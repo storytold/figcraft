@@ -17,7 +17,7 @@ concurrency:
 jobs:
   sonarcloud:
     # Pin the coverage setup that provisions test data and fetches locked dependencies before offline metadata tests.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@5008f8cd1b011b35eed223a7d058d7a8e9075ef6
+    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@ddb472330fe7eff2c5a77ffb551bf119a868f3d3
     with:
       # The shared coverage archive's shards omit the CLI executable used by integration tests.
       # Run this repository's suite in one instrumented job and provide its pinned test data.
