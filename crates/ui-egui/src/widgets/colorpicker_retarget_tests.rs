@@ -310,25 +310,36 @@ fn selecting_and_dragging_an_image_layer_keeps_its_move_undoable() {
 fn same_frame_canvas_click_keeps_image_picker_open_on_new_selection() {
     use egui::{Event, PointerButton};
 
-    let mut session = Session::new();
-    let first = image_layer(&mut session, ImageFilters { exposure: 0.4, ..ImageFilters::default() });
-    let next = image_layer_at(&mut session, ImageFilters { exposure: -0.4, ..ImageFilters::default() }, 300.0);
-    session.set_selection(vec![first]);
-    let mut ui = Ui::new(session);
-    ui.app.ui.picker = Some(PickerTarget::Paint { fills: true, index: 0, ids: vec![first] });
-    ui.frame(vec![]);
+    for discarded in [false, true] {
+        let mut session = Session::new();
+        let first = image_layer(&mut session, ImageFilters { exposure: 0.4, ..ImageFilters::default() });
+        let next = image_layer_at(&mut session, ImageFilters { exposure: -0.4, ..ImageFilters::default() }, 300.0);
+        session.set_selection(vec![first]);
+        let mut ui = Ui::new(session);
+        ui.app.ui.picker = Some(PickerTarget::Paint { fills: true, index: 0, ids: vec![first] });
+        ui.frame(vec![]);
 
-    let bounds = ui.app.session.doc().unwrap().world_bounds(next).unwrap();
-    let at = ui.app.to_screen(bounds.center().x, bounds.center().y);
-    ui.frame(vec![
-        Event::PointerMoved(at),
-        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() },
-        Event::PointerMoved(at),
-        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() },
-    ]);
+        let bounds = ui.app.session.doc().unwrap().world_bounds(next).unwrap();
+        let at = ui.app.to_screen(bounds.center().x, bounds.center().y);
+        let events = vec![
+            Event::PointerMoved(at),
+            Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() },
+            Event::PointerMoved(at),
+            Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() },
+        ];
+        if discarded {
+            ui.frame_raw_with_discard(egui::RawInput { events, ..Default::default() });
+        } else {
+            ui.frame(events);
+        }
 
-    assert_eq!(ui.app.session.selection(), vec![next], "the click selected the image");
-    assert_eq!(ui.app.ui.picker, Some(PickerTarget::Paint { fills: true, index: 0, ids: vec![next] }), "the popup stayed open and followed it");
-    let PaintKind::Image(image) = current_paint(&ui.app, ui.app.ui.picker.as_ref().unwrap()).unwrap().kind else { panic!("image paint") };
-    assert_eq!(image.filters.exposure, -0.4, "the new image's filter values loaded");
+        assert_eq!(ui.app.session.selection(), vec![next], "discarded={discarded}: the click selected the image");
+        assert_eq!(
+            ui.app.ui.picker,
+            Some(PickerTarget::Paint { fills: true, index: 0, ids: vec![next] }),
+            "discarded={discarded}: the popup stayed open and followed it"
+        );
+        let PaintKind::Image(image) = current_paint(&ui.app, ui.app.ui.picker.as_ref().unwrap()).unwrap().kind else { panic!("image paint") };
+        assert_eq!(image.filters.exposure, -0.4, "discarded={discarded}: the new image's filter values loaded");
+    }
 }

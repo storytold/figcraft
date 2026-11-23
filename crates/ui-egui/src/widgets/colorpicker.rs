@@ -352,6 +352,16 @@ fn sync_picker_target(app: &mut FigApp) -> bool {
     true
 }
 
+/// Keep a retargeting click through every pass of its frame, scoped to this viewport and file.
+fn retargeted_this_frame(app: &FigApp, ctx: &egui::Context, changed: bool) -> bool {
+    let key = window_id().with(("retargeted", ctx.viewport_id()));
+    let frame = app.ui.picker_context.as_ref().map(|(_, document, page, _)| (ctx.cumulative_frame_nr(), *document, *page));
+    if changed && let Some(frame) = frame {
+        ctx.data_mut(|data| data.insert_temp(key, frame));
+    }
+    frame.is_some() && ctx.data(|data| data.get_temp::<(u64, u64, NodeId)>(key)) == frame
+}
+
 /// The selected gradient stop in the picker (shared with the on-canvas stops).
 pub fn stop_id() -> Id {
     Id::unique("cp_stop")
@@ -1118,7 +1128,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         return;
     }
     let Some(target) = app.ui.picker.clone() else { return };
-    let retargeted = previous_target.as_ref().is_some_and(|previous| previous != &target);
+    let retargeted = retargeted_this_frame(app, ctx, previous_target.as_ref().is_some_and(|previous| previous != &target));
     // A layer's picker belongs to the selection it was opened for: once that changes, close it
     // rather than keep editing layers that are no longer selected. Image-adjustment paints are
     // retargeted first (`sync_picker_target`), and the same layers in another order stay open.
