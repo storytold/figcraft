@@ -3,7 +3,7 @@ use figcraft_doc::NodeId;
 use figcraft_engine::Session;
 use serde_json::json;
 
-use super::{PickerTarget, current_paint, sync_picker_target, write};
+use super::{PickerTarget, current_paint, finish, sync_picker_target, write};
 use crate::FigApp;
 use crate::layers_drag_tests::Ui;
 
