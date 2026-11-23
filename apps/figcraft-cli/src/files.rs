@@ -301,7 +301,6 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
         println!("{out}");
         return Ok(ExitCode::SUCCESS);
     }
-    figcraft_engine::file_access::create_dir_all(out).map_err(|e| CliError::Failed(e.to_string()))?;
     let ids = match target {
         Some(t) => vec![t],
         None => {
@@ -313,6 +312,7 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
     if ids.is_empty() {
         return Err(CliError::Failed("the page is empty: nothing to export".into()));
     }
+    figcraft_engine::file_access::create_dir_all(out).map_err(|e| CliError::Failed(e.to_string()))?;
     let mut used = std::collections::BTreeSet::new();
     let mut next_suffix: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for id in ids {
@@ -584,6 +584,23 @@ mod tests {
         let pm = render_page(&doc, page_named(&doc, None).unwrap(), 1.0).unwrap();
         assert_eq!((pm.width(), pm.height()), (40, 30));
         assert!(render_page(&doc, divider, 1.0).is_err());
+    }
+
+    #[test]
+    fn an_empty_export_leaves_no_destination_directory() {
+        let dir = temp_dir("empty-export");
+        let input = dir.join("empty.figcraft");
+        let doc = Document::new("Empty");
+        std::fs::write(&input, figcraft_format::save_bytes(&doc, None).unwrap()).unwrap();
+        let parent = dir.join("new-parent");
+        let out = parent.join("exports");
+        let target = Target { format: None, scale: 1.0, page: None, node: None, print: PrintSettings::default(), vd_compat: VdCompat::default() };
+        let result = export(input.to_str().unwrap(), out.to_str().unwrap(), &target);
+        let made_parent = parent.exists();
+        std::fs::remove_dir_all(dir).unwrap();
+
+        assert!(matches!(result, Err(CliError::Failed(ref error)) if error == "the page is empty: nothing to export"), "{result:?}");
+        assert!(!made_parent, "failed export created the output directory");
     }
 
     #[test]
