@@ -20,6 +20,7 @@ mod layer_budget;
 pub mod lod;
 pub mod paint;
 pub mod pattern;
+mod resample;
 pub mod retained;
 pub mod shadow;
 
@@ -301,6 +302,7 @@ fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Opti
         magnified_image_pixels: opts.magnified_image_pixels,
         under: None,
         time: 0.0,
+        casting: false,
         bounds: &bounds,
     };
     let xf = view.transform();
@@ -336,6 +338,7 @@ fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, tim
         magnified_image_pixels: false,
         under,
         time,
+        casting: false,
         bounds: &bounds,
     };
     // 0, but inside an exporter's [`at_layer_depth`] its depth: one cap for both (#1082).
@@ -393,9 +396,9 @@ pub fn raster_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
 }
 
 /// The page-space rectangle a node exports: a clipping frame's box (plus its own effects), else
-/// everything it paints.
+/// everything it paints, framed as [`Document::world_export_bounds`] frames it.
 pub fn export_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
-    doc.world_render_bounds(id)
+    doc.world_export_bounds(id)
 }
 
 /// Rasterise one node at `scale` (export). Transparent background.
@@ -642,6 +645,10 @@ mod dots_tests;
 mod effect_order_tests;
 #[cfg(test)]
 mod effects_behaviour_tests;
+#[cfg(test)]
+mod export_framing_tests;
+#[cfg(test)]
+mod fill_blend_tests;
 #[cfg(test)]
 mod gif_tests;
 #[cfg(test)]

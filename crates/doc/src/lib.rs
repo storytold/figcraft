@@ -54,6 +54,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// A walk for [`Document::world_render_bounds`]: how many more nodes it may visit, and whether it
+/// frames an export ([`Document::world_export_bounds`]).
+struct Walk {
+    left: std::cell::Cell<usize>,
+    export: bool,
+}
+
 /// Deepest descendant [`Document::world_render_bounds`] follows: as deep as the renderer draws
 /// (`figcraft_render::MAX_EXPORT_DEPTH`), so a crafted chain can't overflow the stack (#1062).
 const MAX_RENDER_DEPTH: usize = 256;
@@ -782,37 +789,51 @@ impl Document {
     /// children only within their mask). A group, or an unclipped frame past its box, is what its
     /// children show grown by its effects, which apply to all of it.
     pub fn world_render_bounds(&self, id: NodeId) -> Option<Rect> {
-        // A tree visits each node once; a child list deserialized with repeats (a graph) is cut off
-        // after twice the document's node count rather than walked in full.
-        self.render_bounds_at(id, 0, &std::cell::Cell::new(self.nodes.len().saturating_mul(2).saturating_add(8)))
+        self.render_bounds_from(id, false)
     }
 
-    fn render_bounds_at(&self, id: NodeId, depth: usize, left: &std::cell::Cell<usize>) -> Option<Rect> {
+    /// [`Document::world_render_bounds`] as an export frames it: drop shadows reach as far as
+    /// their blur radius (see [`Node::own_export_bounds`]) and layers inside that draw nothing (no
+    /// visible paint, effect or children) don't count, as in the reference tool's exports.
+    pub fn world_export_bounds(&self, id: NodeId) -> Option<Rect> {
+        self.render_bounds_from(id, true)
+    }
+
+    fn render_bounds_from(&self, id: NodeId, export: bool) -> Option<Rect> {
+        // A tree visits each node once; a child list deserialized with repeats (a graph) is cut off
+        // after twice the document's node count rather than walked in full.
+        let left = std::cell::Cell::new(self.nodes.len().saturating_mul(2).saturating_add(8));
+        self.render_bounds_at(id, 0, &Walk { left, export })
+    }
+
+    fn render_bounds_at(&self, id: NodeId, depth: usize, walk: &Walk) -> Option<Rect> {
         let n = self.node(id)?;
-        let own = n.own_paint_bounds(self.world_transform(id));
-        let visit = left.get();
-        left.set(visit.saturating_sub(1));
+        let world = self.world_transform(id);
+        let own = if walk.export { n.own_export_bounds(world) } else { n.own_paint_bounds(world) };
+        let grow = |r: Rect| if walk.export { n.grow_by_export_effects(r) } else { n.grow_by_effects(r) };
+        let visit = walk.left.get();
+        walk.left.set(visit.saturating_sub(1));
         if (n.clip && n.kind.is_frame_like() && !n.kind.bounds_follow_children()) || depth >= MAX_RENDER_DEPTH || visit == 0 {
             return Some(own);
         }
-        Some(match (self.children_render_bounds(n, depth + 1, left), &n.kind) {
-            (Some(kids), NodeKind::Group) => n.grow_by_effects(kids),
+        Some(match (self.children_render_bounds(n, depth + 1, walk), &n.kind) {
+            (Some(kids), NodeKind::Group) => grow(kids),
             // An unclipped frame's effects apply to its children too, past its box included.
-            (Some(kids), _) => own.union(n.grow_by_effects(kids)),
+            (Some(kids), _) => own.union(grow(kids)),
             (None, _) => own,
         })
     }
 
     /// What `n`'s visible children show, together: each mask's run within the mask's bounds.
-    fn children_render_bounds(&self, n: &Node, depth: usize, left: &std::cell::Cell<usize>) -> Option<Rect> {
-        let shown = |i: &NodeId| self.node(*i).is_some_and(|c| c.visible && !c.is_mask);
+    fn children_render_bounds(&self, n: &Node, depth: usize, walk: &Walk) -> Option<Rect> {
+        let shown = |i: &NodeId| self.node(*i).is_some_and(|c| c.visible && !c.is_mask && !(walk.export && c.draws_nothing()));
         let mut out: Option<Rect> = None;
         for run in self.paint_runs(n) {
             let ids = n.children.get(run).unwrap_or(&[]);
             let mask = ids.first().copied().filter(|m| self.node(*m).is_some_and(|c| c.is_mask && c.visible));
-            let r = ids.iter().filter(|i| shown(i)).filter_map(|i| self.render_bounds_at(*i, depth, left)).reduce(|a, b| a.union(b));
+            let r = ids.iter().filter(|i| shown(i)).filter_map(|i| self.render_bounds_at(*i, depth, walk)).reduce(|a, b| a.union(b));
             let r = match mask {
-                Some(m) => r.zip(self.render_bounds_at(m, depth, left)).map(|(a, b)| a.intersect(b)).filter(|x| x.width() > 0.0 && x.height() > 0.0),
+                Some(m) => r.zip(self.render_bounds_at(m, depth, walk)).map(|(a, b)| a.intersect(b)).filter(|x| x.width() > 0.0 && x.height() > 0.0),
                 None => r,
             };
             out = match (out, r) {

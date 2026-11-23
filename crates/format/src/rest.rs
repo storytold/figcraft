@@ -1314,7 +1314,9 @@ impl<'a> Ctx<'a> {
         let re = |k: &String| rename.get(k).cloned().unwrap_or_else(|| k.clone());
         for id in ids {
             let Some(n) = self.doc.node(id) else { continue };
+            let bound_prop = |k: &String| k.strip_prefix(variables::PROP_BINDING).is_some_and(|p| rename.contains_key(p));
             let touches = n.prop_refs.values().any(|v| rename.contains_key(v))
+                || n.bound.keys().any(bound_prop)
                 || match &n.kind {
                     NodeKind::Component { props, .. } => props.keys().any(|k| rename.contains_key(k)),
                     NodeKind::Instance { props, .. } => props.keys().any(|k| rename.contains_key(k)),
@@ -1327,6 +1329,14 @@ impl<'a> Ctx<'a> {
             for v in n.prop_refs.values_mut() {
                 *v = re(v);
             }
+            // Component property bindings follow their property's name.
+            n.bound = std::mem::take(&mut n.bound)
+                .into_iter()
+                .map(|(k, v)| match k.strip_prefix(variables::PROP_BINDING) {
+                    Some(p) => (format!("{}{}", variables::PROP_BINDING, re(&p.to_string())), v),
+                    None => (k, v),
+                })
+                .collect();
             match &mut n.kind {
                 NodeKind::Component { props, .. } => *props = std::mem::take(props).into_iter().map(|(k, d)| (re(&k), d)).collect(),
                 NodeKind::Instance { props, .. } => *props = std::mem::take(props).into_iter().map(|(k, d)| (re(&k), d)).collect(),

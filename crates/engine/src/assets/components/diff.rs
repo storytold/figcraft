@@ -217,3 +217,39 @@ pub(super) fn follow_boolean_defaults(doc: &mut Document, before: &Document, cha
     }
     out
 }
+
+/// Before instance `inst` switches from main `old` to another variant: the overrides its layers
+/// inherit from the mains around it (a destructive button's main binding its background
+/// instance's tint to red) become the layers' own, so the rebuild carries them onto the new
+/// variant by name, as the reference tool applies an enclosing main's overrides over whichever
+/// variant a nested instance shows. The layers already hold those values.
+pub(crate) fn keep_inherited_overrides(doc: &mut Document, inst: NodeId, old: NodeId) {
+    const MAX_HOPS: usize = 64;
+    let mut found: Vec<(NodeId, Vec<String>)> = Vec::new();
+    for d in doc.subtree(inst).into_iter().skip(1) {
+        let Some(n) = doc.node(d) else { continue };
+        let mut inherited: Vec<String> = Vec::new();
+        let mut src = n.source;
+        for _ in 0..MAX_HOPS {
+            let Some(s) = src.and_then(|s| doc.node(s)) else { break };
+            // The main being left: its own values are what the new variant replaces.
+            if s.id == old || doc.ancestors(s.id).contains(&old) {
+                break;
+            }
+            for g in &s.overrides {
+                if !n.overrides.contains(g) && !inherited.contains(g) {
+                    inherited.push(g.clone());
+                }
+            }
+            src = s.source;
+        }
+        if !inherited.is_empty() {
+            found.push((d, inherited));
+        }
+    }
+    for (d, groups) in found {
+        if let Some(n) = doc.node_mut(d) {
+            n.overrides.extend(groups);
+        }
+    }
+}
