@@ -87,21 +87,6 @@ fn the_tab_is_named_after_the_file_and_page_and_its_x_closes_it() {
 }
 
 #[test]
-fn command_w_closes_the_present_tab() {
-    let (mut u, a, ..) = setup();
-    u.run("proto.present", json!({"start": a}));
-    assert!(presenting(&u));
-    let key = |pressed, modifiers| egui::Event::Key { key: Key::W, physical_key: None, pressed, repeat: false, modifiers };
-    let shifted = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
-    u.frame(vec![key(true, shifted), key(false, shifted)]);
-    assert!(presenting(&u));
-    let command = egui::Modifiers::COMMAND;
-    u.frame(vec![key(true, command), key(false, command)]);
-    assert_eq!((presenting(&u), tabs(&u)), (false, json!([])));
-    assert!(!u.app.ui.home, "back to its file");
-}
-
-#[test]
 fn play_again_shows_the_tab_as_it_was_and_another_page_opens_a_new_one() {
     let (mut u, a, b, _) = setup();
     u.run("proto.present", json!({"start": a}));

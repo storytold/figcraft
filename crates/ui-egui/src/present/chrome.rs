@@ -36,7 +36,7 @@ pub struct PresentTab {
     pub page_name: String,
 }
 
-/// The full-window presenter (while `app.ui.present` is set). Escape, Cmd/Ctrl+W or Close ends it.
+/// The full-window presenter (while `app.ui.present` is set). Escape or Close ends it.
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
@@ -48,15 +48,6 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         pres.sync(&ds.doc, now);
     }
     poll_pads(app, &mut pres, &ctx);
-    // Reserve Cmd/Ctrl+W before the prototype handles key bindings.
-    let close_shortcut = ctx.input_mut(|i| {
-        let count = i.events.len();
-        i.events.retain(|event| {
-            !matches!(event, egui::Event::Key { key: egui::Key::W, pressed: true, modifiers, .. }
-                if modifiers.matches_exact(egui::Modifiers::COMMAND))
-        });
-        i.events.len() != count
-    });
     let mut action = None;
     // Typing a reply to a comment keeps the keys from the prototype, and so does the link notice
     // while it shows; Shift+C shows the comments.
@@ -134,7 +125,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         choose_device(app, &mut pres, &device);
     }
     app.ui.present = Some(pres);
-    if action == Some(BarAction::Close) || close_shortcut || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if action == Some(BarAction::Close) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         if let Some(id) = app.ui.present_active {
             crate::tabs::close_present(app, id);
         } else {
