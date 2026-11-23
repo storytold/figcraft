@@ -5,7 +5,7 @@
   "fork_repository": "https://github.com/hayyaun/figcraft",
   "base_commit": "bbf7ad418f3e02d89546a6c7b044e51df67177f0",
   "integration_branch": "community-integration",
-  "stage": "Reviewed non-draft, non-experimental PRs that integrate without conflicts. Drafts, experiments and conflict resolution are postponed, not permanently excluded.",
+  "stage": "Attempt all reviewed PRs, including drafts and experiments; defer merge conflicts and upstream-specific release infrastructure.",
   "validation": {
     "rust": "1.100.0",
     "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
@@ -22,33 +22,44 @@
     ],
     "platform_limits": [
       "macOS and Windows runtime behavior has not been exercised locally."
+    ],
+    "notes": [
+      "The first wasm-pack invocation placed browser options after the crate path, so they were parsed as Cargo options. The invocation was corrected before retrying.",
+      "The initial combined CI invocation was stopped before checks ran when the user expanded the integration scope."
     ]
   },
   "integration_adjustments": [
     "Applied Rust 1.100 formatting to imported changes.",
-    "Removed two redundant too_many_arguments suppressions; the existing Clippy argument threshold remains 10."
+    "Removed two redundant too_many_arguments suppressions; the existing Clippy argument threshold remains 10.",
+    "Added missing imports to the image-picker regression module introduced by PR #618; assertions are unchanged."
   ],
   "draft_checkpoint_branch": "community-integration-draft-checkpoint",
   "draft_restoration": [
     {
       "number": 2556,
       "merge_commit": "8f5c9c2e2ea2",
-      "revert_commit": "deb77f91"
+      "revert_commit": "deb77f91",
+      "restoration_commit": "e2e83ad01e946fbc296ecc26946f097234d018da",
+      "status": "restored-pending-validation"
     },
     {
       "number": 2555,
       "merge_commit": "d05c13e44b7d",
-      "revert_commit": "57f73d56"
+      "revert_commit": "57f73d56",
+      "restoration_commit": "5615658c03ce75c1a2beed252955a0a71d3e53de",
+      "status": "restored-pending-validation"
     },
     {
       "number": 2544,
       "merge_commit": "fe73379e5ed3",
-      "revert_commit": "0502c19e"
+      "revert_commit": "0502c19e",
+      "restoration_commit": "791339559e10f1312d2e22c4c5be551469d82598",
+      "status": "restored-pending-validation"
     }
   ],
   "counts": {
-    "integrated-pending-validation": 41,
-    "deferred": 86
+    "integrated-pending-validation": 45,
+    "deferred": 82
   },
   "pull_requests": [
     {
@@ -59,7 +70,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "87a1db8b2dda0705718e99fed55eaa79b20f84ea"
     },
@@ -71,9 +82,13 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/engine/src/assets/library_swap/tests.rs",
+        "docs/components-parity.md"
+      ]
     },
     {
       "number": 2575,
@@ -83,7 +98,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "9551b742a5ebc33c27e3cd6ee128ad3bc1189dee"
     },
@@ -95,7 +110,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "892ba33dedd92f6343a8b9fed0fc89d818191ec4"
     },
@@ -107,7 +122,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "2c205328690c71775188cd4c764774b440ff31c7"
     },
@@ -119,7 +134,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "fe86cf799d2fc8d78471878a078c435d14adb40a"
     },
@@ -143,7 +158,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "54f3186eb358c19c2696e95e48cab4b771696d40"
     },
@@ -155,7 +170,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "c238037132a08085471308120f90642c1b51aab7"
     },
@@ -167,7 +182,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "fd3b5432ab68de2f830e9e6f3cb9950bdc056a1a"
     },
@@ -179,7 +194,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "52cecdab9f72c2af735301c781e6a968eae11a8c"
     },
@@ -189,12 +204,11 @@
       "url": "https://github.com/storytold/figcraft/pull/2556",
       "head": "f818a664e6386d93ec7de54df4d5ec7a3e133fc8",
       "draft": true,
-      "status": "deferred",
+      "status": "integrated-pending-validation",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Initially merged before the staging update, then reverted. Restore by reverting the recorded revert commit."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
-      "merge_commit": null
+      "merge_commit": "e2e83ad01e946fbc296ecc26946f097234d018da"
     },
     {
       "number": 2555,
@@ -202,12 +216,11 @@
       "url": "https://github.com/storytold/figcraft/pull/2555",
       "head": "f838950f9b82e932beccf03838d474ac35d01382",
       "draft": true,
-      "status": "deferred",
+      "status": "integrated-pending-validation",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Initially merged before the staging update, then reverted. Restore by reverting the recorded revert commit."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
-      "merge_commit": null
+      "merge_commit": "5615658c03ce75c1a2beed252955a0a71d3e53de"
     },
     {
       "number": 2554,
@@ -217,7 +230,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "19aa80e0c1b07c68b3f0ed1d48045167a7e233ea"
     },
@@ -229,7 +242,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "0220ea30ce7b09ff7d5e98bd06f4377f32d28a52"
     },
@@ -241,19 +254,19 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "75623bb5f9fb2010bda748c758ddd84264a9cf82"
     },
     {
       "number": 2550,
-      "title": "Apply image presets to text’s shared image fill",
+      "title": "Apply image presets to text\u2019s shared image fill",
       "url": "https://github.com/storytold/figcraft/pull/2550",
       "head": "301c382a794f7bae7b975b373521e41d451b8e29",
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "d3031b501790741835820b220815b30a6fbd7b6e"
     },
@@ -265,7 +278,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "bd6dcef5ac2b5ec27c2b74d7c27f6927f5f6ddb7"
     },
@@ -277,7 +290,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "cece5041bda719fc368641ad21bbe0c212108e06"
     },
@@ -289,7 +302,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "a87550e9c5fe022a913b64b2e5fe8e05396047b0"
     },
@@ -301,7 +314,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "de9a5c33b56228f9c9c1cab3c8ca2dd1f6c114e7"
     },
@@ -311,12 +324,11 @@
       "url": "https://github.com/storytold/figcraft/pull/2544",
       "head": "9c5d7dbef784fb70a6657527fbc27f26dd2ad52a",
       "draft": true,
-      "status": "deferred",
+      "status": "integrated-pending-validation",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Initially merged before the staging update, then reverted. Restore by reverting the recorded revert commit."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
-      "merge_commit": null
+      "merge_commit": "791339559e10f1312d2e22c4c5be551469d82598"
     },
     {
       "number": 2543,
@@ -326,7 +338,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "8150232c26035ec7016692d601602066fa2f9da1"
     },
@@ -338,7 +350,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "e993a7145ed1e54eaa80f15eaa83ae069013841d"
     },
@@ -350,7 +362,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "53ee58c7a14d1cdd6687d89fb58b6d51352612fa"
     },
@@ -362,9 +374,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2533,
@@ -374,7 +389,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "ea9281ca6910b7d70f29f76f411580266df8f2f6"
     },
@@ -386,7 +401,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "e465bb4c8411ce743ed5876b9e853b004eeca5c8"
     },
@@ -398,7 +413,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "6f7569343cfa0569b19b0a1f3afafd08d2b76f94"
     },
@@ -410,7 +425,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "4a65ffbc86b46e86e773cc6c854a57fc15bb9802"
     },
@@ -422,7 +437,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "e8f0dc03be899d4e91dbeea24e48714ccc2b5e97"
     },
@@ -434,7 +449,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "8b1d14fe5326d51aedaf72fb913b7aeeeed5f1c8"
     },
@@ -446,9 +461,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2491,
@@ -458,9 +476,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
     },
     {
       "number": 2489,
@@ -470,7 +491,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "50a06b27355bc62e5c324b99e5177f9c452454f5"
     },
@@ -482,9 +503,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
     },
     {
       "number": 2487,
@@ -494,9 +518,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2486,
@@ -506,7 +533,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "34b13b431aa57dcf505d4af6dcea9bc8673a300f"
     },
@@ -518,9 +545,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2484,
@@ -530,9 +560,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
     },
     {
       "number": 2483,
@@ -542,9 +575,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2482,
@@ -554,7 +590,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "003a7335e34c5b5fd2b1c49085cd255937b7cea2"
     },
@@ -566,9 +602,14 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/design_context_tests.rs",
+        "crates/ui-egui/src/panels/dev_mode.rs"
+      ]
     },
     {
       "number": 2476,
@@ -578,9 +619,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2475,
@@ -590,9 +634,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2474,
@@ -602,9 +649,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
     },
     {
       "number": 2473,
@@ -614,9 +664,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2472,
@@ -626,7 +679,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "4241251ae581cb1757f331f47d762f282cc07ae4"
     },
@@ -638,9 +691,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
     },
     {
       "number": 2466,
@@ -650,7 +706,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "536d09d00794b937b899e4b6e4c931854adc9aa4"
     },
@@ -662,9 +718,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2446,
@@ -674,9 +733,14 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/mcp/src/tools.rs",
+        "crates/mcp/tests/it/main.rs",
+        "docs/mcp.md"
+      ]
     },
     {
       "number": 2422,
@@ -686,9 +750,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/file-format-parity.md"
+      ]
     },
     {
       "number": 2406,
@@ -698,9 +765,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
     },
     {
       "number": 2404,
@@ -710,7 +780,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "649b82b92e877e29fc89c8e96e113349f58efd01"
     },
@@ -722,9 +792,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
     },
     {
       "number": 2401,
@@ -734,9 +807,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
     },
     {
       "number": 2400,
@@ -746,9 +822,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
     },
     {
       "number": 2398,
@@ -758,7 +837,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "fbc1bfc295c84d0612f84927b877ad6be166c8ef"
     },
@@ -770,7 +849,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "d0ecaf70a403284381124de34107d72d85f8c3b9"
     },
@@ -782,7 +861,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "eaae1d94967b9c18f7ae669007fcd86d04751079"
     },
@@ -794,9 +873,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
     },
     {
       "number": 2387,
@@ -806,9 +888,15 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/control/document_tests.rs",
+        "docs/prototyping-parity.md"
+      ]
     },
     {
       "number": 2383,
@@ -818,9 +906,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2382,
@@ -830,9 +921,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2381,
@@ -842,9 +936,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2380,
@@ -854,9 +951,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2364,
@@ -866,9 +966,14 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "contributors/people.toml",
+        "docs/dev-mode-parity.md"
+      ]
     },
     {
       "number": 2358,
@@ -878,11 +983,15 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Initial shader fills; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/ui-egui/src/widgets/colorpicker.rs",
+        "docs/gaps.md",
+        "docs/target-app-parity.md"
+      ]
     },
     {
       "number": 2322,
@@ -892,9 +1001,16 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft-cli/src/args.rs",
+        "apps/figcraft-cli/src/main.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/control.rs",
+        "docs/cli.md"
+      ]
     },
     {
       "number": 2281,
@@ -904,9 +1020,20 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft-cli/src/args.rs",
+        "apps/figcraft-cli/src/main.rs",
+        "crates/engine/src/canvas/textedit.rs",
+        "crates/engine/src/canvas/tools.rs",
+        "crates/engine/src/session/exec.rs",
+        "crates/ui-egui/src/canvas/handles.rs",
+        "crates/ui-egui/src/control.rs",
+        "docs/cli.md",
+        "docs/control-protocol.md"
+      ]
     },
     {
       "number": 2247,
@@ -916,9 +1043,14 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/main.rs",
+        "contributors/people.toml"
+      ]
     },
     {
       "number": 2239,
@@ -928,9 +1060,13 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/locales/he.toml",
+        "crates/ui-egui/src/home.rs"
+      ]
     },
     {
       "number": 2235,
@@ -940,7 +1076,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "124b85f4295b3b1292a9e8f63bca99b1bf7d353c"
     },
@@ -952,9 +1088,14 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/format/src/fig/export.rs",
+        "crates/format/src/fig/export/component.rs",
+        "docs/file-format-parity.md"
+      ]
     },
     {
       "number": 2231,
@@ -964,9 +1105,22 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/boards/board.rs",
+        "crates/engine/src/boards/board/edit.rs",
+        "crates/engine/src/boards/board/items.rs",
+        "crates/ui-egui/src/canvas/board_bar.rs",
+        "docs/boards-parity.md",
+        "docs/gaps.md",
+        "docs/mcp.md",
+        "docs/roadmap.md",
+        "docs/target-app-parity.md",
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2225,
@@ -976,9 +1130,15 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "docs/components-parity.md",
+        "docs/file-format-parity.md",
+        "docs/gaps.md"
+      ]
     },
     {
       "number": 2212,
@@ -988,7 +1148,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "5fa32f9a36a2438e581de8ff1abdae16d6102556"
     },
@@ -1000,9 +1160,14 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/svg/src/import.rs",
+        "crates/svg/src/import/budget.rs",
+        "docs/target-app-parity.md"
+      ]
     },
     {
       "number": 2194,
@@ -1012,7 +1177,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "f550cf41c44fcfad6788d0162ca6830b2f14dfb6"
     },
@@ -1024,10 +1189,15 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "contributors/people.toml",
+        "docs/auto-layout-parity.md",
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2177,
@@ -1037,9 +1207,14 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "contributors/people.toml",
+        "crates/engine/src/cmd/props.rs",
+        "crates/ui-egui/src/panels/right/paints.rs"
+      ]
     },
     {
       "number": 2162,
@@ -1049,9 +1224,13 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "Cargo.toml"
+      ]
     },
     {
       "number": 2144,
@@ -1061,9 +1240,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2141,
@@ -1073,9 +1255,17 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/engine/src/cmd/edit/clipboard.rs",
+        "crates/engine/src/lib.rs",
+        "crates/format/src/fig.rs",
+        "crates/format/src/fig/export.rs",
+        "crates/format/src/fig/map/layer.rs",
+        "docs/file-format-parity.md"
+      ]
     },
     {
       "number": 2137,
@@ -1085,9 +1275,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/auto-layout-parity.md"
+      ]
     },
     {
       "number": 2134,
@@ -1097,9 +1290,13 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md",
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 2129,
@@ -1109,9 +1306,12 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/collaboration-parity.md"
+      ]
     },
     {
       "number": 2019,
@@ -1121,21 +1321,39 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft-cli/src/args.rs",
+        "apps/figcraft-cli/src/main.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/control.rs",
+        "docs/cli.md"
+      ]
     },
     {
       "number": 1999,
-      "title": "M9: Home ▸ Online remembers the sessions you joined (#1882)",
+      "title": "M9: Home \u25b8 Online remembers the sessions you joined (#1882)",
       "url": "https://github.com/storytold/figcraft/pull/1999",
       "head": "d4b772743ac449b70a2f74c6616c04ac1aa71c07",
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/collab-net/src/link.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/live_tests.rs",
+        "crates/engine/src/sharing/live.rs",
+        "crates/engine/src/sharing/live/events.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/live_joining_tests.rs",
+        "docs/collaboration-parity.md",
+        "docs/mcp.md"
+      ]
     },
     {
       "number": 1995,
@@ -1143,11 +1361,11 @@
       "url": "https://github.com/storytold/figcraft/pull/1995",
       "head": "f3214ddd10bd2fd57420d7021e184cee69ed1695",
       "draft": true,
-      "status": "deferred",
+      "status": "integrated-pending-validation",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
-      "merge_commit": null
+      "merge_commit": "481072d339d41e74370113a4bee531221866bf3e"
     },
     {
       "number": 1898,
@@ -1157,7 +1375,7 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage."
+        "Adds the upstream getartcraft.com Flatpak update source to stable bundles, which could replace a fork build with an upstream release. A fork-specific release and signing setup is unresolved."
       ],
       "merge_commit": null
     },
@@ -1169,9 +1387,16 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/automation/inspect.rs",
+        "crates/engine/src/cmd/props.rs",
+        "crates/engine/src/dev/codegen/css.rs",
+        "docs/target-app-parity.md"
+      ]
     },
     {
       "number": 1792,
@@ -1181,19 +1406,19 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "0231cb32499982e5845d9162e38cdbbf7f0d6142"
     },
     {
       "number": 1763,
-      "title": "fix(board): map left and right connector controls to matching ends (#…",
+      "title": "fix(board): map left and right connector controls to matching ends (#\u2026",
       "url": "https://github.com/storytold/figcraft/pull/1763",
       "head": "59d5c3624470e787847a32c5fb74d4c61aaf2e86",
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "fc3430f9d6e5832862fd0690809a345dbae392b4"
     },
@@ -1205,10 +1430,13 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/dialogs/updates_ui.rs"
+      ]
     },
     {
       "number": 1736,
@@ -1218,21 +1446,36 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/boards/board_table.rs",
+        "crates/engine/src/derived.rs",
+        "crates/ui-egui/src/board_ui_tests.rs",
+        "crates/ui-egui/src/canvas/board_bar.rs",
+        "docs/boards-parity.md",
+        "docs/gaps.md",
+        "docs/roadmap.md"
+      ]
     },
     {
       "number": 1624,
-      "title": "M4: keyframe animation — timeline, inspector and easing",
+      "title": "M4: keyframe animation \u2014 timeline, inspector and easing",
       "url": "https://github.com/storytold/figcraft/pull/1624",
       "head": "b1637b2cc99c6e6c262b7e5935b9c32c885d8a07",
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/src/panels/right/paints.rs",
+        "docs/prototyping-parity.md",
+        "docs/target-app-parity.md"
+      ]
     },
     {
       "number": 1602,
@@ -1242,9 +1485,17 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.toml",
+        "crates/format/src/fig.rs",
+        "crates/format/src/lib.rs",
+        "crates/format/src/penpot/export_tests.rs",
+        "crates/format/src/sketch.rs",
+        "crates/format/src/thumbnail.rs"
+      ]
     },
     {
       "number": 1473,
@@ -1254,9 +1505,18 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft-cli/src/main.rs",
+        "apps/figcraft/src/control_server.rs",
+        "apps/figcraft/src/control_server_tests.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/mcp/src/backend.rs",
+        "crates/mcp/tests/it/attached.rs",
+        "docs/cli.md"
+      ]
     },
     {
       "number": 1456,
@@ -1266,10 +1526,22 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Experimental GPU renderer; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "ROADMAP.md",
+        "crates/render/src/draw.rs",
+        "crates/render/src/glass.rs",
+        "crates/render/src/lib.rs",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/canvas/render_worker.rs",
+        "docs/control-protocol.md",
+        "docs/gaps.md",
+        "docs/hardware-parity.md",
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 1451,
@@ -1279,11 +1551,50 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Android port series; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "AGENTS.md",
+        "ATTRIBUTION.md",
+        "Cargo.lock",
+        "README.md",
+        "ROADMAP.md",
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "contributors/people.toml",
+        "crates/engine/src/lib.rs",
+        "crates/ui-egui/locales/bn.toml",
+        "crates/ui-egui/locales/cs.toml",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/id.toml",
+        "crates/ui-egui/locales/it.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ka.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/nl.toml",
+        "crates/ui-egui/locales/pl.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/ru.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/locales/th.toml",
+        "crates/ui-egui/locales/tr.toml",
+        "crates/ui-egui/locales/vi.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/dialogs.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/panels/layers.rs",
+        "crates/ui-egui/src/ui_scale.rs",
+        "docs/architecture.md",
+        "docs/gaps.md"
+      ]
     },
     {
       "number": 1449,
@@ -1293,11 +1604,42 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Android port series; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "AGENTS.md",
+        "Cargo.lock",
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/ui-egui/locales/bn.toml",
+        "crates/ui-egui/locales/cs.toml",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/id.toml",
+        "crates/ui-egui/locales/it.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ka.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/nl.toml",
+        "crates/ui-egui/locales/pl.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/ru.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/locales/th.toml",
+        "crates/ui-egui/locales/tr.toml",
+        "crates/ui-egui/locales/vi.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/dialogs.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "docs/architecture.md"
+      ]
     },
     {
       "number": 1448,
@@ -1307,11 +1649,20 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Android port series; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/src/dialogs.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "docs/architecture.md"
+      ]
     },
     {
       "number": 1447,
@@ -1321,11 +1672,15 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Android port series; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "docs/architecture.md"
+      ]
     },
     {
       "number": 1446,
@@ -1335,10 +1690,14 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Android port series; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs"
+      ]
     },
     {
       "number": 1401,
@@ -1348,9 +1707,26 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/main.rs",
+        "contributors/people.toml",
+        "crates/engine/src/cmd/file.rs",
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/file_access.rs",
+        "crates/engine/src/lib.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/home.rs",
+        "crates/ui-egui/src/home/home_recents.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "docs/target-app-parity.md"
+      ]
     },
     {
       "number": 1392,
@@ -1360,9 +1736,22 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/main.rs",
+        "crates/engine/src/cmd/file.rs",
+        "crates/engine/src/file_access.rs",
+        "crates/engine/src/file_access_tests.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/save_disk_changes_tests.rs",
+        "crates/ui-egui/locales/bn.toml",
+        "docs/control-protocol.md",
+        "docs/gaps.md",
+        "docs/hardware-parity.md"
+      ]
     },
     {
       "number": 1364,
@@ -1372,9 +1761,14 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs"
+      ]
     },
     {
       "number": 1271,
@@ -1384,11 +1778,26 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Work-in-progress variables editor; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/engine/src/assets/style_vars.rs",
+        "crates/engine/src/variables_editor_tests.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/ka.toml",
+        "crates/ui-egui/locales/nl.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/src/colorpicker.rs",
+        "crates/ui-egui/src/dialogs/variables_panel.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/panels/layers.rs",
+        "crates/ui-egui/src/panels/variable_ui.rs",
+        "crates/ui-egui/src/widgets.rs"
+      ]
     },
     {
       "number": 1050,
@@ -1398,9 +1807,13 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/sharing/live/host.rs"
+      ]
     },
     {
       "number": 1048,
@@ -1410,9 +1823,19 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "ROADMAP.md",
+        "crates/collab/src/replica.rs",
+        "crates/format/src/image_tests.rs",
+        "crates/format/src/lib.rs",
+        "crates/format/src/penpot/export.rs",
+        "crates/pdf/Cargo.toml",
+        "crates/render/src/tests.rs"
+      ]
     },
     {
       "number": 1046,
@@ -1422,9 +1845,19 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "ROADMAP.md",
+        "crates/collab/src/replica.rs",
+        "crates/format/src/image_tests.rs",
+        "crates/format/src/lib.rs",
+        "crates/format/src/penpot/export.rs",
+        "crates/pdf/Cargo.toml",
+        "crates/render/src/tests.rs"
+      ]
     },
     {
       "number": 941,
@@ -1434,9 +1867,15 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "contributors/people.toml",
+        "crates/ui-egui/src/layers_behaviour_tests.rs",
+        "crates/ui-egui/src/menus.rs",
+        "crates/ui-egui/src/panels/layers.rs"
+      ]
     },
     {
       "number": 823,
@@ -1446,9 +1885,18 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/src/dialogs/variables_panel.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/right.rs",
+        "crates/ui-egui/src/shortcuts.rs",
+        "crates/ui-egui/src/widgets/colorpicker.rs",
+        "crates/ui-egui/src/widgets/style_picker.rs",
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 805,
@@ -1458,10 +1906,32 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "crates/ui-egui/Cargo.toml",
+        "crates/ui-egui/locales/cs.toml",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/id.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/nl.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/ru.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/locales/tr.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/lib.rs"
+      ]
     },
     {
       "number": 803,
@@ -1471,9 +1941,20 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/src/dialogs/variables_panel.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/panels/layout_panel.rs",
+        "crates/ui-egui/src/right.rs",
+        "crates/ui-egui/src/shortcuts.rs",
+        "crates/ui-egui/src/widgets/colorpicker.rs",
+        "crates/ui-egui/src/widgets/style_picker.rs",
+        "docs/auto-layout-parity.md",
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 779,
@@ -1483,10 +1964,12 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.toml"
+      ]
     },
     {
       "number": 734,
@@ -1496,9 +1979,32 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "apps/figcraft-web/src/web.rs",
+        "apps/figcraft/src/main.rs",
+        "contributors/people.toml",
+        "crates/collab-net/src/driver_tests.rs",
+        "crates/collab-net/src/host.rs",
+        "crates/collab-net/src/lib.rs",
+        "crates/collab-net/src/link.rs",
+        "crates/collab-net/src/loopback_tests.rs",
+        "crates/engine/src/live_share_tests.rs",
+        "crates/engine/src/sharing/live/host.rs",
+        "crates/engine/src/sharing/live/types.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/src/live_share_tests.rs",
+        "crates/ui-egui/src/present/actions.rs",
+        "crates/ui-egui/src/present/chrome.rs",
+        "docs/gaps.md",
+        "docs/hardware-parity.md",
+        "docs/mcp.md",
+        "docs/prototyping-parity.md"
+      ]
     },
     {
       "number": 618,
@@ -1508,7 +2014,7 @@
       "draft": false,
       "status": "integrated-pending-validation",
       "reasons": [
-        "Merged without conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined validation is pending."
       ],
       "merge_commit": "9c80e482419d76b496143974583a68668b0d6f09"
     },
@@ -1520,9 +2026,21 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "README.md",
+        "apps/figcraft/src/main.rs",
+        "crates/engine/src/cmd/file.rs",
+        "crates/pdf/src/export_tests.rs",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/dialogs.rs",
+        "crates/ui-egui/src/lib.rs"
+      ]
     },
     {
       "number": 590,
@@ -1532,9 +2050,13 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        ".github/workflows/release.yml",
+        "ROADMAP.md"
+      ]
     },
     {
       "number": 500,
@@ -1544,9 +2066,21 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft-cli/src/main.rs",
+        "apps/figcraft/src/control_server.rs",
+        "apps/figcraft/src/control_server_tests.rs",
+        "apps/figcraft/src/main.rs",
+        "crates/mcp/src/backend.rs",
+        "crates/mcp/tests/it/attached.rs",
+        "docs/cli.md",
+        "docs/control-protocol.md",
+        "docs/mcp.md"
+      ]
     },
     {
       "number": 174,
@@ -1556,9 +2090,68 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/args.rs",
+        "apps/figcraft/src/args_tests.rs",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/engine/src/cmd/file.rs",
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/code_connect.rs",
+        "crates/engine/src/component_codegen.rs",
+        "crates/engine/src/extensions/plugins.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/live.rs",
+        "crates/engine/src/sharing/branches.rs",
+        "crates/engine/src/textedit.rs",
+        "crates/engine/src/tools.rs",
+        "crates/engine/src/widgets.rs",
+        "crates/engine/src/widgets_tests.rs",
+        "crates/plugin/src/lib.rs",
+        "crates/plugin/src/manifest.rs",
+        "crates/plugin/src/sandbox.rs",
+        "crates/plugin/src/tests.rs",
+        "crates/plugin/src/v2_tests.rs",
+        "crates/plugin/src/widget.rs",
+        "crates/plugin/src/widget_tests.rs",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/a11y.rs",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/dialogs/plugins_ui.rs",
+        "crates/ui-egui/src/home.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/present.rs",
+        "crates/ui-egui/src/right.rs",
+        "crates/ui-egui/src/typography.rs",
+        "crates/ui-egui/src/windows.rs",
+        "docs/collaboration-parity.md",
+        "docs/dev-mode-parity.md",
+        "docs/gaps.md",
+        "docs/hardware-parity.md",
+        "docs/mcp.md",
+        "docs/parity-checklist.md",
+        "docs/plugins.md",
+        "docs/roadmap.md",
+        "docs/target-app-parity.md",
+        "docs/ui-parity.md",
+        "plugins/Cargo.lock",
+        "plugins/examples/counter/figcraft-plugin.json",
+        "plugins/examples/counter/src/lib.rs",
+        "plugins/sdk/src/lib.rs",
+        "xtask/src/main.rs"
+      ]
     },
     {
       "number": 173,
@@ -1568,9 +2161,40 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/args.rs",
+        "apps/figcraft/src/args_tests.rs",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/engine/src/cmd/file.rs",
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/code_connect.rs",
+        "crates/engine/src/component_codegen.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/sharing/branches.rs",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/home.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/windows.rs",
+        "docs/collaboration-parity.md",
+        "docs/dev-mode-parity.md",
+        "docs/gaps.md",
+        "docs/hardware-parity.md",
+        "docs/mcp.md",
+        "docs/ui-parity.md"
+      ]
     },
     {
       "number": 129,
@@ -1580,11 +2204,19 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "GPU spike; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "crates/ui-egui/Cargo.toml",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/canvas_fixes_tests.rs",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/idle_tests.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/render_worker.rs"
+      ]
     },
     {
       "number": 113,
@@ -1594,10 +2226,27 @@
       "draft": true,
       "status": "deferred",
       "reasons": [
-        "Draft PR; postponed by the user to a later stage.",
-        "Merge conflicts; resolution postponed by the user to a later stage."
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
       ],
-      "merge_commit": null
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "ROADMAP.md",
+        "apps/figcraft/src/main.rs",
+        "crates/engine/src/catalog.rs",
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/lib.rs",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/menus.rs",
+        "docs/gaps.md",
+        "docs/mcp.md",
+        "docs/parity-checklist.md",
+        "docs/roadmap.md",
+        "docs/target-app-parity.md",
+        "docs/ui-parity.md"
+      ]
     }
-  ]
+  ],
+  "scope_confirmation": "The user explicitly confirmed attempting drafts and experiments while still deferring every merge conflict."
 }
