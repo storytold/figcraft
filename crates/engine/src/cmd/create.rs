@@ -415,10 +415,17 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
         }
         super::props::apply(cmd, doc, nid, &fixed)?;
     }
+    // A `fontStyle` the family lacks draws in its nearest face, the same as `node.set` says.
+    let warnings = match get(p, "props") {
+        Some(Value::Object(props)) if doc.node(nid).is_some_and(|n| n.kind.text().is_some()) => {
+            super::edit::font_style_warnings(doc, &[nid], props)
+        }
+        _ => Vec::new(),
+    };
     if boolean(p, "select").unwrap_or(true) {
         ds.selection = vec![nid];
     }
-    Ok(json!({"id": nid}))
+    if warnings.is_empty() { Ok(json!({"id": nid})) } else { Ok(json!({"id": nid, "warnings": warnings})) }
 }
 
 fn frame_create(s: &mut Session, p: &Value) -> Result<Value> {

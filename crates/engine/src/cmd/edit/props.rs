@@ -206,7 +206,7 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
 /// face has another weight or slant than the name asks for ("Black" on a family whose heaviest is
 /// Bold), say which face it is. Families that aren't installed, and names that match a style or a
 /// named instance (spelled any way: "SemiBold", "Semi Bold"), say nothing.
-fn font_style_warnings(doc: &figcraft_doc::Document, ids: &[NodeId], props: &serde_json::Map<String, Value>) -> Vec<String> {
+pub(crate) fn font_style_warnings(doc: &figcraft_doc::Document, ids: &[NodeId], props: &serde_json::Map<String, Value>) -> Vec<String> {
     let Some(style) = props.get("fontStyle").and_then(Value::as_str) else { return Vec::new() };
     let mut families: Vec<String> = match props.get("fontFamily").and_then(Value::as_str) {
         Some(f) => vec![f.to_string()],
