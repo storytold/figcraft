@@ -250,6 +250,15 @@ pub struct CodeLink {
     pub name: String,
     /// The snippet with `{property}` and `{property ? "a" : "b"}` placeholders.
     pub template: String,
+    /// Where the code component lives, relative to the code repository.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// What a property's design values are called in code: property → design value → code value.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, BTreeMap<String, String>>,
+    /// Notes for whoever uses the component.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
 }
 
 /// A dev resource: a link for developers attached to a layer. The URL is data only: it is shown
