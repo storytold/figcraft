@@ -1093,7 +1093,9 @@ most when it can't be reached).
   by name in their set, styles by name and type, variables by collection, name and type, modes by
   name), keeping overrides; one undo step → `{components, styles, variables, unmatched: [names
   still from `from`, including this file's collections that extend one of its collections],
-  removed (nothing of `from` was left, so it was removed)}`.
+  dropped: [`from`'s copies nothing used before the swap, which it removed rather than moved: a
+  component imported but not placed, or whose instances were deleted; a variable imported but not
+  bound], removed (nothing of `from` was left, so it was removed)}`.
 
 ### Overrides and variants
 
