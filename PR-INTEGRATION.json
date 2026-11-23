@@ -1,6 +1,5 @@
 {
   "schema_version": 1,
-  "snapshot_at": "2026-11-23T17:53:35.377914+03:30",
   "source_repository": "https://github.com/storytold/figcraft",
   "fork_repository": "https://github.com/hayyaun/figcraft",
   "base_commit": "bbf7ad418f3e02d89546a6c7b044e51df67177f0",
@@ -10,28 +9,61 @@
     "rust": "1.100.0",
     "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
     "passed": [
-      "cargo fmt --all --check",
+      "cargo xtask ci (formatting; workspace Clippy with warnings denied; native unit and integration tests; doctests; i18n report; layers, assets and docs checks; wasm32 check; plugin SDK formatting, Clippy, tests and release wasm build)",
+      "wasm-pack test --headless --firefox --geckodriver /snap/bin/geckodriver apps/figcraft-web --bin figcraft-web --locked",
+      "cargo test --workspace --lib --bins --tests --no-fail-fast picker (87 UI tests passed)",
       "git diff --check",
+      "Changed TOML files parsed successfully",
       "bash -n packaging/linux/AppRun packaging/linux/postinst.sh packaging/linux/apprun-test.sh",
-      "bash packaging/linux/apprun-test.sh"
+      "bash packaging/linux/apprun-test.sh",
+      "All 45 included PR heads are ancestors of the validated source commit; all 80 conflict deferrals have file inventories; all 127 captured PRs are accounted for"
     ],
-    "pending": [
-      "Baseline cargo xtask ci",
-      "Combined cargo xtask ci",
-      "File-provider browser regressions"
-    ],
+    "workspace_ci": {
+      "head": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+      "state": "finished",
+      "exit_code": 0,
+      "started": "2026-11-23T19:35:13.318817+00:00",
+      "finished": "2026-11-23T20:14:56.460541+00:00"
+    },
+    "native_test_results": {
+      "passed": 6398,
+      "failed": 0,
+      "ignored": 13,
+      "test_binaries": 36
+    },
+    "browser_regressions": {
+      "head": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+      "state": "finished",
+      "exit_code": 0,
+      "started": "2026-11-23T20:21:58.175636+00:00",
+      "finished": "2026-11-23T20:23:46.946740+00:00"
+    },
+    "browser_test_results": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
     "platform_limits": [
-      "macOS and Windows runtime behavior has not been exercised locally."
+      "Native checks ran on Ubuntu under WSL, with headless UI tests; no manual screen-reader, keyboard-navigation or desktop visual review is claimed.",
+      "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
+      "Release packages and installers have not been built or installed locally.",
+      "Translation quality has not been reviewed by native speakers.",
+      "Baseline full CI was interrupted and is not claimed to have passed."
     ],
     "notes": [
-      "The first wasm-pack invocation placed browser options after the crate path, so they were parsed as Cargo options. The invocation was corrected before retrying.",
-      "The initial combined CI invocation was stopped before checks ran when the user expanded the integration scope."
-    ]
+      "Earlier integration validation exposed missing regression-test imports, stale exact inspection metadata, a pagination fixture made too small by compact JSON, and image/gradient/crop picker interaction defects. These were corrected with assertions preserved or expanded before the final passing runs.",
+      "The first browser runtime attempt failed before assertions because WebDriver did not bind its port; the final isolated run recorded here supersedes that attempt."
+    ],
+    "browser_setup": "GECKODRIVER_REMOTE points to a prestarted /snap/bin/geckodriver on loopback; Snap Firefox remains headless."
   },
   "integration_adjustments": [
     "Applied Rust 1.100 formatting to imported changes.",
     "Removed two redundant too_many_arguments suppressions; the existing Clippy argument threshold remains 10.",
-    "Added missing imports to the image-picker regression module introduced by PR #618; assertions are unchanged."
+    "Added missing imports to the image-picker regression module introduced by PR #618; assertions are unchanged.",
+    "Updated the exact inspection golden response for the document revision and capability metadata added by PR #1995, keeping the full equality assertion.",
+    "Enlarged the MCP pagination fixture so compact JSON serialization still exercises child paging, preserving byte-budget, marker and ordering assertions.",
+    "Fixed completion of picker-owned gradient and crop gestures from PR #618 while preserving unrelated move and text undo scopes; added real-input regression coverage.",
+    "Preserved same-frame image picker retargeting through discarded UI layout passes with viewport, document and page scoped temporary state; extended input regression coverage."
   ],
   "draft_checkpoint_branch": "community-integration-draft-checkpoint",
   "draft_restoration": [
@@ -40,26 +72,29 @@
       "merge_commit": "8f5c9c2e2ea2",
       "revert_commit": "deb77f91",
       "restoration_commit": "e2e83ad01e946fbc296ecc26946f097234d018da",
-      "status": "restored-pending-validation"
+      "status": "restored"
     },
     {
       "number": 2555,
       "merge_commit": "d05c13e44b7d",
       "revert_commit": "57f73d56",
       "restoration_commit": "5615658c03ce75c1a2beed252955a0a71d3e53de",
-      "status": "restored-pending-validation"
+      "status": "restored"
     },
     {
       "number": 2544,
       "merge_commit": "fe73379e5ed3",
       "revert_commit": "0502c19e",
       "restoration_commit": "791339559e10f1312d2e22c4c5be551469d82598",
-      "status": "restored-pending-validation"
+      "status": "restored"
     }
   ],
   "counts": {
-    "integrated-pending-validation": 45,
-    "deferred": 82
+    "integrated": 45,
+    "deferred": 82,
+    "deferred_merge_conflicts": 80,
+    "deferred_release_infrastructure": 2,
+    "integrated_drafts_at_capture": 4
   },
   "pull_requests": [
     {
@@ -68,9 +103,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2577",
       "head": "34abd7da2dba055c4ea87e10bfcee80f8b4f42b7",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "87a1db8b2dda0705718e99fed55eaa79b20f84ea"
     },
@@ -96,9 +131,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2575",
       "head": "e07770073ef7a6b1967c518ceb16e5d389323aaf",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "9551b742a5ebc33c27e3cd6ee128ad3bc1189dee"
     },
@@ -108,9 +143,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2574",
       "head": "cdf20f6f27fc883f23753ac29e547d5675de1eaf",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "892ba33dedd92f6343a8b9fed0fc89d818191ec4"
     },
@@ -120,9 +155,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2573",
       "head": "4296cf8136929bc5db317cf38c7be6ab7b6a0cc8",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "2c205328690c71775188cd4c764774b440ff31c7"
     },
@@ -132,9 +167,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2570",
       "head": "0fca11df35e0b3d9fc6cf554c68a8eb2a03304d6",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "fe86cf799d2fc8d78471878a078c435d14adb40a"
     },
@@ -146,7 +181,7 @@
       "draft": false,
       "status": "deferred",
       "reasons": [
-        "Requires upstream private self-hosted CI runners that are not configured for this fork."
+        "Uses upstream self-hosted runner labels whose availability to this fork has not been established."
       ],
       "merge_commit": null
     },
@@ -156,9 +191,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2561",
       "head": "141083243ac81dc0f349282a9f8f6fb6640c2960",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "54f3186eb358c19c2696e95e48cab4b771696d40"
     },
@@ -168,9 +203,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2560",
       "head": "3a374ba85c0869a6e9e97117ae498924fbc40da2",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "c238037132a08085471308120f90642c1b51aab7"
     },
@@ -180,9 +215,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2558",
       "head": "0264e32c47f9924878156d5d37404e4a73268191",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "fd3b5432ab68de2f830e9e6f3cb9950bdc056a1a"
     },
@@ -192,9 +227,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2557",
       "head": "8deece232336e680e646b2670bf469650a7361a5",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "52cecdab9f72c2af735301c781e6a968eae11a8c"
     },
@@ -204,9 +239,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2556",
       "head": "f818a664e6386d93ec7de54df4d5ec7a3e133fc8",
       "draft": true,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "e2e83ad01e946fbc296ecc26946f097234d018da"
     },
@@ -216,9 +251,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2555",
       "head": "f838950f9b82e932beccf03838d474ac35d01382",
       "draft": true,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "5615658c03ce75c1a2beed252955a0a71d3e53de"
     },
@@ -228,9 +263,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2554",
       "head": "0961afab2eb00afc0fb6e7d8842d62a34dcddf96",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "19aa80e0c1b07c68b3f0ed1d48045167a7e233ea"
     },
@@ -240,9 +275,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2553",
       "head": "ba3773e1ab2f8e833839770f063f7e211d1b77f5",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "0220ea30ce7b09ff7d5e98bd06f4377f32d28a52"
     },
@@ -252,9 +287,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2551",
       "head": "a6f9cd1efc20285635e50e8ddf01cfa0282ef266",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "75623bb5f9fb2010bda748c758ddd84264a9cf82"
     },
@@ -264,9 +299,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2550",
       "head": "301c382a794f7bae7b975b373521e41d451b8e29",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "d3031b501790741835820b220815b30a6fbd7b6e"
     },
@@ -276,9 +311,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2549",
       "head": "a976caf85763c080ebbb003441732e971a2c034e",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "bd6dcef5ac2b5ec27c2b74d7c27f6927f5f6ddb7"
     },
@@ -288,9 +323,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2548",
       "head": "03080bfd7afef77a586699c527b840e648a3d336",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "cece5041bda719fc368641ad21bbe0c212108e06"
     },
@@ -300,9 +335,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2546",
       "head": "0d03a241db7d40670fb6e30428a0e94fc6c6f59e",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "a87550e9c5fe022a913b64b2e5fe8e05396047b0"
     },
@@ -312,9 +347,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2545",
       "head": "9a0ba67e312136950eb8c33d9876d5d1b7c83fc1",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "de9a5c33b56228f9c9c1cab3c8ca2dd1f6c114e7"
     },
@@ -324,9 +359,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2544",
       "head": "9c5d7dbef784fb70a6657527fbc27f26dd2ad52a",
       "draft": true,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "791339559e10f1312d2e22c4c5be551469d82598"
     },
@@ -336,9 +371,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2543",
       "head": "488304cc03c84c172d0d98601d196a668b0dde59",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "8150232c26035ec7016692d601602066fa2f9da1"
     },
@@ -348,9 +383,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2542",
       "head": "0ceac64731d5ec5d5fc4748737b3f69f27a318c2",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "e993a7145ed1e54eaa80f15eaa83ae069013841d"
     },
@@ -360,9 +395,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2537",
       "head": "35c18751fece606061cecef35c8e38480d31d681",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "53ee58c7a14d1cdd6687d89fb58b6d51352612fa"
     },
@@ -387,9 +422,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2533",
       "head": "e26b0aa2238dfa97bcaa5d4f4ebaf20a04ebc9ad",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "ea9281ca6910b7d70f29f76f411580266df8f2f6"
     },
@@ -399,9 +434,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2532",
       "head": "17a7469bab3312b3f29bb00f92b0a509ca2f9367",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "e465bb4c8411ce743ed5876b9e853b004eeca5c8"
     },
@@ -411,9 +446,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2509",
       "head": "cfef5763f4208fa9bdb7ad1469da4cc22e8ae40c",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "6f7569343cfa0569b19b0a1f3afafd08d2b76f94"
     },
@@ -423,9 +458,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2503",
       "head": "0a47e5e5d5a582fa3781057b064caf90d79c123a",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "4a65ffbc86b46e86e773cc6c854a57fc15bb9802"
     },
@@ -435,9 +470,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2498",
       "head": "d28438ec5596228c85a6de8572f7fc0f574ef50d",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "e8f0dc03be899d4e91dbeea24e48714ccc2b5e97"
     },
@@ -447,9 +482,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2493",
       "head": "940b133b029fa0ec122e737a0728144e8123da81",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "8b1d14fe5326d51aedaf72fb913b7aeeeed5f1c8"
     },
@@ -489,9 +524,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2489",
       "head": "f6dd6a9c3bd03ac2322c80abedc1383a8c529cee",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "50a06b27355bc62e5c324b99e5177f9c452454f5"
     },
@@ -531,9 +566,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2486",
       "head": "0d7eeac29d7df0c206194a5cb9e7344f63132a4c",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "34b13b431aa57dcf505d4af6dcea9bc8673a300f"
     },
@@ -588,9 +623,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2482",
       "head": "ef957a61c818b98d7118873b05a20986945e89c7",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "003a7335e34c5b5fd2b1c49085cd255937b7cea2"
     },
@@ -677,9 +712,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2472",
       "head": "d6cef43353c768acf4857bf5ee66218806f5606f",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "4241251ae581cb1757f331f47d762f282cc07ae4"
     },
@@ -704,9 +739,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2466",
       "head": "d243347fd08325847e84ff717c3eb346fc672108",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "536d09d00794b937b899e4b6e4c931854adc9aa4"
     },
@@ -778,9 +813,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2404",
       "head": "43810b42eeb31615e3aedc26306be32887d3ffbc",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "649b82b92e877e29fc89c8e96e113349f58efd01"
     },
@@ -835,9 +870,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2398",
       "head": "5e507f3721457522289e875970ac04300a913e57",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "fbc1bfc295c84d0612f84927b877ad6be166c8ef"
     },
@@ -847,9 +882,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2397",
       "head": "a7f1091e74213b59947b0c7a27c05184ea958754",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "d0ecaf70a403284381124de34107d72d85f8c3b9"
     },
@@ -859,9 +894,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2396",
       "head": "f8d7dd1fb2a05ac403394985624fa3dd923544dc",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "eaae1d94967b9c18f7ae669007fcd86d04751079"
     },
@@ -1074,9 +1109,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2235",
       "head": "586753345cac65c51bb9ed7785781e9cf12b2ab1",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "124b85f4295b3b1292a9e8f63bca99b1bf7d353c"
     },
@@ -1146,9 +1181,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2212",
       "head": "530c159699e9970464016583d54303b69f91ae4e",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "5fa32f9a36a2438e581de8ff1abdae16d6102556"
     },
@@ -1175,9 +1210,9 @@
       "url": "https://github.com/storytold/figcraft/pull/2194",
       "head": "13cd2f7d6b28dd82698fbdcf4aca65e94f67b6ec",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "f550cf41c44fcfad6788d0162ca6830b2f14dfb6"
     },
@@ -1361,9 +1396,9 @@
       "url": "https://github.com/storytold/figcraft/pull/1995",
       "head": "f3214ddd10bd2fd57420d7021e184cee69ed1695",
       "draft": true,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "481072d339d41e74370113a4bee531221866bf3e"
     },
@@ -1404,9 +1439,9 @@
       "url": "https://github.com/storytold/figcraft/pull/1792",
       "head": "556a088bf0f8f1ea5875ad32a5ea10683bde3a63",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "0231cb32499982e5845d9162e38cdbbf7f0d6142"
     },
@@ -1416,9 +1451,9 @@
       "url": "https://github.com/storytold/figcraft/pull/1763",
       "head": "59d5c3624470e787847a32c5fb74d4c61aaf2e86",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "fc3430f9d6e5832862fd0690809a345dbae392b4"
     },
@@ -2012,9 +2047,9 @@
       "url": "https://github.com/storytold/figcraft/pull/618",
       "head": "635619d2676ba5a05fa753351c7ef952c7ecaa20",
       "draft": false,
-      "status": "integrated-pending-validation",
+      "status": "integrated",
       "reasons": [
-        "Integrated without resolving merge conflicts; combined validation is pending."
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
       "merge_commit": "9c80e482419d76b496143974583a68668b0d6f09"
     },
@@ -2248,5 +2283,14 @@
       ]
     }
   ],
-  "scope_confirmation": "The user explicitly confirmed attempting drafts and experiments while still deferring every merge conflict."
+  "scope_confirmation": "The user explicitly confirmed attempting drafts and experiments while still deferring every merge conflict.",
+  "snapshot_recorded_at": "2026-11-23T17:53:35.377914+03:30",
+  "completed_at": "2026-11-23T20:24:23.892159+00:00",
+  "validated_source_commit": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+  "upstream_observation": {
+    "observed_main_commit": "b828e6c75a3a90fefc0e62f488c013ca4714a5fa",
+    "subject": "ci(release): forward ARTCRAFT_SERVICES_DISPATCH_TOKEN secret (#2578)",
+    "included": false,
+    "reason": "Newer CI-only main commit observed after the fixed integration base and captured backlog; not merged into this branch."
+  }
 }
