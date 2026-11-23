@@ -119,8 +119,9 @@ page 1 "Screens": 380 nodes, 4 top-level
   The name is kept as it is, except for the characters file systems refuse (`/ \ : * ? " < > |`
   and control characters), which become `_`, and leading or trailing spaces and dots, which are
   dropped. Reserved Windows device names such as `CON` get a leading `_`.
-  A name is cut at 100 characters. The app's export replaces the same characters (there a
-  `/` makes a folder). Two layers with the same name get `Name 2`, `Name 3`…
+  Names are limited to 100 characters and 200 UTF-8 bytes. The app's export replaces the same
+  characters (there a `/` makes a folder). Two layers with the same name get `Name 2`, `Name 3`…
+  With `--node`, the CLI writes one file named after the selected layer, including a nested layer.
 - `<out>` has an image extension: one file with the given `--node`, or the whole page composited.
 - `--node` takes a layer id (`12` or `0:12`) or a layer name.
 - `--format fig` (or an `<out>` ending in `.fig`) writes the whole file as `.fig`, experimental:
