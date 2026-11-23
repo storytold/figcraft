@@ -66,9 +66,11 @@ fn golden_tree() -> (Session, NodeId) {
 fn empty_options_keep_the_main_tree_and_document_output() {
     let (s, frame) = golden_tree();
     // Captured with this builder on origin/main (43af145a12eacd1e87f5f5e6984c49b7da040288), plus the
-    // document `id` that #1533 added. That id comes from a process-wide counter, so it is the
-    // session's own.
+    // document `id` that #1533 added and revision/capabilities metadata from #1995. The id
+    // comes from a process-wide counter, so it is the session's own.
     let expected = json!({
+        "capabilities": {"conditionalExecute": 1, "documentChangeEvents": 1},
+        "revision": 8,
         "colorProfile": "srgb",
         "currentPage": 7,
         "dirty": true,
