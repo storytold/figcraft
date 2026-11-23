@@ -300,3 +300,27 @@ fn crop_in_the_colour_picker_only_sets_the_mode_where_crop_image_does_not_apply(
     assert_eq!(image_at(&u, vector, true, Some(1)).scale_mode, ImageScaleMode::Crop);
     assert_eq!(u.app.session.doc().unwrap().node(vector).unwrap().fills, layer_fills, "the layer's fills are untouched");
 }
+
+#[test]
+fn closing_the_picker_stops_a_crop_drag_under_the_held_button() {
+    let (mut u, layer, _) = setup();
+    u.app.open_picker(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![layer] }, None);
+    for _ in 0..4 {
+        u.frame(vec![]);
+    }
+    choose_mode(&mut u, "Fill", "Crop");
+    let from = u.app.to_screen(100.0, 50.0);
+    u.button(from, true);
+    u.frame(vec![Event::PointerMoved(from + vec2(20.0, 10.0))]);
+    assert!(crate::handles::crop_dragging(&u.ctx), "the image crop is being dragged");
+    crate::colorpicker::close(&mut u.app);
+    let depth = u.app.session.undo_depth().0;
+    let doc = u.app.session.doc().unwrap().clone();
+    for k in 1..=4 {
+        u.frame(vec![Event::PointerMoved(from + vec2(20.0 + 10.0 * k as f32, 10.0))]);
+    }
+    assert!(!crate::handles::crop_dragging(&u.ctx), "closing ended the crop drag");
+    assert_eq!(u.app.session.undo_depth().0, depth, "moving under the held button adds no undo steps");
+    assert!(*u.app.session.doc().unwrap() == doc, "the crop stays at its committed position");
+    u.button(from + vec2(60.0, 10.0), false);
+}

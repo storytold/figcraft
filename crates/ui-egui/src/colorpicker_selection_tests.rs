@@ -372,3 +372,29 @@ fn a_gradient_drag_whose_gesture_closes_under_the_held_button_stops_editing() {
         u.button(u.app.to_screen(180.0, 200.0), false);
     }
 }
+
+#[test]
+fn closing_the_picker_stops_a_new_gradient_stop_drag() {
+    let mut u = gradient_ui(false);
+    u.button(u.app.to_screen(200.0, 200.0), true);
+    u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(200.0, 240.0))]);
+    assert!(crate::handles::gradient_dragging(&u.ctx));
+    let selected = u.app.session.selection()[0];
+    assert!(
+        matches!(
+            &u.app.session.doc().unwrap().node(selected).unwrap().fills[0].kind,
+            figcraft_color::PaintKind::Gradient(g) if g.stops.len() == 3
+        ),
+        "the press added a gradient stop"
+    );
+    crate::colorpicker::close(&mut u.app);
+    let depth = u.app.session.undo_depth().0;
+    let doc = u.app.session.doc().unwrap().clone();
+    for k in 1..=4 {
+        u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(200.0, 240.0 + 10.0 * f64::from(k)))]);
+    }
+    assert!(!crate::handles::gradient_dragging(&u.ctx), "closing ended the new stop's drag");
+    assert_eq!(u.app.session.undo_depth().0, depth, "moving under the held button adds no undo steps");
+    assert!(*u.app.session.doc().unwrap() == doc, "the new stop stays at its committed position");
+    u.button(u.app.to_screen(200.0, 280.0), false);
+}

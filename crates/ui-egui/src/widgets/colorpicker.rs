@@ -207,6 +207,11 @@ fn finish(app: &mut FigApp) {
     finish_with(app, true);
 }
 
+/// The picker and its on-canvas paint controls share an undo interaction lifetime.
+fn is_picker_interaction(label: &str) -> bool {
+    matches!(label, "Color" | "Edit gradient" | "Add gradient stop" | "Crop image")
+}
+
 /// Finish the picker's edit. `record`: the colour it ends on is a choice for the recent colours
 /// (not when the picker was only closed because its layers went away or changed).
 fn finish_with(app: &mut FigApp, record: bool) {
@@ -215,7 +220,7 @@ fn finish_with(app: &mut FigApp, record: bool) {
         app.ui.picker = Some(PickerTarget::PluginField { plugin, control, pending: None });
     }
     // Any open interaction counts for the recent colours: editing text holds an "Edit text" one, and
-    // the colour a drag ends on is still a choice. Only a colour interaction is committed here.
+    // the colour a drag ends on is still a choice. Only the picker's own interaction is committed here.
     let label = app.session.ds().ok().and_then(|d| d.interaction.as_ref().map(|interaction| interaction.label.clone()));
     if let Some(label) = label {
         if record
@@ -225,7 +230,7 @@ fn finish_with(app: &mut FigApp, record: bool) {
         {
             remember_recent(app, c);
         }
-        if label == "Color" {
+        if is_picker_interaction(&label) {
             let _ = app.session.commit_interaction();
         }
     }
@@ -237,7 +242,7 @@ fn finish_document(app: &mut FigApp, uid: u64) {
         crate::plugins_ui::set_field(app, &plugin, &control, &hex);
     }
     let Some(index) = app.session.docs.iter().position(|doc| doc.uid == uid) else { return };
-    if !app.session.docs[index].interaction.as_ref().is_some_and(|interaction| interaction.label == "Color") {
+    if !app.session.docs[index].interaction.as_ref().is_some_and(|interaction| is_picker_interaction(&interaction.label)) {
         return;
     }
     let active = app.session.active;
@@ -1102,6 +1107,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         app.ui.picker_context = None;
         return;
     }
+    let previous_target = app.ui.picker.clone();
     if !sync_picker_target(app) {
         if app.ui.picker.is_none() {
             app.session.tool.picked = None;
@@ -1112,6 +1118,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         return;
     }
     let Some(target) = app.ui.picker.clone() else { return };
+    let retargeted = previous_target.as_ref().is_some_and(|previous| previous != &target);
     // A layer's picker belongs to the selection it was opened for: once that changes, close it
     // rather than keep editing layers that are no longer selected. Image-adjustment paints are
     // retargeted first (`sync_picker_target`), and the same layers in another order stay open.
@@ -1162,7 +1169,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     // Nor may a press on the open gradient's handles or stops on the canvas: they are this picker's
     // controls, and the canvas took the press before the picker drew (#1852).
     // Nor may one on the crop of an image paint held in Crop mode (#2307).
-    let own = picking || crate::handles::gradient_dragging(ctx) || crate::handles::crop_dragging(ctx);
+    // A click that selected a new image belongs to the picker it retargeted, including a
+    // press and release delivered together in one frame.
+    let own = retargeted || picking || crate::handles::gradient_dragging(ctx) || crate::handles::crop_dragging(ctx);
     pop = pop.close_on_outside(!own);
     // Only the opening control is held out: any other sidebar or canvas press dismisses it.
     let mut held: Vec<Rect> = app.ui.picker_button.into_iter().collect();
