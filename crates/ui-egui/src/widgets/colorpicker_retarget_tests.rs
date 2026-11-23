@@ -1,3 +1,12 @@
+use figcraft_color::{Color, ImageFilters, ImageScaleMode, Paint, PaintKind};
+use figcraft_doc::NodeId;
+use figcraft_engine::Session;
+use serde_json::json;
+
+use super::{PickerTarget, current_paint, sync_picker_target, write};
+use crate::FigApp;
+use crate::layers_drag_tests::Ui;
+
 fn image_layer(session: &mut Session, filters: ImageFilters) -> NodeId {
     image_layer_at(session, filters, 0.0)
 }
