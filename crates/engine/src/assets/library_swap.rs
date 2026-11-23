@@ -238,14 +238,25 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
                 *v = b.clone();
             }
         }
-        n.var_modes = std::mem::take(&mut n.var_modes)
-            .into_iter()
-            .flat_map(|(c, mode)| match colls.get(&c).and_then(|(b, modes)| modes.get(&mode).map(|bm| (b.clone(), bm.clone()))) {
-                Some(moved) if still_a.contains(&c) => vec![moved, (c, mode)],
-                Some(moved) => vec![moved],
-                None => vec![(c, mode)],
-            })
-            .collect();
+        // A mode the layer already chose of B's collection wins over one moved from A's.
+        let old = std::mem::take(&mut n.var_modes);
+        let mut moved = Vec::new();
+        for (c, mode) in old {
+            match colls.get(&c).and_then(|(b, modes)| modes.get(&mode).map(|bm| (b.clone(), bm.clone()))) {
+                Some(to) => {
+                    moved.push(to);
+                    if still_a.contains(&c) {
+                        n.var_modes.insert(c, mode);
+                    }
+                }
+                None => {
+                    n.var_modes.insert(c, mode);
+                }
+            }
+        }
+        for (c, mode) in moved {
+            n.var_modes.entry(c).or_insert(mode);
+        }
     }
     for v in doc.variables.variables.iter_mut().filter(|v| !remote.contains(&v.id)) {
         for r in v.values.values_mut().flat_map(VariableValue::references_mut) {

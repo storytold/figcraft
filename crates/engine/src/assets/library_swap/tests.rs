@@ -279,6 +279,21 @@ fn swap_keeps_the_mode_of_a_collection_that_still_has_a_variable_on_the_old_libr
     assert_eq!(owners, expected, "B's Theme mode, and A's kept: {modes:?}");
     assert_eq!((fill(&s, accent), fill(&s, glow)), ("00FF00".to_string(), "222222".to_string()), "glow stays on A's Dark");
 
+    // A mode chosen of B's Theme since wins over A's Dark moved onto it by a second swap.
+    ex(&mut s, "library.setVariableMode", json!({"library": b, "collection": "Theme", "mode": "Light", "ids": [frame]}));
+    ex(&mut s, "library.swap", json!({"from": a, "to": b}));
+    assert_eq!(fill(&s, accent), "00FF00", "B's Light kept");
+    let doc = s.doc().unwrap();
+    let b_mode = doc
+        .node(frame)
+        .unwrap()
+        .var_modes
+        .iter()
+        .find(|(c, _)| doc.libraries.collection_import(c).is_some_and(|r| r.library == b))
+        .map(|(c, m)| (c.clone(), m.clone()));
+    let (b_coll, mode) = b_mode.unwrap();
+    assert_eq!(doc.variables.collection_by_id(&b_coll).and_then(|c| c.mode_by_id(&mode)).map(|m| m.name.as_str()), Some("Light"));
+
     // With nothing left on A's Theme, its mode goes with it.
     ex(&mut s, "edit.delete", json!({"ids": [glow]}));
     ex(&mut s, "library.swap", json!({"from": a, "to": b}));
