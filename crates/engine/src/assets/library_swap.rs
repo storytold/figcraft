@@ -210,8 +210,10 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
         out.unmatched.push(format!("extended collection {}", c.name));
     }
 
-    // Re-point layers outside the library copies, and local variables aliasing A's.
-    let ids: Vec<NodeId> = doc.nodes().filter(|n| outside(doc, n.id)).map(|n| n.id).collect();
+    // Re-point the layers, and local variables aliasing A's. The library copies' own layers too:
+    // a copy B has no match for stays (A's, or another library's), and instances placed from it
+    // later must link what the ones re-pointed here link (#2568).
+    let ids: Vec<NodeId> = doc.nodes().map(|n| n.id).collect();
     for id in ids {
         let Ok(n) = doc.get_mut(id) else { continue };
         for r in [&mut n.styles.fill, &mut n.styles.stroke, &mut n.styles.effect, &mut n.styles.grid, &mut n.styles.text] {
