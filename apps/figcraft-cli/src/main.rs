@@ -69,6 +69,10 @@ impl From<String> for CliError {
 pub type CliResult<T> = Result<T, CliError>;
 
 fn run(cli: Cli) -> CliResult<ExitCode> {
+    let mcp_roots_for_server = match &cli.command {
+        Command::Mcp(a) if a.attach.is_none() => Some(mcp_roots(&a.roots, &a.automation_allow_servers)?),
+        _ => None,
+    };
     if !cli.no_system_fonts {
         // Text lays out with the installed fonts, like the desktop app, so headless renders and
         // auto layout sizes match what users see.
@@ -92,7 +96,7 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         // `--attach` conflicts with the roots: the app runs the commands, only its own roots can confine them.
-        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, mcp_roots(&a.roots, &a.automation_allow_servers)?),
+        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, mcp_roots_for_server),
         Command::Plugin { command: PluginCommand::Publish(a) } => publish_plugin(&a.folder, &a.server),
         Command::Connect { command: ConnectCommand::Publish(a) } => confined(&a.roots, || files::connect_publish(&a.file, &a.mappings, a.dry_run)),
         Command::Perf(a) => {
@@ -172,14 +176,11 @@ fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine
     Ok(ExitCode::SUCCESS)
 }
 
-fn mcp_roots(roots: &RootArgs, allowed_servers: &[String]) -> CliResult<Option<figcraft_engine::file_access::Roots>> {
-    let Some(roots) = roots_of(roots)? else {
-        return if allowed_servers.is_empty() {
-            Ok(None)
-        } else {
-            Err(CliError::Usage("--automation-allow-server requires automation read or write roots".into()))
-        };
-    };
+fn mcp_roots(roots: &RootArgs, allowed_servers: &[String]) -> CliResult<figcraft_engine::file_access::Roots> {
+    if roots.automation_read_root.is_empty() || roots.automation_write_root.is_empty() {
+        return Err(CliError::Usage("headless mcp requires both --automation-read-root and --automation-write-root".into()));
+    }
+    let roots = figcraft_engine::file_access::Roots::new(&roots.automation_read_root, &roots.automation_write_root).map_err(CliError::Failed)?;
     let mut servers = Vec::with_capacity(allowed_servers.len());
     for server in allowed_servers {
         if server.contains('?') {
@@ -192,7 +193,7 @@ fn mcp_roots(roots: &RootArgs, allowed_servers: &[String]) -> CliResult<Option<f
         }
         servers.push(endpoint.url());
     }
-    Ok(Some(roots.with_allowed_servers(servers)))
+    Ok(roots.with_allowed_servers(servers))
 }
 
 #[cfg(test)]
@@ -201,15 +202,22 @@ mod tests {
     use crate::args::RootArgs;
 
     #[test]
-    fn an_allowed_server_needs_file_roots_and_cannot_carry_a_key() {
+    fn headless_mcp_requires_both_roots_and_allowlist_cannot_carry_a_key() {
         let server = "wss://figcraft.example.com/".to_string();
         let no_roots = RootArgs { automation_read_root: Vec::new(), automation_write_root: Vec::new() };
+        assert!(matches!(mcp_roots(&no_roots, &[]), Err(CliError::Usage(_))));
         assert!(matches!(mcp_roots(&no_roots, std::slice::from_ref(&server)), Err(CliError::Usage(_))));
 
         let path = std::env::temp_dir().join(format!("figcraft-cli-roots-{}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
+        let root = path.to_string_lossy().into_owned();
+        let read_only = RootArgs { automation_read_root: vec![root.clone()], automation_write_root: Vec::new() };
+        assert!(matches!(mcp_roots(&read_only, &[]), Err(CliError::Usage(_))));
         let roots = RootArgs { automation_read_root: Vec::new(), automation_write_root: vec![path.to_string_lossy().into_owned()] };
-        let allowed = mcp_roots(&roots, &[server]).unwrap().unwrap();
+        assert!(matches!(mcp_roots(&roots, &[]), Err(CliError::Usage(_))));
+
+        let roots = RootArgs { automation_read_root: vec![root.clone()], automation_write_root: vec![root] };
+        let allowed = mcp_roots(&roots, &[server]).unwrap();
         assert_eq!(allowed.allowed_servers(), ["wss://figcraft.example.com:443/"]);
 
         let with_key = "wss://figcraft.example.com/?key=secret".to_string();

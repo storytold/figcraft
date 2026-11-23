@@ -70,8 +70,9 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   and correct, for example `automation path rejected: /etc/x.png is outside the folders that may be
   written: /work/project/out`. Nothing is written and the server keeps serving.
 - Read and write authority are separate. With only `--automation-read-root` nothing can be written
-  to disk (`export` and the export commands without a `path` still return the bytes). Without either
-  flag nothing changes.
+  to disk (`export` and the export commands without a `path` still return the bytes). Headless MCP
+  refuses to start unless both `--automation-read-root` and `--automation-write-root` are supplied.
+  Attached MCP takes neither flag; the attached app's roots govern its file access.
 - The roots must be existing folders: a missing one, or a file, stops the server at startup.
   `initialize`'s `instructions` name the folders, so the agent knows where it may work.
 - **What is covered:** everything a call does, because the engine reaches the file system through

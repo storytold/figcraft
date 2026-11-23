@@ -280,6 +280,8 @@ Serve MCP on stdio: headless by default, or attached to a running app started wi
 `figcraft --control PORT`. See [mcp.md](mcp.md). The automation roots (each repeatable; existing
 folders) confine the files the agent's calls read (inside a read or write root) and write (inside a
 write root); everything else is refused ([mcp.md › Confining file access](mcp.md#confining-file-access)).
+Headless MCP requires both `--automation-read-root` and `--automation-write-root`; `--attach` uses
+the attached app's roots instead.
 They apply to the headless session only, and that is why `--attach` refuses them: an attached server
 is confined by the app it attaches to, from the flags that app was started with. With `--attach`,
 `--timeout SECONDS` (1–600, default 60) is how long the app may take over each request. The headless
