@@ -445,7 +445,11 @@ impl Session {
             Gesture::Pencil { points, pressure } => {
                 let (mut pts, mut pressure) = (points.clone(), pressure.clone());
                 pencil_add(&mut pts, &mut pressure, ev);
-                self.tool.overlay.pen = pts.iter().map(|p| [p.x, p.y]).collect();
+                if self.tool.tool != ToolId::Highlighter {
+                    self.tool.overlay.pen = pts.iter().map(|p| [p.x, p.y]).collect();
+                } else if pts.len() >= 2 {
+                    self.highlighter_drag(&super::pen::fitted_ink_path(&pts).to_svg())?;
+                }
                 self.tool.gesture = Gesture::Pencil { points: pts, pressure };
                 if let Ok(ds) = self.ds_mut() {
                     ds.revision += 1;

@@ -490,12 +490,22 @@ fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
     let ov = &app.session.tool.overlay;
     if !ov.pen.is_empty() {
         let pts: Vec<Pos2> = ov.pen.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
-        if app.session.tool.tool == ToolId::Pencil {
-            // The stroke it will make, in its colour and weight (at least a point when zoomed out):
-            // white over a dark page or frame, as the stroke will be (#1741).
-            let (default, weight) = figcraft_engine::tools::PENCIL_STROKE;
-            let color = ov.pen_color.unwrap_or(default);
-            painter.add(Shape::line(pts, stroke(doc_c32(painter.ctx(), color), ((weight * zoom) as f32).max(1.0))));
+        let ink = match app.session.tool.tool {
+            ToolId::Pencil => {
+                // The pencil's stroke can be white over a dark page or frame (#1741).
+                let (default, weight) = figcraft_engine::tools::PENCIL_STROKE;
+                Some((ov.pen_color.unwrap_or(default), weight))
+            }
+            ToolId::Marker => {
+                let (color, weight, opacity) = app.session.tool.board.ink_style(false);
+                Some((color.with_alpha(color.a * opacity), weight))
+            }
+            _ => None,
+        };
+        if let Some((color, weight)) = ink {
+            let width = (weight * zoom) as f32;
+            let width = if app.session.tool.tool == ToolId::Pencil { width.max(1.0) } else { width };
+            painter.add(Shape::line(pts, stroke(doc_c32(painter.ctx(), color), width)));
         } else {
             for [x0, y0, x1, y1] in &ov.pen_handles {
                 bezier_handle(painter, app.to_screen(*x0, *y0), app.to_screen(*x1, *y1), 3.5, Color32::WHITE);

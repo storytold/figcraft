@@ -87,7 +87,7 @@ impl FigApp {
                     figcraft_render::Work::Partial { pixels } => json!({"kind": "partial", "pixels": pixels}),
                     figcraft_render::Work::Full => json!({"kind": "full"}),
                 }),
-                "quality": if self.canvas.tex_coarse { "preview" } else { "refined" },
+                "quality": if self.canvas.shown_coarse() { "preview" } else { "refined" },
                 "previewLatencyMs": self.canvas.preview_latency_ms,
                 "refineLatencyMs": self.canvas.refine_latency_ms,
                 // The share of the canvas only the page colour covered last frame (no render reached it).

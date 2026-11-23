@@ -1,10 +1,10 @@
 use super::connectors::{CAPS, make};
 use super::{
     AUTHOR_INK, Affine, AutoLayout, BlendMode, BoardItem, BoardShape, Color, Connector, Constraints, CrossAlign, Document, Effect, EffectKind, End,
-    EngineError, HConstraint, HIGHLIGHTER, INK, LayoutMode, MARKER, MainAlign, Node, NodeId, NodeKind, Paint, Result, SHAPE, STAMP_SIZE, STICKY,
-    STICKY_GAP, STICKY_PAD, Session, Shadow, Side, Sizing, StrokeAlign, StrokeCap, StrokeJoin, TextAlignH, TextAutoResize, TextData, VConstraint,
-    Value, VectorNetwork, author, bad, boolean, color_param, get, id, id_of, json, line_shade, num, num_or, parent_of, req_num, require, shape_of,
-    stamp_of, string, textedit,
+    EngineError, HConstraint, INK, LayoutMode, MainAlign, Node, NodeId, NodeKind, Paint, Result, SHAPE, STAMP_SIZE, STICKY, STICKY_GAP, STICKY_PAD,
+    Session, Shadow, Side, Sizing, StrokeAlign, StrokeCap, StrokeJoin, TextAlignH, TextAutoResize, TextData, VConstraint, Value, VectorNetwork,
+    author, bad, boolean, color_param, get, id, id_of, json, line_shade, num, num_or, parent_of, req_num, require, shape_of, stamp_of, string,
+    textedit,
 };
 
 /// A new layer at the top of `parent`, at `at` in it, made by `f`.
@@ -376,16 +376,14 @@ pub(super) fn ink_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "board.ink";
     require(s, cmd)?;
     let high = boolean(p, "highlighter").unwrap_or(false);
-    let color = color_param(cmd, p)?.unwrap_or(if high { s.tool.board.highlighter } else { s.tool.board.marker });
-    let (weight, opacity) = if high { HIGHLIGHTER } else { MARKER };
+    let (default_color, weight, opacity) = s.tool.board.ink_style(high);
+    let color = color_param(cmd, p)?.unwrap_or(default_color);
     if get(p, "path").is_none() && get(p, "points").is_none() {
         return Err(bad(cmd, "`path` or `points` is required"));
     }
     let page = s.page()?;
     let select = boolean(p, "select").unwrap_or(true);
-    let mut q = json!({"type": "vector", "parent": page, "closed": false, "select": select, "name": if high { "Highlight" } else { "Ink" }, "props": {
-        "fills": [], "strokes": [color.to_css_hex()], "strokeWeight": weight, "strokeCap": "round", "strokeJoin": "round", "strokeAlign": "center",
-    }});
+    let mut q = json!({"type": "vector", "parent": page, "closed": false, "select": select, "name": if high { "Highlight" } else { "Ink" }});
     for k in ["path", "points"] {
         if let (Some(v), Some(o)) = (get(p, k), q.as_object_mut()) {
             o.insert(k.into(), v.clone());
@@ -393,11 +391,32 @@ pub(super) fn ink_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let made = crate::cmd::create::create(s, &q)?;
     let id = made.get("id").and_then(id_of).ok_or_else(|| EngineError::Other("no stroke made".into()))?;
-    let n = s.doc_mut()?.get_mut(id)?;
+    style_ink(s.doc_mut()?.get_mut(id)?, (color, weight, opacity), high);
+    Ok(json!({"id": id}))
+}
+
+fn style_ink(n: &mut Node, (color, weight, opacity): (Color, f64, f32), high: bool) {
+    // Use the same eight-bit colour the ink command used to pass as a CSS hex string.
+    let [r, g, b, a] = color.to_rgba8();
+    n.fills.clear();
+    n.strokes = vec![Paint::solid(Color::from_rgba8(r, g, b, a))];
+    n.stroke.weight = weight;
+    n.stroke.cap_start = StrokeCap::Round;
+    n.stroke.cap_end = StrokeCap::Round;
+    n.stroke.join = StrokeJoin::Round;
+    n.stroke.align = StrokeAlign::Center;
     n.opacity = opacity;
     if high {
         n.blend = BlendMode::Multiply;
     }
     n.board = Some(BoardItem::Ink);
-    Ok(json!({"id": id}))
+}
+
+/// Insert the live highlighter into the preview document so it blends with the actual backdrop.
+pub(super) fn preview_highlighter(doc: &mut Document, page: NodeId, path: &str, style: (Color, f64, f32)) -> Result<()> {
+    let shape = crate::cmd::create::path_network("board.ink", path, None, None)?;
+    let mut network = shape.network;
+    network.regions.clear();
+    add(doc, page, NodeKind::Vector { network }, "Highlight", shape.offset, (shape.width, shape.height), |n| style_ink(n, style, true))?;
+    Ok(())
 }

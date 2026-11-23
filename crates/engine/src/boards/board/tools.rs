@@ -1,7 +1,9 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use super::connectors::{CAPS, at_json, end_json, make, other_end, side_json};
 use super::derived::{ends_now, route};
 use super::edit::label_of;
-use super::items::edit_text;
+use super::items::{edit_text, preview_highlighter};
 use super::{
     BoardItem, Connector, Document, ERASER_PX, End, EngineError, Gesture, NodeId, Point, PointerEvent, Result, SHAPE, STICKY, Session, Side, ToolId,
     id_of, is_board, json,
@@ -10,6 +12,7 @@ use super::{
 /// How near (screen pixels) the pointer must be to the middle of an object's side for a connector
 /// end to attach there, however small the object is on screen.
 const ATTACH_PX: f64 = 10.0;
+static NEXT_HIGHLIGHTER_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Point `p` as fractions of box `b` (`None`: a box with no area).
 fn part_at(b: figcraft_geom::Rect, p: Point) -> Option<[f64; 2]> {
@@ -71,6 +74,9 @@ impl Session {
                 Ok(())
             }
             ToolId::Marker | ToolId::Highlighter => {
+                if self.tool.tool == ToolId::Highlighter {
+                    self.tool.highlighter_generation = NEXT_HIGHLIGHTER_GENERATION.fetch_add(1, Ordering::Relaxed);
+                }
                 self.tool.gesture = Gesture::Pencil { points: vec![ev.p()], pressure: vec![ev.pressure] };
                 Ok(())
             }
@@ -264,6 +270,27 @@ impl Session {
     pub(crate) fn erase_up(&mut self) -> Result<()> {
         self.tool.overlay.brush = None;
         self.commit_interaction()
+    }
+
+    /// Update the render-only document after the pointer extends a highlighter stroke.
+    pub(crate) fn highlighter_drag(&mut self, path: &str) -> Result<()> {
+        let ds = self.ds()?;
+        let (uid, page, source) = (ds.uid, ds.page, ds.doc.clone());
+        let mut doc = (*source).clone();
+        preview_highlighter(&mut doc, page, path, self.tool.board.ink_style(true))?;
+        self.tool.highlighter_preview = Some(crate::tools::HighlighterPreview { uid, page, source, doc: std::sync::Arc::new(doc) });
+        Ok(())
+    }
+
+    /// The canvas's preview of a live highlighter stroke on the current page and document.
+    pub fn highlighter_preview_doc(&self) -> Option<(std::sync::Arc<Document>, u64)> {
+        if self.tool.tool != ToolId::Highlighter || !matches!(&self.tool.gesture, Gesture::Pencil { points, .. } if points.len() >= 2) {
+            return None;
+        }
+        let preview = self.tool.highlighter_preview.as_ref()?;
+        let ds = self.ds().ok()?;
+        (preview.uid == ds.uid && preview.page == ds.page && std::sync::Arc::ptr_eq(&preview.source, &ds.doc))
+            .then(|| (preview.doc.clone(), self.tool.highlighter_generation))
     }
 
     /// A finished marker or highlighter stroke (page points).
