@@ -219,7 +219,9 @@ pub(super) fn cut(s: &mut Session, p: &Value) -> Result<Value> {
     delete(s, &json!({"ids": layers}))
 }
 
-/// Paste the clipboard under `parent` with the copied top-left moved to `at` (page coords).
+/// Paste the clipboard under `parent` with the copied top-left moved to `at` (page coords). A
+/// copied main is pasted as an instance of it; in another file, as an instance of it from the
+/// library the source file publishes, and as a copy of it when that library doesn't offer it.
 pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Result<Vec<NodeId>> {
     paste_layers(s, parent, at, false)
 }
@@ -250,13 +252,16 @@ fn paste_layers(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>, as_vari
     let mut out = Vec::new();
     let mut all = BTreeMap::new();
     for (root, nodes) in &clip.nodes {
-        if copy_local
-            && !into_set
-            && clip.copied_components.contains(root)
-            && let Some(n) = nodes.first().filter(|n| matches!(n.kind, NodeKind::Component { .. }))
-            && doc.node(*root).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))
-        {
-            let instance = crate::components::create_instance(doc, *root, parent, 0.0, 0.0)?;
+        let copied_main = nodes.first().filter(|n| clip.copied_components.contains(root) && matches!(n.kind, NodeKind::Component { .. }));
+        let main = match (copied_main, foreign) {
+            (Some(_), _) if copy_local => {
+                (!into_set && doc.node(*root).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))).then_some(*root)
+            }
+            (Some(_), Some(src)) => crate::library::published_main(doc, src, clip.source_path.as_deref(), *root)?,
+            _ => None,
+        };
+        if let (Some(main), Some(n)) = (main, copied_main) {
+            let instance = crate::components::create_instance(doc, main, parent, 0.0, 0.0)?;
             doc.get_mut(instance)?.transform = doc.world_transform(parent).inverse() * shift * n.transform;
             out.push(instance);
             continue;
