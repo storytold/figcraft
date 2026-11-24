@@ -1306,3 +1306,28 @@ fn second_review_invisible_group_does_not_hide_a_contrast_failure() {
         }
     }
 }
+
+#[test]
+fn third_review_blended_groups_do_not_invent_contrast_or_repairs() {
+    use figcraft_color::BlendMode;
+    for blend in [BlendMode::Multiply, BlendMode::Normal, BlendMode::PassThrough] {
+        let mut s = Session::new();
+        let frame = id(&ex(&mut s, "node.create", json!({"type":"frame","width":200,"height":100,"props":{"fill":"#000000"}})));
+        let child = id(&ex(&mut s, "node.create", json!({"type":"rectangle","parent":frame,"width":200,"height":100,"props":{"fill":"#FFFFFF"}})));
+        let group = id(&ex(&mut s, "object.group", json!({"ids":[child]})));
+        s.doc_mut().unwrap().get_mut(group).unwrap().blend = blend;
+        let text = id(&ex(&mut s, "text.create", json!({"parent":frame,"text":"Group contrast","x":10,"y":10,"props":{"fill":"#FFFFFF"}})));
+        let before = s.doc().unwrap().node(text).unwrap().clone();
+        let args = json!({"ids":[text],"rules":["color.contrast"]});
+        let report = ex(&mut s, "design.audit", args.clone());
+        assert_eq!(
+            has(&report, "color.contrast"),
+            blend != BlendMode::Multiply,
+            "only supported group compositing has a known white backdrop: {report}"
+        );
+        if blend == BlendMode::Multiply {
+            ex(&mut s, "design.fix", args);
+            assert_eq!(s.doc().unwrap().node(text).unwrap(), &before, "unknown compositing must not cause a guessed repair");
+        }
+    }
+}

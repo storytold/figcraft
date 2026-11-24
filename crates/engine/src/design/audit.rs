@@ -1381,8 +1381,9 @@ fn paint_behind(
         return Some(Behind::Capped);
     }
     let bounds = doc.world_bounds(node.id);
-    // Children share their group's opacity; their opaque paint is not an opaque backdrop.
-    if node.opacity < 0.99 && !node.children.is_empty() && bounds.is_some_and(|b| overlaps(b, target)) {
+    // Children share their group's opacity and blending; do not guess the composite backdrop.
+    let blended = !matches!(node.blend, BlendMode::Normal | BlendMode::PassThrough);
+    if (node.opacity < 0.99 || blended) && !node.children.is_empty() && bounds.is_some_and(|b| overlaps(b, target)) {
         return Some(Behind::Unknown);
     }
     let clipped_away = node.clip && bounds.is_some_and(|b| !contains(b, target));

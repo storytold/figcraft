@@ -280,6 +280,11 @@ impl Server {
                 if acc.changes.iter().any(Change::is_image) && self.state.clone().apply_kept(&mut acc.changes, Change::is_image)? > 0 {
                     self.resync = true;
                 }
+                // Older journals can carry review values accepted before today's limits. Keep
+                // their bounded settings and later edits, but never resume from the old delta.
+                if docprops::clamp_snapshot_design_review(&mut acc.changes) {
+                    self.resync = true;
+                }
                 self.accept(acc.author, self.seq, &acc.changes)?;
                 self.issued.entry(acc.author).or_default().note(acc.batch_id, false);
                 self.next_client = self.next_client.max(acc.author.saturating_add(1));

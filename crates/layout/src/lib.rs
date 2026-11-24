@@ -587,15 +587,40 @@ fn settle_locked_hug_line(doc: &mut Document, items: &mut [Item], lines: &[Vec<u
         || items.iter().filter(|it| it.fill_main || it.fill_cross).any(|it| {
             doc.node(it.id).is_none_or(|n| {
                 // A rigid auto-layout frame can accept the trial size just like a shape.
-                // Hug dimensions and text can remeasure themselves from their contents.
+                // Hug dimensions and text can remeasure themselves from their contents. A frame
+                // with a measured text baseline needs the ordinary measurement path as well:
+                // the numerical trial can only move an unmeasured bottom-edge baseline.
                 (n.layout.is_some() && (n.child_layout.sizing_h == Sizing::Hug || n.child_layout.sizing_v == Sizing::Hug))
                     || matches!(n.kind, NodeKind::Text(_))
+                    || (it.baseline.is_some() && item_baseline(doc, it.id, m, 0).is_some())
             })
         })
     {
         return false;
     }
-    let original = items.to_vec();
+    let mut original = items.to_vec();
+    for it in original.iter_mut().filter(|it| it.fill_main || it.fill_cross) {
+        if let Some(n) = doc.node(it.id)
+            && let Some(al) = &n.layout
+        {
+            // layout_frame always retains its insets, even on a fixed axis. Include that
+            // floor in the trial, in the parent's coordinates, before solving the ratio.
+            let (pt, pr, pb, pl) = insets(n, al);
+            let floor = figcraft_geom::transform_rect_bbox(linear(n.transform), Rect::new(0.0, 0.0, pl + pr, pt + pb));
+            let (main, cross) = if st.horizontal { (floor.width(), floor.height()) } else { (floor.height(), floor.width()) };
+            if !main.is_finite() || !cross.is_finite() {
+                return false;
+            }
+            let mut min_main = it.min_main.unwrap_or(0.0).max(main);
+            let mut min_cross = it.min_cross.unwrap_or(0.0).max(cross);
+            if let Some(ratio) = it.locked_cross_per_main {
+                min_main = min_main.max(min_cross / ratio);
+                min_cross = min_cross.max(min_main * ratio);
+            }
+            it.min_main = Some(min_main);
+            it.min_cross = Some(min_cross);
+        }
+    }
     let (frame, pads) = st.frame;
     let (min, max) = if st.horizontal { (frame.min_h, frame.max_h) } else { (frame.min_w, frame.max_w) };
     let trial = |items: &mut [Item], line: f64| {

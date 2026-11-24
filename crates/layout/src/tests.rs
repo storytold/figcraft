@@ -587,3 +587,77 @@ fn review_oversized_initial_ratio_fills_still_solve_the_available_space() {
         assert!((b.width - b.height).abs() < 1e-6);
     }
 }
+
+#[test]
+fn third_review_coupled_frames_keep_descendant_baselines() {
+    let (mut d, f, k) = setup(LayoutMode::Horizontal);
+    let parent = d.get_mut(f).unwrap();
+    parent.width = 400.0;
+    parent.child_layout.sizing_v = Sizing::Hug;
+    let al = parent.layout.as_mut().unwrap();
+    al.padding = [0.0; 4];
+    al.gap = 0.0;
+    al.cross_align = CrossAlign::Baseline;
+    for (i, id) in k.iter().enumerate() {
+        let n = d.get_mut(*id).unwrap();
+        (n.width, n.height) = (100.0, 100.0);
+        n.constrain_proportions = true;
+        (n.child_layout.sizing_h, n.child_layout.sizing_v) = if i == 0 { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+    }
+    let a = d.get_mut(k[0]).unwrap();
+    a.kind = NodeKind::Frame;
+    a.layout = Some(AutoLayout { mode: LayoutMode::Horizontal, ..Default::default() });
+    let t = text(&mut d, k[0], "Nested label");
+    let c = d.create(f, NodeKind::Rectangle, "Icon", 0.0, 0.0, 20.0, 20.0).unwrap();
+    let m = FakeMeasure([(t, (40.0, 20.0, 10.0))].into());
+    layout_frame(&mut d, f, &m);
+    let label_base = pos(&d, k[0]).1 + pos(&d, t).1 + m.text_baseline(&d, t).unwrap();
+    let icon_bottom = pos(&d, c).1 + pos(&d, c).3;
+    assert!((label_base - icon_bottom).abs() < 1e-6, "the icon must align with the descendant text, not the frame bottom");
+}
+
+#[test]
+fn third_review_coupled_frames_respect_padding_floors_and_settle() {
+    for horizontal in [false, true] {
+        for padded_child in 0..2 {
+            let mode = if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical };
+            let (mut d, f, k) = setup(mode);
+            let parent = d.get_mut(f).unwrap();
+            (parent.width, parent.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+            parent.layout.as_mut().unwrap().padding = [0.0; 4];
+            parent.layout.as_mut().unwrap().gap = 0.0;
+            if horizontal {
+                parent.child_layout.sizing_v = Sizing::Hug;
+            } else {
+                parent.child_layout.sizing_h = Sizing::Hug;
+            }
+            for (i, id) in k.iter().enumerate() {
+                let n = d.get_mut(*id).unwrap();
+                (n.width, n.height) = (100.0, 100.0);
+                n.constrain_proportions = true;
+                (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                    if horizontal == (i == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+                if i == padded_child {
+                    n.kind = NodeKind::Frame;
+                    n.layout = Some(AutoLayout {
+                        mode,
+                        padding: if horizontal { [100.0, 0.0, 100.0, 0.0] } else { [0.0, 100.0, 0.0, 100.0] },
+                        ..Default::default()
+                    });
+                }
+            }
+            layout_frame(&mut d, f, &NoMeasure);
+            let a = pos(&d, k[0]);
+            let b = pos(&d, k[1]);
+            let cross = |v: (f64, f64, f64, f64)| if horizontal { v.3 } else { v.2 };
+            assert!((cross(a) - cross(b)).abs() < 1e-6, "both children must agree with the retained line: {a:?} {b:?}");
+            assert!(cross(a) >= 200.0 - 1e-6, "the frame's padding must fit");
+            assert!((a.2 - a.3).abs() < 1e-6 && (b.2 - b.3).abs() < 1e-6, "retained padding floors must preserve both locked ratios");
+            let before = [pos(&d, f), a, b];
+            layout_frame(&mut d, f, &NoMeasure);
+            for (old, new) in before.into_iter().zip([pos(&d, f), pos(&d, k[0]), pos(&d, k[1])]) {
+                assert!((old.2 - new.2).abs() < 1e-6 && (old.3 - new.3).abs() < 1e-6, "the next layout must retain the geometry: {old:?} {new:?}");
+            }
+        }
+    }
+}
