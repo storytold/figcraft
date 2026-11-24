@@ -9,7 +9,9 @@
                                           AZURE_SIGNING_ENDPOINT (e.g. https://eus.codesigning.azure.net),
                                           AZURE_SIGNING_ACCOUNT, AZURE_CERT_PROFILE
   With neither, it prints a warning and leaves the files unsigned (exit code 0), so test builds
-  still produce installers.
+  still produce installers. Nightly callers require signing with -Required and can check the
+  signing configuration with -Required -CheckOnly. Compilation uses the separate
+  -CheckBuildEnvironment mode, without importing signing keys.
 
   This is the one place to adapt when the signing setup changes (an HSM/cloud key, a different
   timestamp server, ...). Optional overrides: WINDOWS_TIMESTAMP_URL, SIGNTOOL (path to signtool.exe).
@@ -18,10 +20,29 @@
   pwsh packaging/windows/sign.ps1 dist/figcraft.exe dist/FigCraft.msi
 #>
 param(
-  [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
-  [string[]] $Files
+  [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+  [string[]] $Files,
+  [switch] $Required,
+  [switch] $CheckOnly,
+  [switch] $CheckBuildEnvironment
 )
 $ErrorActionPreference = 'Stop'
+
+# Azure Trusted Signing loads this NuGet package's dlib into signtool, beside the signing secrets,
+# so the package is pinned to a reviewed version and SHA-256 and refused on any mismatch (#2936).
+# Upgrading is a deliberate change to both values: download
+# https://www.nuget.org/api/v2/package/Microsoft.Trusted.Signing.Client/<version> and record
+# (Get-FileHash -Algorithm SHA256 <file>).Hash.
+$TrustedSigningClient = @{
+  Version = '1.0.95'
+  Sha256  = '3BFCF1E0A3CB42AF1692F0A8ED45C15DE070C2DE86F28A59B2795D904D8A920F'
+}
+
+function Assert-AuthenticodeSignature($Signature) {
+  if (-not $Signature -or [string]$Signature.Status -cne 'Valid' -or -not $Signature.SignerCertificate) {
+    throw 'Required signing must produce a valid Authenticode signature and signer certificate'
+  }
+}
 
 function Write-Warn([string] $Message) {
   if ($env:GITHUB_ACTIONS) { Write-Output "::warning::$Message" } else { Write-Warning $Message }
@@ -44,10 +65,27 @@ function Invoke-SignTool([string[]] $Arguments) {
   if ($LASTEXITCODE -ne 0) { throw "signtool $($Arguments[0]) failed with exit code $LASTEXITCODE" }
 }
 
-$Files = $Files | ForEach-Object { (Resolve-Path $_).Path }
-$haveCert = [bool]$env:WINDOWS_CERTIFICATE
 $azureVars = 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_CERT_PROFILE'
+if ($CheckBuildEnvironment) {
+  if ($Required -or $CheckOnly -or $Files) { throw '-CheckBuildEnvironment is separate from signing' }
+  $names = @('WINDOWS_CERTIFICATE', 'WINDOWS_CERTIFICATE_PASSWORD') + $azureVars
+  if ($names | Where-Object { [Environment]::GetEnvironmentVariable($_) }) {
+    throw 'Compilation must not receive signing credentials; use a separate trusted signing step'
+  }
+  return
+}
+$haveCert = [bool]$env:WINDOWS_CERTIFICATE
 $haveAzure = -not ($azureVars | Where-Object { -not [Environment]::GetEnvironmentVariable($_) })
+
+if ($Required -and -not $haveCert -and -not $haveAzure) {
+  throw 'Nightly signing is required: configure WINDOWS_CERTIFICATE or the complete existing Azure signing configuration'
+}
+if ($CheckOnly) {
+  if ($Files) { throw '-CheckOnly does not sign files' }
+  return
+}
+if (-not $Files) { throw 'At least one file is required for signing' }
+$Files = $Files | ForEach-Object { (Resolve-Path $_).Path }
 
 if (-not $haveCert -and -not $haveAzure) {
   Write-Warn "Windows signing secrets not set (WINDOWS_CERTIFICATE or AZURE_*): leaving unsigned: $($Files -join ', ')"
@@ -73,14 +111,12 @@ try {
     Write-Output "Signing with Azure Trusted Signing ($env:AZURE_SIGNING_ACCOUNT / $env:AZURE_CERT_PROFILE): $($Files -join ', ')"
     # The dlib authenticates with DefaultAzureCredential, which reads AZURE_TENANT_ID,
     # AZURE_CLIENT_ID and AZURE_CLIENT_SECRET from the environment.
-    $trustedSigningVersion = '1.0.95'
-    $trustedSigningSha256 = '3bfcf1e0a3cb42af1692f0a8ed45c15de070c2de86f28a59b2795d904d8a920f'
     $pkg = Join-Path $tmp 'trusted-signing.zip'
-    $uri = "https://api.nuget.org/v3-flatcontainer/microsoft.trusted.signing.client/$trustedSigningVersion/microsoft.trusted.signing.client.$trustedSigningVersion.nupkg"
-    Invoke-WebRequest -Uri $uri -OutFile $pkg
-    $actualHash = (Get-FileHash -Path $pkg -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actualHash -ne $trustedSigningSha256) {
-      throw "Microsoft.Trusted.Signing.Client $trustedSigningVersion checksum mismatch"
+    $version = $TrustedSigningClient.Version
+    Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Trusted.Signing.Client/$version" -OutFile $pkg
+    $sha256 = (Get-FileHash -Algorithm SHA256 -Path $pkg).Hash
+    if ($sha256 -ne $TrustedSigningClient.Sha256) {
+      throw "Microsoft.Trusted.Signing.Client $version has SHA-256 $sha256, expected $($TrustedSigningClient.Sha256): refusing to load it"
     }
     Expand-Archive -Path $pkg -DestinationPath (Join-Path $tmp 'client') -Force
     $dlib = Get-ChildItem -Path (Join-Path $tmp 'client') -Recurse -Filter Azure.CodeSigning.Dlib.dll |
@@ -96,6 +132,9 @@ try {
     Invoke-SignTool ($common + @('/tr', $ts, '/dlib', $dlib.FullName, '/dmdf', $metadata) + $Files)
   }
   Invoke-SignTool (@('verify', '/pa', '/v') + $Files)
+  if ($Required) {
+    foreach ($file in $Files) { Assert-AuthenticodeSignature (Get-AuthenticodeSignature -LiteralPath $file) }
+  }
 }
 finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

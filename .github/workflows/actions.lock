@@ -9,6 +9,7 @@ workflows:
     '.github/workflows/lockfile.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/harden-runner@v2.22.4'
+    '.github/workflows/nightly-macos.yml': []
     '.github/workflows/nightly-sign.yml': []
     '.github/workflows/nightly.yml': []
     '.github/workflows/nix.yml': []

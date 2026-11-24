@@ -190,9 +190,12 @@ pub(crate) fn fail_input_acks(app: &mut FigApp, viewport: ViewportId) {
 }
 
 fn title_of(ds: Option<&DocState>) -> String {
+    // The Nightly names itself in the caption and the taskbar, so two windows of the same file are
+    // never mistaken for each other (see `channel`).
+    let app = crate::channel::name();
     match ds {
-        Some(ds) => format!("{}{} – FigCraft", ds.doc.name, if ds.is_dirty() { " •" } else { "" }),
-        None => "FigCraft".into(),
+        Some(ds) => format!("{}{} – {app}", ds.doc.name, if ds.is_dirty() { " •" } else { "" }),
+        None => app.into(),
     }
 }
 
