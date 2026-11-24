@@ -671,6 +671,8 @@ mod magnified_image_tests;
 #[cfg(test)]
 mod mask_bounds_tests;
 #[cfg(test)]
+mod outline_shadow_tests;
+#[cfg(test)]
 mod paint_behaviour_tests;
 #[cfg(test)]
 mod pan_bench_tests;
@@ -694,3 +696,5 @@ mod stroke_reach_tests;
 mod tests;
 #[cfg(test)]
 mod width_tests;
+#[cfg(test)]
+mod zoom_bench_tests;
