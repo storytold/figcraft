@@ -180,7 +180,10 @@ mod tests {
                 }
                 app.session.active = 0;
                 let read = app.file_providers.request_open("shared").unwrap();
-                app.file_providers.open(read, "shared.figcraft".into(), bytes).unwrap();
+                assert!(
+                    app.file_providers.open(read, "shared.figcraft".into(), bytes).is_err(),
+                    "an already-bound resource focuses its live tab without admitting fetched bytes"
+                );
                 tick(&mut app);
                 assert_eq!(app.session.docs.len(), 3);
                 assert_eq!(app.session.ds().unwrap().uid, second);
@@ -914,10 +917,10 @@ mod tests {
         assert!(!app.session.ds().unwrap().is_dirty());
         app.ui.close_tab = Some(TabClose::Ask(uid));
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close_tab(&mut app, ui.ctx()));
+        ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close_tab(&mut app, ui.ctx())).textures_delta.clear();
         assert!(matches!(app.ui.close_tab,Some(TabClose::Ask(id)) if id==uid), "the close request must survive until the terminal drains");
         app.file_providers.take_events();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close_tab(&mut app, ui.ctx()));
+        ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close_tab(&mut app, ui.ctx())).textures_delta.clear();
         assert!(app.session.docs.iter().all(|doc| doc.uid != uid));
     }
 
@@ -942,12 +945,12 @@ mod tests {
         app.file_providers.take_events();
         app.ui.close_after_save_as = Some(uid);
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close(&mut app, ui.ctx()));
+        ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close(&mut app, ui.ctx())).textures_delta.clear();
         assert_eq!(app.ui.close_after_save_as, Some(uid));
         assert!(!app.ui.quit);
         app.file_providers.cancel_open(request, String::new()).unwrap();
         app.file_providers.take_events();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close(&mut app, ui.ctx()));
+        ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close(&mut app, ui.ctx())).textures_delta.clear();
         assert!(app.ui.close_after_save_as.is_none(), "the continuation resumes after the open settles");
     }
 
