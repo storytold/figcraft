@@ -65,3 +65,108 @@ fn a_clip_edge_on_a_pixel_boundary_clips_the_same_in_every_render() {
         assert_same(&pix, &render_view(&smaller, page, &shown, &opts).unwrap(), &format!("lod {lod}"));
     }
 }
+/// A closed zigzag of `2 * teeth + 2` points, 240 × 120 units at (20, 20): a ridge.
+fn ridge(d: &mut Document, page: NodeId, teeth: usize) -> NodeId {
+    let mut pts = vec![figcraft_geom::Point::new(0.0, 120.0)];
+    for i in 0..=teeth * 2 {
+        pts.push(figcraft_geom::Point::new(240.0 * i as f64 / (teeth * 2) as f64, if i % 2 == 0 { 60.0 } else { 10.0 }));
+    }
+    pts.push(figcraft_geom::Point::new(240.0, 120.0));
+    let network = figcraft_doc::VectorNetwork::from_points(&pts, true);
+    let id = d.create(page, NodeKind::Vector { network }, "Ridge", 20.0, 20.0, 240.0, 120.0).unwrap();
+    d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::from_hex("7FAE9C").unwrap())];
+    id
+}
+
+fn move_point(d: &mut Document, id: NodeId, point: usize, by: (f64, f64)) {
+    if let NodeKind::Vector { network } = &mut d.get_mut(id).unwrap().kind {
+        network.vertices[point].x += by.0;
+        network.vertices[point].y += by.1;
+    }
+}
+
+/// A point of a vector dragged while the vector fills the view (zoomed to it, as the vector
+/// editor does): the shape looks different only around the point's segments, and only that is
+/// drawn again. (Its whole box was, and past 60 % of the view that made every frame of the
+/// drag a full render.)
+#[test]
+fn a_moved_point_redraws_the_vector_around_it_only() {
+    type Style = fn(&mut figcraft_doc::Node);
+    let styles: [(&str, Style); 4] = [
+        ("filled", |_| {}),
+        ("stroked, mitred", |n| {
+            n.strokes = vec![Paint::solid(Color::from_hex("203040").unwrap())];
+            n.stroke.weight = 6.0;
+            n.stroke.miter_limit = 4.0;
+        }),
+        ("rounded points", |n| {
+            if let NodeKind::Vector { network } = &mut n.kind {
+                network.vertices.iter_mut().for_each(|v| v.radius = 9.0);
+            }
+        }),
+        ("stroked only", |n| {
+            n.fills.clear();
+            n.strokes = vec![Paint::solid(Color::from_hex("203040").unwrap())];
+            n.stroke.weight = 3.0;
+        }),
+    ];
+    for (what, style) in styles {
+        let mut d = Document::new("ridge");
+        let page = d.first_page().unwrap();
+        let id = ridge(&mut d, page, 6);
+        style(d.get_mut(id).unwrap());
+        let doc = Arc::new(d);
+        // The ridge is 720 × 360 of the view's 780 × 420 pixels.
+        let v = View { origin: (10.0, 10.0), scale: 3.0, width: 780, height: 420 };
+        let mut r = Retained::default();
+        check(&mut r, &doc, page, &v, what);
+        let mut d2 = (*doc).clone();
+        move_point(&mut d2, id, 6, (4.0, -7.0));
+        let d2 = Arc::new(d2);
+        let (_, _, work) = r.render(&d2, page, &v, &Options::default()).unwrap();
+        let Work::Partial { pixels } = work else { panic!("{what}: a full render ({work:?})") };
+        // A tooth of six each way from the point, and what the stroke adds (36 pixels each way
+        // for the mitred one); the ridge's box is 259,200 pixels.
+        assert!(pixels < 780 * 420 * 2 / 5, "{what}: {pixels} pixels drawn again");
+        check(&mut r, &d2, page, &v, what);
+        // And back: the same again.
+        let (_, _, work) = r.render(&doc, page, &v, &Options::default()).unwrap();
+        assert!(matches!(work, Work::Partial { .. }), "{what}: {work:?}");
+        check(&mut r, &doc, page, &v, what);
+    }
+}
+
+/// What depends on the whole outline is drawn again whole: a gradient laid out in the vector's
+/// box, dashes that run on from the moved point, an open path's closing line.
+#[test]
+fn a_moved_point_redraws_a_vector_whole_when_its_look_depends_on_all_of_it() {
+    type Style = fn(&mut figcraft_doc::Node);
+    let styles: [(&str, Style); 3] = [
+        ("dashed", |n| {
+            n.strokes = vec![Paint::solid(Color::from_hex("203040").unwrap())];
+            n.stroke.weight = 3.0;
+            n.stroke.dashes = vec![8.0, 5.0];
+        }),
+        ("a shadow", |n| n.effects.push(Effect::inner_shadow())),
+        ("an open path", |n| {
+            if let NodeKind::Vector { network } = &mut n.kind {
+                network.segments.pop();
+            }
+        }),
+    ];
+    for (what, style) in styles {
+        let mut d = Document::new("ridge");
+        let page = d.first_page().unwrap();
+        let id = ridge(&mut d, page, 6);
+        style(d.get_mut(id).unwrap());
+        let doc = Arc::new(d);
+        let v = View { origin: (10.0, 10.0), scale: 3.0, width: 780, height: 420 };
+        let mut r = Retained::default();
+        check(&mut r, &doc, page, &v, what);
+        let mut d2 = (*doc).clone();
+        move_point(&mut d2, id, 6, (4.0, -7.0));
+        let d2 = Arc::new(d2);
+        assert_eq!(r.render(&d2, page, &v, &Options::default()).unwrap().2, Work::Full, "{what}");
+        check(&mut r, &d2, page, &v, what);
+    }
+}
