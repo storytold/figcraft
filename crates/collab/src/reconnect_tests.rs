@@ -421,3 +421,41 @@ fn review_an_oversized_saved_batch_resyncs_even_when_the_snapshot_is_valid() {
     deliver(&mut reader, &out);
     assert_eq!(reader.seq(), restored.seq());
 }
+
+#[test]
+fn second_review_clamped_snapshot_resync_survives_saved_restarts() {
+    use crate::change::{Change, DocProp, Json};
+    let mut server = Server::new(base(), "tok", Limits::default());
+    let mut writer = join(&mut server);
+    let mut reader = join(&mut server);
+    let message = edit(&mut writer, |doc| doc.design_review.grid = 8.0).unwrap();
+    let out = server.receive(writer.id(), message);
+    deliver(&mut writer, &out);
+    deliver(&mut reader, &out);
+    reader.disconnect();
+    let mut state = server.state().unwrap();
+    let oversized = figcraft_doc::DesignReview { grid: 12.0, radii: vec![4.0; figcraft_doc::MAX_RADII + 1], ..Default::default() };
+    for change in &mut state.snapshot {
+        if let Change::SetDoc { prop: DocProp::DesignReview, value } = change {
+            *value = Json::of(&oversized).unwrap();
+        }
+    }
+    state.log.clear();
+    // Legacy snapshots have no saved resync flag. Deserialize one, then save/restart repeatedly.
+    let mut legacy = serde_json::to_value(state).unwrap();
+    legacy.as_object_mut().unwrap().remove("resync");
+    let mut restored = Server::restore(serde_json::from_value(legacy).unwrap(), "tok", Limits::default()).unwrap();
+    assert_ne!(reader.document().design_review, restored.document().design_review);
+    for _ in 0..2 {
+        let bytes = message::encode(&restored.state().unwrap()).unwrap();
+        restored = Server::restore(message::decode(&bytes, bytes.len()).unwrap(), "tok", Limits::default()).unwrap();
+    }
+    let ClientMsg::Hello(h) = reader.reconnect(hello()) else { panic!("no reconnect") };
+    let (_, out) = restored.join(h).unwrap();
+    assert!(
+        matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })),
+        "clamping must still require a snapshot after later restarts"
+    );
+    deliver(&mut reader, &out);
+    assert_eq!(reader.document().design_review, restored.document().design_review);
+}

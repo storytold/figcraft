@@ -32,7 +32,9 @@ pub const ASSET_ACTIONS: &str = "asset-actions.json";
 
 const SNAP_MAGIC: &[u8; 4] = b"FCSN";
 const LOG_MAGIC: &[u8; 4] = b"FCLG";
-const FORMAT: u8 = 1;
+const SNAP_FORMAT: u8 = 2;
+const LEGACY_SNAP_FORMAT: u8 = 1;
+const LOG_FORMAT: u8 = 1;
 const SNAP_HEADER: usize = 4 + 1 + 8 + 4;
 pub const LOG_HEADER: usize = 4 + 1 + 8;
 const RECORD_HEADER: usize = 8;
@@ -157,7 +159,7 @@ fn u64_at(b: &[u8], at: usize) -> Option<u64> {
 pub fn encode_snapshot(generation: u64, state: &SessionState) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(SNAP_HEADER);
     out.extend_from_slice(SNAP_MAGIC);
-    out.push(FORMAT);
+    out.push(SNAP_FORMAT);
     out.extend_from_slice(&generation.to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
     let mut out = message::encode_into(state, out).map_err(|e| e.to_string())?;
@@ -167,31 +169,34 @@ pub fn encode_snapshot(generation: u64, state: &SessionState) -> Result<Vec<u8>,
 }
 
 /// A snapshot's generation and body, when its header and checksum are right.
-fn snapshot_body(bytes: &[u8]) -> Result<(u64, &[u8]), String> {
+fn snapshot_body(bytes: &[u8]) -> Result<(u64, u8, &[u8]), String> {
     if bytes.get(..4) != Some(SNAP_MAGIC.as_slice()) {
         return Err("the snapshot isn't one (wrong header)".into());
     }
-    if bytes.get(4) != Some(&FORMAT) {
-        return Err("the snapshot is in a format this version doesn't read".into());
-    }
+    let format = match bytes.get(4).copied() {
+        Some(format @ (LEGACY_SNAP_FORMAT | SNAP_FORMAT)) => format,
+        _ => return Err("the snapshot is in a format this version doesn't read".into()),
+    };
     let (Some(generation), Some(sum), Some(body)) = (u64_at(bytes, 5), u32_at(bytes, 13), bytes.get(SNAP_HEADER..)) else {
         return Err("the snapshot is cut short".into());
     };
     if crc(body) != sum {
         return Err("the snapshot is damaged (checksum mismatch)".into());
     }
-    Ok((generation, body))
+    Ok((generation, format, body))
 }
 
 /// A snapshot's generation, after checking its header and checksum (no decoding).
 pub fn check_snapshot(bytes: &[u8]) -> Result<u64, String> {
-    snapshot_body(bytes).map(|(g, _)| g)
+    snapshot_body(bytes).map(|(g, _, _)| g)
 }
 
 /// A snapshot's generation and session state.
 pub fn decode_snapshot(bytes: &[u8]) -> Result<(u64, SessionState), String> {
-    let (generation, body) = snapshot_body(bytes)?;
-    let state = message::decode::<SessionState>(body, body.len()).map_err(|e| format!("the snapshot can't be read: {e}"))?;
+    let (generation, format, body) = snapshot_body(bytes)?;
+    let state =
+        if format == LEGACY_SNAP_FORMAT { SessionState::decode_v1(body, body.len()) } else { message::decode::<SessionState>(body, body.len()) }
+            .map_err(|e| format!("the snapshot can't be read: {e}"))?;
     Ok((generation, state))
 }
 
@@ -199,7 +204,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<(u64, SessionState), String> {
 pub fn log_header(generation: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(LOG_HEADER);
     out.extend_from_slice(LOG_MAGIC);
-    out.push(FORMAT);
+    out.push(LOG_FORMAT);
     out.extend_from_slice(&generation.to_le_bytes());
     out
 }
@@ -230,7 +235,7 @@ pub fn read_log(bytes: &[u8]) -> Result<LogRead, String> {
     if bytes.get(..4) != Some(LOG_MAGIC.as_slice()) {
         return Err("the log isn't one (wrong header)".into());
     }
-    if bytes.get(4) != Some(&FORMAT) {
+    if bytes.get(4) != Some(&LOG_FORMAT) {
         return Err("the log is in a format this version doesn't read".into());
     }
     let generation = u64_at(bytes, 5).ok_or("the log is cut short")?;

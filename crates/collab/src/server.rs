@@ -123,6 +123,34 @@ pub struct SessionState {
     #[serde(default)]
     pub removed: BTreeSet<Entry>,
     pub log: Vec<Accepted>,
+    /// Saved history no longer describes the snapshot: resuming clients must take a snapshot.
+    #[serde(default)]
+    pub resync: bool,
+}
+
+/// Frozen field order of binary session state in version-one server snapshots.
+/// Postcard does not encode field names or a struct length, so adding a serde default is not
+/// sufficient to read the old binary representation.
+#[derive(Deserialize)]
+struct SessionStateV1 {
+    session: u64,
+    snapshot: Vec<Change>,
+    seq: u64,
+    next_client: u32,
+    issued: BTreeMap<u32, Processed>,
+    deleted: BTreeSet<NodeId>,
+    removed: BTreeSet<Entry>,
+    log: Vec<Accepted>,
+}
+
+impl SessionState {
+    /// Read a version-one server snapshot body, with the same envelope and byte limit as
+    /// [`crate::message::decode`]. The snapshot's format byte must select this schema explicitly.
+    pub fn decode_v1(bytes: &[u8], max_bytes: usize) -> Result<Self, Error> {
+        let SessionStateV1 { session, snapshot, seq, next_client, issued, deleted, removed, log } =
+            crate::message::decode::<SessionStateV1>(bytes, max_bytes)?;
+        Ok(Self { session, snapshot, seq, next_client, issued, deleted, removed, log, resync: false })
+    }
 }
 
 impl Server {
@@ -168,6 +196,7 @@ impl Server {
             deleted: self.deleted.clone(),
             removed: self.removed.clone(),
             log: self.log.iter().cloned().collect(),
+            resync: self.resync,
         })
     }
 
@@ -200,7 +229,7 @@ impl Server {
         // refuse it, so the clamped snapshot is what everyone catches up with.
         let puts_images = state.log.iter().flat_map(|a| &a.changes).any(Change::is_image);
         let oversized_review_log = state.log.iter().flat_map(|batch| &batch.changes).any(docprops::over_limit_design_review);
-        server.resync = left_out > 0 || puts_images || review_clamped || oversized_review_log;
+        server.resync = state.resync || left_out > 0 || puts_images || review_clamped || oversized_review_log;
         if contiguous && state.log.last().is_none_or(|a| a.seq == state.seq) {
             for a in state.log {
                 server.remember(a);
