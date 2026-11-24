@@ -115,15 +115,23 @@ fn match_layers(
         }
         m.map.insert(*s, nid);
     }
-    match_text_by_name(doc, inst, component, old, &mut m);
+    match_text_by_name(doc, inst, component, src, old, &mut m);
     m
 }
 
 /// Main text layers nothing matched take the unmatched old text layer of the same name, when
 /// exactly one of each has it: text typed into an instance stays when it switches to a variant that
 /// nests the same text layer in other frames (its name path differs). Only layers outside nested
-/// instances, which rebuild from their own mains.
-fn match_text_by_name(doc: &Document, inst: NodeId, component: NodeId, old: &BTreeMap<NodeId, std::sync::Arc<Node>>, m: &mut Matched) {
+/// instances, which rebuild from their own mains. Names are counted over all those text layers,
+/// matched ones too, so a name two layers share on either side never pairs by elimination.
+fn match_text_by_name(
+    doc: &Document,
+    inst: NodeId,
+    component: NodeId,
+    src: &[NodeId],
+    old: &BTreeMap<NodeId, std::sync::Arc<Node>>,
+    m: &mut Matched,
+) {
     fn unique<K: Ord>(pairs: impl Iterator<Item = (K, NodeId)>) -> BTreeMap<K, NodeId> {
         let mut seen: BTreeMap<K, Option<NodeId>> = BTreeMap::new();
         for (k, id) in pairs {
@@ -132,19 +140,19 @@ fn match_text_by_name(doc: &Document, inst: NodeId, component: NodeId, old: &BTr
         seen.into_iter().filter_map(|(k, id)| Some((k, id?))).collect()
     }
     let text = |n: &Node| matches!(n.kind, NodeKind::Text(_));
-    let mains = unique(
-        m.fresh.iter().filter_map(|s| doc.node(*s)).filter(|s| text(s) && outside_nested(doc, s.id, component)).map(|s| (s.name.clone(), s.id)),
-    );
+    let mut mains =
+        unique(src.iter().filter_map(|s| doc.node(*s)).filter(|s| text(s) && outside_nested(doc, s.id, component)).map(|s| (s.name.clone(), s.id)));
+    mains.retain(|_, s| m.fresh.contains(s));
     if mains.is_empty() {
         return;
     }
     let olds = unique(
         old.iter()
-            .filter(|(id, o)| text(o) && !m.used.contains(id) && outside_nested(doc, **id, inst))
+            .filter(|(id, o)| text(o) && outside_nested(doc, **id, inst))
             .map(|(id, o)| (o.source.and_then(|s| doc.node(s)).map_or(&o.name, |s| &s.name).clone(), *id)),
     );
     for (name, s) in mains {
-        if let Some(o) = olds.get(&name) {
+        if let Some(o) = olds.get(&name).filter(|o| !m.used.contains(*o)) {
             m.used.insert(*o);
             m.map.insert(s, *o);
             m.fresh.retain(|f| *f != s);

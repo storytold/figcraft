@@ -286,7 +286,8 @@ fn variant_switch_keeps_compatible_overrides() {
 fn typed_text_stays_across_variants_that_nest_it_differently() {
     let mut s = Session::new();
     // Each variant's Label layers, by the frames holding them.
-    let shapes: [(&str, &[&[&str]]); 3] = [("Kind=Plain", &[&["text"]]), ("Kind=Boxed", &[&["div", "text"]]), ("Kind=Twice", &[&["a"], &["b"]])];
+    let shapes: [(&str, &[&[&str]]); 4] =
+        [("Kind=Plain", &[&["text"]]), ("Kind=Boxed", &[&["div", "text"]]), ("Kind=Twice", &[&["a"], &["b"]]), ("Kind=Moved", &[&["a"], &["c"]])];
     let mut labels = Vec::new();
     let mut variants = Vec::new();
     for (k, (name, paths)) in shapes.into_iter().enumerate() {
@@ -313,8 +314,16 @@ fn typed_text_stays_across_variants_that_nest_it_differently() {
 
     ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Kind": "Twice"}}));
     healthy(&s);
-    let texts: Vec<String> = labels[2..].iter().map(|l| chars(&s, copy_of(&s, i, *l))).collect();
+    let texts: Vec<String> = labels[2..4].iter().map(|l| chars(&s, copy_of(&s, i, *l))).collect();
     assert_eq!(texts, ["I agree", "I agree"], "two layers of that name: neither is the one typed into");
+
+    // `a › Label` matches by path; the leftover `b › Label` and `c › Label` still share a name with it.
+    let typed = copy_of(&s, i, labels[3]);
+    ex(&mut s, "text.set", json!({"id": typed, "characters": "Architect"}));
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Kind": "Moved"}}));
+    healthy(&s);
+    let texts: Vec<String> = labels[4..].iter().map(|l| chars(&s, copy_of(&s, i, *l))).collect();
+    assert_eq!(texts, ["I agree", "I agree"], "a name two layers share doesn't pair what path matching left over");
 }
 
 #[test]
