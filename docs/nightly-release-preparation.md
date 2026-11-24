@@ -22,6 +22,15 @@ and the Linux and macOS legs). Both callers name it in `uses` and `tooling-revis
 source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
 
+**The shared-workflow port is a prerequisite.** At this pin both reusable workflows admit only
+PhotoCraft: `nightly-unsigned.yml` requires `inputs.app-name == 'photocraft'` and
+`github.repository == 'storytold/photocraft'` on its build jobs, and `nightly-release.yml` requires the
+same repository in `validate` and every signing job (its concurrency group is
+`craft-release-ref-signer-photocraft`). A FigCraft dispatch therefore builds and signs nothing until
+`storytold/craft-common-actions` admits `storytold/figcraft`. No dispatch can produce a release before
+that port, and both callers' `uses`, `tooling-revision` and the policy pins must move to the same
+reviewed revision together.
+
 **First runs.** The first runs are manual dispatches in this order: `nightly.yml` on `main` (only a
 listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `release` with that
 producer run ID and attempt, by a listed manual actor.
