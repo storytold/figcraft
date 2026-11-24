@@ -300,6 +300,8 @@ pub struct Renders {
     /// The number of the image `full` keeps: every image drawn there gets the next one
     /// ([`Done::frame`]), handed to the canvas or not.
     frame: u64,
+    /// Whether that image was handed over with a soft proof's stripes ([`Job::proof`]).
+    frame_proofed: bool,
 }
 
 /// A full render drawn in steps and what it is of: a newer job of the same file, page, zoom, size
@@ -358,7 +360,16 @@ impl Default for Renders {
 impl Renders {
     /// Previews when renders from scratch take at least `ms` (tests: 0, always).
     pub fn with_threshold(ms: f64) -> Self {
-        Self { full: Retained::default(), preview: Retained::default(), last: None, full_ms: 0.0, preview_after_ms: ms, steps: None, frame: 0 }
+        Self {
+            full: Retained::default(),
+            preview: Retained::default(),
+            last: None,
+            full_ms: 0.0,
+            preview_after_ms: ms,
+            steps: None,
+            frame: 0,
+            frame_proofed: false,
+        }
     }
 
     /// Whether `job` is a render from scratch: the kept image is of another zoom, page or file, or
@@ -392,15 +403,16 @@ impl Renders {
         preview_with(job, &mut self.preview)
     }
 
-    /// `d`, an image drawn in `full` just now, numbered.
-    fn numbered(&mut self, d: Done) -> Done {
+    /// `d`, an image drawn in `full` just now for a job with soft proof `proofed`, numbered.
+    fn numbered(&mut self, d: Done, proofed: bool) -> Done {
         self.frame += 1;
+        self.frame_proofed = proofed;
         Done { frame: self.frame, ..d }
     }
 
     /// The image of `job`'s view, built on the kept one where it can be.
     pub fn refine(&mut self, job: &Job) -> Option<Done> {
-        let done = guarded(&mut self.full, |r| run(job, &job.view, r, false)).map(|d| self.numbered(d));
+        let done = guarded(&mut self.full, |r| run(job, &job.view, r, false)).map(|d| self.numbered(d, job.proof));
         if let Some(d) = &done {
             self.last = Some((job.uid, job.page, job.view.scale));
             if d.work == Work::Full {
@@ -452,7 +464,7 @@ impl Renders {
                 // The image of the job it was started for: its document's colour profile, its
                 // proof setting and its request time.
                 let drawn = done(&drawn_for, view, pix, Work::Full, spent, false, None);
-                let drawn = self.numbered(drawn);
+                let drawn = self.numbered(drawn, drawn_for.proof);
                 // Drawn for this very request: shown, done. Otherwise kept, then started on like
                 // any render: an edit, a pan or images that came meanwhile are patched in, or it
                 // is drawn again in steps (never all at once here), this one shown till then.
@@ -477,7 +489,10 @@ impl Renders {
         let rows = job.view.height.saturating_add(1).div_ceil(MAX_BANDS).max(MIN_BAND_ROWS);
         // The canvas holds the image this render starts from: one that only patches it hands
         // over the patches.
-        let held = holds.is_some_and(|f| f == self.frame);
+        // Not when that image was handed over with a soft proof's stripes on it: the renderer's
+        // image has none, so patches of it (none at all, when only the proof was turned off)
+        // would leave them on the texture.
+        let held = holds.is_some_and(|f| f == self.frame) && !self.frame_proofed;
         let full = &mut self.full;
         let begun = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let (view, work) = match full.begin(&job.doc, job.page, &job.view, &options(job), rows) {
@@ -502,7 +517,7 @@ impl Renders {
             }
             Ok(Err(d)) => {
                 // An image drawn now gets its number; one drawn in steps just before has it.
-                let d = d.map(|(d, new)| if new { self.numbered(d) } else { d });
+                let d = d.map(|(d, new)| if new { self.numbered(d, job.proof) } else { d });
                 Some(Refined::Done(self.finished(job, d)))
             }
             Err(_) => {

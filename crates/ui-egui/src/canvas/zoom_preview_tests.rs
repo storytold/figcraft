@@ -791,3 +791,25 @@ fn an_edit_hands_over_only_what_changed_of_the_image_the_canvas_holds() {
     let Refined::Done(Some(moved)) = r.refine_for(&panned, 0.0, Some(same.frame)) else { panic!("a pan is patched at once") };
     assert!(moved.image.whole().is_some(), "whole after a pan");
 }
+
+/// A soft proof stripes the image handed over, not the renderer's own. With the proof turned off
+/// and nothing else changed, the renderer has nothing to redraw: the canvas still gets the whole
+/// image, or the stripes would stay on its texture.
+#[test]
+fn turning_soft_proof_off_hands_over_the_whole_image() {
+    let (mut s, rect) = document();
+    let view = view_at((300.0, 250.0), 1.0, 700, 600);
+    let now = |s: &Session, proof: bool| {
+        let ds = s.ds().unwrap();
+        Job { proof, ..job(&ds.doc, ds.page, ds.uid, view.clone()) }
+    };
+    let mut r = Renders::default();
+    let proofed = stepped(&mut r, &now(&s, true)).0.expect("drawn");
+    assert!(proofed.image.whole().is_some());
+    let Refined::Done(Some(plain)) = r.refine_for(&now(&s, false), 0.0, Some(proofed.frame)) else { panic!("reused at once") };
+    assert!(plain.image.whole().is_some(), "the whole image without the stripes");
+    // From there on, edits are patches again.
+    s.execute("node.set", &json!({"id": rect, "width": 240})).unwrap();
+    let Refined::Done(Some(edited)) = r.refine_for(&now(&s, false), 0.0, Some(plain.frame)) else { panic!("a patch is done at once") };
+    assert!(matches!(&edited.image, Pixels::Patches(parts) if !parts.is_empty()));
+}
