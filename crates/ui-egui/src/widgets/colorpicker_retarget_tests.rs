@@ -343,3 +343,30 @@ fn same_frame_canvas_click_keeps_image_picker_open_on_new_selection() {
         assert_eq!(image.filters.exposure, -0.4, "discarded={discarded}: the new image's filter values loaded");
     }
 }
+
+#[test]
+fn review_text_image_picker_retargets_the_effective_character_fills() {
+    let mut session = Session::new();
+    let mut ids = Vec::new();
+    for extra in [true, false] {
+        let id: NodeId = serde_json::from_value(session.execute("text.create", &json!({"text":"Image text"})).unwrap()["id"].clone()).unwrap();
+        let node = session.doc_mut().unwrap().get_mut(id).unwrap();
+        let figcraft_doc::NodeKind::Text(text) = &mut node.kind else { panic!("not text") };
+        let mut effective = Vec::new();
+        if extra {
+            effective.push(Paint::solid(Color::BLACK));
+        }
+        effective.push(Paint::image("synthetic-text-image", ImageScaleMode::Fill));
+        text.style.fills = Some(effective);
+        node.fills = vec![Paint::solid(Color::WHITE)];
+        ids.push(id);
+    }
+    session.set_selection(vec![ids[0]]);
+    let mut app = FigApp::new(session, Box::new(crate::NoServices));
+    app.ui.picker = Some(PickerTarget::Paint { fills: true, index: 1, ids: vec![ids[0]] });
+    app.session.set_selection(vec![ids[1]]);
+    assert!(sync_picker_target(&mut app));
+    let expected = PickerTarget::Paint { fills: true, index: 0, ids: vec![ids[1]] };
+    assert_eq!(app.ui.picker, Some(expected.clone()));
+    assert!(matches!(current_paint(&app, &expected).unwrap().kind, PaintKind::Image(_)));
+}

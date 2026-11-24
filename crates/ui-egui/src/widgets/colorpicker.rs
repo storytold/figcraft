@@ -137,7 +137,7 @@ fn paint_command(app: &FigApp, target: &PickerTarget, paint: &Paint) -> Option<(
             ("page.setBackground", json!({"color": c.to_css_hex()}))
         }
         PickerTarget::Paint { fills, index, ids } => {
-            (if *fills { "fill.set" } else { "stroke.set" }, json!({"ids": ids, "index": index, "paint": paint}))
+            (if *fills { "fill.set" } else { "stroke.set" }, json!({"ids": ids, "index": index, "paint": paint, "preservePlacement": true}))
         }
         PickerTarget::Effect { ids, index, secondary } => {
             let mut e = ids.first().and_then(|i| app.session.doc().ok()?.node(*i)?.effects.get(*index).cloned())?;
@@ -307,7 +307,7 @@ fn sync_picker_target(app: &mut FigApp) -> bool {
         _ => return true,
     };
     let original_is_image = ids.first().and_then(|id| app.session.doc().ok()?.node(*id)).is_some_and(|node| {
-        let paints = if fills { &node.fills } else { &node.strokes };
+        let paints = if fills { figcraft_engine::cmd::lists::character_fills(node).unwrap_or_default() } else { node.strokes.clone() };
         matches!(paints.get(index).map(|paint| &paint.kind), Some(PaintKind::Image(_)))
     });
     if !original_is_image {
@@ -328,13 +328,14 @@ fn sync_picker_target(app: &mut FigApp) -> bool {
         close_picker(app);
         return false;
     };
+    let character_fills = figcraft_engine::cmd::lists::character_fills(node).unwrap_or_default();
     let target_image = |fills: bool, index: usize| {
-        let paints = if fills { &node.fills } else { &node.strokes };
+        let paints = if fills { &character_fills } else { &node.strokes };
         matches!(paints.get(index).map(|paint| &paint.kind), Some(PaintKind::Image(_)))
     };
     let (fills, index) = if target_image(fills, index) {
         (fills, index)
-    } else if let Some(index) = node.fills.iter().position(|paint| matches!(paint.kind, PaintKind::Image(_))) {
+    } else if let Some(index) = character_fills.iter().position(|paint| matches!(paint.kind, PaintKind::Image(_))) {
         (true, index)
     } else if let Some(index) = node.strokes.iter().position(|paint| matches!(paint.kind, PaintKind::Image(_))) {
         (false, index)

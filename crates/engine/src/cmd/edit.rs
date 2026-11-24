@@ -380,11 +380,17 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "fill.set",
             "Set fill",
-            "{ids?, index?, paint | color, opacity?, visible?, blend?, regions? (a vector's regions by index: their own fills, as the regions selected in edit mode)}",
+            "{ids?, index?, paint | color, opacity?, visible?, blend?, preservePlacement? (default false; retain each target image crop during multi-target picker adjustments), regions? (a vector's regions by index: their own fills, as the regions selected in edit mode)}",
             true,
             |s, p| paint_set(s, p, true)
         ),
-        spec!("stroke.set", "Set stroke", "{ids?, index?, paint | color, opacity?, visible?, blend?}", true, |s, p| paint_set(s, p, false)),
+        spec!(
+            "stroke.set",
+            "Set stroke",
+            "{ids?, index?, paint | color, opacity?, visible?, blend?, preservePlacement? (default false; retain each target image crop during multi-target picker adjustments)}",
+            true,
+            |s, p| paint_set(s, p, false)
+        ),
         spec!("fill.copy", "Copy fill", "{id?, index? (default the top fill)}", false, |s, p| paint_copy(s, p, true)),
         spec!("fill.paste", "Paste fill", "{ids?, index? (replace the fill there; without: add one), regions?}", true, |s, p| paint_paste(
             s, p, true

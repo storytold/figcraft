@@ -158,3 +158,25 @@ fn replacing_an_image_keeps_its_fill_mode_crop_and_adjustments() {
     assert!(s.execute("image.replace", &json!({"ids": [solid], "index": 0})).is_err());
     assert_eq!(fills(&s, solid), now);
 }
+
+#[test]
+fn review_explicit_crop_replacements_apply_to_multiple_layers_and_with_rotation() {
+    let mut s = Session::new();
+    let first = image_layer(&mut s);
+    let second = image_layer(&mut s);
+    set_mode(&mut s, first, ImageScaleMode::Crop);
+    set_mode(&mut s, second, ImageScaleMode::Crop);
+    let mut paint = fills(&s, first)[0].clone();
+    let PaintKind::Image(img) = &mut paint.kind else { panic!("not an image") };
+    let requested = [0.5, 0.0, 0.0, 0.5, 0.25, 0.25];
+    img.crop = Some(requested);
+    ex(&mut s, "fill.set", json!({"ids":[first,second],"index":0,"paint":paint}));
+    for id in [first, second] {
+        assert!(matches!(&fills(&s,id)[0].kind,PaintKind::Image(img) if img.crop==Some(requested)));
+    }
+    let PaintKind::Image(img) = &mut paint.kind else { panic!("not an image") };
+    img.rotation = 1;
+    img.crop = Some([0.4, 0.0, 0.0, 0.4, 0.3, 0.3]);
+    ex(&mut s, "fill.set", json!({"ids":[first],"index":0,"paint":paint}));
+    assert!(matches!(&fills(&s,first)[0].kind,PaintKind::Image(img) if img.crop==Some([0.4,0.0,0.0,0.4,0.3,0.3])));
+}

@@ -416,6 +416,7 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
     let cmd = if fills { "fill.set" } else { "stroke.set" };
     let ids = req_targets(cmd, s, p)?;
     let idx = opt_index(cmd, p, "index")?;
+    let preserve_placement = boolean(p, "preservePlacement").unwrap_or(false);
     let new_paint = match get(p, "paint") {
         Some(v) => Some(paint_of(v).ok_or_else(|| bad(cmd, "invalid paint"))?),
         None => None,
@@ -468,12 +469,12 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
             {
                 match &old.kind {
                     figcraft_color::PaintKind::Image(old_img) if old_img.image == img.image => {
-                        if old_img.rotation != img.rotation {
+                        if old_img.rotation != img.rotation && img.crop.is_none() {
                             img.crop = None;
                             img.crop = Some(img.placement_crop(iw, ih, nw, nh));
                         } else if img.crop.is_none() {
                             img.crop = Some(old_img.placement_crop(iw, ih, nw, nh));
-                        } else if regions.len() > 1 && old_img.scale_mode == figcraft_color::ImageScaleMode::Crop {
+                        } else if preserve_placement && regions.len() > 1 && old_img.scale_mode == figcraft_color::ImageScaleMode::Crop {
                             img.crop = old_img.crop;
                         }
                     }
@@ -514,12 +515,12 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
         {
             match &old.kind {
                 figcraft_color::PaintKind::Image(old_img) if old_img.image == img.image => {
-                    if old_img.rotation != img.rotation {
+                    if old_img.rotation != img.rotation && img.crop.is_none() {
                         img.crop = None;
                         img.crop = Some(img.placement_crop(iw, ih, n.width, n.height));
                     } else if img.crop.is_none() {
                         img.crop = Some(old_img.placement_crop(iw, ih, n.width, n.height));
-                    } else if ids.len() > 1 && old_img.scale_mode == figcraft_color::ImageScaleMode::Crop {
+                    } else if preserve_placement && ids.len() > 1 && old_img.scale_mode == figcraft_color::ImageScaleMode::Crop {
                         img.crop = old_img.crop;
                     }
                 }
