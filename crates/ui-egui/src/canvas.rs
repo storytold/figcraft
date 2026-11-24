@@ -272,7 +272,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
             // Otherwise keep the centre.
             ds.view.vw = f64::from(rect.width());
             ds.view.vh = f64::from(rect.height());
-            if first {
+            if first && ds.fit_when_sized {
                 ds.zoom_to_fit();
             }
         }

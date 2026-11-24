@@ -93,6 +93,11 @@ pub struct Prefs {
     /// Which of [`open_files`](Self::open_files) was in front.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub front_file: Option<String>,
+    /// Where each file was left when its tab closed or the app quit, the most recently left first,
+    /// at most [`MAX_FILE_VIEWS`](crate::MAX_FILE_VIEWS): opening it again shows that page at that
+    /// view ([`Session::remember_views`](crate::Session::remember_views)).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub file_views: Vec<crate::FileView>,
     /// The files you put on a server without its key, with their owner tokens (passwords: see
     /// [`online`]), most recently opened first, at most [`online::MAX_ONLINE_FILES`].
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "online::read")]
@@ -165,6 +170,7 @@ impl Default for Prefs {
             recent_files: Vec::new(),
             open_files: Vec::new(),
             front_file: None,
+            file_views: Vec::new(),
             online_files: Vec::new(),
             getting_started_dismissed: false,
             link_notice_skipped: false,
