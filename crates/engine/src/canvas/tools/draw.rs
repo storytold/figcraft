@@ -165,6 +165,11 @@ impl Session {
                             }
                             // A layer can't go into itself; it stays where it is.
                             let _ = d.reparent(*m, target, None);
+                            // Frames, sections and components land on whole pixels of the frame
+                            // they are dropped into too.
+                            if d.node(*m).is_some_and(crate::snap::always_on_pixels) {
+                                crate::snap::settle_on_pixels(d, *m)?;
+                            }
                         }
                         crate::normalize(ds.doc_mut(), &before);
                     }

@@ -838,6 +838,31 @@ fn frames_land_on_whole_pixels_whatever_they_snap_to() {
 }
 
 #[test]
+fn frames_resized_together_each_land_on_whole_pixels() {
+    let mut s = session();
+    let frame = |s: &mut Session, x: f64| id(&ex(s, "frame.create", json!({"x": x, "y": 0, "width": 100, "height": 100})));
+    let (a, b) = (frame(&mut s, 0.0), frame(&mut s, 200.0));
+    ex(&mut s, "select.set", json!({"ids": [a, b]}));
+    // 300 wide to 400: a third more, so each frame alone would be 133.33 wide.
+    drag(&mut s, Point::new(300.0, 100.0), Point::new(400.0, 100.0), Mods::default());
+    assert_eq!(bounds(&s, a), Rect::new(0.0, 0.0, 133.0, 100.0));
+    assert_eq!(bounds(&s, b), Rect::new(267.0, 0.0, 400.0, 100.0));
+}
+
+#[test]
+fn a_frame_dropped_into_a_frame_off_the_pixel_grid_lands_on_its_whole_pixels() {
+    let mut s = session();
+    let target = id(&ex(&mut s, "frame.create", json!({"x": 300.5, "y": 0.5, "width": 300, "height": 300})));
+    let f = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 50})));
+    ex(&mut s, "select.set", json!({"ids": [f]}));
+    drag(&mut s, Point::new(25.0, 25.0), Point::new(425.0, 125.0), Mods::default());
+    let n = s.doc().unwrap().node(f).unwrap().clone();
+    assert_eq!(n.parent, Some(target));
+    let [.., x, y] = n.transform.as_coeffs();
+    assert_eq!((x.fract(), y.fract()), (0.0, 0.0), "at {x}, {y} in the frame");
+}
+
+#[test]
 fn corner_cursors_stay_diagonal_whatever_the_proportions() {
     let mut s = session();
     let mod180 = |a: f64, b: f64| near((a - b).rem_euclid(180.0).min((b - a).rem_euclid(180.0)), 0.0);

@@ -671,8 +671,16 @@ impl Session {
                 let lin = (mirror * local).with_translation(Vec2::ZERO);
                 let origin = Point::new(x0 + center.x * sx, y0 + center.y * sy) - lin * Point::new(w2 / 2.0, h2 / 2.0);
                 let kept = if keeps(doc, *id) { crate::cmd::props::children_worlds(doc, *id) } else { Vec::new() };
-                doc.set_world_transform(*id, frame * lin.with_translation(origin))?;
+                let (t, w2, h2) = if boards {
+                    on_whole_pixels(doc, *id, frame * lin.with_translation(origin), w2, h2)
+                } else {
+                    (frame * lin.with_translation(origin), w2, h2)
+                };
+                doc.set_world_transform(*id, t)?;
                 crate::cmd::props::resize_node(doc, *id, w2, h2)?;
+                if boards {
+                    crate::snap::settle_on_pixels(doc, *id)?;
+                }
                 crate::cmd::props::restore_worlds(doc, &kept)?;
             }
             Ok(())
@@ -705,6 +713,25 @@ impl Session {
         self.tool.overlay.guides = guides;
         Ok(())
     }
+}
+
+/// `world` and the size `w` x `h` a layer of a resized selection takes, moved so its box in its
+/// parent has its edges on whole pixels, each on the nearest one and the box at least a pixel
+/// wide: a frame resized with others lands on whole pixels as one resized alone does. A layer
+/// turned or scaled in its parent keeps them.
+fn on_whole_pixels(doc: &Document, id: NodeId, world: Affine, w: f64, h: f64) -> (Affine, f64, f64) {
+    let pw = doc.node(id).and_then(|n| n.parent).map_or(Affine::IDENTITY, |p| doc.world_transform(p));
+    let local = pw.inverse() * world;
+    let [a, b, c, d, e, f] = local.as_coeffs();
+    if !crate::guides::axis_aligned(local) || (a.abs() - 1.0).abs() > 1e-9 || (d.abs() - 1.0).abs() > 1e-9 {
+        return (world, w, h);
+    }
+    let edges = |at: f64, flip: bool, len: f64| if flip { (at - len, at) } else { (at, at + len) };
+    let ((x0, x1), (y0, y1)) = (edges(e, a < 0.0, w), edges(f, d < 0.0, h));
+    let (x0, y0) = (x0.round(), y0.round());
+    let (w, h) = ((x1.round() - x0).max(1.0), (y1.round() - y0).max(1.0));
+    let (e, f) = (if a < 0.0 { x0 + w } else { x0 }, if d < 0.0 { y0 + h } else { y0 });
+    (pw * Affine::new([a, b, c, d, e, f]), w, h)
 }
 
 /// Moving `moving` by the same offset moves nothing else and changes nothing about them but where
