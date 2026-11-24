@@ -89,9 +89,17 @@ impl Menu {
     /// Show the menu while it is open. Its rows `content` scroll with the wheel or the scroll bar
     /// once they were taller than the window last frame, as the main menu's do (#2217); a menu
     /// that fits is laid out as it is, so it still grows with its rows (a scroll area in a popup
-    /// would keep the popup's last height).
+    /// would keep the popup's last height). A click on the scroll bar scrolls and leaves the menu
+    /// open. The rows have the same ids scrolling or not, so the row the keyboard is on keeps it
+    /// when the window's height changes which of the two the menu does.
     pub fn show<R>(self, content: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
-        self.0.show(|ui| {
+        let rows = self.0.get_id().with("menu_rows");
+        let bar_key = rows.with("scroll_bar");
+        let ctx = self.0.ctx().clone();
+        let bar_clicked = ctx.data(|d| d.get_temp::<Id>(bar_key)).is_some_and(|bar| ctx.interaction_snapshot(|i| i.clicked == Some(bar)));
+        let popup = if bar_clicked { self.0.close_behavior(egui::PopupCloseBehavior::IgnoreClicks) } else { self.0 };
+        let rows_ui = egui::UiBuilder::new().scope_id(rows);
+        popup.show(|ui| {
             let window = ui.ctx().content_rect().height();
             let max_height = (window - ui.style().spacing.menu_margin.sum().y - 2.0 * MENU_WINDOW_GAP).max(0.0);
             let rows_height = ui.scope_id().with("menu_rows_height");
@@ -101,10 +109,12 @@ impl Menu {
                     .id_salt("menu_rows")
                     .max_height(max_height)
                     .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::SCROLL_BAR)
-                    .show(ui, content);
+                    .show(ui, |ui| ui.scope_builder(rows_ui, content).inner);
+                // egui's id for a scroll area's vertical bar (a test in `menu_scroll_tests` clicks it).
+                ui.data_mut(|d| d.insert_temp(bar_key, out.id.with(1_usize)));
                 (out.inner, out.content_size.y)
             } else {
-                let inner = content(ui);
+                let inner = ui.scope_builder(rows_ui, content).inner;
                 let height = ui.min_rect().height();
                 if height > max_height {
                     ui.ctx().request_repaint();
