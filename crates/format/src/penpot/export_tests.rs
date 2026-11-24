@@ -18,7 +18,7 @@ fn entries(bytes: &[u8]) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_owned();
+        let name = f.name().expect("ZIP member name").into_owned();
         if name.ends_with(".json") {
             let mut text = String::new();
             f.read_to_string(&mut text).unwrap();
@@ -684,7 +684,7 @@ fn imported_penpot_tokens_are_written_back_verbatim() {
     doc.node_mut(p).unwrap().plugin_data.insert("penpot.fp.tokens".into(), fp);
     let (bytes, warnings) = export(&doc).unwrap();
     let mut z = zip::ZipArchive::new(Cursor::new(&bytes[..])).unwrap();
-    let path = z.file_names().find(|n| n.ends_with("tokens.json")).unwrap().to_owned();
+    let path = z.file_names().map(|name| name.expect("ZIP member name")).find(|n| n.ends_with("tokens.json")).unwrap().into_owned();
     let mut text = String::new();
     z.by_name(&path).unwrap().read_to_string(&mut text).unwrap();
     assert_eq!(text, source);
@@ -1033,7 +1033,7 @@ fn shared_writer_keeps_manifest_first_and_deflated_members() {
     let doc = Document::new("Shared container");
     let (bytes, _) = export(&doc).unwrap();
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
-    assert_eq!(zip.by_index(0).unwrap().name(), "manifest.json");
+    assert_eq!(zip.by_index(0).unwrap().name().expect("ZIP member name"), "manifest.json");
     for index in 0..zip.len() {
         assert_eq!(zip.by_index(index).unwrap().compression(), zip::CompressionMethod::Deflated);
     }

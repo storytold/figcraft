@@ -4446,8 +4446,8 @@ mod tests {
         assert!(dense.len() < MAX_JSON as usize);
         for index in 0..source.len() {
             let mut member = source.by_index(index).unwrap();
-            writer.start_file(member.name(), crate::json_options()).unwrap();
-            if member.name().ends_with(&format!("/{id}.json")) {
+            writer.start_file(member.name().expect("ZIP member name"), crate::json_options()).unwrap();
+            if member.name().expect("ZIP member name").ends_with(&format!("/{id}.json")) {
                 writer.write_all(dense.as_bytes()).unwrap();
             } else {
                 io::copy(&mut member, &mut writer).unwrap();
@@ -4556,6 +4556,23 @@ mod tests {
             z.write_all(data.to_string().as_bytes()).unwrap();
         }
         z.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn import_allows_a_legacy_encoded_ancillary_zip_member() {
+        let id = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        let bytes = archive_with_shapes(&[(id, serde_json::json!({"id":id,"type":"rect","name":"Imported rectangle","width":40,"height":25}))]);
+        let mut writer = zip::ZipWriter::new_append(Cursor::new(bytes)).unwrap();
+        // Unflagged CP437, as written by legacy ZIP tools: 0x82 is é.
+        writer.start_file_with_options(SimpleFileOptions::default().name(b"caf\x82.txt")).unwrap();
+        writer.write_all(b"Ancillary archive note").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let mut archive = open_archive(&bytes).unwrap();
+        assert!((0..archive.len()).any(|i| archive.entry_name(i).unwrap().as_deref() == Some("café.txt")));
+        let (doc, warnings) = import(&bytes).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(doc.nodes().any(|node| node.name == "Imported rectangle"));
     }
 
     #[test]
@@ -4941,12 +4958,12 @@ mod tests {
             let mut e = z.by_index(i).unwrap();
             let mut content = Vec::new();
             e.read_to_end(&mut content).unwrap();
-            if e.name().ends_with(&format!("/{ROOT_ID}.json")) {
+            if e.name().expect("ZIP member name").ends_with(&format!("/{ROOT_ID}.json")) {
                 let mut v: Value = serde_json::from_slice(&content).unwrap();
                 v["shapes"] = serde_json::json!([one]);
                 content = serde_json::to_vec(&v).unwrap();
             }
-            members.push((e.name().to_string(), content));
+            members.push((e.name().expect("ZIP member name").to_string(), content));
         }
         drop(z);
         let cursor = Cursor::new(Vec::new());
