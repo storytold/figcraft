@@ -411,10 +411,16 @@ mod tests {
     #[test]
     fn the_stable_settings_folder_and_its_ancestors_are_refused() {
         let fixture = Fixture::new();
-        let stable = fixture.home().join(".config/FigCraft");
-        std::fs::create_dir_all(&stable).unwrap();
-        std::fs::write(stable.join("state.json"), b"stable settings").unwrap();
-        for platform in [Platform::Windows, Platform::Linux, Platform::Mac] {
+        // Each platform fences the folder its own stable build resolves (`services::platform_dir`):
+        // `%APPDATA%` on Windows, `~/.config` on Linux and Application Support on macOS.
+        let stable_folders = [
+            (Platform::Windows, fixture.root.join("roaming/FigCraft")),
+            (Platform::Linux, fixture.home().join(".config/FigCraft")),
+            (Platform::Mac, fixture.home().join("Library/Application Support/FigCraft")),
+        ];
+        for (platform, stable) in stable_folders {
+            std::fs::create_dir_all(&stable).unwrap();
+            std::fs::write(stable.join("state.json"), b"stable settings").unwrap();
             for root in [stable.clone(), stable.join("nightly")] {
                 let calls = std::cell::Cell::new(0);
                 let result = validate_for(
@@ -430,8 +436,8 @@ mod tests {
                 assert!(result.unwrap_err().contains("overlap"));
                 assert_eq!(calls.get(), 0);
             }
+            assert_eq!(std::fs::read(stable.join("state.json")).unwrap(), b"stable settings");
         }
-        assert_eq!(std::fs::read(stable.join("state.json")).unwrap(), b"stable settings");
     }
 
     #[test]
