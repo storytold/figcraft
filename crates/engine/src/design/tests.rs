@@ -828,7 +828,11 @@ fn a_limit_reached_by_hidden_nodes_is_not_truncation() {
     let mut s = Session::new();
     let page = s.page().unwrap();
     for i in 0..999 {
-        s.doc_mut().unwrap().create(page, NodeKind::Group, &format!("Visible {i}"), 400.0, 400.0, 1.0, 1.0).unwrap();
+        let doc = s.doc_mut().unwrap();
+        let filler = doc.create(page, NodeKind::Rectangle, &format!("Visible {i}"), 400.0, 400.0, 1.0, 1.0).unwrap();
+        let node = doc.get_mut(filler).unwrap();
+        node.fills.clear();
+        node.strokes.clear();
     }
     ex(&mut s, "text.create", json!({"text":"0","x":0,"y":0,"props":{"fill":"#FFFFFF"}}));
     for i in 0..10 {
@@ -1261,7 +1265,7 @@ fn review_contrast_uses_the_bold_cutoff_and_a_reachable_repair_shade() {
 #[test]
 fn review_brand_settings_round_trip_their_alpha() {
     let mut s = Session::new();
-    let settings = ex(&mut s, "design.configure", json!({"brand":["#FF000080","#00AA00"]}));
+    let settings = ex(&mut s, "design.configure", json!({"grid":4,"brand":["#FF000080","#00AA00"]}));
     let before = s.doc().unwrap().design_review.clone();
     ex(&mut s, "design.configure", settings);
     assert_eq!(s.doc().unwrap().design_review, before, "reapplying returned settings must preserve brand ownership");
@@ -1270,8 +1274,9 @@ fn review_brand_settings_round_trip_their_alpha() {
 #[test]
 fn review_transparent_sibling_groups_are_not_opaque_backdrops() {
     let mut s = Session::new();
-    let group = id(&ex(&mut s, "node.create", json!({"type":"group","width":200,"height":100,"props":{"opacity":0}})));
-    ex(&mut s, "node.create", json!({"type":"rectangle","parent":group,"width":200,"height":100,"props":{"fill":"#000000"}}));
+    let child = id(&ex(&mut s, "node.create", json!({"type":"rectangle","width":200,"height":100,"props":{"fill":"#000000"}})));
+    let group = id(&ex(&mut s, "object.group", json!({"ids":[child]})));
+    s.doc_mut().unwrap().get_mut(group).unwrap().opacity = 0.0;
     let text = id(&ex(&mut s, "text.create", json!({"text":"Legible","x":10,"y":10,"props":{"fill":"#000000"}})));
     let before = s.doc().unwrap().node(text).unwrap().clone();
     let report = ex(&mut s, "design.audit", json!({"ids":[text],"rules":["color.contrast"]}));

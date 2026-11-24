@@ -282,7 +282,7 @@ fn multi_layer_crop_mode_selection_computes_placement_per_node() {
     let PaintKind::Image(img) = &mut fill.kind else { panic!("image fill") };
     img.scale_mode = ImageScaleMode::Crop;
     img.crop = None;
-    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": fill}));
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": fill, "preservePlacement": true}));
 
     // Verify both layers received crop transforms tailored to their own dimensions, not stretched.
     let n1 = s.doc().unwrap().node(layer1).unwrap().clone();
@@ -304,7 +304,7 @@ fn multi_layer_crop_mode_selection_computes_placement_per_node() {
     let mut rot_fill = n1.fills[0].clone();
     let PaintKind::Image(img) = &mut rot_fill.kind else { panic!("image fill") };
     img.rotation = 1;
-    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": rot_fill}));
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": rot_fill, "preservePlacement": true}));
 
     let n1_rot = s.doc().unwrap().node(layer1).unwrap().clone();
     let n2_rot = s.doc().unwrap().node(layer2).unwrap().clone();
@@ -321,7 +321,7 @@ fn multi_layer_crop_mode_selection_computes_placement_per_node() {
     let mut filter_fill = n1_rot.fills[0].clone();
     let PaintKind::Image(img) = &mut filter_fill.kind else { panic!("image fill") };
     img.filters.exposure = 0.5;
-    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": filter_fill}));
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": filter_fill, "preservePlacement": true}));
 
     let n1_filt = s.doc().unwrap().node(layer1).unwrap().clone();
     let n2_filt = s.doc().unwrap().node(layer2).unwrap().clone();
