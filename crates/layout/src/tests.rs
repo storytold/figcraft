@@ -508,3 +508,41 @@ fn review_coupled_ratio_fills_use_the_hugging_lines_main_space_and_settle() {
         }
     }
 }
+
+#[test]
+fn review_oversized_initial_ratio_fills_still_solve_the_available_space() {
+    for horizontal in [false, true] {
+        let (mut d, f, k) = setup(if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical });
+        let frame = d.get_mut(f).unwrap();
+        (frame.width, frame.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+        let al = frame.layout.as_mut().unwrap();
+        al.padding = [0.0; 4];
+        al.gap = 0.0;
+        if horizontal {
+            frame.child_layout.sizing_v = Sizing::Hug
+        } else {
+            frame.child_layout.sizing_h = Sizing::Hug
+        }
+        for (index, id) in k.iter().enumerate() {
+            let n = d.get_mut(*id).unwrap();
+            (n.width, n.height) = if index == 1 {
+                (1000.0, 1000.0)
+            } else if horizontal {
+                (100.0, 1000.0)
+            } else {
+                (1000.0, 100.0)
+            };
+            n.constrain_proportions = true;
+            (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                if horizontal == (index == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+        }
+        layout_frame(&mut d, f, &NoMeasure);
+        let a = d.node(k[0]).unwrap();
+        let b = d.node(k[1]).unwrap();
+        let (main, cross) = if horizontal { (a.width + b.width, a.height) } else { (a.height + b.height, a.width) };
+        assert!((main - 300.0).abs() < 1e-6, "the initial oversized child must not select a spurious zero-width solution: {main}");
+        let own_main = if horizontal { a.width } else { a.height };
+        assert!((cross - 10.0 * own_main).abs() < 1e-6);
+        assert!((b.width - b.height).abs() < 1e-6);
+    }
+}

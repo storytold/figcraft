@@ -598,12 +598,18 @@ fn settle_locked_hug_line(doc: &mut Document, items: &mut [Item], lines: &[Vec<u
         items.clone_from_slice(&original);
         for it in items.iter_mut().filter(|it| it.fill_cross) {
             it.cross = clamp_size(line, it.min_cross, it.max_cross);
-            it.main = it.main_for_cross(it.cross, it.main);
+            if let Some(ratio) = it.locked_cross_per_main {
+                it.main = clamp_size(it.cross / ratio, it.min_main, it.max_main);
+            }
         }
         let (main, gap, auto) = st.flow;
         distribute_flow_lines(items, lines, main, gap, auto);
         for it in items.iter_mut().filter(|it| it.fill_main) {
-            it.cross = it.cross_for_main(it.main, it.cross);
+            if let Some(ratio) = it.locked_cross_per_main {
+                // Trial zero sizes must follow the ratio too. The ordinary resize helper
+                // keeps the old cross size at zero, which would make this function jump.
+                it.cross = clamp_size(it.main * ratio, it.min_cross, it.max_cross);
+            }
         }
         for it in items.iter_mut().filter(|it| it.baseline.is_some() && (it.fill_main || it.fill_cross)) {
             it.baseline = Some(it.cross)
@@ -615,9 +621,22 @@ fn settle_locked_hug_line(doc: &mut Document, items: &mut [Item], lines: &[Vec<u
     let mut hi = trial(items, 1e-9).max(1e-9);
     for _ in 0..48 {
         let mid = (lo + hi) / 2.0;
-        if trial(items, mid) > mid { lo = mid } else { hi = mid }
+        let needed = trial(items, mid);
+        if needed == mid {
+            lo = mid;
+            hi = mid;
+            break;
+        }
+        if needed > mid { lo = mid } else { hi = mid }
     }
     trial(items, (lo + hi) / 2.0);
+    if items
+        .iter()
+        .any(|it| it.locked_cross_per_main.is_some() && (it.main <= 0.0 || it.cross <= 0.0 || !it.main.is_finite() || !it.cross.is_finite()))
+    {
+        items.clone_from_slice(&original);
+        return false;
+    }
     for it in items.iter_mut().filter(|it| it.fill_main || it.fill_cross) {
         let (w, h) = if st.horizontal { (it.main, it.cross) } else { (it.cross, it.main) };
         resize_child(doc, it.id, w, h, m);
