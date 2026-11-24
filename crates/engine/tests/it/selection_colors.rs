@@ -694,8 +694,8 @@ fn a_library_that_is_not_a_string_is_refused_rather_than_linking_a_local_style()
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)]
 fn a_row_binds_a_published_library_color_variable_copied_in_in_one_undo_step() {
-    #[allow(clippy::disallowed_methods)]
     let fixture = Fixture(std::env::temp_dir().join(format!("figcraft-selection-colors-variable-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&fixture.0);
     std::fs::create_dir(&fixture.0).unwrap();
