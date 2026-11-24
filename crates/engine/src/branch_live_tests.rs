@@ -238,3 +238,71 @@ fn branch_commands_survive_junk_params_in_a_live_session() {
     }
     room.check();
 }
+
+#[test]
+fn a_shared_branch_syncs_and_another_peer_can_review_and_merge_it() {
+    let mut room = Room::new(base(), 2, 19);
+    room.settle();
+    let (main0, main1) = (room.s(0).active, room.s(1).active);
+    let (f, r) = frame_and_rect(room.server.document());
+    // Person 0 creates a branch, edits a layer, adds a new layer and a style.
+    let id = ok(room.s(0), "branch.create", json!({"name": "New Header"}))["id"].as_str().unwrap().to_string();
+    ok(room.s(0), "fill.set", json!({"ids": [r], "color": "#00AA55"}));
+    let made = NodeId(ok(room.s(0), "shape.rectangle", json!({"x": 400, "y": 200, "width": 60, "height": 30}))["id"].as_u64().unwrap());
+    ok(room.s(0), "style.create", json!({"type": "paint", "name": "Accent", "from": r}));
+    room.settle();
+    // Main is untouched, while Person 1 sees the shared branch in their list.
+    assert!(!room.server.document().contains(made));
+    let branches = ok(room.s(1), "branch.list", json!({}));
+    let list = branches.as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["id"], id);
+    assert_eq!(list[0]["name"], "New Header");
+    assert_eq!(list[0]["state"], "active");
+    // Person 1 opens Person 0's branch and sees the new layer and style.
+    ok(room.s(1), "branch.open", json!({"id": id}));
+    assert!(room.s(1).doc().unwrap().contains(made));
+    assert!(room.s(1).doc().unwrap().styles.iter().any(|st| st.name == "Accent"));
+    // Person 1 also edits main concurrently (non-conflicting rename on frame).
+    ok(room.s(1), "doc.switch", json!({"index": main1}));
+    ok(room.s(1), "node.set", json!({"id": f, "props": {"name": "Main Frame"}}));
+    room.settle();
+    // Person 1 reviews and merges Person 0's branch into main.
+    assert_eq!(conflict_keys(room.s(1), &id), Vec::<String>::new());
+    assert_eq!(ok(room.s(1), "branch.merge", json!({"id": id}))["merged"], true);
+    room.settle();
+    // Switch Person 0 back to main so room.check() compares main tabs.
+    ok(room.s(0), "doc.switch", json!({"index": main0}));
+    room.check();
+    let doc = room.server.document();
+    assert!(doc.contains(made), "Person 0's layer from the branch is now on main");
+    assert_eq!(doc.node(f).unwrap().name, "Main Frame");
+    assert!(doc.styles.iter().any(|st| st.name == "Accent"));
+    // Both peers see the branch marked merged.
+    assert_eq!(ok(room.s(0), "branch.list", json!({}))[0]["state"], "merged");
+    assert_eq!(ok(room.s(1), "branch.list", json!({}))[0]["state"], "merged");
+}
+
+#[test]
+fn shared_branch_update_from_main_and_archive_sync_to_peers() {
+    let mut room = Room::new(base(), 2, 23);
+    room.settle();
+    let main0 = room.s(0).active;
+    let (f, _) = frame_and_rect(room.server.document());
+    let a = ok(room.s(0), "branch.create", json!({"name": "Keep"}))["id"].as_str().unwrap().to_string();
+    ok(room.s(0), "doc.switch", json!({"index": main0}));
+    let b = ok(room.s(0), "branch.create", json!({"name": "Drop"}))["id"].as_str().unwrap().to_string();
+    room.settle();
+    // Person 1 edits main and archives branch B.
+    ok(room.s(1), "node.set", json!({"id": f, "props": {"name": "Updated Main"}}));
+    ok(room.s(1), "branch.archive", json!({"id": b}));
+    room.settle();
+    // Person 0 sees branch B archived, and updates branch A from main.
+    let list0 = ok(room.s(0), "branch.list", json!({}));
+    assert_eq!(list0.as_array().unwrap().iter().find(|x| x["id"] == b).unwrap()["state"], "archived");
+    assert_eq!(ok(room.s(0), "branch.updateFromMain", json!({"id": a}))["updated"], true);
+    room.settle();
+    // Person 1 opens branch A and sees main's update in it.
+    ok(room.s(1), "branch.open", json!({"id": a}));
+    assert_eq!(room.s(1).doc().unwrap().node(f).unwrap().name, "Updated Main");
+}

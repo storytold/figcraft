@@ -59,6 +59,7 @@ use crate::params::{get, num, req_string, string};
 use crate::tools::ToolId;
 use crate::{DocState, EngineError, Result, Session, TextEdit, ViewState, bad, spec};
 
+mod branches;
 mod events;
 mod host;
 mod join;
@@ -140,6 +141,10 @@ pub struct Live {
     /// The branches of the session's file made or last updated from main in this session: every
     /// layer of their base was in it (see [`crate::branches`]).
     branch_bases: BTreeSet<String>,
+    /// The server supports shared branches (it sent [`ServerMsg::Branches`] after the welcome).
+    pub shared_branches: bool,
+    /// Synced replicas of each shared branch on this client.
+    branch_replicas: BTreeMap<String, branches::SyncedBranch>,
     /// You were in this session and aren't now: what joining it again takes (`collab.reconnect`).
     stranded: Option<Stranded>,
 }

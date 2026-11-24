@@ -73,7 +73,10 @@ impl Room {
                 Outgoing::All(m) => (m, (0..self.people.len()).collect()),
                 Outgoing::Others(id, m) => (m, (0..self.people.len()).filter(|i| self.people[*i].id != id).collect()),
             };
-            if !matches!(msg, ServerMsg::Changes(_) | ServerMsg::Reject { .. } | ServerMsg::Welcome { .. }) {
+            if !matches!(
+                msg,
+                ServerMsg::Changes(_) | ServerMsg::Reject { .. } | ServerMsg::Welcome { .. } | ServerMsg::Branches(_) | ServerMsg::Branch(_)
+            ) {
                 continue;
             }
             let to: Vec<usize> = to.into_iter().filter(|i| self.people[*i].online).collect();

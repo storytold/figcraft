@@ -109,6 +109,7 @@ impl Host {
         for o in outs {
             match o {
                 Outgoing::To(id, w @ ServerMsg::Welcome { .. }) if id == me => inbox.push(Event::Sync(w)),
+                Outgoing::To(id, b @ ServerMsg::Branches(_)) if id == me => inbox.push(Event::Sync(b)),
                 Outgoing::To(id, ref m @ ServerMsg::Signal { .. }) if id == me => to_local(&inbox, me, m),
                 _ => {}
             }

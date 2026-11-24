@@ -112,11 +112,27 @@ impl Session {
         }
         // Your own edits first: the client replays them over what others did.
         self.live_edit(uid, None);
-        let Some(live) = self.live.sessions.get_mut(&id) else { return };
-        let Some(client) = live.client.as_mut() else { return };
+        let waiting = {
+            let Some(live) = self.live.sessions.get_mut(&id) else { return };
+            std::mem::take(&mut live.deferred)
+        };
+        let mut waiting = waiting.into_iter();
         let mut out = Vec::new();
-        let mut waiting = std::mem::take(&mut live.deferred).into_iter();
+        let mut changed_main = false;
         while let Some(m) = waiting.next() {
+            match m {
+                ServerMsg::Branches(list) => {
+                    self.live_branches_welcome(id, list);
+                    continue;
+                }
+                ServerMsg::Branch(ev) => {
+                    self.live_branch_event(id, *ev);
+                    continue;
+                }
+                _ => {}
+            }
+            let Some(live) = self.live.sessions.get_mut(&id) else { return };
+            let Some(client) = live.client.as_mut() else { return };
             // The server no longer knows this client (it restarted without its saved state, say):
             // it welcomed you as someone new. What you did goes on top like after any rejoin.
             if let ServerMsg::Welcome { session, client_id, .. } = &m {
@@ -133,7 +149,10 @@ impl Session {
                 }
             }
             match client.receive(m, &EngineRecompute) {
-                Ok(more) => out.extend(more),
+                Ok(more) => {
+                    out.extend(more);
+                    changed_main = true;
+                }
                 Err(e) => {
                     self.live_fail(id, format!("The live session got out of step ({e})"));
                     // A fresh join has nothing to get out of step with.
@@ -144,15 +163,19 @@ impl Session {
                 }
             }
         }
-        let doc = Arc::new(client.document().clone());
-        // Edits the server refused were rolled back: say why (the UI's toast).
-        let notices: Vec<String> = client.take_notices().iter().map(figcraft_collab::Notice::message).collect();
-        live.synced = Some(doc.clone());
-        if !notices.is_empty() {
-            self.message = Some(notices.join("; "));
+        if changed_main {
+            let Some(live) = self.live.sessions.get_mut(&id) else { return };
+            let Some(client) = live.client.as_mut() else { return };
+            let doc = Arc::new(client.document().clone());
+            // Edits the server refused were rolled back: say why (the UI's toast).
+            let notices: Vec<String> = client.take_notices().iter().map(figcraft_collab::Notice::message).collect();
+            live.synced = Some(doc.clone());
+            if !notices.is_empty() {
+                self.message = Some(notices.join("; "));
+            }
+            self.live.send(id, out);
+            self.apply_remote(uid, doc);
         }
-        self.live.send(id, out);
-        self.apply_remote(uid, doc);
     }
 
     /// Show the peer followed in session `id`: their viewport (and their page, in the session's
@@ -227,6 +250,7 @@ impl Session {
             self.live_deferred(id);
             if let Some(uid) = self.live.get(id).and_then(|l| l.doc_uid) {
                 self.live_edit(uid, None);
+                self.live_branches_sync(uid);
             }
             self.live_present(id);
         }

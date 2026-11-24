@@ -92,10 +92,10 @@ impl Backend for Store {
         let compact = self.files.get_mut(file).is_some_and(|entry| {
             let snapshot_seq = entry.meta.seq;
             entry.log.as_mut().is_some_and(|log| {
-                // Issued client ids and refusals are durable in the log; only edits need a
-                // new image-bearing snapshot. Still try a snapshot if syncing the log failed.
+                // Issued client ids and refusals are durable in the log; edits (on main or
+                // shared branches) need a new snapshot. Still try a snapshot if syncing failed.
                 synced = flush_log(file, log).is_ok();
-                !synced || (log.dirty && server.seq() > snapshot_seq)
+                !synced || (log.dirty && (server.seq() > snapshot_seq || server.has_branches()))
             })
         });
         if compact {

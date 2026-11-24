@@ -34,9 +34,13 @@ pub const COMMENTS: &str = "comments";
 /// read it).
 pub const PACKED: &str = "packed";
 
+/// The word a client puts in its [`Hello::client_version`] when it reads [`ServerMsg::Branches`]
+/// and [`ServerMsg::Branch`]: a server syncs shared branches only with clients that say so.
+pub const BRANCHES: &str = "branches";
+
 /// The `client_version` this build announces: its version, then what it reads beyond the protocol.
 pub fn client_version() -> String {
-    format!("{} {SIGNALS} {HOSTING} {COMMENTS} {PACKED}", env!("CARGO_PKG_VERSION"))
+    format!("{} {SIGNALS} {HOSTING} {COMMENTS} {PACKED} {BRANCHES}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Whether `client_version` announces `word`.
@@ -62,6 +66,11 @@ pub fn reads_comments(client_version: &str) -> bool {
 /// A [`Hello::client_version`] that announces [`PACKED`].
 pub fn reads_packed(client_version: &str) -> bool {
     announces(client_version, PACKED)
+}
+
+/// A [`Hello::client_version`] that announces [`BRANCHES`].
+pub fn reads_branches(client_version: &str) -> bool {
+    announces(client_version, BRANCHES)
 }
 
 /// Join a file's session.
@@ -821,6 +830,53 @@ pub enum PluginReply {
     },
 }
 
+/// Most shared branches one session keeps.
+pub const MAX_SHARED_BRANCHES: usize = 64;
+
+/// Where a shared branch is in its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BranchStatus {
+    Active,
+    Merged,
+    Archived,
+}
+
+/// A shared branch kept by the server and sent to joining clients announcing [`BRANCHES`].
+/// `base_diff` turns the server's current main document into the branch's base; `head_diff` turns
+/// that base into the branch's head.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SharedBranch {
+    pub id: String,
+    pub name: String,
+    pub time: u64,
+    pub client: u32,
+    pub status: BranchStatus,
+    pub rev: u64,
+    pub base_diff: Vec<Change>,
+    pub head_diff: Vec<Change>,
+}
+
+/// Client -> server shared branch requests.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BranchReq {
+    Create { id: String, name: String, time: u64, client: u32, base_seq: u64, base_diff: Vec<Change>, head_diff: Vec<Change> },
+    Edit { id: String, changes: Vec<Change> },
+    UpdateFromMain { id: String, base_changes: Vec<Change>, head_changes: Vec<Change> },
+    SetState { id: String, status: BranchStatus },
+}
+
+/// Server -> client shared branch updates.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BranchEvent {
+    Created { author: u32, branch: SharedBranch },
+    Edited { id: String, author: u32, rev: u64, changes: Vec<Change> },
+    UpdatedFromMain { id: String, author: u32, rev: u64, base_changes: Vec<Change>, head_changes: Vec<Change> },
+    State { id: String, author: u32, rev: u64, status: BranchStatus },
+}
+
 /// Client → server.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -866,6 +922,8 @@ pub enum ClientMsg {
     /// Ask for the link of a file on the server's team list (the first message on a connection,
     /// instead of `Hello`).
     ResolveTeam(ResolveTeam),
+    /// Shared branch actions (only to a server that sent [`ServerMsg::Branches`]).
+    Branch(Box<BranchReq>),
 }
 
 /// Server → client.
@@ -937,6 +995,10 @@ pub enum ServerMsg {
         file: String,
         token: String,
     },
+    /// The file's shared branches, sent right after `Welcome` to clients announcing [`BRANCHES`].
+    Branches(Vec<SharedBranch>),
+    /// A shared branch update, sent to clients announcing [`BRANCHES`].
+    Branch(Box<BranchEvent>),
 }
 
 /// (days since 1970-01-01, seconds-of-day, nanos) → (proleptic Gregorian year, the same wall-clock
