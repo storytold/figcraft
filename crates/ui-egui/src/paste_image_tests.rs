@@ -64,7 +64,7 @@ impl Win {
         let mut s = Session::new();
         s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
         s.execute("select.none", &json!({})).unwrap();
-        let ctx = egui::Context::default();
+        let ctx = crate::framework::headless_context();
         let clip = Rc::new(RefCell::new(Clip::default()));
         let app = FigApp::new(s, Box::new(Desktop(clip.clone())));
         let mut w = Self { ctx, app, time: 0.0, clip, shapes: Vec::new() };
@@ -84,6 +84,7 @@ impl Win {
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| {
             if take_v {
                 ui.ctx().input_mut(|i| i.consume_key(Modifiers::NONE, Key::V));
