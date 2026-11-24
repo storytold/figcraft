@@ -217,7 +217,7 @@ fn a_toast_raised_by_a_slow_frame_still_shows_for_3_s() {
 
 #[test]
 fn a_finished_background_render_wakes_the_ui() {
-    let ctx = crate::framework::headless_context();
+    let ctx = egui::Context::default();
     let wakes = Arc::new(AtomicUsize::new(0));
     let w = wakes.clone();
     ctx.set_request_repaint_callback(move |_| {

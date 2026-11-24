@@ -253,7 +253,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let ppp = ctx.pixels_per_point();
     let resp = ui.interact(rect, ui.scope_id().with("canvas"), Sense::click_and_drag());
     // The window's document canvas: with nothing focused its keys stay in egui for the shortcuts.
-    crate::framework::host_canvas(&ctx, resp.id);
+    // Tab is the canvas's (pick select) only while FigCraft's regions run; over a dialog, the
+    // palette or the presenter it is egui's own focus move.
+    crate::framework::host_canvas(&ctx, resp.id, !crate::a11y::blocked(app));
     let key_box = app.ui.key_box;
     crate::a11y::canvas(&mut app.ui.nav, &resp, || key_box.map_or_else(|| describe(&app.session), describe_box));
     if let Ok(ds) = app.session.ds_mut() {

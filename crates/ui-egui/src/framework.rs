@@ -139,10 +139,13 @@ impl FigApp {
 }
 
 /// Declares the canvas `id`, drawn in this pass, as its window's document canvas. With nothing focused it is the
-/// window's key target: Tab, the edit chords, the clipboard events and the Alt+digit panel keys stay in egui's input
-/// for FigCraft's shortcuts, as do the arrows, Enter and the page keys.
-pub(crate) fn host_canvas(ctx: &egui::Context, id: egui::Id) {
-    let keys = KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL).with_claims(alt_digit_claims());
+/// window's key target: the edit chords, the clipboard events and the Alt+digit panel keys stay in egui's input for
+/// FigCraft's shortcuts, as do the arrows, Enter and the page keys. With `keeps_tab` Tab stays there too, for the
+/// canvas and FigCraft's region moves; without it, a Tab from nothing focused is egui's own focus move, which the
+/// runtime cancels for a Tab the canvas keeps.
+pub(crate) fn host_canvas(ctx: &egui::Context, id: egui::Id, keeps_tab: bool) {
+    let keys = KeyUse::CANVAS.with_edits(EditSet::ALL).with_claims(alt_digit_claims());
+    let keys = if keeps_tab { keys.with_keep(KeepKeys::Tab) } else { keys };
     craft_ui::runtime::focus::host_canvas(ctx, id, keys);
 }
 

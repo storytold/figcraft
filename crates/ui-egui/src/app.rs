@@ -167,6 +167,9 @@ impl FigApp {
             self.ui_frame_stamp = Some(stamp);
             self.frame_stats.record(&ctx);
             self.ui_setup(&ctx);
+            // The root `Ui` copied the style before the setup set this frame's theme: this pass
+            // draws with the theme it just set.
+            ui.set_style(ctx.global_style());
         }
         windows::begin(self, &ctx);
         let (files, prefs) = (self.session.docs.len(), self.session.prefs.clone());
