@@ -19,7 +19,7 @@ mod background;
 mod builder;
 mod input;
 mod outline;
-mod overlays;
+pub(crate) mod overlays;
 mod render;
 mod rulers;
 

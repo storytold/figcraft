@@ -171,22 +171,27 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     labels
 }
 
+/// The pixel grid's lines: one screen pixel wide, a light grey at a fifth of its strength, so
+/// they darken white and lighten a dark canvas or fill alike. Measured in Figma (2026-11-24):
+/// 242 on white and 78 on a grey of 50, which this grey gives.
+pub(crate) const PIXEL_GRID: Color32 = Color32::from_rgba_unmultiplied_const(190, 190, 190, 51);
+
 /// Pixel grid at high zoom.
 fn pixel_grid(app: &FigApp, painter: &egui::Painter) {
     let r = app.canvas.rect;
     let p0 = app.to_page(r.min);
     let p1 = app.to_page(r.max);
-    let col = Color32::from_black_alpha(18);
+    let line = stroke(PIXEL_GRID, 1.0 / painter.pixels_per_point());
     let mut x = p0.x.floor();
     while x <= p1.x {
-        let s = app.to_screen(x, 0.0).x;
-        painter.line_segment([pos2(s, r.min.y), pos2(s, r.max.y)], stroke(col, 1.0));
+        let s = painter.round_to_pixel_center(app.to_screen(x, 0.0).x);
+        painter.line_segment([pos2(s, r.min.y), pos2(s, r.max.y)], line);
         x += 1.0;
     }
     let mut y = p0.y.floor();
     while y <= p1.y {
-        let s = app.to_screen(0.0, y).y;
-        painter.line_segment([pos2(r.min.x, s), pos2(r.max.x, s)], stroke(col, 1.0));
+        let s = painter.round_to_pixel_center(app.to_screen(0.0, y).y);
+        painter.line_segment([pos2(r.min.x, s), pos2(r.max.x, s)], line);
         y += 1.0;
     }
 }
