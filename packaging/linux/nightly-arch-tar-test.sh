@@ -29,7 +29,7 @@ bin="$work/installed/bin"
 mv "$bin/figcraft" "$bin/figcraft-nightly"
 mv "$bin/figcraft-cli" "$bin/figcraft-nightly-cli"
 
-test ! -e "$stage/bin/.figcraft-nightly"
+[[ ! -e "$stage/bin/.figcraft-nightly" ]]
 cmp "$stage/bin/figcraft" "$bin/.figcraft-nightly/figcraft"
 cmp "$stage/bin/figcraft-cli" "$bin/figcraft-nightly-cli"
 export HOME="$work/home with space"
