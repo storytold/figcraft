@@ -1,19 +1,35 @@
 //! The files open when the desktop app quit open again at its next start.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
 use crate::Session;
 
-fn folder(name: &str) -> PathBuf {
+/// A fresh folder for a test's files, removed when the test ends, a failing one too.
+struct Folder(PathBuf);
+
+impl std::ops::Deref for Folder {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Folder {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn folder(name: &str) -> Folder {
     let dir = std::env::temp_dir().join(format!("figcraft-reopen-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    Folder(dir)
 }
 
-fn saved(s: &mut Session, dir: &std::path::Path, name: &str) -> String {
+fn saved(s: &mut Session, dir: &Path, name: &str) -> String {
     let path = dir.join(format!("{name}.figcraft")).to_string_lossy().into_owned();
     s.execute("file.new", &json!({"name": name})).unwrap();
     s.execute("file.save", &json!({"path": path})).unwrap();
@@ -48,7 +64,6 @@ fn the_files_open_at_quit_reopen_in_their_order_with_the_same_one_in_front() {
     assert!(t.reopen_files().is_empty());
     assert_eq!(paths(&t), vec![Some(a), Some(b.clone()), Some(c)]);
     assert_eq!(t.docs[t.active].path.as_deref(), Some(b.as_str()), "B is in front again");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -66,7 +81,6 @@ fn a_file_gone_since_is_skipped_and_one_that_wont_open_says_why() {
     let failed = t.reopen_files();
     assert_eq!(failed.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(), vec![broken]);
     assert_eq!(paths(&t), vec![Some(kept)]);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -84,7 +98,6 @@ fn a_file_already_open_at_start_keeps_its_one_tab() {
     assert!(t.reopen_files().is_empty());
     assert_eq!(paths(&t), vec![Some(b), Some(a.clone())]);
     assert_eq!(t.docs[t.active].path.as_deref(), Some(a.as_str()));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -99,5 +112,4 @@ fn quitting_with_nothing_open_leaves_nothing_to_reopen() {
     assert_eq!(s.prefs.front_file, None);
     let saved = serde_json::to_value(&s.prefs).unwrap();
     assert!(saved.get("open_files").is_none() && saved.get("front_file").is_none(), "not written when empty");
-    let _ = std::fs::remove_dir_all(&dir);
 }

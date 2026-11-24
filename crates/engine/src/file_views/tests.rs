@@ -8,10 +8,26 @@ fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
     s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd} {p}: {e}"))
 }
 
-fn dir(name: &str) -> std::path::PathBuf {
+/// A test's folder, removed when the test ends, a failing one too.
+struct Dir(std::path::PathBuf);
+
+impl std::ops::Deref for Dir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Dir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn dir(name: &str) -> Dir {
     let d = std::env::temp_dir().join(format!("figcraft-file-views-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
-    d
+    Dir(d)
 }
 
 /// A saved file at `path` with two pages, each holding a rectangle, the first page shown.
@@ -64,7 +80,6 @@ fn a_file_opens_again_where_it_was_left() {
     next.prefs = prefs;
     ex(&mut next, "file.open", json!({"path": path}));
     assert_eq!(view(&next), (second, 2010.0, 2020.0, 0.5));
-    let _ = std::fs::remove_dir_all(d);
 }
 
 /// Quitting keeps every open file's view; a file never saved keeps none.
@@ -87,7 +102,6 @@ fn quitting_keeps_each_open_files_view() {
     assert_eq!(view(&next), (a_page, 1.0, 2.0, 3.0));
     ex(&mut next, "file.open", json!({"path": b}));
     assert_eq!(view(&next), (b_page, 4.0, 5.0, 0.25));
-    let _ = std::fs::remove_dir_all(d);
 }
 
 /// A kept page the file no longer has, or a view the canvas can't show, is left out: the file
@@ -106,7 +120,6 @@ fn a_view_that_no_longer_fits_the_file_is_left_out() {
     assert_eq!(ds.page, first);
     assert!(ds.fit_when_sized, "fitted as a file never left");
     assert!(ds.view.cx.is_finite());
-    let _ = std::fs::remove_dir_all(d);
 }
 
 /// The views kept are bounded, the most recently left first.
