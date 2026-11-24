@@ -20,8 +20,14 @@ use super::{CanvasState, shows};
 use figcraft_render::Retained;
 
 use crate::render_worker::{
-    Done, Inline, Job, PREVIEW_AFTER_MS, PREVIEW_FACTOR, Refined, Renders, SETTLE_MS, Worker, better, coarse_view, preview_with, render_now,
+    Done, Inline, Job, PREVIEW_AFTER_MS, PREVIEW_FACTOR, Pixels, Refined, Renders, SETTLE_MS, Worker, better, coarse_view, preview_with, render_now,
 };
+
+/// The whole image a render handed over (these all are: nothing here tells the worker what the
+/// canvas holds).
+fn whole(d: &Done) -> &egui::ColorImage {
+    d.image.whole().expect("a whole image")
+}
 
 /// A page of ellipses with a rectangle on top; the session and the rectangle. The system fonts are
 /// scanned first (once per process, and a concurrent caller waits for it): the scan another test
@@ -93,17 +99,17 @@ pub(super) fn job(doc: &Arc<Document>, page: NodeId, uid: u64, view: View) -> Jo
 
 /// Every pixel of `a` and `b` alike.
 fn same_pixels(a: &Done, b: &Done) -> bool {
-    a.image.size == b.image.size && a.image.pixels == b.image.pixels
+    whole(a).size == whole(b).size && whole(a).pixels == whole(b).pixels
 }
 
 /// The same image up to where render bands meet ([`figcraft_render::Steps`] and the desktop's
 /// parallel bands cut the view in different places): on each row, under a quarter of a level on
 /// average and at most one pixel in twenty off.
 fn close_pixels(a: &Done, b: &Done) -> bool {
-    let [w, h] = a.image.size;
-    a.image.size == b.image.size
+    let [w, h] = whole(a).size;
+    whole(a).size == whole(b).size
         && (0..h).all(|y| {
-            let row = |d: &Done| d.image.pixels[y * w..(y + 1) * w].to_vec();
+            let row = |d: &Done| whole(d).pixels[y * w..(y + 1) * w].to_vec();
             let (ra, rb) = (row(a), row(b));
             let diffs: Vec<u32> =
                 ra.iter().zip(&rb).map(|(p, q)| p.to_array().iter().zip(q.to_array()).map(|(x, y)| u32::from(x.abs_diff(y))).sum()).collect();
@@ -135,7 +141,7 @@ fn refined_at(w: &mut Inline, now: Instant) -> Option<Done> {
 /// Refine `job` through `r` with no time to spare (a band a call); the image and how many calls.
 fn stepped(r: &mut Renders, job: &Job) -> (Option<Done>, usize) {
     for n in 1..1000 {
-        match r.refine_for(job, 0.0) {
+        match r.refine_for(job, 0.0, None) {
             Refined::Done(d) => return (d, n),
             Refined::Shown(_) | Refined::More => {}
         }
@@ -162,7 +168,7 @@ fn a_zoom_out_previews_the_whole_view_then_refines_to_a_fresh_render() {
     let p = r.preview(&out).expect("a preview first");
     assert!(p.coarse && (p.uid, p.page) == (ds.uid, ds.page));
     assert!(covers(&p.view, &out.view), "the preview shows the whole view asked for");
-    let pixels = |d: &Done| d.image.size[0] * d.image.size[1];
+    let pixels = |d: &Done| whole(d).size[0] * whole(d).size[1];
     let fresh = render_now(&out).unwrap();
     assert!(
         (pixels(&p) as f64) * PREVIEW_FACTOR * PREVIEW_FACTOR < 1.5 * pixels(&fresh) as f64,
@@ -618,7 +624,7 @@ fn the_browser_draws_a_full_render_band_by_band() {
     assert!(n > 2 && !r.stepping(), "several calls, then done ({n})");
     assert!(close_pixels(&d, &render_now(&at(300.0)).unwrap()));
     // Kept: a pan now patches it at once.
-    assert!(matches!(r.refine_for(&at(320.0), 0.0), Refined::Done(Some(d)) if d.work != Work::Full));
+    assert!(matches!(r.refine_for(&at(320.0), 0.0, None), Refined::Done(Some(d)) if d.work != Work::Full));
 }
 
 #[test]
@@ -628,14 +634,14 @@ fn a_pan_while_drawing_finishes_the_render_then_patches_it_and_a_zoom_drops_it()
     let ds = s.ds().unwrap();
     let at = |x, scale| job(&ds.doc, ds.page, ds.uid, view(x, scale));
     let mut r = Renders::default();
-    assert!(matches!(r.refine_for(&at(300.0, 1.0), 0.0), Refined::More));
+    assert!(matches!(r.refine_for(&at(300.0, 1.0), 0.0, None), Refined::More));
     // Panned meanwhile: the same render goes on, and what comes is the panned view.
     let (d, _) = stepped(&mut r, &at(330.0, 1.0));
     let d = d.expect("drawn");
     assert!(close_pixels(&d, &render_now(&at(330.0, 1.0)).unwrap()), "the panned view");
     // Zoomed meanwhile: the render under way is dropped for one of the new zoom.
     let mut r = Renders::default();
-    assert!(matches!(r.refine_for(&at(300.0, 1.0), 0.0), Refined::More));
+    assert!(matches!(r.refine_for(&at(300.0, 1.0), 0.0, None), Refined::More));
     let (d, _) = stepped(&mut r, &at(300.0, 2.0));
     assert_eq!(d.expect("drawn").view.scale, 2.0);
 }
@@ -649,7 +655,7 @@ fn an_edit_while_drawing_shows_in_what_comes() {
         (ds.doc.clone(), ds.page, ds.uid)
     };
     let mut r = Renders::default();
-    assert!(matches!(r.refine_for(&job(&doc, page, uid, v.clone()), 0.0), Refined::More));
+    assert!(matches!(r.refine_for(&job(&doc, page, uid, v.clone()), 0.0, None), Refined::More));
     // Edited meanwhile, the view unchanged: the render goes on and what comes shows the edit.
     s.execute("shape.rectangle", &json!({"x": 100, "y": 0, "width": 400, "height": 400})).unwrap();
     let edited = job(&s.ds().unwrap().doc, page, uid, v);
@@ -663,11 +669,11 @@ fn a_render_overtaken_by_a_long_pan_is_shown_then_drawn_again() {
     let s = slow_scene(std::slice::from_ref(&v), 3.0 * PREVIEW_AFTER_MS);
     let ds = s.ds().unwrap();
     let mut r = Renders::default();
-    assert!(matches!(r.refine_for(&job(&ds.doc, ds.page, ds.uid, v.clone()), 0.0), Refined::More));
+    assert!(matches!(r.refine_for(&job(&ds.doc, ds.page, ds.uid, v.clone()), 0.0, None), Refined::More));
     // Panned more than a view meanwhile: nothing to patch. What was drawn shows, then the new view.
     let far = job(&ds.doc, ds.page, ds.uid, view_at((1500.0, 200.0), 1.0, 600, 600));
     let mut shown = vec![];
-    let last = (0..1000).find_map(|_| match r.refine_for(&far, 0.0) {
+    let last = (0..1000).find_map(|_| match r.refine_for(&far, 0.0, None) {
         Refined::More => None,
         Refined::Shown(d) => {
             shown.push(d);
@@ -709,7 +715,7 @@ fn a_change_of_options_while_drawing_drops_the_render() {
     outlined.outline = true;
     let (_, alone) = stepped(&mut Renders::default(), &outlined);
     let mut r = Renders::default();
-    assert!(matches!(r.refine_for(&plain, 0.0), Refined::More));
+    assert!(matches!(r.refine_for(&plain, 0.0, None), Refined::More));
     let (d, n) = stepped(&mut r, &outlined);
     assert!(d.is_some_and(|d| !d.coarse));
     assert!(n <= alone + 1, "the old render's bands are dropped: {n} calls against {alone} alone");
@@ -726,6 +732,62 @@ fn a_render_dropped_while_drawing_leaves_its_time_as_the_measure() {
     let at = |scale| job(&ds.doc, ds.page, ds.uid, view(scale));
     // Previews once renders have taken any time at all: a band has, where no measure (0 ms) hasn't.
     let mut r = Renders::with_threshold(1e-9);
-    assert!(matches!(r.refine_for(&at(1.0), 0.0), Refined::More));
+    assert!(matches!(r.refine_for(&at(1.0), 0.0, None), Refined::More));
     assert!(r.preview(&at(2.0)).is_some(), "the zoom gets a preview by the dropped render's measure");
+}
+
+/// `parts` put on `image` at their positions, as the canvas puts them on its texture.
+fn patched(image: &egui::ColorImage, parts: &[([usize; 2], egui::ColorImage)]) -> egui::ColorImage {
+    let mut out = image.clone();
+    let w = out.size[0];
+    for ([x, y], part) in parts {
+        for (r, row) in part.pixels.chunks(part.size[0]).enumerate() {
+            out.pixels[(y + r) * w + x..(y + r) * w + x + row.len()].copy_from_slice(row);
+        }
+    }
+    out
+}
+
+/// An edit redraws a part of the view. Told which image the canvas holds, the worker hands over
+/// that part only; put on that image, it makes the new one. Converting and uploading the whole
+/// image again after every edit cost more than drawing the part.
+#[test]
+fn an_edit_hands_over_only_what_changed_of_the_image_the_canvas_holds() {
+    let (mut s, rect) = document();
+    let view = view_at((300.0, 250.0), 1.0, 700, 600);
+    let now = |s: &Session| {
+        let ds = s.ds().unwrap();
+        job(&ds.doc, ds.page, ds.uid, view.clone())
+    };
+    let widen = |s: &mut Session, w: u32| s.execute("node.set", &json!({"id": rect, "width": w})).unwrap();
+    let mut r = Renders::default();
+    let first = stepped(&mut r, &now(&s)).0.expect("drawn");
+    assert_ne!(first.frame, 0, "a numbered image");
+    // Not told what the canvas holds: the whole image.
+    widen(&mut s, 280);
+    let Refined::Done(Some(second)) = r.refine_for(&now(&s), 0.0, None) else { panic!("a patch is done at once") };
+    assert!(matches!(second.work, Work::Partial { .. }) && second.image.whole().is_some());
+    // Told it holds that image: the changed part only, and with it the canvas has the new image.
+    widen(&mut s, 240);
+    let Refined::Done(Some(third)) = r.refine_for(&now(&s), 0.0, Some(second.frame)) else { panic!("a patch is done at once") };
+    let Pixels::Patches(parts) = &third.image else { panic!("patches of the image the canvas holds") };
+    let handed: usize = parts.iter().map(|(_, p)| p.pixels.len()).sum();
+    let all = whole(&second).pixels.len();
+    assert!(handed > 0 && handed * 4 < all, "{handed} of {all} pixels handed over");
+    let fresh = stepped(&mut Renders::default(), &now(&s)).0.expect("drawn");
+    let have = Done { image: Pixels::Whole(patched(whole(&second), parts)), ..render_now(&now(&s)).unwrap() };
+    assert!(close_pixels(&have, &fresh), "the patched image is the new one");
+    assert!(!close_pixels(&second, &fresh), "and the one before it is not");
+    // A canvas that holds an older image (it showed none of the last) gets the whole one.
+    widen(&mut s, 200);
+    let Refined::Done(Some(fourth)) = r.refine_for(&now(&s), 0.0, Some(second.frame)) else { panic!("a patch is done at once") };
+    assert!(fourth.image.whole().is_some(), "whole for a canvas an image behind");
+    // Nothing changed: nothing to hand over.
+    let Refined::Done(Some(same)) = r.refine_for(&now(&s), 0.0, Some(fourth.frame)) else { panic!("reused at once") };
+    assert!(matches!(&same.image, Pixels::Patches(parts) if parts.is_empty()) && same.work == Work::Reused);
+    // A pan moves every pixel: whole.
+    let ds = s.ds().unwrap();
+    let panned = job(&ds.doc, ds.page, ds.uid, view_at((320.0, 250.0), 1.0, 700, 600));
+    let Refined::Done(Some(moved)) = r.refine_for(&panned, 0.0, Some(same.frame)) else { panic!("a pan is patched at once") };
+    assert!(moved.image.whole().is_some(), "whole after a pan");
 }

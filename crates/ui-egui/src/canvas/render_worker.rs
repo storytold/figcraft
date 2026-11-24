@@ -77,9 +77,33 @@ pub struct Job {
     pub at: Instant,
 }
 
+/// What a finished render hands the canvas for its texture.
+pub enum Pixels {
+    /// The whole image.
+    Whole(egui::ColorImage),
+    /// The parts that differ from the image the canvas said its texture holds
+    /// ([`Inline::texture_holds`]): each goes at its position (x, y) in that texture. An edit
+    /// redraws a part of the view; converting and uploading all of it again cost more than
+    /// drawing the part.
+    Patches(Vec<([usize; 2], egui::ColorImage)>),
+}
+
+impl Pixels {
+    /// The whole image, when that is what this is.
+    pub fn whole(&self) -> Option<&egui::ColorImage> {
+        match self {
+            Pixels::Whole(image) => Some(image),
+            Pixels::Patches(_) => None,
+        }
+    }
+}
+
 pub struct Done {
     /// The image, ready for a texture (converted off the UI thread).
-    pub image: egui::ColorImage,
+    pub image: Pixels,
+    /// Which image of the worker's this is, numbered as they are drawn (0: a preview, or a
+    /// worker that doesn't number them): what the canvas reports back as its texture's.
+    pub frame: u64,
     /// The view the image shows (the requested one snapped outwards to whole device pixels).
     pub view: View,
     pub ms: f64,
@@ -97,13 +121,37 @@ pub struct Done {
 
 /// A render of a document in `profile` as a texture image for the screen (sRGB).
 pub fn screen_image(pix: &Pixmap, profile: ColorProfile) -> egui::ColorImage {
-    let size = [pix.width() as usize, pix.height() as usize];
+    screen_pixels([pix.width() as usize, pix.height() as usize], pix.data(), profile)
+}
+
+/// [`screen_image`] of `size` premultiplied RGBA pixels.
+fn screen_pixels(size: [usize; 2], rgba: &[u8], profile: ColorProfile) -> egui::ColorImage {
     if profile.is_srgb() {
-        return egui::ColorImage::from_rgba_premultiplied(size, pix.data());
+        return egui::ColorImage::from_rgba_premultiplied(size, rgba);
     }
-    let mut data = pix.data().to_vec();
+    let mut data = rgba.to_vec();
     profile.conversion_to(ColorProfile::Srgb).apply_pixels(&mut data);
     egui::ColorImage::from_rgba_premultiplied(size, &data)
+}
+
+/// The areas `[x, y, width, height]` of `pix` as texture images at their positions; `None` when
+/// one doesn't lie in it.
+fn screen_patches(pix: &Pixmap, areas: &[[u32; 4]], profile: ColorProfile) -> Option<Vec<([usize; 2], egui::ColorImage)>> {
+    let row = pix.width() as usize * 4;
+    areas
+        .iter()
+        .map(|&[x, y, w, h]| {
+            let (x, y, w, h) = (x as usize, y as usize, w as usize, h as usize);
+            if w == 0 || h == 0 || x + w > pix.width() as usize || y + h > pix.height() as usize {
+                return None;
+            }
+            let mut rgba = Vec::with_capacity(w * h * 4);
+            for r in y..y + h {
+                rgba.extend_from_slice(pix.data().get(r * row + x * 4..r * row + (x + w) * 4)?);
+            }
+            Some(([x, y], screen_pixels([w, h], &rgba, profile)))
+        })
+        .collect()
 }
 
 /// Soft proof: grey diagonal stripes over the pixels whose colours sRGB can't show.
@@ -136,16 +184,25 @@ fn options(job: &Job) -> figcraft_render::Options {
 fn run(job: &Job, view: &View, retained: &mut Retained, coarse: bool) -> Option<Done> {
     let t0 = Instant::now();
     let (view, pix, work) = retained.render(&job.doc, job.page, view, &options(job))?;
-    Some(done(job, view, pix, work, t0.elapsed().as_secs_f64() * 1000.0, coarse))
+    Some(done(job, view, pix, work, t0.elapsed().as_secs_f64() * 1000.0, coarse, None))
 }
 
-/// The image `pix` of `view`, rendered for `job` in `ms`.
-fn done(job: &Job, view: View, pix: &Pixmap, work: Work, ms: f64, coarse: bool) -> Done {
-    let mut image = screen_image(pix, job.doc.color_profile);
-    if job.proof {
-        mark_outside_srgb(&mut image, pix, job.doc.color_profile);
-    }
-    Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0 }
+/// The image `pix` of `view`, rendered for `job` in `ms`. With `patched`, only those areas of it
+/// (see [`Pixels::Patches`]): the caller knows the canvas holds the rest. A soft proof stripes the
+/// whole image, so it is always handed over whole.
+fn done(job: &Job, view: View, pix: &Pixmap, work: Work, ms: f64, coarse: bool, patched: Option<&[[u32; 4]]>) -> Done {
+    let patches = patched.filter(|_| !job.proof).and_then(|areas| screen_patches(pix, areas, job.doc.color_profile));
+    let image = match patches {
+        Some(parts) => Pixels::Patches(parts),
+        None => {
+            let mut image = screen_image(pix, job.doc.color_profile);
+            if job.proof {
+                mark_outside_srgb(&mut image, pix, job.doc.color_profile);
+            }
+            Pixels::Whole(image)
+        }
+    };
+    Done { image, frame: 0, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0 }
 }
 
 /// The coarse image around the view is this many views wide and tall, centred on it.
@@ -211,7 +268,7 @@ impl Surround {
         let t0 = Instant::now();
         let d = guarded(&mut self.retained, |r| {
             let (snapped, pix, work) = r.render(&job.doc, job.page, &view, &options(job))?;
-            (!(same && work == Work::Reused)).then(|| done(job, snapped, pix, work, t0.elapsed().as_secs_f64() * 1000.0, true))
+            (!(same && work == Work::Reused)).then(|| done(job, snapped, pix, work, t0.elapsed().as_secs_f64() * 1000.0, true, None))
         });
         if d.is_some() {
             self.of = Some((job.uid, job.page, view, job.proof));
@@ -240,6 +297,9 @@ pub struct Renders {
     /// A full render being drawn band by band (the browser): the job it was started for, the
     /// font generation then, the bands and the time they took so far.
     steps: Option<Stepping>,
+    /// The number of the image `full` keeps: every image drawn there gets the next one
+    /// ([`Done::frame`]), handed to the canvas or not.
+    frame: u64,
 }
 
 /// A full render drawn in steps and what it is of: a newer job of the same file, page, zoom, size
@@ -298,7 +358,7 @@ impl Default for Renders {
 impl Renders {
     /// Previews when renders from scratch take at least `ms` (tests: 0, always).
     pub fn with_threshold(ms: f64) -> Self {
-        Self { full: Retained::default(), preview: Retained::default(), last: None, full_ms: 0.0, preview_after_ms: ms, steps: None }
+        Self { full: Retained::default(), preview: Retained::default(), last: None, full_ms: 0.0, preview_after_ms: ms, steps: None, frame: 0 }
     }
 
     /// Whether `job` is a render from scratch: the kept image is of another zoom, page or file, or
@@ -332,9 +392,15 @@ impl Renders {
         preview_with(job, &mut self.preview)
     }
 
+    /// `d`, an image drawn in `full` just now, numbered.
+    fn numbered(&mut self, d: Done) -> Done {
+        self.frame += 1;
+        Done { frame: self.frame, ..d }
+    }
+
     /// The image of `job`'s view, built on the kept one where it can be.
     pub fn refine(&mut self, job: &Job) -> Option<Done> {
-        let done = guarded(&mut self.full, |r| run(job, &job.view, r, false));
+        let done = guarded(&mut self.full, |r| run(job, &job.view, r, false)).map(|d| self.numbered(d));
         if let Some(d) = &done {
             self.last = Some((job.uid, job.page, job.view.scale));
             if d.work == Work::Full {
@@ -346,7 +412,10 @@ impl Renders {
 
     /// [`Self::refine`] for about `budget_ms` at a time (the browser): a full render is drawn band by
     /// band over several calls, the kept image (re-projected) or the preview showing meanwhile.
-    pub fn refine_for(&mut self, job: &Job, budget_ms: f64) -> Refined {
+    ///
+    /// `holds` is the number of the image the canvas's texture holds ([`Done::frame`]), if it is
+    /// one of these: a render that only patches that image hands over the patches.
+    pub fn refine_for(&mut self, job: &Job, budget_ms: f64, holds: Option<u64>) -> Refined {
         let t0 = Instant::now();
         if let Some(s) = self.steps.as_ref()
             && !same_settings(&s.job, job)
@@ -357,7 +426,7 @@ impl Renders {
             self.steps = None;
         }
         if self.steps.is_none()
-            && let Some(r) = self.begin(job, t0, None)
+            && let Some(r) = self.begin(job, t0, None, holds)
         {
             return r;
         }
@@ -382,14 +451,15 @@ impl Renders {
                 self.full_ms = spent;
                 // The image of the job it was started for: its document's colour profile, its
                 // proof setting and its request time.
-                let drawn = done(&drawn_for, view, pix, Work::Full, spent, false);
+                let drawn = done(&drawn_for, view, pix, Work::Full, spent, false, None);
+                let drawn = self.numbered(drawn);
                 // Drawn for this very request: shown, done. Otherwise kept, then started on like
                 // any render: an edit, a pan or images that came meanwhile are patched in, or it
                 // is drawn again in steps (never all at once here), this one shown till then.
                 if same_request(&drawn_for, fonts, job) {
                     return Refined::Done(self.finished(job, Some(drawn)));
                 }
-                self.begin(job, t0, Some(drawn)).unwrap_or(Refined::More)
+                self.begin(job, t0, Some(drawn), holds).unwrap_or(Refined::More)
             }
             Err(_) => {
                 self.steps = None;
@@ -402,18 +472,27 @@ impl Renders {
     /// Start `job` on the kept image: done when it is reused or patched, `None` when a full render
     /// is now drawn in steps. `drawn` is the kept image just drawn in steps: what a reuse shows,
     /// else shown while it is drawn again.
-    fn begin(&mut self, job: &Job, t0: Instant, mut drawn: Option<Done>) -> Option<Refined> {
+    fn begin(&mut self, job: &Job, t0: Instant, mut drawn: Option<Done>, holds: Option<u64>) -> Option<Refined> {
         // The snapped view may be a row taller.
         let rows = job.view.height.saturating_add(1).div_ceil(MAX_BANDS).max(MIN_BAND_ROWS);
-        let begun =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match self.full.begin(&job.doc, job.page, &job.view, &options(job), rows) {
-                Some(Begun::Done(view, pix, work)) => Err(Box::new(match drawn.take() {
-                    Some(d) if work == Work::Reused => Some(d),
-                    _ => Some(done(job, view, pix, work, t0.elapsed().as_secs_f64() * 1000.0, false)),
-                })),
-                Some(Begun::Steps(steps)) => Ok(steps),
-                None => Err(Box::new(None)),
-            }));
+        // The canvas holds the image this render starts from: one that only patches it hands
+        // over the patches.
+        let held = holds.is_some_and(|f| f == self.frame);
+        let full = &mut self.full;
+        let begun = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (view, work) = match full.begin(&job.doc, job.page, &job.view, &options(job), rows) {
+                Some(Begun::Done(view, _, work)) => (view, work),
+                Some(Begun::Steps(steps)) => return Ok(steps),
+                None => return Err(Box::new(None)),
+            };
+            Err(Box::new(match drawn.take() {
+                Some(d) if work == Work::Reused => Some((d, false)),
+                _ => full.image().map(|pix| {
+                    let patched = full.patched().filter(|_| held);
+                    (done(job, view, pix, work, t0.elapsed().as_secs_f64() * 1000.0, false, patched), true)
+                }),
+            }))
+        }));
         match begun {
             Ok(Ok(steps)) => {
                 // A pan or an edit at this zoom builds on this render: no preview for it.
@@ -421,7 +500,11 @@ impl Renders {
                 self.steps = Some(Stepping { job: job.clone(), fonts: figcraft_text::layout_generation(), steps, spent: 0.0 });
                 drawn.map(Refined::Shown)
             }
-            Ok(Err(d)) => Some(Refined::Done(self.finished(job, *d))),
+            Ok(Err(d)) => {
+                // An image drawn now gets its number; one drawn in steps just before has it.
+                let d = d.map(|(d, new)| if new { self.numbered(d) } else { d });
+                Some(Refined::Done(self.finished(job, d)))
+            }
             Err(_) => {
                 self.full.clear();
                 Some(Refined::Done(None))
@@ -687,6 +770,8 @@ pub struct Inline {
     /// The wait for the pending job's preview.
     wait: std::time::Duration,
     renders: Renders,
+    /// See [`Self::texture_holds`].
+    holds: Option<u64>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -708,6 +793,7 @@ impl Inline {
             settle,
             wait: settle,
             renders: Renders::default(),
+            holds: None,
         }
     }
     /// Previewing when renders from scratch take at least `ms` (tests: 0, whatever the machine).
@@ -730,6 +816,12 @@ impl Inline {
     /// (one would hold the page up); draw one there once the canvas renders on a wasm thread (#1500).
     pub fn surround(&mut self) -> Option<Done> {
         None
+    }
+    /// Tell the worker which of its images the canvas's texture holds ([`Done::frame`]; `None`:
+    /// none of them, or not for sure). The next image comes as patches of that one when that is
+    /// all that changed ([`Pixels::Patches`]); without this, every image comes whole.
+    pub fn texture_holds(&mut self, frame: Option<u64>) {
+        self.holds = frame;
     }
     pub fn poll(&mut self) -> Option<Done> {
         self.poll_at(Instant::now())
@@ -755,7 +847,7 @@ impl Inline {
             }
         }
         let job = self.pending.as_ref()?;
-        match self.renders.refine_for(job, STEP_MS) {
+        match self.renders.refine_for(job, STEP_MS, self.holds) {
             Refined::Done(d) => {
                 self.pending = None;
                 d.map(|d| answering(d, self.submitted))
