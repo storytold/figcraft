@@ -146,14 +146,18 @@ fn load_any(
                 optical_size_follows_text_size(&mut doc);
                 return Ok((figcraft_format::Loaded { issues: warnings, ..doc.into() }, true));
             }
-            let mut loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
-            // Older files saved an untouched default title even after the user chose a filename.
-            if loaded.doc.name.is_empty() || loaded.doc.name == "Untitled" {
-                loaded.doc.name = file_stem(name_hint);
-            }
-            Ok((loaded, false))
+            Ok((load_native(bytes, name_hint)?, false))
         }
     }
+}
+
+/// Decode only the native project format, never an interchange import.
+pub(super) fn load_native(bytes: &[u8], name: &str) -> Result<figcraft_format::Loaded> {
+    let mut loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
+    if loaded.doc.name.is_empty() || loaded.doc.name == "Untitled" {
+        loaded.doc.name = file_stem(name);
+    }
+    Ok(loaded)
 }
 
 /// Gives `None` when `bytes` are not a `.sketch` file. Then other readers can try.

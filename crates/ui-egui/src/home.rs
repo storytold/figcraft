@@ -291,6 +291,7 @@ fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     let query = app.ui.home_view.file_query.trim().to_lowercase();
     let mut count = open_files(app, ui, t, &query);
     count += crate::home_recents::section(app, ui, t, &query);
+    count += app.file_providers.search_ui(ui, &query);
 
     let online: Vec<_> = app.session.prefs.online_files.iter().filter(|f| file_matches(&f.name, &f.server, &query)).cloned().collect();
     let mut open_online = None;

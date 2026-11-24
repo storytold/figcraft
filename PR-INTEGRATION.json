@@ -6,43 +6,9 @@
   "integration_branch": "community-integration",
   "stage": "Attempt all reviewed PRs, including drafts and experiments; defer merge conflicts and upstream-specific release infrastructure.",
   "validation": {
+    "state": "pending",
     "rust": "1.100.0",
     "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
-    "passed": [
-      "cargo xtask ci (formatting; workspace Clippy with warnings denied; native unit and integration tests; doctests; i18n report; layers, assets and docs checks; wasm32 check; plugin SDK formatting, Clippy, tests and release wasm build)",
-      "wasm-pack test --headless --firefox --geckodriver /snap/bin/geckodriver apps/figcraft-web --bin figcraft-web --locked",
-      "cargo test --workspace --lib --bins --tests --no-fail-fast picker (87 UI tests passed)",
-      "git diff --check",
-      "Changed TOML files parsed successfully",
-      "bash -n packaging/linux/AppRun packaging/linux/postinst.sh packaging/linux/apprun-test.sh",
-      "bash packaging/linux/apprun-test.sh",
-      "All 45 included PR heads are ancestors of the validated source commit; all 80 conflict deferrals have file inventories; all 127 captured PRs are accounted for"
-    ],
-    "workspace_ci": {
-      "head": "06907880c7bd60f1038a00a9992064b3eb892d7f",
-      "state": "finished",
-      "exit_code": 0,
-      "started": "2026-11-23T19:35:13.318817+00:00",
-      "finished": "2026-11-23T20:14:56.460541+00:00"
-    },
-    "native_test_results": {
-      "passed": 6398,
-      "failed": 0,
-      "ignored": 13,
-      "test_binaries": 36
-    },
-    "browser_regressions": {
-      "head": "06907880c7bd60f1038a00a9992064b3eb892d7f",
-      "state": "finished",
-      "exit_code": 0,
-      "started": "2026-11-23T20:21:58.175636+00:00",
-      "finished": "2026-11-23T20:23:46.946740+00:00"
-    },
-    "browser_test_results": {
-      "passed": 2,
-      "failed": 0,
-      "ignored": 0
-    },
     "platform_limits": [
       "Native checks ran on Ubuntu under WSL, with headless UI tests; no manual screen-reader, keyboard-navigation or desktop visual review is claimed.",
       "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
@@ -51,10 +17,8 @@
       "Baseline full CI was interrupted and is not claimed to have passed."
     ],
     "notes": [
-      "Earlier integration validation exposed missing regression-test imports, stale exact inspection metadata, a pagination fixture made too small by compact JSON, and image/gradient/crop picker interaction defects. These were corrected with assertions preserved or expanded before the final passing runs.",
-      "The first browser runtime attempt failed before assertions because WebDriver did not bind its port; the final isolated run recorded here supersedes that attempt."
-    ],
-    "browser_setup": "GECKODRIVER_REMOTE points to a prestarted /snap/bin/geckodriver on loopback; Snap Firefox remains headless."
+      "Review follow-up source changes require fresh validation. Previous passing results remain attached to their original source commit in validation_history."
+    ]
   },
   "integration_adjustments": [
     "Applied Rust 1.100 formatting to imported changes.",
@@ -63,27 +27,34 @@
     "Updated the exact inspection golden response for the document revision and capability metadata added by PR #1995, keeping the full equality assertion.",
     "Enlarged the MCP pagination fixture so compact JSON serialization still exercises child paging, preserving byte-budget, marker and ordering assertions.",
     "Fixed completion of picker-owned gradient and crop gestures from PR #618 while preserving unrelated move and text undo scopes; added real-input regression coverage.",
-    "Preserved same-frame image picker retargeting through discarded UI layout passes with viewport, document and page scoped temporary state; extended input regression coverage."
+    "Preserved same-frame image picker retargeting through discarded UI layout passes with viewport, document and page scoped temporary state; extended input regression coverage.",
+    "Follow-up review: report capped contrast sampling as unchecked; cache backdrop sibling indexes; honor explicit descendants; resolve requested-mode alpha and WCAG size thresholds consistently.",
+    "Follow-up review: simulate actual dry-run repairs, preserve hidden effects and accepted spacing, retain brand alpha and variable-owned padding, and avoid invented backdrops from translucent groups.",
+    "Follow-up review: synchronize same-variant property bindings, preserve valid text fill sizing, reject lossy connection imports/exports, and resync restored collaboration logs containing oversized review changes.",
+    "Follow-up review: distinguish explicit crop replacements from placement-preserving picker edits; classify text image targets by effective character fills.",
+    "Follow-up review: retain masks and text-style blends during rendering, solve coupled ratio fills without oscillation, and correct shared-edge coverage in the synthetic UI rasterizer.",
+    "Follow-up review: serialize provider writes, preserve capture-time Save As identity, expose local cancellation with keyboard access, require native provider bytes, and preserve close continuations and offline resource focus.",
+    "Corrected the original merge SHAs of the three restored draft PRs; their restoration commits remain recorded separately."
   ],
   "draft_checkpoint_branch": "community-integration-draft-checkpoint",
   "draft_restoration": [
     {
       "number": 2556,
-      "merge_commit": "8f5c9c2e2ea2",
+      "merge_commit": "8f5c9c2e2ea29e70e44946e17d4002881b1f6b09",
       "revert_commit": "deb77f91",
       "restoration_commit": "e2e83ad01e946fbc296ecc26946f097234d018da",
       "status": "restored"
     },
     {
       "number": 2555,
-      "merge_commit": "d05c13e44b7d",
+      "merge_commit": "d05c13e44b7d02418969ec73efa112910e5a0e96",
       "revert_commit": "57f73d56",
       "restoration_commit": "5615658c03ce75c1a2beed252955a0a71d3e53de",
       "status": "restored"
     },
     {
       "number": 2544,
-      "merge_commit": "fe73379e5ed3",
+      "merge_commit": "fe73379e5ed37f5f2a9cb5de4621b0733a8256bb",
       "revert_commit": "0502c19e",
       "restoration_commit": "791339559e10f1312d2e22c4c5be551469d82598",
       "status": "restored"
@@ -243,7 +214,7 @@
       "reasons": [
         "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
-      "merge_commit": "e2e83ad01e946fbc296ecc26946f097234d018da"
+      "merge_commit": "8f5c9c2e2ea29e70e44946e17d4002881b1f6b09"
     },
     {
       "number": 2555,
@@ -255,7 +226,7 @@
       "reasons": [
         "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
-      "merge_commit": "5615658c03ce75c1a2beed252955a0a71d3e53de"
+      "merge_commit": "d05c13e44b7d02418969ec73efa112910e5a0e96"
     },
     {
       "number": 2554,
@@ -295,7 +266,7 @@
     },
     {
       "number": 2550,
-      "title": "Apply image presets to text\u2019s shared image fill",
+      "title": "Apply image presets to text’s shared image fill",
       "url": "https://github.com/storytold/figcraft/pull/2550",
       "head": "301c382a794f7bae7b975b373521e41d451b8e29",
       "draft": false,
@@ -363,7 +334,7 @@
       "reasons": [
         "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
       ],
-      "merge_commit": "791339559e10f1312d2e22c4c5be551469d82598"
+      "merge_commit": "fe73379e5ed37f5f2a9cb5de4621b0733a8256bb"
     },
     {
       "number": 2543,
@@ -1369,7 +1340,7 @@
     },
     {
       "number": 1999,
-      "title": "M9: Home \u25b8 Online remembers the sessions you joined (#1882)",
+      "title": "M9: Home ▸ Online remembers the sessions you joined (#1882)",
       "url": "https://github.com/storytold/figcraft/pull/1999",
       "head": "d4b772743ac449b70a2f74c6616c04ac1aa71c07",
       "draft": false,
@@ -1447,7 +1418,7 @@
     },
     {
       "number": 1763,
-      "title": "fix(board): map left and right connector controls to matching ends (#\u2026",
+      "title": "fix(board): map left and right connector controls to matching ends (#…",
       "url": "https://github.com/storytold/figcraft/pull/1763",
       "head": "59d5c3624470e787847a32c5fb74d4c61aaf2e86",
       "draft": false,
@@ -1497,7 +1468,7 @@
     },
     {
       "number": 1624,
-      "title": "M4: keyframe animation \u2014 timeline, inspector and easing",
+      "title": "M4: keyframe animation — timeline, inspector and easing",
       "url": "https://github.com/storytold/figcraft/pull/1624",
       "head": "b1637b2cc99c6e6c262b7e5935b9c32c885d8a07",
       "draft": false,
@@ -2286,11 +2257,73 @@
   "scope_confirmation": "The user explicitly confirmed attempting drafts and experiments while still deferring every merge conflict.",
   "snapshot_recorded_at": "2026-11-23T17:53:35.377914+03:30",
   "completed_at": "2026-11-23T20:24:23.892159+00:00",
-  "validated_source_commit": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+  "validated_source_commit": null,
   "upstream_observation": {
     "observed_main_commit": "b828e6c75a3a90fefc0e62f488c013ca4714a5fa",
     "subject": "ci(release): forward ARTCRAFT_SERVICES_DISPATCH_TOKEN secret (#2578)",
     "included": false,
     "reason": "Newer CI-only main commit observed after the fixed integration base and captured backlog; not merged into this branch."
+  },
+  "validation_history": [
+    {
+      "source_commit": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+      "validation": {
+        "rust": "1.100.0",
+        "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
+        "passed": [
+          "cargo xtask ci (formatting; workspace Clippy with warnings denied; native unit and integration tests; doctests; i18n report; layers, assets and docs checks; wasm32 check; plugin SDK formatting, Clippy, tests and release wasm build)",
+          "wasm-pack test --headless --firefox --geckodriver /snap/bin/geckodriver apps/figcraft-web --bin figcraft-web --locked",
+          "cargo test --workspace --lib --bins --tests --no-fail-fast picker (87 UI tests passed)",
+          "git diff --check",
+          "Changed TOML files parsed successfully",
+          "bash -n packaging/linux/AppRun packaging/linux/postinst.sh packaging/linux/apprun-test.sh",
+          "bash packaging/linux/apprun-test.sh",
+          "All 45 included PR heads are ancestors of the validated source commit; all 80 conflict deferrals have file inventories; all 127 captured PRs are accounted for"
+        ],
+        "workspace_ci": {
+          "head": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+          "state": "finished",
+          "exit_code": 0,
+          "started": "2026-11-23T19:35:13.318817+00:00",
+          "finished": "2026-11-23T20:14:56.460541+00:00"
+        },
+        "native_test_results": {
+          "passed": 6398,
+          "failed": 0,
+          "ignored": 13,
+          "test_binaries": 36
+        },
+        "browser_regressions": {
+          "head": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+          "state": "finished",
+          "exit_code": 0,
+          "started": "2026-11-23T20:21:58.175636+00:00",
+          "finished": "2026-11-23T20:23:46.946740+00:00"
+        },
+        "browser_test_results": {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        "platform_limits": [
+          "Native checks ran on Ubuntu under WSL, with headless UI tests; no manual screen-reader, keyboard-navigation or desktop visual review is claimed.",
+          "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
+          "Release packages and installers have not been built or installed locally.",
+          "Translation quality has not been reviewed by native speakers.",
+          "Baseline full CI was interrupted and is not claimed to have passed."
+        ],
+        "notes": [
+          "Earlier integration validation exposed missing regression-test imports, stale exact inspection metadata, a pagination fixture made too small by compact JSON, and image/gradient/crop picker interaction defects. These were corrected with assertions preserved or expanded before the final passing runs.",
+          "The first browser runtime attempt failed before assertions because WebDriver did not bind its port; the final isolated run recorded here supersedes that attempt."
+        ],
+        "browser_setup": "GECKODRIVER_REMOTE points to a prestarted /snap/bin/geckodriver on loopback; Snap Firefox remains headless."
+      }
+    }
+  ],
+  "review_followup": {
+    "reviewed_head": "a750a52ba9ba5c8834bfbde83629d8563f72e61b",
+    "review_url": "https://github.com/storytold/figcraft/pull/2583#pullrequestreview-6029252625",
+    "state": "pending_validation",
+    "scope_note": "Reviewed all 13 inline findings and the 35 lower-priority claims, including the follow-up review comment. Dependency/workflow PR #2574 remains part of the requested aggregate integration; the review follow-up makes no workflow changes."
   }
 }

@@ -111,16 +111,18 @@ fn provider_recents_render_separately_from_device_history() {
             output = Some(out);
         }
         let out = output.unwrap();
-        fn texts(shape: &egui::Shape, found: &mut Vec<String>) {
+        fn texts(shape: &egui::Shape, clip: egui::Rect, found: &mut Vec<String>) {
             match shape {
-                egui::Shape::Text(text) => found.push(text.galley.text().to_string()),
-                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, found)),
+                egui::Shape::Text(text) if clip.intersects(text.galley.rect.translate(text.pos.to_vec2())) => {
+                    found.push(text.galley.text().to_string())
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, clip, found)),
                 _ => {}
             }
         }
         let mut found = Vec::new();
         for shape in &out.shapes {
-            texts(&shape.shape, &mut found);
+            texts(&shape.shape, shape.clip_rect, &mut found);
         }
         assert!(found.iter().any(|text| text == "Device design"), "{found:?}");
         assert_eq!(found.iter().any(|text| text == "Provider design.figcraft"), enabled, "{found:?}");

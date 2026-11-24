@@ -155,7 +155,11 @@ pub(crate) fn install(host: Host, ctx: egui::Context, embedded: bool) -> Result<
     let api = Object::new();
     set(&api, "protocolVersion", &1.into())?;
     set(&api, "app", &"figcraft".into())?;
-    set(&api, "capabilities", &object(&serde_json::json!(["revisionAck", "externalRecents", "saveDestination", "openBytes"]))?)?;
+    set(
+        &api,
+        "capabilities",
+        &object(&serde_json::json!(["revisionAck", "externalRecents", "saveDestination", "openBytes", "saveCancellation", "serializedWrites"]))?,
+    )?;
 
     let active = provider.clone();
     let register = Closure::<dyn FnMut(JsValue, JsValue, JsValue) -> Result<String, JsValue>>::new(move |id, label, namespace| {
@@ -192,11 +196,12 @@ pub(crate) fn install(host: Host, ctx: egui::Context, embedded: bool) -> Result<
             return Err(error("resources must be an array of at most 100 entries"));
         }
         let entries = value.dyn_into::<Array>()?;
-        if entries.length() > 100 {
+        let count = entries.length();
+        if count > 100 {
             return Err(error("resources must be an array of at most 100 entries"));
         }
         // Read only bounded metadata; do not copy or serialize arbitrary host properties.
-        let resources = entries.iter().map(resource).collect::<Result<Vec<_>, _>>()?;
+        let resources = (0..count).map(|i| resource(entries.get(i))).collect::<Result<Vec<_>, _>>()?;
         active.active()?.host.set_resources(&connection, resources).map_err(error)?;
         active.wake_later();
         Ok(())
@@ -235,6 +240,15 @@ pub(crate) fn install(host: Host, ctx: egui::Context, embedded: bool) -> Result<
         Ok(())
     });
     set(&api, "cancelOpen", &cancel_open.into_js_value())?;
+
+    let active = provider.clone();
+    let cancel_save = Closure::<dyn FnMut(JsValue) -> Result<(), JsValue>>::new(move |request| {
+        let request = bounded_string(request, 160)?;
+        active.active()?.host.cancel_save(&request).map_err(error)?;
+        active.wake_later();
+        Ok(())
+    });
+    set(&api, "cancelSave", &cancel_save.into_js_value())?;
 
     let active = provider.clone();
     let result = Closure::<dyn FnMut(JsValue, JsValue, JsValue) -> Result<(), JsValue>>::new(move |request, status, resource| {

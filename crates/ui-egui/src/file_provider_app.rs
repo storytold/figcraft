@@ -71,12 +71,23 @@ pub(crate) fn tick(app: &mut FigApp) {
                     }
                     app.toast("Saved with file provider");
                 } else {
-                    app.ui.close_after_save_as = None;
+                    if app.ui.close_after_save_as == Some(capture.doc) {
+                        app.ui.close_after_save_as = None;
+                    }
                     if status == "failed" {
                         app.toast("File provider save failed; the document is still unsaved");
                     }
                 }
                 host.finish_save(&request, &capture, &status, &resource, alive);
+            }
+            Action::FocusOpen { request, resource, name } => {
+                if let Some(index) = host.bound_document(&resource).and_then(|uid| app.session.docs.iter().position(|doc| doc.uid == uid)) {
+                    app.session.active = index;
+                    app.ui.home = false;
+                    host.finish_open(&request, &resource, &name, Ok(app.session.docs[index].uid));
+                } else {
+                    host.fetch_open(&request);
+                }
             }
             Action::Open { request, resource, name, bytes } => {
                 let result = if let Some(uid) = host.bound_document(&resource).filter(|uid| app.session.docs.iter().any(|d| d.uid == *uid)) {
@@ -85,7 +96,7 @@ pub(crate) fn tick(app: &mut FigApp) {
                     }
                     Ok(uid)
                 } else {
-                    app.run_user("file.open", json!({"name":name,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)}))
+                    app.run_user("file.open", json!({"name":name,"data":base64::engine::general_purpose::STANDARD.encode(&bytes),"nativeOnly":true}))
                         .and_then(|_| app.session.ds().ok().map(|d| d.uid))
                         .ok_or_else(|| "native project could not be opened".to_string())
                 };
@@ -137,15 +148,22 @@ mod tests {
                 std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Second".into();
                 let second_request = request(&mut app);
                 app.file_providers.resolve_dialog(&second_request, "provider", "shared.figcraft").unwrap();
-                let bytes = app.file_providers.take_events().remove(0).bytes.unwrap();
+                assert!(app.file_providers.take_events().is_empty(), "the second write waits for the first durable acknowledgement");
+                assert!(
+                    app.file_providers.result(second_request.clone(), "saved".into(), "shared".into()).is_err(),
+                    "no acknowledgement is accepted before transfer"
+                );
                 if later_edit {
                     std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Second after capture".into();
                 }
                 let before: Vec<_> = app.session.docs.iter().map(|doc| (doc.uid, doc.revision, doc.doc.clone())).collect();
                 app.file_providers.result(first_request, "saved".into(), "shared".into()).unwrap();
                 if !queued_together {
-                    tick(&mut app);
+                    assert!(app.file_providers.take_events().is_empty(), "an unapplied acknowledgement still owns the write slot");
                 }
+                tick(&mut app);
+                let events = app.file_providers.take_events();
+                let bytes = events.into_iter().find(|e| e.metadata["type"] == "save").unwrap().bytes.unwrap();
                 app.file_providers.result(second_request, "saved".into(), "shared".into()).unwrap();
                 tick(&mut app);
                 assert_eq!(app.session.ds().unwrap().uid, second);
@@ -761,5 +779,205 @@ mod tests {
         assert!(admitted.branches.iter().any(|branch| branch.name == "Captured branch"));
         assert_eq!(host.bound_document("incoming"), Some(admitted.uid));
         assert!(host.take_events().iter().any(|event| event.metadata["type"] == "opened" && event.metadata["requestId"] == retry));
+    }
+    #[test]
+    fn review_abandoning_an_unanswered_save_preserves_edits_and_refuses_late_ack() {
+        for transferred in [false, true] {
+            let mut app = app();
+            app.session.execute("shape.rectangle", &json!({"width":20,"height":20})).unwrap();
+            let uid = app.session.ds().unwrap().uid;
+            let pending = request(&mut app);
+            if transferred {
+                app.file_providers.resolve_dialog(&pending, "provider", "saved.figcraft").unwrap();
+                app.file_providers.take_events();
+            }
+            app.file_providers.cancel_save(&pending).unwrap();
+            assert!(app.file_providers.result(pending.clone(), "saved".into(), "late".into()).is_err());
+            tick(&mut app);
+            app.file_providers.take_events();
+            assert!(app.session.ds().unwrap().is_dirty());
+            assert!(!app.file_providers.pending_for(uid));
+            assert!(app.file_providers.bound_document("late").is_none());
+            assert!(app.file_providers.pending_save(uid).is_none());
+            let retry = request(&mut app);
+            assert_ne!(retry, pending);
+        }
+    }
+
+    #[test]
+    fn review_save_as_keeps_original_identity_after_another_document_overwrites_it() {
+        let mut app = app();
+        let old = request(&mut app);
+        app.file_providers.resolve_dialog(&old, "provider", "old.figcraft").unwrap();
+        app.file_providers.take_events();
+        app.file_providers.result(old, "saved".into(), "original".into()).unwrap();
+        tick(&mut app);
+        app.file_providers.take_events();
+        let first = app.session.ds().unwrap().uid;
+        save(&mut app, true).unwrap();
+        let dialog = app.file_providers.take_events().remove(0);
+        assert_eq!(dialog.metadata["originalResourceId"], "original");
+        let save_as = dialog.metadata["requestId"].as_str().unwrap().to_string();
+        app.session.execute("file.new", &json!({})).unwrap();
+        let overwrite = request(&mut app);
+        app.file_providers.resolve_dialog(&overwrite, "provider", "old.figcraft").unwrap();
+        app.file_providers.take_events();
+        app.file_providers.result(overwrite, "saved".into(), "original".into()).unwrap();
+        tick(&mut app);
+        app.file_providers.take_events();
+        assert!(app.file_providers.bound_filename(first).is_none());
+        app.file_providers.resolve_dialog(&save_as, "provider", "copy.figcraft").unwrap();
+        let transfer = app.file_providers.take_events().remove(0);
+        assert_eq!(transfer.metadata["originalResourceId"], "original", "the provider must exclude this before writing");
+        assert!(app.file_providers.result(save_as, "saved".into(), "original".into()).is_err());
+    }
+
+    #[test]
+    fn review_provider_open_refuses_interchange_bytes_disguised_as_a_native_project() {
+        let mut app = app();
+        let host = app.file_providers.clone();
+        let connection = host.snapshot()["connectionId"].as_str().unwrap().to_string();
+        host.set_resources(
+            &connection,
+            vec![crate::file_providers::Resource { id: "foreign".into(), name: "foreign.figcraft".into(), updated_at: String::new() }],
+        )
+        .unwrap();
+        let bytes=serde_json::to_vec(&json!({"name":"Interchange","document":{"id":"0:0","type":"DOCUMENT","children":[{"id":"0:1","type":"CANVAS","children":[]}]},"components":{},"styles":{}})).unwrap();
+        let original = app.session.docs.len();
+        let request = host.request_open("foreign").unwrap();
+        host.take_events();
+        host.open(request.clone(), "foreign.figcraft".into(), bytes.clone()).unwrap();
+        tick(&mut app);
+        let events = host.take_events();
+        assert!(events.iter().any(|e| e.metadata["type"] == "openFailed" && e.metadata["requestId"] == request));
+        assert_eq!(app.session.docs.len(), original);
+        assert!(host.bound_document("foreign").is_none());
+        assert!(
+            app.session.execute("file.open", &json!({"name":"normal.json","data":base64::engine::general_purpose::STANDARD.encode(bytes)})).is_ok(),
+            "ordinary interchange imports still work"
+        );
+    }
+    #[test]
+    fn review_provider_recents_focus_live_tabs_without_a_fetch_and_retry_stale_bindings() {
+        let mut app = app();
+        let uid = app.session.ds().unwrap().uid;
+        let saved = request(&mut app);
+        app.file_providers.resolve_dialog(&saved, "provider", "saved.figcraft").unwrap();
+        app.file_providers.take_events();
+        app.file_providers.result(saved, "saved".into(), "remote".into()).unwrap();
+        tick(&mut app);
+        app.file_providers.take_events();
+        app.session.execute("file.new", &json!({})).unwrap();
+        let focused = app.file_providers.request_open("remote").unwrap();
+        assert!(app.file_providers.take_events().is_empty(), "focus must not require a remote response");
+        tick(&mut app);
+        assert_eq!(app.session.ds().unwrap().uid, uid);
+        assert!(app.file_providers.take_events().iter().any(|e| e.metadata["type"] == "opened" && e.metadata["requestId"] == focused));
+        let stale = app.file_providers.request_open("remote").unwrap();
+        app.session.docs.retain(|doc| doc.uid != uid);
+        app.session.active = 0;
+        tick(&mut app);
+        assert!(
+            app.file_providers.take_events().iter().any(|e| e.metadata["type"] == "openRequested" && e.metadata["requestId"] == stale),
+            "a stale binding falls back to the ordinary fetch path"
+        );
+    }
+
+    #[test]
+    fn review_another_documents_failed_save_keeps_the_window_close_continuation() {
+        let mut app = app();
+        let waiting = app.session.ds().unwrap().uid;
+        let first = request(&mut app);
+        app.ui.close_after_save_as = Some(waiting);
+        app.session.execute("file.new", &json!({})).unwrap();
+        let other = request(&mut app);
+        app.file_providers.resolve_dialog(&other, "provider", "other.figcraft").unwrap();
+        app.file_providers.take_events();
+        app.file_providers.result(other, "failed".into(), String::new()).unwrap();
+        tick(&mut app);
+        app.file_providers.take_events();
+        assert_eq!(app.ui.close_after_save_as, Some(waiting));
+        app.file_providers.cancel_save(&first).unwrap();
+        tick(&mut app);
+        assert!(app.ui.close_after_save_as.is_none(), "failure of the document being closed still stops its continuation");
+    }
+
+    #[test]
+    fn review_a_clean_tab_close_waits_for_its_provider_terminal_event() {
+        let mut app = app();
+        let uid = app.session.ds().unwrap().uid;
+        let saved = request(&mut app);
+        app.file_providers.resolve_dialog(&saved, "provider", "saved.figcraft").unwrap();
+        app.file_providers.take_events();
+        app.file_providers.result(saved, "saved".into(), "remote".into()).unwrap();
+        tick(&mut app);
+        assert!(!app.session.ds().unwrap().is_dirty());
+        app.ui.close_tab = Some(TabClose::Ask(uid));
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close_tab(&mut app, ui.ctx()));
+        assert!(matches!(app.ui.close_tab,Some(TabClose::Ask(id)) if id==uid), "the close request must survive until the terminal drains");
+        app.file_providers.take_events();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close_tab(&mut app, ui.ctx()));
+        assert!(app.session.docs.iter().all(|doc| doc.uid != uid));
+    }
+
+    #[test]
+    fn review_window_close_waits_for_an_unrelated_provider_open() {
+        let mut app = app();
+        let uid = app.session.ds().unwrap().uid;
+        let saved = request(&mut app);
+        app.file_providers.resolve_dialog(&saved, "provider", "saved.figcraft").unwrap();
+        app.file_providers.take_events();
+        app.file_providers.result(saved, "saved".into(), "remote".into()).unwrap();
+        tick(&mut app);
+        app.file_providers.take_events();
+        let connection = app.file_providers.snapshot()["connectionId"].as_str().unwrap().to_string();
+        app.file_providers
+            .set_resources(
+                &connection,
+                vec![crate::file_providers::Resource { id: "incoming".into(), name: "incoming.figcraft".into(), updated_at: String::new() }],
+            )
+            .unwrap();
+        let request = app.file_providers.request_open("incoming").unwrap();
+        app.file_providers.take_events();
+        app.ui.close_after_save_as = Some(uid);
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close(&mut app, ui.ctx()));
+        assert_eq!(app.ui.close_after_save_as, Some(uid));
+        assert!(!app.ui.quit);
+        app.file_providers.cancel_open(request, String::new()).unwrap();
+        app.file_providers.take_events();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close(&mut app, ui.ctx()));
+        assert!(app.ui.close_after_save_as.is_none(), "the continuation resumes after the open settles");
+    }
+
+    #[test]
+    fn review_home_search_includes_only_enabled_matching_provider_resources() {
+        let mut ui = crate::layers_drag_tests::Ui::new(Session::new());
+        ui.app = app();
+        let host = ui.app.file_providers.clone();
+        let connection = host.snapshot()["connectionId"].as_str().unwrap().to_string();
+        host.set_resources(
+            &connection,
+            vec![crate::file_providers::Resource { id: "needle".into(), name: "Provider needle.figcraft".into(), updated_at: String::new() }],
+        )
+        .unwrap();
+        ui.app.ui.home = true;
+        ui.app.ui.home_view.section = crate::home::Section::Recents;
+        ui.app.ui.home_view.file_query = "provider needle".into();
+        for enabled in [false, true] {
+            host.set_enabled(enabled).unwrap();
+            ui.frame(vec![]);
+            ui.frame(vec![]);
+            let output = ui.frame_output(vec![]);
+            let text: Vec<_> = crate::live_tests::flat(&output.shapes)
+                .into_iter()
+                .filter_map(|shape| if let egui::Shape::Text(text) = shape { Some(text.galley.text().to_string()) } else { None })
+                .collect();
+            assert_eq!(text.iter().any(|text| text == "Provider needle.figcraft"), enabled, "{text:?}");
+            if enabled {
+                assert!(!text.iter().any(|text| text == "No files or templates match your search"));
+            }
+        }
     }
 }

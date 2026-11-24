@@ -1566,7 +1566,8 @@ the tab in front. Headless sessions take it too.
 ### Live sessions
 
 People (and agents) edit one file together and see each other's cursors, selections and
-viewports. Both the headless session and the attached app can host and join (the web build can
+viewports. A headless MCP session with the required automation roots can join explicitly approved
+servers, but cannot host a local server. The attached app can host and join (the web build can
 join but not host); each call takes in what happened since the last one and sends your edits (a
 joined file opens as a new document).
 

@@ -190,3 +190,31 @@ Names and resources are synthetic UI metadata, not an authentication service or 
 fixture. The test-only CPU raster helper is adapted from SolidCraft's existing
 [mesh renderer](https://github.com/tangency-labs/solidcraft/blob/57d789c0aaf1bcf4691647f9a1cb7a547eb45fdf/crates/ui-egui/tests/support/raster.rs),
 with its MIT notice retained. No production dependency or rendering API is added.
+
+## Save ordering and recovery
+
+The editor transfers one save at a time, across documents. A destination choice for another
+captured document remains queued until the current save result has been applied. Providers must
+wait for the `save` event before writing or calling `saveResult`; resolving a dialog does not
+mean its transfer is ready. This prevents reversed write acknowledgements from assigning the
+latest saved checkpoint to the wrong document. Captures and queue limits remain unchanged.
+
+Both `saveDialog` and `save` include `originalResourceId` (null when unbound), captured when the
+save starts. For `saveAs`, the provider must exclude that resource before making any write,
+even if a different document has since overwritten it and removed its editor binding.
+The editor rejects a Save As acknowledgement naming that captured resource.
+
+File > Cancel pending provider save abandons the current document's unanswered save without
+marking its checkpoint saved or downloading a fallback copy. The same operation is available
+as `cancelSave(requestId)`; the API advertises `saveCancellation` and `serializedWrites`.
+The editor then reports `saveCancelled`, rejects late replies and admits a retry. Cancellation
+cannot undo a write already made by the provider. A provider must finish or cancel any underlying
+write before starting the next queued transfer, including after it receives `saveCancelled`.
+
+Provider opens use `file.open` with `nativeOnly: true` for transferred bytes. This decodes native
+archives with their versions and branches and refuses interchange imports regardless of filename;
+ordinary device opens and imports retain their existing format detection.
+
+Recents and Home search include enabled provider resources. Choosing an already-open resource
+focuses its bound tab without reading remote storage. If that binding becomes stale before the
+editor applies the focus request, it requests the resource through the ordinary provider read path.

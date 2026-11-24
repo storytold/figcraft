@@ -437,7 +437,7 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
     // A Save as this question started: once its dialog is answered, closing goes on if the file
     // was saved; cancelled or failed, the window stays open.
     if let Some(uid) = app.ui.close_after_save_as {
-        if app.pending_dialog.is_some() || app.file_providers.pending_for(uid) {
+        if app.pending_dialog.is_some() || app.file_providers.busy() {
             return;
         }
         app.ui.close_after_save_as = None;
@@ -558,7 +558,11 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
     let dirty = app.session.docs.get(i).is_some_and(DocState::is_dirty);
     match step {
         TabClose::Ask(_) if !dirty => {
-            // Saved meanwhile: nothing is lost by closing.
+            // A saved checkpoint can precede its terminal event. Keep the close request
+            // until all provider ownership has drained, just like the ordinary close path.
+            if app.file_providers.busy() {
+                return;
+            }
             app.ui.close_tab = None;
             app.run("file.close", json!({"index": i}));
         }

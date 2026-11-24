@@ -40,11 +40,13 @@ pub(crate) struct Capture {
     pub name: String,
     intent: String,
     destination: String,
+    original_resource: Option<String>,
     bytes: Option<Vec<u8>>,
 }
 pub(crate) enum Action {
     Save { request: String, capture: Capture, status: String, resource: String },
     Open { request: String, resource: String, name: String, bytes: Vec<u8> },
+    FocusOpen { request: String, resource: String, name: String },
 }
 #[derive(Clone, Copy)]
 enum TerminalOwner {
@@ -69,10 +71,12 @@ struct State {
     names: HashMap<u64, String>,
     dialogs: HashMap<String, Capture>,
     pending: HashMap<String, Capture>,
+    ready_saves: VecDeque<String>,
     // Keep every captured document alias owned until its terminal event can be queued.
     finishing_saves: HashMap<String, Vec<u64>>,
     opens: HashMap<String, String>,
     queued_opens: HashSet<String>,
+    deferred_reads: VecDeque<String>,
     actions: Vec<Action>,
     // Only previously admitted captures; at most MAX_PENDING and no transfer bytes.
     failed_deliveries: Vec<Action>,
@@ -138,6 +142,26 @@ impl State {
                 }
             }
         }
+        while self.events.len() < MAX_EVENTS {
+            let Some(request) = self.deferred_reads.pop_front() else { break };
+            if let Some(resource) = self.opens.get(&request).filter(|_| !self.queued_opens.contains(&request)).cloned() {
+                self.event(json!({"type":"openRequested","requestId":request,"resourceId":resource}), None);
+            }
+        }
+        self.flush_saves();
+    }
+    /// Only one provider write may own transfer bytes until its acknowledgement is applied.
+    /// Resource ids for new documents are not known until that acknowledgement arrives.
+    fn flush_saves(&mut self) {
+        if !self.pending.is_empty() || !self.finishing_saves.is_empty() || self.events.len() >= MAX_EVENTS {
+            return;
+        }
+        let Some(request) = self.ready_saves.pop_front() else { return };
+        let Some(mut capture) = self.dialogs.remove(&request) else { return };
+        let resource = if capture.intent == "save" { self.bindings.get(&capture.doc).cloned() } else { None };
+        let bytes = capture.bytes.take();
+        self.event(json!({"type":"save","requestId":request,"documentId":capture.doc.to_string(),"revision":capture.revision.to_string(),"intent":capture.intent,"filename":capture.name,"resourceId":resource,"originalResourceId":capture.original_resource,"destination":capture.destination}), bytes);
+        self.pending.insert(request, capture);
     }
 }
 #[derive(Clone, Default)]
@@ -183,6 +207,7 @@ impl Host {
         s.enabled = false;
         s.connection.clear();
         s.resources.clear();
+        s.deferred_reads.clear();
         s.bindings.clear();
         s.names.clear();
         s.events.clear();
@@ -265,8 +290,12 @@ impl Host {
         }
         let request = s.next("dialog")?;
         let intent = if save_as { "saveAs" } else { "save" }.to_string();
-        s.event(json!({"type":"saveDialog","requestId":request,"documentId":doc.to_string(),"revision":revision.to_string(),"intent":intent,"filename":name}), None);
-        s.dialogs.insert(request.clone(), Capture { doc, revision, snapshots, name, intent, destination: String::new(), bytes: Some(bytes) });
+        let original_resource = s.bindings.get(&doc).cloned();
+        s.event(json!({"type":"saveDialog","requestId":request,"documentId":doc.to_string(),"revision":revision.to_string(),"intent":intent,"filename":name,"originalResourceId":original_resource}), None);
+        s.dialogs.insert(
+            request.clone(),
+            Capture { doc, revision, snapshots, name, intent, destination: String::new(), original_resource, bytes: Some(bytes) },
+        );
         Ok(request)
     }
     pub fn resolve_dialog(&self, request: &str, destination: &str, name: &str) -> Result<(), String> {
@@ -277,6 +306,9 @@ impl Host {
         if s.events.len() >= MAX_EVENTS {
             return Err("provider event queue is full".into());
         }
+        if s.dialogs.get(request).is_some_and(|c| !c.destination.is_empty()) {
+            return Err("save destination already chosen".into());
+        }
         let mut capture = s.dialogs.remove(request).ok_or("unknown or completed save dialog")?;
         if destination == "cancel" {
             capture.bytes = None;
@@ -286,10 +318,9 @@ impl Host {
         }
         capture.name = name.into();
         capture.destination = destination.into();
-        let resource = if capture.intent == "save" { s.bindings.get(&capture.doc).cloned() } else { None };
-        let bytes = capture.bytes.take();
-        s.event(json!({"type":"save","requestId":request,"documentId":capture.doc.to_string(),"revision":capture.revision.to_string(),"intent":capture.intent,"filename":name,"resourceId":resource,"destination":destination}), bytes);
-        s.pending.insert(request.into(), capture);
+        s.dialogs.insert(request.into(), capture);
+        s.ready_saves.push_back(request.into());
+        s.flush_saves();
         Ok(())
     }
     pub fn result(&self, request: String, status: String, resource: String) -> Result<(), String> {
@@ -303,7 +334,7 @@ impl Host {
         {
             return Err("result does not match the chosen destination".into());
         }
-        if status == "saved" && capture.intent == "saveAs" && s.bindings.get(&capture.doc) == Some(&resource) {
+        if status == "saved" && capture.intent == "saveAs" && capture.original_resource.as_ref() == Some(&resource) {
             return Err("Save As must produce a distinct resource".into());
         }
         if s.actions.len() >= MAX_PENDING {
@@ -313,6 +344,22 @@ impl Host {
         s.finishing_saves.insert(request.clone(), capture.snapshots.iter().map(|doc| doc.uid).collect());
         s.actions.push(Action::Save { request, capture, status, resource });
         Ok(())
+    }
+    /// Abandon an unanswered save locally; a provider's late answer cannot mark it saved.
+    pub fn cancel_save(&self, request: &str) -> Result<(), String> {
+        let mut s = self.state();
+        let mut capture = s.dialogs.remove(request).or_else(|| s.pending.remove(request)).ok_or("unknown or completed save request")?;
+        s.ready_saves.retain(|id| id != request);
+        s.events.retain(|event| event.metadata["requestId"].as_str() != Some(request));
+        capture.bytes = None;
+        s.finishing_saves.insert(request.into(), capture.snapshots.iter().map(|doc| doc.uid).collect());
+        // This inbox holds only admitted captures and is independent of the transport queue.
+        s.failed_deliveries.push(Action::Save { request: request.into(), capture, status: "cancel".into(), resource: String::new() });
+        Ok(())
+    }
+    pub fn pending_save(&self, doc: u64) -> Option<String> {
+        let s = self.state();
+        s.dialogs.iter().chain(s.pending.iter()).find(|(_, c)| c.snapshots.iter().any(|d| d.uid == doc)).map(|(id, _)| id.clone())
     }
     pub fn set_resources(&self, connection: &str, resources: Vec<Resource>) -> Result<(), String> {
         let mut seen = HashSet::new();
@@ -339,9 +386,27 @@ impl Host {
             return Err("resource is unavailable in the current provider account".into());
         }
         let request = s.next("open")?;
-        s.opens.insert(request.clone(), resource.into());
-        s.event(json!({"type":"openRequested","requestId":request,"resourceId":resource}), None);
+        if s.bindings.values().any(|bound| bound == resource) {
+            if s.actions.len() >= MAX_PENDING {
+                return Err("provider command queue is full".into());
+            }
+            let name = s.resources.iter().find(|r| r.id == resource).map(|r| r.name.clone()).ok_or("resource is unavailable")?;
+            s.opens.insert(request.clone(), resource.into());
+            s.queued_opens.insert(request.clone());
+            s.actions.push(Action::FocusOpen { request: request.clone(), resource: resource.into(), name });
+        } else {
+            s.opens.insert(request.clone(), resource.into());
+            s.event(json!({"type":"openRequested","requestId":request,"resourceId":resource}), None);
+        }
         Ok(request)
+    }
+    /// A focus request lost its live tab before the app applied it: fetch the resource normally.
+    pub(crate) fn fetch_open(&self, request: &str) {
+        let mut s = self.state();
+        if s.opens.contains_key(request) && s.queued_opens.remove(request) {
+            s.deferred_reads.push_back(request.into());
+            s.flush_finished();
+        }
     }
     pub fn open(&self, request: String, name: String, bytes: Vec<u8>) -> Result<(), String> {
         if !valid_native_name(&name) || bytes.is_empty() || bytes.len() > MAX_BYTES {
@@ -426,6 +491,7 @@ impl Host {
             _ => None,
         };
         if let Some(mut capture) = capture {
+            s.ready_saves.retain(|id| id != request);
             // A synchronous accepted result/choice has already removed this original owner.
             // Retain only a still-owned snapshot, never bytes or a fabricated durable ACK.
             capture.bytes = None;
@@ -520,6 +586,41 @@ impl Host {
         s.finished.push_back(Terminal { request: request.into(), metadata, owner: TerminalOwner::Open });
         s.flush_finished();
     }
+    pub(crate) fn search_ui(&self, ui: &mut egui::Ui, query: &str) -> usize {
+        let (label, resources) = {
+            let s = self.state();
+            if !s.enabled {
+                return 0;
+            }
+            (
+                s.provider.as_ref().map(|p| p.label.clone()),
+                s.resources.iter().filter(|r| r.name.to_lowercase().contains(query)).cloned().collect::<Vec<_>>(),
+            )
+        };
+        let Some(label) = label.filter(|_| !resources.is_empty()) else { return 0 };
+        ui.strong(crate::i18n::trf("Recent files — {provider}", &[("provider", &label)]));
+        self.resource_rows_ui(ui, &resources);
+        resources.len()
+    }
+    fn resource_rows_ui(&self, ui: &mut egui::Ui, resources: &[Resource]) -> bool {
+        let mut selected = false;
+        for resource in resources {
+            if ui.button(&resource.name).on_hover_text(&resource.updated_at).clicked() {
+                match self.request_open(&resource.id) {
+                    Ok(_) => {
+                        self.state().open_error = None;
+                        selected = true;
+                    }
+                    Err(error) => self.state().open_error = Some(error),
+                }
+                ui.ctx().request_repaint();
+            }
+        }
+        if let Some(error) = self.state().open_error.clone() {
+            ui.label(error);
+        }
+        selected
+    }
     pub fn recent_ui(&self, ui: &mut egui::Ui) -> bool {
         let (label, resources, enabled) = {
             let s = self.state();
@@ -533,23 +634,8 @@ impl Host {
             if resources.is_empty() {
                 ui.weak("No recent files from this provider");
             }
-            for resource in resources {
-                if ui.button(&resource.name).on_hover_text(&resource.updated_at).clicked() {
-                    match self.request_open(&resource.id) {
-                        Ok(_) => {
-                            self.state().open_error = None;
-                            selected = true;
-                        }
-                        Err(error) => self.state().open_error = Some(error),
-                    }
-                    ui.ctx().request_repaint();
-                }
-            }
+            selected = self.resource_rows_ui(ui, &resources);
         });
-        let error = self.state().open_error.clone();
-        if let Some(error) = error {
-            ui.label(error);
-        }
         ui.separator();
         ui.weak("Recent files on this device");
         selected

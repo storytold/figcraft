@@ -55,7 +55,11 @@ fn replies_preserve_destination_and_admit_a_durable_resource_overwrite() {
     h.resolve_dialog(&request, "device", "local.figcraft").unwrap();
     assert!(h.result(request.clone(), "saved".into(), "remote".into()).is_err());
     h.result(request, "download".into(), String::new()).unwrap();
-    h.take_actions();
+    for action in h.take_actions() {
+        if let Action::Save { request, capture, status, resource } = action {
+            h.finish_save(&request, &capture, &status, &resource, true);
+        }
+    }
     h.take_events();
     let (request, new_owner) = capture(&h, false);
     h.state().bindings.insert(uid, "already-open".into());
@@ -302,8 +306,10 @@ fn retained_terminals_are_bounded_by_admitted_reads_and_saves() {
     let connection = h.snapshot()["connectionId"].as_str().unwrap().to_string();
     for _ in 0..MAX_PENDING {
         let (request, _) = capture(&h, false);
-        h.resolve_dialog(&request, "provider", &format!("Failed{EXTENSION}")).unwrap();
-        h.result(request, "failed".into(), String::new()).unwrap();
+        // Writes are serialized, but all admitted chooser deliveries can fail before the
+        // consumer runs. Those captures must retain the same bounded terminal ownership.
+        let event = h.take_events().into_iter().find(|e| e.metadata["requestId"] == request).unwrap();
+        h.delivery_failed(&event.metadata);
     }
     let saves: Vec<_> = h
         .take_actions()

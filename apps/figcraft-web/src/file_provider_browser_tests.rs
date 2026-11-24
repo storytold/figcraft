@@ -438,3 +438,53 @@ fn restarting_the_editor_replaces_the_provider_api_and_rejects_previous_requests
     assert!(!embedded.file_providers.enabled());
     Ok(())
 }
+
+#[wasm_bindgen_test]
+fn a_real_dom_listener_exception_leaves_a_cancellable_unsaved_request() -> Result<(), JsValue> {
+    let (mut app, _) = resource_app()?;
+    let page = Page::install(&app)?;
+    page.api("registerProvider", &["fixture".into(), "Fixture storage".into(), "account-one".into()])?;
+    let count = Rc::new(Cell::new(0));
+    let observed = count.clone();
+    let listener = Closure::<dyn FnMut(web_sys::Event) -> Result<(), JsValue>>::new(move |event: web_sys::Event| {
+        let Some(event) = event.dyn_ref::<web_sys::CustomEvent>() else { return Ok(()) };
+        if text(&event.detail(), "type")? == "saveDialog" {
+            observed.set(observed.get() + 1);
+            return Err(js_sys::RangeError::new("synthetic provider listener failure").into());
+        }
+        Ok(())
+    });
+    // The DOM reports listener exceptions to the window, without making dispatchEvent fail.
+    let errors_seen = Rc::new(Cell::new(0));
+    let expected_errors = errors_seen.clone();
+    let errors = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        if field(event.as_ref(), "message").ok().and_then(|v| v.as_string()).is_some_and(|m| m.contains("synthetic provider listener failure")) {
+            expected_errors.set(expected_errors.get() + 1);
+            event.prevent_default();
+            event.stop_immediate_propagation();
+        }
+    });
+    page.window.add_event_listener_with_callback_and_bool("error", errors.as_ref().unchecked_ref(), true)?;
+    page.window.add_event_listener_with_callback(super::EVENT, listener.as_ref().unchecked_ref())?;
+    app.save();
+    page.publish();
+    page.window.remove_event_listener_with_callback(super::EVENT, listener.as_ref().unchecked_ref())?;
+    page.window.remove_event_listener_with_callback_and_bool("error", errors.as_ref().unchecked_ref(), true)?;
+    assert_eq!(count.get(), 1);
+    assert_eq!(errors_seen.get(), 1, "a real DOM listener exception must reach the window");
+    let request = text(&page.latest("saveDialog")?, "requestId")?;
+    assert!(page.host.busy(), "DOM listener exceptions do not settle the capture");
+    let uid = app.session.ds().map_err(error)?.uid;
+    assert_eq!(page.host.pending_save(uid).as_deref(), Some(request.as_str()));
+    page.api("cancelSave", &[request.clone().into()])?;
+    page.tick(&mut app);
+    page.publish();
+    page.one("saveCancelled", &request)?;
+    assert!(app.session.ds().map_err(error)?.is_dirty());
+    assert!(page.api("saveResult", &[request.into(), "saved".into(), "late".into()]).is_err());
+    assert!(!page.host.pending_for(uid));
+    app.save();
+    page.publish();
+    assert!(page.host.pending_for(uid), "a retry is admitted without a fallback download");
+    Ok(())
+}

@@ -81,7 +81,15 @@ fn triangle(pixels: &mut [u8], [width, height]: [u32; 2], texture: &ColorImage, 
         for x in left..right {
             let p = pos2(x as f32 + 0.5, y as f32 + 0.5);
             let w = [cross(b.pos - p, c.pos - p) / area, cross(c.pos - p, a.pos - p) / area, cross(a.pos - p, b.pos - p) / area];
-            if w.iter().any(|v| *v < -1e-5) {
+            // A shared edge belongs to exactly one triangle, including with reversed winding.
+            let edges = [(b.pos, c.pos), (c.pos, a.pos), (a.pos, b.pos)];
+            let outside = w.iter().zip(edges).any(|(weight, (start, end))| {
+                let (start, end) = if area > 0.0 { (start, end) } else { (end, start) };
+                let edge = end - start;
+                let top_left = edge.y < 0.0 || (edge.y == 0.0 && edge.x > 0.0);
+                *weight < 0.0 || (*weight == 0.0 && !top_left)
+            });
+            if outside {
                 continue;
             }
             let uv = a.uv.to_vec2() * w[0] + b.uv.to_vec2() * w[1] + c.uv.to_vec2() * w[2];
@@ -109,6 +117,25 @@ fn triangle(pixels: &mut [u8], [width, height]: [u32; 2], texture: &ColorImage, 
             for i in 0..3 {
                 pixels[base + i] = ((src[i] + pixels[base + i] as f32 / 255.0 * (1.0 - src[3])) * 255.0).clamp(0.0, 255.0) as u8;
             }
+        }
+    }
+}
+
+#[test]
+fn review_shared_triangle_edges_blend_a_translucent_quad_once() {
+    let texture = ColorImage::new([1, 1], vec![egui::Color32::WHITE]);
+    let vertex = |x, y| egui::epaint::Vertex { pos: pos2(x, y), uv: pos2(0.5, 0.5), color: egui::Color32::from_rgba_unmultiplied(255, 0, 0, 128) };
+    let v = [vertex(0.0, 0.0), vertex(2.0, 0.0), vertex(2.0, 2.0), vertex(0.0, 2.0)];
+    for reverse in [false, true] {
+        let mut pixels = vec![255; 16];
+        for mut indices in [[0, 1, 2], [0, 2, 3]] {
+            if reverse {
+                indices.reverse()
+            }
+            triangle(&mut pixels, [2, 2], &texture, egui::Rect::EVERYTHING, indices.map(|i| v[i]));
+        }
+        for pixel in pixels.chunks_exact(4) {
+            assert!(pixel[1].abs_diff(127) <= 1 && pixel[2].abs_diff(127) <= 1, "shared edge double-blended or left a hole: {pixels:?}");
         }
     }
 }
