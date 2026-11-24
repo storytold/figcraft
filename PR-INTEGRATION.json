@@ -6,126 +6,129 @@
   "integration_branch": "community-integration",
   "stage": "Attempt all reviewed PRs, including drafts and experiments; defer merge conflicts and upstream-specific release infrastructure.",
   "validation": {
-    "state": "passed",
-    "rust": "1.100.0",
+    "state": "passed_scoped",
+    "rust": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
     "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
+    "scope": "Complete engine, layout, collaboration and server test suites including doctests; affected-crate Clippy; workspace formatting, layer/docs checks and wasm gate.",
     "passed": [
-      "cargo test --workspace --lib --bins --tests --no-fail-fast",
+      "cargo test -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --no-fail-fast",
       "cargo fmt --all --check",
-      "cargo clippy --workspace --all-targets --keep-going -- -D warnings",
-      "cargo test --workspace --doc",
-      "cargo xtask i18n-report",
+      "cargo clippy -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --all-targets -- -D warnings",
       "cargo xtask layers",
-      "cargo xtask assets",
       "cargo xtask docs",
       "cargo xtask wasm",
-      "wasm-pack test --headless --firefox --geckodriver /snap/bin/geckodriver apps/figcraft-web --bin figcraft-web --locked",
       "git diff --check",
-      "11 changed TOML files parsed successfully",
-      "All 45 included heads are ancestors; all 127 captured PRs accounted for; 80 conflict inventories retained; restored drafts reference original two-parent merge commits"
+      "All 45 included PR heads remain ancestors; all 127 captured entries retained."
     ],
-    "workspace_ci": {
-      "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-      "state": "finished",
-      "exit_code": 0,
-      "started": "2026-11-24T13:48:09.191666+00:00",
-      "finished": "2026-11-24T14:28:27.994894+00:00",
-      "commands": [
-        "cargo test --workspace --lib --bins --tests --no-fail-fast",
-        "cargo fmt --all --check",
-        "cargo clippy --workspace --all-targets --keep-going -- -D warnings",
-        "cargo test --workspace --doc",
-        "cargo xtask i18n-report",
-        "cargo xtask layers",
-        "cargo xtask assets",
-        "cargo xtask docs",
-        "cargo xtask wasm"
-      ],
-      "runs": {
-        "review-final-native-3": {
-          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-          "state": "finished",
-          "exit_code": 0,
-          "started": "2026-11-24T13:48:09.191666+00:00",
-          "finished": "2026-11-24T14:10:53.368339+00:00"
-        },
-        "review-final-format-check": {
-          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-          "state": "finished",
-          "exit_code": 0,
-          "started": "2026-11-24T14:11:23.122668+00:00",
-          "finished": "2026-11-24T14:11:40.261525+00:00"
-        },
-        "review-final-clippy": {
-          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-          "state": "finished",
-          "exit_code": 0,
-          "started": "2026-11-24T14:11:40.331237+00:00",
-          "finished": "2026-11-24T14:13:33.500868+00:00"
-        },
-        "review-final-doctests": {
-          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-          "state": "finished",
-          "exit_code": 0,
-          "started": "2026-11-24T14:13:33.546008+00:00",
-          "finished": "2026-11-24T14:14:06.013149+00:00"
-        },
-        "review-final-i18n": {
-          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-          "state": "finished",
-          "exit_code": 0,
-          "started": "2026-11-24T14:14:06.068181+00:00",
-          "finished": "2026-11-24T14:22:48.472788+00:00"
-        },
-        "review-final-layers": {
-          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-          "state": "finished",
-          "exit_code": 0,
-          "started": "2026-11-24T14:22:49.275601+00:00",
-          "finished": "2026-11-24T14:25:57.042763+00:00"
-        },
-        "review-final-assets": {
-          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-          "state": "finished",
-          "exit_code": 0,
-          "started": "2026-11-24T14:25:58.127862+00:00",
-          "finished": "2026-11-24T14:25:59.194052+00:00"
-        },
-        "review-final-docs": {
-          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-          "state": "finished",
-          "exit_code": 0,
-          "started": "2026-11-24T14:25:59.245493+00:00",
-          "finished": "2026-11-24T14:26:00.497348+00:00"
-        },
-        "review-final-wasm": {
-          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-          "state": "finished",
-          "exit_code": 0,
-          "started": "2026-11-24T14:26:00.553544+00:00",
-          "finished": "2026-11-24T14:28:27.994894+00:00"
-        }
+    "runs": {
+      "second-review-final-native": {
+        "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+        "args": [
+          "test",
+          "-p",
+          "figcraft-engine",
+          "-p",
+          "figcraft-layout",
+          "-p",
+          "figcraft-collab",
+          "-p",
+          "figcraft-server",
+          "--no-fail-fast"
+        ],
+        "start": "2026-11-24T17:08:41.630936+00:00",
+        "finish": "2026-11-24T17:24:16.332310+00:00",
+        "exit_code": 0
+      },
+      "second-review-final-format": {
+        "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+        "args": [
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "start": "2026-11-24T17:10:41.208330+00:00",
+        "finish": "2026-11-24T17:11:29.981299+00:00",
+        "exit_code": 0
+      },
+      "second-review-final-clippy": {
+        "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+        "args": [
+          "clippy",
+          "-p",
+          "figcraft-engine",
+          "-p",
+          "figcraft-layout",
+          "-p",
+          "figcraft-collab",
+          "-p",
+          "figcraft-server",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "start": "2026-11-24T17:24:19.663837+00:00",
+        "finish": "2026-11-24T17:26:58.879409+00:00",
+        "exit_code": 0
+      },
+      "second-review-final-layers": {
+        "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+        "args": [
+          "xtask",
+          "layers"
+        ],
+        "start": "2026-11-24T17:26:59.137454+00:00",
+        "finish": "2026-11-24T17:29:09.513519+00:00",
+        "exit_code": 0
+      },
+      "second-review-final-docs": {
+        "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+        "args": [
+          "xtask",
+          "docs"
+        ],
+        "start": "2026-11-24T17:29:09.572582+00:00",
+        "finish": "2026-11-24T17:29:10.627399+00:00",
+        "exit_code": 0
+      },
+      "second-review-final-wasm": {
+        "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+        "args": [
+          "xtask",
+          "wasm"
+        ],
+        "start": "2026-11-24T17:29:10.682505+00:00",
+        "finish": "2026-11-24T17:31:00.415139+00:00",
+        "exit_code": 0
       }
     },
-    "native_test_results": {
-      "passed": 6428,
-      "failed": 0,
-      "ignored": 13,
-      "test_binaries": 36
+    "test_results": {
+      "native": {
+        "passed": 2773,
+        "failed": 0,
+        "ignored": 5,
+        "summaries": 7
+      },
+      "doctests": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "summaries": 4
+      }
     },
-    "browser_regressions": {
-      "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
-      "state": "finished",
-      "exit_code": 0,
-      "started": "2026-11-24T14:30:27.449896+00:00",
-      "finished": "2026-11-24T15:09:39.403681+00:00"
-    },
-    "browser_test_results": {
-      "passed": 3,
-      "failed": 0,
-      "ignored": 0
-    },
-    "browser_setup": "GECKODRIVER_REMOTE points to a prestarted /snap/bin/geckodriver on loopback; Snap Firefox remains headless.",
+    "new_regressions_passed": [
+      "reconnect_tests::second_review_clamped_snapshot_resync_survives_saved_restarts",
+      "design::tests::second_review_invisible_group_does_not_hide_a_contrast_failure",
+      "variant_binding_import_tests::second_review_same_color_local_variable_binding_survives_settlement",
+      "variant_binding_import_tests::second_review_inherited_variable_paint_resolves_in_the_instances_mode",
+      "variant_binding_import_tests::second_review_property_settlement_keeps_instance_paint_bindings_and_modes",
+      "tests::second_review_rigid_layout_frames_share_the_coupled_ratio_line",
+      "store_tests::second_review_version_one_binary_snapshots_remain_readable"
+    ],
+    "not_rerun": [
+      "Full workspace native test and Clippy gates",
+      "Headless Firefox regressions"
+    ],
     "platform_limits": [
       "Native checks ran on Ubuntu under WSL, with headless UI tests; no manual screen-reader, keyboard-navigation or desktop visual review is claimed.",
       "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
@@ -134,16 +137,13 @@
       "Baseline full CI was interrupted and is not claimed to have passed."
     ],
     "notes": [
-      "All checks performed by cargo xtask ci ran separately on the exact source commit. Native unit/integration tests used Cargo --no-fail-fast so an early failure could not conceal later suite results. No new skip or ignore was introduced; the pre-existing ignored tests remain recorded in the native results.",
-      "Original successful validation remains in validation_history with its original source commit. Earlier failed/interrupted review attempts are not counted as passes.",
-      "The first completed review gate stopped at an unchanged upstream control-server test: SendError after its 100 ms reply deadline. The exact binary and all 89 application tests passed on subsequent diagnostic runs without source changes.",
-      "Review validation corrected an invalid new bound-text fixture, serialized-write test producers, and File menu focus registration. Later targeted runs identified one existing reopen producer conflicting with the new live-tab focus behavior and two new headless fixtures discarding texture deltas. These fixtures now follow the documented protocol and existing headless rendering patterns while preserving the binding, dirty-state, and close assertions.",
-      "The full native run on 4ada579f found four engine fixture issues and three missing English source keys. Fixtures now use persistent unpainted rectangles, a nonempty group, an explicit normalized grid, and the real picker preservePlacement option; every existing assertion is retained. The three English source keys were added.",
-      "That same run also had four server share-connection timeouts while new WSL commands were failing. All seven team-link tests passed together afterward without a server change; apps/figcraft-server source is unchanged from the integration base.",
-      "The full native run on 8758b0a4 passed the server and English catalog checks and failed only the existing multi-layer crop rotation assertion. The subsequent fix recomputes target-specific placement for picker rotations while preserving default explicit crop replacements; no crop or filter assertion was changed.",
-      "An oversized-start ratio regression failed before the trial-bound correction and all layout tests passed afterward.",
-      "A filtered provider diagnostic exceeded its 90-second wrapper limit during import and is not counted as a full pass. The native-only/import regression passed separately; final native results above come from the complete renewed suite.",
-      "Firefox uses supported GECKODRIVER_REMOTE with a prestarted loopback Snap WebDriver, without desktop focus."
+      "Prior comprehensive validation on 4413d3b5 remains in validation_history and is not claimed for this source.",
+      "The original-production baseline reproduced restart, invisible-group contrast and rigid-layout defects. The first paint assertion expected a noncanonical binding key and is not counted as defect evidence.",
+      "A corrected paint run reproduced loss of an instance-only variable binding when its current color matches the main. Contrasting-color and inherited-mode controls passed before that fix. The first three defect regressions passed after their fixes.",
+      "The first server compatibility command selected an executable with zero tests and is not counted as a pass. The library regression then failed reading the preceding eight-field binary snapshot with an end-of-buffer error.",
+      "Snapshot format 2 persists resync; the explicit version-one decoder preserves existing binary snapshots. The complete framing/checksum equality test is retained, now covering format 2 with both flag values. Old JSON without the flag also remains readable.",
+      "Older server builds cannot read newly written format-2 snapshots; a downgrade needs compatible saved snapshots and matching logs. No live server data was changed.",
+      "No test was removed, weakened, ignored or skipped. The existing framing test version byte changed to match the explicitly versioned storage contract."
     ]
   },
   "integration_adjustments": [
@@ -2383,7 +2383,7 @@
   "scope_confirmation": "The user explicitly confirmed attempting drafts and experiments while still deferring every merge conflict.",
   "snapshot_recorded_at": "2026-11-23T17:53:35.377914+03:30",
   "completed_at": "2026-11-23T20:24:23.892159+00:00",
-  "validated_source_commit": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+  "validated_source_commit": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
   "upstream_observation": {
     "observed_main_commit": "b828e6c75a3a90fefc0e62f488c013ca4714a5fa",
     "subject": "ci(release): forward ARTCRAFT_SERVICES_DISPATCH_TOKEN secret (#2578)",
@@ -2444,6 +2444,150 @@
         ],
         "browser_setup": "GECKODRIVER_REMOTE points to a prestarted /snap/bin/geckodriver on loopback; Snap Firefox remains headless."
       }
+    },
+    {
+      "source_commit": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+      "validation": {
+        "state": "passed",
+        "rust": "1.100.0",
+        "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
+        "passed": [
+          "cargo test --workspace --lib --bins --tests --no-fail-fast",
+          "cargo fmt --all --check",
+          "cargo clippy --workspace --all-targets --keep-going -- -D warnings",
+          "cargo test --workspace --doc",
+          "cargo xtask i18n-report",
+          "cargo xtask layers",
+          "cargo xtask assets",
+          "cargo xtask docs",
+          "cargo xtask wasm",
+          "wasm-pack test --headless --firefox --geckodriver /snap/bin/geckodriver apps/figcraft-web --bin figcraft-web --locked",
+          "git diff --check",
+          "11 changed TOML files parsed successfully",
+          "All 45 included heads are ancestors; all 127 captured PRs accounted for; 80 conflict inventories retained; restored drafts reference original two-parent merge commits"
+        ],
+        "workspace_ci": {
+          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+          "state": "finished",
+          "exit_code": 0,
+          "started": "2026-11-24T13:48:09.191666+00:00",
+          "finished": "2026-11-24T14:28:27.994894+00:00",
+          "commands": [
+            "cargo test --workspace --lib --bins --tests --no-fail-fast",
+            "cargo fmt --all --check",
+            "cargo clippy --workspace --all-targets --keep-going -- -D warnings",
+            "cargo test --workspace --doc",
+            "cargo xtask i18n-report",
+            "cargo xtask layers",
+            "cargo xtask assets",
+            "cargo xtask docs",
+            "cargo xtask wasm"
+          ],
+          "runs": {
+            "review-final-native-3": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T13:48:09.191666+00:00",
+              "finished": "2026-11-24T14:10:53.368339+00:00"
+            },
+            "review-final-format-check": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:11:23.122668+00:00",
+              "finished": "2026-11-24T14:11:40.261525+00:00"
+            },
+            "review-final-clippy": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:11:40.331237+00:00",
+              "finished": "2026-11-24T14:13:33.500868+00:00"
+            },
+            "review-final-doctests": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:13:33.546008+00:00",
+              "finished": "2026-11-24T14:14:06.013149+00:00"
+            },
+            "review-final-i18n": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:14:06.068181+00:00",
+              "finished": "2026-11-24T14:22:48.472788+00:00"
+            },
+            "review-final-layers": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:22:49.275601+00:00",
+              "finished": "2026-11-24T14:25:57.042763+00:00"
+            },
+            "review-final-assets": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:25:58.127862+00:00",
+              "finished": "2026-11-24T14:25:59.194052+00:00"
+            },
+            "review-final-docs": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:25:59.245493+00:00",
+              "finished": "2026-11-24T14:26:00.497348+00:00"
+            },
+            "review-final-wasm": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:26:00.553544+00:00",
+              "finished": "2026-11-24T14:28:27.994894+00:00"
+            }
+          }
+        },
+        "native_test_results": {
+          "passed": 6428,
+          "failed": 0,
+          "ignored": 13,
+          "test_binaries": 36
+        },
+        "browser_regressions": {
+          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+          "state": "finished",
+          "exit_code": 0,
+          "started": "2026-11-24T14:30:27.449896+00:00",
+          "finished": "2026-11-24T15:09:39.403681+00:00"
+        },
+        "browser_test_results": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        "browser_setup": "GECKODRIVER_REMOTE points to a prestarted /snap/bin/geckodriver on loopback; Snap Firefox remains headless.",
+        "platform_limits": [
+          "Native checks ran on Ubuntu under WSL, with headless UI tests; no manual screen-reader, keyboard-navigation or desktop visual review is claimed.",
+          "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
+          "Release packages and installers have not been built or installed locally.",
+          "Translation quality has not been reviewed by native speakers.",
+          "Baseline full CI was interrupted and is not claimed to have passed."
+        ],
+        "notes": [
+          "All checks performed by cargo xtask ci ran separately on the exact source commit. Native unit/integration tests used Cargo --no-fail-fast so an early failure could not conceal later suite results. No new skip or ignore was introduced; the pre-existing ignored tests remain recorded in the native results.",
+          "Original successful validation remains in validation_history with its original source commit. Earlier failed/interrupted review attempts are not counted as passes.",
+          "The first completed review gate stopped at an unchanged upstream control-server test: SendError after its 100 ms reply deadline. The exact binary and all 89 application tests passed on subsequent diagnostic runs without source changes.",
+          "Review validation corrected an invalid new bound-text fixture, serialized-write test producers, and File menu focus registration. Later targeted runs identified one existing reopen producer conflicting with the new live-tab focus behavior and two new headless fixtures discarding texture deltas. These fixtures now follow the documented protocol and existing headless rendering patterns while preserving the binding, dirty-state, and close assertions.",
+          "The full native run on 4ada579f found four engine fixture issues and three missing English source keys. Fixtures now use persistent unpainted rectangles, a nonempty group, an explicit normalized grid, and the real picker preservePlacement option; every existing assertion is retained. The three English source keys were added.",
+          "That same run also had four server share-connection timeouts while new WSL commands were failing. All seven team-link tests passed together afterward without a server change; apps/figcraft-server source is unchanged from the integration base.",
+          "The full native run on 8758b0a4 passed the server and English catalog checks and failed only the existing multi-layer crop rotation assertion. The subsequent fix recomputes target-specific placement for picker rotations while preserving default explicit crop replacements; no crop or filter assertion was changed.",
+          "An oversized-start ratio regression failed before the trial-bound correction and all layout tests passed afterward.",
+          "A filtered provider diagnostic exceeded its 90-second wrapper limit during import and is not counted as a full pass. The native-only/import regression passed separately; final native results above come from the complete renewed suite.",
+          "Firefox uses supported GECKODRIVER_REMOTE with a prestarted loopback Snap WebDriver, without desktop focus."
+        ]
+      }
     }
   ],
   "review_followup": {
@@ -2453,5 +2597,26 @@
     "scope_note": "Reviewed all 13 inline findings and the 35 lower-priority claims, including the follow-up review comment. Dependency/workflow PR #2574 remains part of the requested aggregate integration; the review follow-up makes no workflow changes.",
     "validated_source_commit": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
     "validated_at": "2026-11-24T15:10:33.159388+00:00"
-  }
+  },
+  "review_followups": [
+    {
+      "reviewed_head": "d5da504bf5cb77a68758a9f4082cc66dfe817011",
+      "review_url": "https://github.com/storytold/figcraft/pull/2583#pullrequestreview-6042130672",
+      "state": "validated",
+      "validated_source_commit": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+      "validated_at": "2026-11-24T17:32:31.768891+00:00",
+      "comments": [
+        4682278582,
+        4682278598,
+        4682278616,
+        4682278628
+      ],
+      "fix_commits": [
+        "0185dbb3",
+        "7ce93e32",
+        "cd4a9c0b",
+        "369590f4"
+      ]
+    }
+  ]
 }
