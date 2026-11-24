@@ -1,6 +1,6 @@
 //! Recent file rows keep their full accessible name.
 
-use egui::{Context, Id, Pos2, RawInput, Rect, accesskit::Role, vec2};
+use egui::{Id, Pos2, RawInput, Rect, accesskit::Role, vec2};
 use figcraft_engine::Session;
 use figcraft_ui_egui::{FigApp, NoServices};
 
