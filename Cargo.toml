@@ -180,6 +180,15 @@ debug = false
 strip = true
 panic = "abort"
 
+# The rasteriser's loops run for every pixel of the canvas on the page's one thread: built for
+# speed. (The rest stays "z": the whole build at speed is megabytes over the gate.)
+[profile.web-release.package.tiny-skia]
+opt-level = 3
+[profile.web-release.package.tiny-skia-path]
+opt-level = 3
+[profile.web-release.package.figcraft-render]
+opt-level = 3
+
 # Keep the complete egui family and native event bridge on reviewed fork commits.
 [patch.crates-io]
 ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
