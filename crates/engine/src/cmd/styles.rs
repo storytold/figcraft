@@ -1270,43 +1270,46 @@ pub(crate) fn apply_paint_bindings_on_load(doc: &mut Document) {
 /// Settle imported instances whose component properties are bound to variables before the
 /// document is first shown: a variant property bound to a string variable (a kit's Light/Dark
 /// `Mode`) switches each instance to the variant the variable names in its mode, and the instance
-/// follows that variant, keeping what the mains around it override. Again for the instances the
-/// new content brings, until nothing switches (a few rounds at most).
+/// follows that variant, keeping what the mains around it override. Text and Boolean property
+/// bindings also refresh children when the variant stays the same. Repeat for the instances the
+/// new content brings, until bound properties settle (a few rounds at most).
 pub(crate) fn apply_prop_bindings_on_load(doc: &mut Document) {
     const MAX_ROUNDS: usize = 8;
     let prop_bound = |n: &Node| matches!(n.kind, NodeKind::Instance { .. }) && n.bound.keys().any(|k| k.starts_with(crate::components::PROP_BINDING));
     let pending = doc.take_dirty();
     for _ in 0..MAX_ROUNDS {
-        let before: Vec<(NodeId, NodeId)> = doc
+        let before: std::collections::BTreeMap<_, _> = doc
             .nodes()
             .filter(|n| prop_bound(n))
-            .filter_map(|n| match n.kind {
-                NodeKind::Instance { component, .. } => Some((n.id, component)),
+            .filter_map(|n| match &n.kind {
+                NodeKind::Instance { component, props, .. } => Some((n.id, (*component, props.clone()))),
                 _ => None,
             })
             .collect();
         if before.is_empty() {
             break;
         }
-        let ids: std::collections::BTreeSet<NodeId> = before.iter().map(|(i, _)| *i).collect();
+        let ids: std::collections::BTreeSet<NodeId> = before.keys().copied().collect();
         apply_bindings_matching(doc, Some(&ids), |f| f.starts_with(crate::components::PROP_BINDING));
-        let switched: Vec<(usize, NodeId)> = before
+        let changed: Vec<(usize, NodeId)> = before
             .iter()
-            .filter(|(i, c)| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Instance { component, .. }) if component != c))
+            .filter(|(i, (c, old_props))| matches!(doc.node(**i).map(|n| &n.kind), Some(NodeKind::Instance { component, props, .. }) if component != c || props != old_props))
             .map(|(i, _)| (doc.ancestors(*i).len(), *i))
             .collect();
-        if switched.is_empty() {
+        if changed.is_empty() {
             break;
         }
         // Outer instances first. What a switching instance's layers inherit from the mains around
         // it becomes their own first, so the rebuild carries it onto the new variant (rebuilding
         // the outer instance instead would put the main's variant back: the switch is no override).
-        let mut switched = switched;
-        switched.sort_unstable();
+        let mut changed = changed;
+        changed.sort_unstable();
         let m = crate::measure::TextMeasure;
-        for (_, id) in switched {
+        for (_, id) in changed {
             if doc.contains(id) {
-                if let Some((_, old)) = before.iter().find(|(i, _)| *i == id) {
+                if let Some((old, _)) = before.get(&id)
+                    && matches!(doc.node(id).map(|n| &n.kind), Some(NodeKind::Instance { component, .. }) if component != old)
+                {
                     crate::components::keep_inherited_overrides(doc, id, *old);
                 }
                 crate::components::sync_instance(doc, id);

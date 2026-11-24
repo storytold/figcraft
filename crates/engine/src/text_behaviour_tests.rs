@@ -1001,3 +1001,13 @@ fn setting_characters_as_a_command_never_renames_the_layer() {
     s.execute("node.set", &json!({"id": t, "props": {"characters": "Site em 7 dias"}})).unwrap();
     assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("Site em 7 dias", "Title"), "the field keeps its name");
 }
+
+#[test]
+fn review_restoring_locked_text_height_preserves_fill_sizing() {
+    let mut s = Session::new();
+    let parent = id(s.execute("node.create", &json!({"type":"frame","width":300,"height":200,"props":{"layout":"horizontal"}})).unwrap());
+    let child=id(s.execute("node.create",&json!({"type":"text","parent":parent,"text":"Title","width":100,"height":80,"props":{"textAutoResize":"none","sizingH":"fill","constrainProportions":true}})).unwrap());
+    let node = s.doc().unwrap().node(child).unwrap();
+    assert_eq!(node.child_layout.sizing_h, figcraft_doc::Sizing::Fill);
+    assert!(node.width > 100.0, "the text still fills the wider parent");
+}

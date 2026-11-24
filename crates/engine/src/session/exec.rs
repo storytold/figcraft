@@ -79,7 +79,7 @@ impl Session {
 
     fn record_document_change(&mut self, uid: u64, before: &Document, command: &str) {
         let Some(ds) = self.docs.iter().find(|d| d.uid == uid) else { return };
-        if ds.doc.as_ref() == before {
+        if std::ptr::eq(ds.doc.as_ref(), before) || ds.doc.as_ref() == before {
             return;
         }
         let changed = ds.doc.changed_ids(before, 256);

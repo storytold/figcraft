@@ -412,6 +412,8 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
             && n.width.is_finite()
         {
             fixed.insert("width".into(), json!(n.width));
+            fixed.insert("sizingH".into(), json!(n.child_layout.sizing_h));
+            fixed.insert("sizingV".into(), json!(n.child_layout.sizing_v));
         }
         super::props::apply(cmd, doc, nid, &fixed)?;
     }

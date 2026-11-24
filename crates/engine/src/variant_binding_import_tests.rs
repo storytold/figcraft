@@ -181,3 +181,30 @@ fn a_text_reads_the_property_the_instance_sets_though_the_set_lists_it_under_ano
     let NodeKind::Text(t) = &label.kind else { panic!("not text") };
     assert_eq!(t.characters, "Stop");
 }
+
+#[test]
+fn review_bound_text_refreshes_children_without_a_variant_switch_on_open() {
+    let mut file = kit_file(true);
+    // This case binds a defined property; the separate alias fixture above intentionally uses
+    // different ids for an enclosing main's explicit override and must retain that override.
+    let definitions = &mut file["document"]["children"][0]["children"][0]["componentPropertyDefinitions"];
+    let definition = definitions.as_object_mut().unwrap().remove("Label#1:5").unwrap();
+    definitions["Label#9:9"] = definition;
+    let used = &mut file["document"]["children"][0]["children"][2]["children"][0]["children"][0];
+    used["componentProperties"]["Label#9:9"]["value"] = json!("Label");
+    used["children"][2]["characters"] = json!("Label");
+    file["document"]["children"][0]["children"][1]["children"][0]["boundVariables"]["componentProperties"] =
+        json!({"Label#9:9":{"type":"VARIABLE_ALIAS","id":"VariableID:1"}});
+    file["document"]["children"][0]["children"][2]["children"][0]["children"][0]["boundVariables"]["componentProperties"] =
+        json!({"Label#9:9":{"type":"VARIABLE_ALIAS","id":"VariableID:1"}});
+    let data = base64::engine::general_purpose::STANDARD.encode(file.to_string());
+    let mut s = Session::new();
+    s.execute("file.open", &json!({"data":data,"name":"kit.json","variables":variables()})).unwrap();
+    let doc = s.doc().unwrap();
+    let chip = doc.node(dark_chip(&s)).unwrap();
+    let NodeKind::Instance { component, .. } = &chip.kind else { panic!("not an instance") };
+    assert_eq!(doc.node(*component).unwrap().name, "Mode=Light", "the component itself did not switch");
+    let label = doc.subtree(chip.id).into_iter().filter_map(|id| doc.node(id)).find(|n| n.name == "Label").unwrap();
+    let NodeKind::Text(t) = &label.kind else { panic!("not text") };
+    assert_eq!(t.characters, "Dark", "the bound text must reach the rendered child; instance={:?}, binding={:?}", chip.kind, chip.bound);
+}

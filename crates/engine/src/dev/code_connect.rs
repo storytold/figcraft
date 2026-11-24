@@ -400,7 +400,19 @@ pub(crate) fn render(doc: &Document, c: &Component, values: &[(String, Value)], 
             }
             Piece::Value { name, inner } => match find(c, coded, name) {
                 Some((p, v)) => {
-                    let e = expr(doc, c, p, v, lang);
+                    // Enum emitters need the code vocabulary as well as the mapped value;
+                    // otherwise an unfamiliar mapped value silently selects the first case.
+                    let mut coded_param = p.clone();
+                    if let ParamKind::Variant(opts) = &mut coded_param.kind
+                        && let Some(mapping) = link.values.get(&p.prop)
+                    {
+                        for option in opts {
+                            if let Some(mapped) = mapping.get(option) {
+                                *option = mapped.clone();
+                            }
+                        }
+                    }
+                    let e = expr(doc, c, &coded_param, v, lang);
                     // JSX and `view!`: a plain string reads best as an attribute value, anything
                     // else is an expression in braces (JSX attribute strings have no escapes).
                     // Vue's bound attributes take an expression, so a string keeps its JS quotes
@@ -764,6 +776,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let others = old.get("links").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
                 links.extend(others.iter().filter(|l| !l.get("component").and_then(Value::as_str).is_some_and(|c| here.contains(&c))).cloned());
                 links.sort_by_key(key);
+                if path.is_some() && links.len() > MAX_FILE_LINKS {
+                    return Err(bad(cmd, format!("at most {MAX_FILE_LINKS} links; the existing file was left unchanged")));
+                }
                 let mut file = json!({"version": VERSION, "links": links});
                 if let Some(fields) = file.as_object_mut() {
                     for (k, v) in old {
@@ -773,6 +788,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let text = serde_json::to_string_pretty(&file).map_err(|e| EngineError::Other(e.to_string()))? + "\n";
                 match path {
                     Some(path) => {
+                        if text.len() > MAX_FILE as usize {
+                            return Err(bad(cmd, "the connect file exceeds its byte limit; the existing file was left unchanged"));
+                        }
                         crate::cmd::file::write(&path, text.as_bytes())?;
                         Ok(json!({"path": path, "links": count}))
                     }
@@ -797,7 +815,11 @@ fn kept_keys(cmd: &str, path: &str) -> Result<serde_json::Map<String, Value>> {
         return Ok(serde_json::Map::new());
     }
     match serde_json::from_slice(&crate::cmd::file::read_capped(path, MAX_FILE)?) {
-        Ok(Value::Object(fields)) => Ok(fields),
+        Ok(Value::Object(fields))
+            if fields.get("version").is_none_or(|v| v.as_u64() == Some(VERSION)) && fields.get("links").is_some_and(Value::is_array) =>
+        {
+            Ok(fields)
+        }
         _ => Err(bad(cmd, format!("{path} isn't a connect file it can read, so it was left as it is"))),
     }
 }
@@ -840,6 +862,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             ));
             continue;
         };
+        if ["source", "notes", "importPath"].iter().any(|key| e.get(key).is_some_and(|v| !v.is_string())) {
+            warnings.push(format!("link {}: source, notes and importPath must be strings when present", i + 1));
+            continue;
+        }
         let values = match e.get("values") {
             None | Some(Value::Null) => Default::default(),
             Some(v) => match serde_json::from_value(v.clone()) {

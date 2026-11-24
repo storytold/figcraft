@@ -489,7 +489,14 @@ fn exporting_over_a_file_it_cant_read_is_refused() {
     let (set, _) = button(&mut s);
     ex(&mut s, "codeConnect.set", json!({"id": set, "name": "Button", "template": "<Button />"}));
     let big = vec![b' '; 4 * 1024 * 1024 + 1];
-    for (name, bytes) in [("broken.json", b"{\"links\": [".to_vec()), ("list.json", b"[]".to_vec()), ("big.json", big)] {
+    for (name, bytes) in [
+        ("broken.json", b"{\"links\": [".to_vec()),
+        ("list.json", b"[]".to_vec()),
+        ("object-links.json", br#"{"version":1,"links":{"Other":{"template":"<Other />"}}}"#.to_vec()),
+        ("future.json", br#"{"version":2,"links":[]}"#.to_vec()),
+        ("missing-links.json", br#"{"version":1,"project":"keep"}"#.to_vec()),
+        ("big.json", big),
+    ] {
         let path = dir.join(name);
         std::fs::write(&path, &bytes).unwrap();
         assert!(s.execute("codeConnect.export", &json!({"path": path})).is_err(), "{name}");
@@ -501,4 +508,55 @@ fn exporting_over_a_file_it_cant_read_is_refused() {
     ex(&mut s, "codeConnect.export", json!({"path": new}));
     assert!(new.exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn review_connected_variants_use_mapped_enum_cases_in_every_language() {
+    for language in ["react", "vue", "swiftui", "flutter", "leptos", "arkui", "compose"] {
+        let mut s = Session::new();
+        ex(&mut s, "file.new", json!({}));
+        let (set, hover) = button(&mut s);
+        ex(&mut s, "codeConnect.set", json!({"id":set,"language":language,"name":"Button","values":{"State":{"Hover":"hovered"}}}));
+        let instance = idv(&ex(&mut s, "instance.create", json!({"component":hover})));
+        let output = code(&mut s, instance, language);
+        assert!(output.to_ascii_lowercase().contains("hovered"), "{language}: {output}");
+        let plain = idv(&ex(&mut s, "instance.create", json!({"component":set})));
+        assert!(code(&mut s, plain, language).to_ascii_lowercase().contains("default"), "unmapped values retain their names");
+    }
+}
+
+#[test]
+fn review_malformed_optional_connection_fields_keep_the_existing_link() {
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, _) = button(&mut s);
+    ex(&mut s, "codeConnect.set", json!({"id":set,"name":"Keep","template":"<Keep />","source":"src/keep.tsx","notes":"Keep notes"}));
+    let before = s.doc().unwrap().node(set).unwrap().code_links.clone();
+    for key in ["source", "notes", "importPath"] {
+        let mut link = json!({"component":"Button","language":"react","name":"Replace","template":"<Replace />"});
+        link[key] = json!(42);
+        let result = ex(&mut s, "codeConnect.import", json!({"json":{"version":1,"links":[link]}}));
+        assert_eq!(result["linked"], 0, "{result}");
+        assert!(!result["warnings"].as_array().unwrap().is_empty());
+        assert_eq!(s.doc().unwrap().node(set).unwrap().code_links, before);
+    }
+}
+
+#[test]
+fn review_export_refuses_unreadable_merged_counts_and_sizes_without_overwriting() {
+    let dir = std::env::temp_dir().join(format!("figcraft-connect-merge-limit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("figcraft.connect.json");
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, _) = button(&mut s);
+    ex(&mut s, "codeConnect.set", json!({"id":set,"name":"Button","template":"<Button />"}));
+    let many: Vec<_> = (0..5000).map(|i| json!({"component":format!("Other{i}"),"language":"react","name":"Other","template":"<Other />"})).collect();
+    for file in [json!({"version":1,"links":many}), json!({"version":1,"links":[],"project":"x".repeat(4*1024*1024-100)})] {
+        let before = serde_json::to_vec(&file).unwrap();
+        std::fs::write(&path, &before).unwrap();
+        assert!(s.execute("codeConnect.export", &json!({"path":path})).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before, "refusal preserves the existing bytes");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
