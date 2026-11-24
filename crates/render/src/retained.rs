@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use figcraft_doc::{Document, EffectKind, NodeId, NodeKind};
 use figcraft_geom::Rect;
-use tiny_skia::{IntRect, Pixmap, PixmapPaint, Transform};
+use tiny_skia::Pixmap;
 
 use crate::{Options, View, draw, render_view};
 
@@ -554,14 +554,17 @@ fn render_into(frame: FrameRender<'_>, d: &Px, margin: i64, pix: &mut Pixmap) ->
     // The same pixel grid as the frame: origin (px + offset) / scale.
     let sub = View { origin: ((px.0 + ox) as f64 / s, (px.1 + oy) as f64 / s), scale: s, width: rw, height: rh };
     let part = crate::render_part(doc, page, &sub, opts)?;
-    let inner = IntRect::from_xywh(
-        i32::try_from(d.x0 - ox).ok()?,
-        i32::try_from(d.y0 - oy).ok()?,
-        u32::try_from(d.x1 - d.x0).ok()?,
-        u32::try_from(d.y1 - d.y0).ok()?,
-    )?;
-    let inner = part.clone_rect(inner)?;
-    let copy = PixmapPaint { blend_mode: tiny_skia::BlendMode::Source, ..Default::default() };
-    pix.draw_pixmap(i32::try_from(d.x0).ok()?, i32::try_from(d.y0).ok()?, inner.as_ref(), &copy, Transform::identity(), None);
+    // The rows of `d` in `part`, straight into their place (a copy of the part and a draw of the
+    // copy took longer than rendering a simple part).
+    let (skip_x, skip_y) = (usize::try_from(d.x0 - ox).ok()?, usize::try_from(d.y0 - oy).ok()?);
+    let (cols, rows) = (usize::try_from(d.x1 - d.x0).ok()?, usize::try_from(d.y1 - d.y0).ok()?);
+    let (at_x, at_y) = (usize::try_from(d.x0).ok()?, usize::try_from(d.y0).ok()?);
+    let (src_w, dst_w) = (part.width() as usize, pix.width() as usize);
+    let dst = pix.data_mut();
+    for (r, row) in part.data().chunks_exact(src_w.max(1) * 4).skip(skip_y).take(rows).enumerate() {
+        let from = row.get(skip_x * 4..(skip_x + cols) * 4)?;
+        let start = ((at_y + r) * dst_w + at_x) * 4;
+        dst.get_mut(start..start + cols * 4)?.copy_from_slice(from);
+    }
     Some(())
 }
