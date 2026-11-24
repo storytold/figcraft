@@ -66,6 +66,32 @@ impl Session {
         r
     }
 
+    /// Compare a live document token on the same engine thread as command
+    /// execution. Tokens are process-local; inspect again after reopening.
+    /// Rejection happens before agent presence, previews, branches or history.
+    pub fn execute_as_if_revision(&mut self, agent: Option<&str>, id: &str, params: &Value, document: u64, revision: u64) -> Result<Value> {
+        let ds = self.ds()?;
+        if ds.uid != document || ds.revision != revision {
+            return Err(EngineError::Other("conflict: native document identity or revision changed; inspect before retrying".into()));
+        }
+        self.execute_as(agent, id, params)
+    }
+
+    fn record_document_change(&mut self, uid: u64, before: &Document, command: &str) {
+        let Some(ds) = self.docs.iter().find(|d| d.uid == uid) else { return };
+        if std::ptr::eq(ds.doc.as_ref(), before) || ds.doc.as_ref() == before {
+            return;
+        }
+        let changed = ds.doc.changed_ids(before, 256);
+        let data = serde_json::json!({"documentId":uid,"revision":ds.revision,"command":command,"ids":changed.as_ref().map(|ids|ids.iter().map(|id|id.0).collect::<Vec<_>>()),"reset":changed.is_none()});
+        let (document, path) = (ds.doc.name.clone(), ds.path.clone());
+        if self.group_depth > 0 {
+            self.pending_events.push(("document.changed".into(), document, path, data));
+        } else {
+            self.events.push("document.changed", &document, path.as_deref(), data);
+        }
+    }
+
     /// Run a command by id. Mutations become one undo step; a failure or panic leaves the document
     /// as it was.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
@@ -95,6 +121,7 @@ impl Session {
             ds.end_preview();
         }
         let before = self.ds().ok().map(|d| (d.doc.clone(), d.selection.clone(), d.page, d.uid));
+        let event_before = before.as_ref().map(|(doc, _, _, uid)| (*uid, doc.clone()));
         // Cut and copy write the clipboard before a later check can refuse the command.
         let clipboard_before = self.clipboard.clone();
         // An inner command of a batch can panic while the outer group is still open; remember the
@@ -107,9 +134,9 @@ impl Session {
             .and_then(|v| self.check_live_access(id, &before).map(|()| v))
             .and_then(|v| self.check_finite_geometry(id, &before).map(|()| v))
             // Normalising is part of the command: a panic in it rolls the edit back too (#1085).
-            .and_then(|v| {
+            .and_then(|mut v| {
                 guard::run(id, || {
-                    self.normalize_edit(spec, &before);
+                    self.normalize_edit(spec, &before, &mut v);
                     Ok(v)
                 })
             });
@@ -144,6 +171,15 @@ impl Session {
             }
         }
         self.after_comment_command(id, params, &result, group_depth_before, pending_events_before);
+        // Child commands buffer events until the outer group succeeds; the batch
+        // wrapper must not emit a second copy of the same native mutations.
+        if result.is_ok()
+            && id != "command.batch"
+            && !id.starts_with("comment.")
+            && let Some((uid, doc)) = event_before
+        {
+            self.record_document_change(uid, &doc, id);
+        }
         result
     }
 
@@ -229,13 +265,17 @@ impl Session {
 
     /// Normalise what a command changed in the document it ran on (text boxes, groups, instances,
     /// auto layout…).
-    fn normalize_edit(&mut self, spec: &CommandSpec, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) {
+    fn normalize_edit(&mut self, spec: &CommandSpec, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>, result: &mut Value) {
         let Some((bdoc, _, _, uid)) = before else { return };
+        let deletes = spec.id == "edit.delete" || (spec.id == "edit.repeat" && self.last_command.as_ref().is_some_and(|(id, _)| id == "edit.delete"));
         let Some(ds) = self.docs.iter_mut().find(|d| d.uid == *uid) else { return };
         // Saving may adopt the chosen filename as the document title. The encoded snapshot is
         // already final; normalising it again would detach it from the saved baseline.
         if !Arc::ptr_eq(&ds.doc, bdoc) && !matches!(spec.id, "file.save" | "file.saveAs") {
             normalize(ds.doc_mut(), bdoc);
+            if deletes {
+                cmd::edit::report_orphaned_instances(result, bdoc, &ds.doc);
+            }
         }
     }
 

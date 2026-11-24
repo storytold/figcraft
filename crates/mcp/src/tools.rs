@@ -19,8 +19,10 @@ impl ToolResult {
     pub fn text(t: impl Into<String>) -> Self {
         Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: false }
     }
+    /// Compact JSON: indentation is whitespace the agent pays for in tokens on every result, and
+    /// a layer tree's indentation can be more than half of its text.
     pub fn json(v: &Value) -> Self {
-        Self::text(serde_json::to_string_pretty(v).unwrap_or_default())
+        Self::text(serde_json::to_string(v).unwrap_or_default())
     }
     pub fn error(t: impl Into<String>) -> Self {
         Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: true }
@@ -101,6 +103,8 @@ pub const TOOL_NAMES: &[&str] = &[
     "inspect_document",
     "get_node",
     "design_context",
+    "component_mappings",
+    "sync_mappings",
     "select",
     "export",
     "screenshot",
@@ -124,6 +128,8 @@ const DOCUMENT_TOOLS: &[&str] = &[
     "inspect_document",
     "get_node",
     "design_context",
+    "component_mappings",
+    "sync_mappings",
     "select",
     "export",
     "screenshot",
@@ -185,7 +191,7 @@ fn tools() -> Vec<Value> {
         tool(
             "create_node",
             "Create layer",
-            "Create a layer (engine `node.create`) and return its id and inspected properties. Coordinates are page units, y down; x/y are relative to the parent frame (the page when there is none, so then they are page coordinates; groups don't count). Inside an auto-layout frame the position is decided by the layout. The new layer becomes the selection.",
+            "Create a layer (engine `node.create`) and return its id and inspected properties. Coordinates are page units, y down; x/y are relative to the parent frame (the page when there is none, so then they are page coordinates; groups don't count). Inside an auto-layout frame the position is decided by the layout. The new layer becomes the selection. `warnings` reports a fontStyle that draws in another face.",
             obj(
                 json!({
                     "type": {"type": "string", "enum": ["frame", "rectangle", "ellipse", "polygon", "star", "line", "arrow", "text", "vector", "section", "component", "slice"], "description": "Layer type"},
@@ -271,6 +277,33 @@ fn tools() -> Vec<Value> {
             true,
         ),
         tool(
+            "component_mappings",
+            "Component mappings",
+            "Which code component each design component is: its import, code name, source file, a ready snippet, its properties and variants, and which design values need translating. Check this before writing a component: reuse a mapped one, never recreate it. `unmapped` lists those with no code component yet.",
+            obj(
+                json!({
+                    "ids": ids_schema("Layers: the components they are, use or hold (default every component in the file)"),
+                    "unmapped": boolean("Only components without a mapping"),
+                    "root": string("The code repository, to check each link's source file is there (default where this server runs)")
+                }),
+                &[],
+            ),
+            true,
+        ),
+        tool(
+            "sync_mappings",
+            "Sync mappings with a repository",
+            "Apply a code repository's figcraft.connect.json to the open design (`import`, one undo step), or write the design's mappings to it (`export`, keeping its other keys and the links of components this design doesn't have). Run `import` first when component_mappings shows less than the repository should have.",
+            obj(
+                json!({
+                    "direction": {"type": "string", "enum": ["import", "export"], "description": "import: file to design. export: design to file"},
+                    "path": string("The file (default figcraft.connect.json where this server runs)")
+                }),
+                &["direction"],
+            ),
+            false,
+        ),
+        tool(
             "select",
             "Select layers",
             "Replace the selection with `ids` (switching to their page). An empty array deselects everything. Most commands act on the selection when no `ids` are passed.",
@@ -280,11 +313,11 @@ fn tools() -> Vec<Value> {
         tool(
             "export",
             "Export",
-            "Export layers (default: the selection, else every top-level layer of the current page) as png, jpg, svg, webp, pdf or xml (an Android Vector Drawable, with `warnings` for what it changed or left out, per `vdCompat`) at `scale`, or the whole file as `fig` (experimental: written from public format knowledge, with `warnings` for what was left out; other apps may not open every file) (PDF: with `bleed`, `cropMarks`, `bleedMarks` and `cmyk` for print; options `contentsOnly`, `includeBoundingBox`, and for SVG `svgOutlineText`, `svgIdAttribute`, `svgSimplifyStroke`; for XML `svgIdAttribute` and `vdCompat`; for png, jpg and webp `colorProfile`). With `path` the file is written there (absolute path recommended) and the result says where. Without `path`: png/jpg/webp come back as an image content block, svg as text, xml as text followed by `{format, warnings}`, other formats as base64 `data`.",
+            "Export layers (default: the selection, else every top-level layer of the current page) as png, jpg, svg, webp, pdf or xml (an Android Vector Drawable, with `warnings` for what it changed or left out, per `vdCompat`) at `scale`, or the whole file as `penpot` (a Penpot archive) or `fig` (experimental: written from public format knowledge, with `warnings` for what was left out; other apps may not open every file) (PDF: with `bleed`, `cropMarks`, `bleedMarks` and `cmyk` for print; options `contentsOnly`, `includeBoundingBox`, and for SVG `svgOutlineText`, `svgIdAttribute`, `svgSimplifyStroke`; for XML `svgIdAttribute` and `vdCompat`; for png, jpg and webp `colorProfile`). With `path` the file is written there (absolute path recommended) and the result says where. Without `path`: png/jpg/webp come back as an image content block, svg as text, xml as text followed by `{format, warnings}`, other formats as base64 `data`.",
             obj(
                 json!({
                     "ids": ids_schema("Layers to export (several are composited into one image)"),
-                    "format": {"type": "string", "enum": ["png", "jpg", "svg", "webp", "pdf", "xml", "fig"], "description": "Format (default png, or from the path's extension)"},
+                    "format": {"type": "string", "enum": ["png", "jpg", "svg", "webp", "pdf", "xml", "fig", "penpot"], "description": "Format (default png, or from the path's extension)"},
                     "scale": num("Pixel scale for raster formats (default 1, max 64)"),
                     "size": string("Instead of `scale`: `2x`, or a width or height in pixels like `512w` / `512h`"),
                     "path": string("Output file path"),
@@ -456,6 +489,26 @@ fn design_context(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolRes
     }
 }
 
+/// `codeConnect.list`, checking source files against `root`, else where this server runs.
+fn component_mappings(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let mut params = a.clone();
+    let root = std::path::absolute(s_arg(a, "root")?.unwrap_or(".")).map_err(|e| format!("root: {e}"))?;
+    params.insert("root".into(), json!(root.to_string_lossy()));
+    exec(b, "codeConnect.list", Value::Object(params)).map(|v| ToolResult::json(&v))
+}
+
+/// `codeConnect.import` or `.export` with a code repository's connect file, made absolute here: an
+/// attached app runs in another folder.
+fn sync_mappings(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let command = match s_arg(a, "direction")? {
+        Some("import") => "codeConnect.import",
+        Some("export") => "codeConnect.export",
+        _ => return Err("`direction`: import or export".into()),
+    };
+    let path = std::path::absolute(s_arg(a, "path")?.unwrap_or("figcraft.connect.json")).map_err(|e| format!("path: {e}"))?;
+    exec(b, command, json!({"path": path.to_string_lossy()})).map(|v| ToolResult::json(&v))
+}
+
 fn wait_for_changes(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
     b.call("events.poll", Value::Object(a.clone())).map(|v| ToolResult::json(&v))
 }
@@ -602,6 +655,8 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "inspect_document" => inspect_document(b, &a),
         "get_node" => get_node(b, &a),
         "design_context" => design_context(b, &a),
+        "component_mappings" => component_mappings(b, &a),
+        "sync_mappings" => sync_mappings(b, &a),
         "select" => select(b, &a),
         "export" => export(b, &a),
         "screenshot" => screenshot(b, &a),
@@ -725,8 +780,13 @@ fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult
     }
     let r = exec(b, "node.create", Value::Object(params))?;
     let id = r.get("id").cloned().ok_or("node.create returned no id")?;
+    let warnings = r.get("warnings").cloned();
     let node = b.call("node.get", json!({"id": id, "depth": 0}))?;
-    Ok(ToolResult::json(&json!({"id": id, "node": node})))
+    let mut out = json!({"id": id, "node": node});
+    if let Some(w) = warnings {
+        out["warnings"] = w;
+    }
+    Ok(ToolResult::json(&out))
 }
 
 fn set_properties(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
@@ -796,14 +856,15 @@ fn budget(a: &Map<String, Value>) -> Result<(usize, usize), String> {
 }
 
 /// What a value's text block would take on the wire. It is sent as a text block, so it is measured
-/// pretty-printed *and* escaped -- escaping adds about a tenth.
+/// as [`ToolResult::json`] writes it *and* escaped -- escaping adds about a tenth.
 fn wire_size(value: &Value) -> usize {
-    let text = serde_json::to_string_pretty(value).unwrap_or_default();
+    let text = serde_json::to_string(value).unwrap_or_default();
     serde_json::to_string(&text).map_or(text.len(), |s| s.len())
 }
 
 /// The document at `depth`, and what its text block would take on the wire. The tree is sent as a
-/// text block, so it is measured pretty-printed *and* escaped -- escaping adds about a tenth.
+/// text block, so it is measured as [`ToolResult::json`] writes it *and* escaped -- escaping adds
+/// about a tenth.
 fn inspect_at(b: &mut dyn Backend, depth: u64, all: bool, options: &Value) -> Result<(Value, usize), String> {
     let mut params = options.clone();
     params["depth"] = json!(depth);
@@ -1073,8 +1134,8 @@ fn export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Str
     }
     let format = s_arg(a, "format")?.map(str::to_ascii_lowercase);
     if let Some(f) = &format {
-        if !["png", "jpg", "jpeg", "svg", "webp", "pdf", "xml", "fig"].contains(&f.as_str()) {
-            return Err(format!("unknown format `{f}` (png|jpg|svg|webp|pdf|xml|fig)"));
+        if !["png", "jpg", "jpeg", "svg", "webp", "pdf", "xml", "fig", "penpot"].contains(&f.as_str()) {
+            return Err(format!("unknown format `{f}` (png|jpg|svg|webp|pdf|xml|fig|penpot)"));
         }
         params.insert("format".into(), json!(f));
     }

@@ -210,8 +210,19 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
         out.unmatched.push(format!("extended collection {}", c.name));
     }
 
-    // Re-point layers outside the library copies, and local variables aliasing A's.
-    let ids: Vec<NodeId> = doc.nodes().filter(|n| outside(doc, n.id)).map(|n| n.id).collect();
+    // Re-point the layers, and local variables aliasing A's. The library copies' own layers too:
+    // a copy B has no match for stays (A's, or another library's), and instances placed from it
+    // later must link what the ones re-pointed here link (#2568).
+    // A's collections that keep a variable on A (one B has no match for): a layer choosing a mode
+    // of one keeps that choice next to B's, so what still reads the A variable keeps its mode.
+    let still_a: BTreeSet<String> = doc
+        .libraries
+        .variables
+        .iter()
+        .filter(|r| r.library == from && !vars.contains_key(&r.local))
+        .filter_map(|r| doc.variables.get_by_id(&r.local).map(|v| v.collection.clone()))
+        .collect();
+    let ids: Vec<NodeId> = doc.nodes().map(|n| n.id).collect();
     for id in ids {
         let Ok(n) = doc.get_mut(id) else { continue };
         for r in [&mut n.styles.fill, &mut n.styles.stroke, &mut n.styles.effect, &mut n.styles.grid, &mut n.styles.text] {
@@ -229,9 +240,10 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
         }
         n.var_modes = std::mem::take(&mut n.var_modes)
             .into_iter()
-            .map(|(c, mode)| match colls.get(&c).and_then(|(b, modes)| modes.get(&mode).map(|bm| (b.clone(), bm.clone()))) {
-                Some(moved) => moved,
-                None => (c, mode),
+            .flat_map(|(c, mode)| match colls.get(&c).and_then(|(b, modes)| modes.get(&mode).map(|bm| (b.clone(), bm.clone()))) {
+                Some(moved) if still_a.contains(&c) => vec![moved, (c, mode)],
+                Some(moved) => vec![moved],
+                None => vec![(c, mode)],
             })
             .collect();
     }

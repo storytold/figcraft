@@ -119,8 +119,9 @@ page 1 "Screens": 380 nodes, 4 top-level
   The name is kept as it is, except for the characters file systems refuse (`/ \ : * ? " < > |`
   and control characters), which become `_`, and leading or trailing spaces and dots, which are
   dropped. Reserved Windows device names such as `CON` get a leading `_`.
-  A name is cut at 100 characters. The app's export replaces the same characters (there a
-  `/` makes a folder). Two layers with the same name get `Name 2`, `Name 3`…
+  Names are limited to 100 characters and 200 UTF-8 bytes. The app's export replaces the same
+  characters (there a `/` makes a folder). Two layers with the same name get `Name 2`, `Name 3`…
+  With `--node`, the CLI writes one file named after the selected layer, including a nested layer.
 - `<out>` has an image extension: one file with the given `--node`, or the whole page composited.
 - `--node` takes a layer id (`12` or `0:12`) or a layer name.
 - `--format fig` (or an `<out>` ending in `.fig`) writes the whole file as `.fig`, experimental:
@@ -159,6 +160,10 @@ page 1 "Screens": 380 nodes, 4 top-level
   `K = 1 − max(R, G, B)`, `C = (1 − R − K) / (1 − K)` (M and Y alike): DeviceCMYK without an
   output intent (no CMYK profile ships with FigCraft), so proof against your printer's profile.
 
+For `--node`, a layer ID can refer to any page. For a layer name, the CLI looks for a
+case-sensitive exact match on the chosen page, then an exact match elsewhere in the document.
+If neither exists, it uses the first case-insensitive substring match on the chosen page.
+
 ```sh
 figcraft-cli export app.figcraft -o exports/ --scale 2
 figcraft-cli export app.figcraft -o hero.svg --node "Hero"
@@ -169,12 +174,15 @@ figcraft-cli export app.figcraft -o handoff.fig
 
 ### `convert <in> <out>`
 
-By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.sketch` (Sketch 48 or newer, best effort), `.svg` (an editable frame: groups,
+By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.sketch` (Sketch 48 or newer, best effort),
+`.penpot` (Penpot 2.x archive, best effort), `.svg` (an editable frame: groups,
 shapes, text, gradients, masks and effects; `info` lists what it left out as `note:` lines), `.png/.jpg/.webp/.gif/.tif/.bmp`
 (an image layer). Outputs: `.figcraft`, `.json` (FigCraft JSON, pretty-printed), `.svg`,
 `.png/.jpg/.webp` (the current page rendered at 1x with its background), `.pdf` (the current page's
 frames, one page each), `.fig` (the whole file, experimental, as `export --format fig`), `.penpot`
 (the whole file as a Penpot 2.x archive, as `export --format penpot`).
+
+When converting from a `.penpot` file, import warnings are printed to stderr as `note:` lines.
 
 ### `render <file> -o <out.png> [--scale N] [--page NAME]`
 
@@ -189,8 +197,8 @@ Runs commands in a headless session (a new document, or `--in`), printing one JS
 {"command":"frame.create","ok":true,"result":{"id":2},"step":0}
 ```
 
-The whole script is **one undo step**, and it is **all-or-nothing**, exactly like running the same
-commands through `command.batch` (the MCP tool `batch`, the control channel, plugins). A step key
+The script groups document edits into **one undo step**, like running the same commands through
+`command.batch` (the MCP tool `batch`, the control channel, and plugins). A step key
 other than `command`, `params` and `as`, or a parameter the command's doc (`figcraft-cli commands`)
 doesn't list, fails the script with an error naming it (`ids` and `id` are always taken). A step named
 with `"as"` can be used by later steps: `{"$ref": "name"}` in a step's params is the `id` in that
@@ -211,12 +219,12 @@ The result lines are printed once the script is through, so none of them reports
 took back.
 
 To keep going past a failed command, make a step a `command.batch` with `"onError": "continue"`
-([MCP server](mcp.md) has the rules). The script itself stays all-or-nothing: if a
-later top-level step fails, that batch's edits are rolled back with everything else.
+([MCP server](mcp.md) has the rules). If a later top-level step fails, FigCraft rolls back that
+batch's document edits along with the script's other document edits.
 
-A failing step prints one line with `"ok": false`, the error and `"rolledBack": true`, writes
-nothing (`--out` is not saved, and the session's documents go back to how the script found them),
-and exits with code 1:
+If a top-level step fails during execution, the CLI prints one JSON line with `"ok": false`, the
+error and `"rolledBack": true`, skips the final `--out` save, and exits with code 1. Files written
+by earlier steps, such as a `file.saveAs` step with a path, remain on disk.
 
 ```text
 {"step":1,"command":"node.set","ok":false,"error":"no such node 99999","rolledBack":true}
@@ -274,19 +282,22 @@ the flags leave the output identical when nothing strays outside the roots.
 Every command with its label, shortcut, undoable flag (`*`) and parameter docs; `--json` for
 machines.
 
-### `mcp [--attach PORT] [--automation-read-root DIR]… [--automation-write-root DIR]…`
+### `mcp [--attach PORT] [--automation-read-root DIR]… [--automation-write-root DIR]… [--automation-allow-server URL]…`
 
 Serve MCP on stdio: headless by default, or attached to a running app started with
 `figcraft --control PORT`. See [mcp.md](mcp.md). The automation roots (each repeatable; existing
 folders) confine the files the agent's calls read (inside a read or write root) and write (inside a
 write root); everything else is refused ([mcp.md › Confining file access](mcp.md#confining-file-access)).
+Headless MCP requires both `--automation-read-root` and `--automation-write-root`; `--attach` uses
+the attached app's roots instead.
 They apply to the headless session only, and that is why `--attach` refuses them: an attached server
 is confined by the app it attaches to, from the flags that app was started with. With `--attach`,
 `--timeout SECONDS` (1–600, default 60) is how long the app may take over each request. The headless
-session can host, join and publish
-live sessions (`collab.*`: without a key on a server open to the public, with `collab.serverInfo`,
-`collab.manageFile` for the owner token and `collab.report`) and use plugin directories
-(`plugin.directory.*`); the one-shot `run` can't (no network link).
+session can join a shared file on an explicitly allowed server with `--automation-allow-server
+wss://host/`; the file must already have been published and the agent needs its edit link. That
+flag only permits `collab.join` to the named server. Other network commands remain disabled; without
+the flag, all network commands remain disabled as well. See [Confining file access](mcp.md#confining-file-access).
+The one-shot `run` has no network link.
 
 ### `plugin publish <folder> --server ws://host:port/[?key=KEY]`
 

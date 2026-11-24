@@ -16,6 +16,7 @@ mod canvas;
 pub mod catalog;
 pub mod cmd;
 mod content;
+mod design;
 mod dev;
 pub mod events;
 mod extensions;
@@ -345,6 +346,8 @@ mod fig_font_names_tests;
 #[cfg(test)]
 mod fig_import_tests;
 #[cfg(test)]
+mod fig_optical_size_tests;
+#[cfg(test)]
 mod fill_none_tests;
 #[cfg(test)]
 mod finite_geometry_tests;
@@ -423,6 +426,8 @@ mod library_variables_tests;
 #[cfg(test)]
 mod line_endings_tests;
 #[cfg(test)]
+mod link_revision_tests;
+#[cfg(test)]
 mod live_access_tests;
 #[cfg(test)]
 mod live_docs_tests;
@@ -436,6 +441,8 @@ mod live_signal_tests;
 mod live_tests;
 #[cfg(test)]
 mod lock_behaviour_tests;
+#[cfg(test)]
+mod locked_ratio_layout_tests;
 #[cfg(test)]
 mod marquee_behaviour_tests;
 #[cfg(test)]
@@ -646,6 +653,10 @@ mod variables_editor_tests;
 mod variables_import_shapes_tests;
 #[cfg(test)]
 mod variables_io_tests;
+#[cfg(test)]
+mod variant_binding_import_tests;
+#[cfg(test)]
+mod variant_mode_switch_tests;
 #[cfg(test)]
 mod variant_shared_props_tests;
 #[cfg(test)]

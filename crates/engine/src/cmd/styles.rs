@@ -864,7 +864,7 @@ fn bind_field(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets(cmd, s, p)?;
     let doc = s.doc_mut()?;
     let vid = match &var {
-        Some(v) => Some(doc.variables.get(v).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such variable"))?),
+        Some(v) => Some(super::variables::resolve_strict(cmd, doc, v)?),
         None => None,
     };
     bind_variable(cmd, doc, &ids, &field, vid.as_deref())?;
@@ -1040,7 +1040,12 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
     // variable yet, so they can't loop).
     for val in values.values_mut() {
         if let VariableValue::Alias(a) = val {
-            let t = doc.variables.get(a).filter(|t| t.kind == kind).ok_or_else(|| bad(cmd, format!("no {} variable `{a}` to alias", kind.id())))?;
+            let id = super::variables::resolve_strict(cmd, doc, a)?;
+            let t = doc
+                .variables
+                .get_by_id(&id)
+                .filter(|t| t.kind == kind)
+                .ok_or_else(|| bad(cmd, format!("no {} variable `{a}` to alias", kind.id())))?;
             *a = t.id.clone();
         }
     }
@@ -1262,6 +1267,60 @@ pub(crate) fn apply_paint_bindings_on_load(doc: &mut Document) {
 
 /// Re-apply the variable bindings whose field passes `include`, on the `only` nodes (every bound
 /// node when `None`). Auto layout fields wait while their node has no auto layout.
+/// Settle imported instances whose component properties are bound to variables before the
+/// document is first shown: a variant property bound to a string variable (a kit's Light/Dark
+/// `Mode`) switches each instance to the variant the variable names in its mode, and the instance
+/// follows that variant, keeping what the mains around it override. Text and Boolean property
+/// bindings also refresh children when the variant stays the same. Repeat for the instances the
+/// new content brings, until bound properties settle (a few rounds at most).
+pub(crate) fn apply_prop_bindings_on_load(doc: &mut Document) {
+    const MAX_ROUNDS: usize = 8;
+    let prop_bound = |n: &Node| matches!(n.kind, NodeKind::Instance { .. }) && n.bound.keys().any(|k| k.starts_with(crate::components::PROP_BINDING));
+    let pending = doc.take_dirty();
+    for _ in 0..MAX_ROUNDS {
+        let before: std::collections::BTreeMap<_, _> = doc
+            .nodes()
+            .filter(|n| prop_bound(n))
+            .filter_map(|n| match &n.kind {
+                NodeKind::Instance { component, props, .. } => Some((n.id, (*component, props.clone()))),
+                _ => None,
+            })
+            .collect();
+        if before.is_empty() {
+            break;
+        }
+        let ids: std::collections::BTreeSet<NodeId> = before.keys().copied().collect();
+        apply_bindings_matching(doc, Some(&ids), |f| f.starts_with(crate::components::PROP_BINDING));
+        let changed: Vec<(usize, NodeId)> = before
+            .iter()
+            .filter(|(i, (c, old_props))| matches!(doc.node(**i).map(|n| &n.kind), Some(NodeKind::Instance { component, props, .. }) if component != c || props != old_props))
+            .map(|(i, _)| (doc.ancestors(*i).len(), *i))
+            .collect();
+        if changed.is_empty() {
+            break;
+        }
+        // Outer instances first. What a switching instance's layers inherit from the mains around
+        // it becomes their own first, so the rebuild carries it onto the new variant (rebuilding
+        // the outer instance instead would put the main's variant back: the switch is no override).
+        let mut changed = changed;
+        changed.sort_unstable();
+        let m = crate::measure::TextMeasure;
+        for (_, id) in changed {
+            if doc.contains(id) {
+                if let Some((old, _)) = before.get(&id)
+                    && matches!(doc.node(id).map(|n| &n.kind), Some(NodeKind::Instance { component, .. }) if component != old)
+                {
+                    crate::components::keep_inherited_overrides(doc, id, *old);
+                }
+                crate::components::sync_instance(doc, id);
+                figcraft_layout::layout_up(doc, id, &m);
+            }
+        }
+    }
+    doc.take_dirty();
+    doc.mark_dirty(pending);
+}
+
 fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::BTreeSet<NodeId>>, include: impl Fn(&str) -> bool) {
     use super::lists::{BoundList, list_binding};
     if doc.variables.variables.is_empty() {

@@ -20,6 +20,8 @@ pub mod canvas;
 pub mod cjk;
 pub mod control;
 pub mod dialogs;
+mod file_provider_app;
+pub mod file_providers;
 pub mod home;
 pub mod i18n;
 pub mod icons;
@@ -523,6 +525,8 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
+    /// The picker target and document/page it belongs to, for safe retargeting across tabs.
+    pub(crate) picker_context: Option<(colorpicker::PickerTarget, u64, NodeId, bool)>,
     /// Crop mode (`image.crop`): the layer and the index of the image fill whose crop handles
     /// show on the canvas until Enter, Escape or a click outside the image.
     pub crop: Option<(NodeId, usize)>,
@@ -722,6 +726,7 @@ impl Default for UiState {
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
+            picker_context: None,
             crop: None,
             picker_popover: None,
             picker_button: None,
@@ -811,6 +816,8 @@ pub struct FigApp {
     pub ui: UiState,
     pub canvas: canvas::CanvasState,
     pub services: Box<dyn Services>,
+    /// Optional storage capability, disabled until the web host registers one.
+    pub file_providers: crate::file_providers::Host,
     worker: Option<render_worker::Worker>,
     fonts_installed: bool,
     /// System faces for scripts the built-in fonts lack were added (after the font scan), with

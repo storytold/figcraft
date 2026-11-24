@@ -1,0 +1,3190 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/storytold/figcraft",
+  "fork_repository": "https://github.com/hayyaun/figcraft",
+  "base_commit": "bbf7ad418f3e02d89546a6c7b044e51df67177f0",
+  "integration_branch": "community-integration",
+  "stage": "Attempt all reviewed PRs, including drafts and experiments; defer merge conflicts and upstream-specific release infrastructure.",
+  "validation": {
+    "state": "partial",
+    "rust": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
+    "scope": "Targeted regressions and complete engine, layout and collaboration suites; full server/native attempt recorded with one intermittent loopback timeout; affected-crate Clippy and format/layer/docs/wasm checks.",
+    "passed": [
+      "cargo test -p figcraft-engine -p figcraft-layout -p figcraft-collab --lib fourth_review --no-fail-fast",
+      "cargo fmt --all --check",
+      "cargo clippy -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --all-targets -- -D warnings",
+      "cargo xtask layers",
+      "cargo xtask docs",
+      "cargo xtask wasm",
+      "Complete collaboration suite: 147 passed, 2 pre-existing ignored.",
+      "Complete engine suite: 2394 passed, 3 pre-existing ignored; 51 integration tests passed.",
+      "Complete layout suite: 61 passed.",
+      "git diff --check",
+      "All 45 included PR heads remain ancestors; all 127 captured entries retained."
+    ],
+    "runs": {
+      "fourth-review-final-regressions": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "test",
+          "-p",
+          "figcraft-engine",
+          "-p",
+          "figcraft-layout",
+          "-p",
+          "figcraft-collab",
+          "--lib",
+          "fourth_review",
+          "--no-fail-fast"
+        ],
+        "start": "2026-11-24T18:57:23.442263+00:00",
+        "finish": "2026-11-24T19:02:22.112815+00:00",
+        "exit_code": 0
+      },
+      "fourth-review-final-native": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "test",
+          "-p",
+          "figcraft-engine",
+          "-p",
+          "figcraft-layout",
+          "-p",
+          "figcraft-collab",
+          "-p",
+          "figcraft-server",
+          "--no-fail-fast"
+        ],
+        "start": "2026-11-24T19:02:22.769645+00:00",
+        "finish": "2026-11-24T19:15:30.927293+00:00",
+        "exit_code": 101
+      },
+      "fourth-review-final-format": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "start": "2026-11-24T19:18:02.973568+00:00",
+        "finish": "2026-11-24T19:18:12.840361+00:00",
+        "exit_code": 0
+      },
+      "fourth-review-final-clippy": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "clippy",
+          "-p",
+          "figcraft-engine",
+          "-p",
+          "figcraft-layout",
+          "-p",
+          "figcraft-collab",
+          "-p",
+          "figcraft-server",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "start": "2026-11-24T19:18:12.889514+00:00",
+        "finish": "2026-11-24T19:19:01.918021+00:00",
+        "exit_code": 0
+      },
+      "fourth-review-final-layers": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "xtask",
+          "layers"
+        ],
+        "start": "2026-11-24T19:19:01.970614+00:00",
+        "finish": "2026-11-24T19:20:31.664917+00:00",
+        "exit_code": 0
+      },
+      "fourth-review-final-docs": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "xtask",
+          "docs"
+        ],
+        "start": "2026-11-24T19:20:31.711371+00:00",
+        "finish": "2026-11-24T19:20:32.887690+00:00",
+        "exit_code": 0
+      },
+      "fourth-review-final-wasm": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "xtask",
+          "wasm"
+        ],
+        "start": "2026-11-24T19:20:32.929662+00:00",
+        "finish": "2026-11-24T19:21:46.927170+00:00",
+        "exit_code": 0
+      }
+    },
+    "test_results": {
+      "native": {
+        "passed": 2779,
+        "failed": 1,
+        "ignored": 5,
+        "summaries": 7
+      },
+      "doctests": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "summaries": 4
+      }
+    },
+    "new_regressions_passed": [
+      "journal_tests::fourth_review_mixed_image_and_review_journals_keep_later_edits",
+      "design::tests::fourth_review_blended_frame_overflow_uses_painted_bounds_and_clips",
+      "tests::fourth_review_scaled_coupled_children_commit_the_trial_in_local_space"
+    ],
+    "not_rerun": [
+      "Full workspace native test and Clippy gates",
+      "Headless Firefox regressions"
+    ],
+    "platform_limits": [
+      "Native checks ran on Ubuntu under WSL. The UI/Firefox suites and manual screen-reader, keyboard-navigation and desktop visual review were not rerun for this follow-up.",
+      "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
+      "Release packages and installers have not been built or installed locally.",
+      "Translation quality has not been reviewed by native speakers.",
+      "Baseline full CI was interrupted and is not claimed to have passed."
+    ],
+    "notes": [
+      "All three new regression tests failed against published production head 988db7de before these fixes; the targeted runs and complete engine, layout and collaboration suites pass on this clean source. The full native attempt retains one server timeout failure.",
+      "Legacy review settings are normalized before image apply_kept, matching the snapshot path. The existing restart regression was factored into a helper without dropping its assertions, then reused for mixed batches carrying valid or forged image changes. It checks retention/omission, a later rename and saved-restart snapshot catch-up.",
+      "The blend/opacity guard uses world_render_bounds lazily, including visible child overflow and respecting clipping. Tests retain Normal/PassThrough controls, partial-opacity behavior and unchanged repair state for unknown compositing.",
+      "Trial min/max bounds and insets are normalized to parent space. Planned sizes are converted to local dimensions and checked for representability before any trial resize. Rotated/collapsed or otherwise unrepresentable proposals retain the existing general layout path. Scaled/flipped rectangles and bounded rigid frames are tested in both flow directions and both fill roles, including repeat-layout stability.",
+      "All new test documents and journal data are generated by these Rust tests from original inputs; no external assets, fixture files or dependencies were added.",
+      "The full native attempt recorded 2779 passed, one failed server loopback test and five pre-existing ignored tests. The failed case passed an isolated rerun on the same source. No further reruns were used to erase the failed full run; its cause is not established and clean CI confirmation remains outstanding.",
+      "Validation ran sequentially without overlapping compiler checks and native runtime suites. The earlier third-review loopback timeout failures and isolated rerun observations remain in their original validation_history entry; no timing bounds, tests or workflows were weakened.",
+      "No pre-existing tests were removed, weakened, ignored or skipped. Full workspace and Firefox gates were not rerun. GitHub Actions and required maintainer approval remain separate from local validation."
+    ],
+    "prior_attempts": {
+      "fourth-review-red": {
+        "head": "988db7dee72d07e94fa34523a0e0947bf8a4c6ba",
+        "args": [
+          "test",
+          "-p",
+          "figcraft-engine",
+          "-p",
+          "figcraft-layout",
+          "-p",
+          "figcraft-collab",
+          "--lib",
+          "fourth_review",
+          "--no-fail-fast"
+        ],
+        "start": "2026-11-24T18:50:24.071400+00:00",
+        "finish": "2026-11-24T18:55:37.157731+00:00",
+        "exit_code": 101
+      }
+    },
+    "failed": [
+      {
+        "command": "cargo test -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --no-fail-fast",
+        "test": "owned_tests::a_shared_file_is_its_owners_again_after_the_app_restarts",
+        "location": "apps/figcraft-server/src/test_util.rs:79",
+        "reason": "Loopback helper timed out during the initial share; the same unchanged-source case passed one isolated diagnostic rerun. The full default native run remains failed; cause is not established."
+      }
+    ],
+    "diagnostics": {
+      "fourth-review-server-diagnostic-owned": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "test",
+          "-p",
+          "figcraft-server",
+          "--lib",
+          "owned_tests::a_shared_file_is_its_owners_again_after_the_app_restarts",
+          "--",
+          "--exact"
+        ],
+        "start": "2026-11-24T19:16:02.492507+00:00",
+        "finish": "2026-11-24T19:16:31.341438+00:00",
+        "exit_code": 0
+      }
+    }
+  },
+  "integration_adjustments": [
+    "Applied Rust 1.100 formatting to imported changes.",
+    "Removed two redundant too_many_arguments suppressions; the existing Clippy argument threshold remains 10.",
+    "Added missing imports to the image-picker regression module introduced by PR #618; assertions are unchanged.",
+    "Updated the exact inspection golden response for the document revision and capability metadata added by PR #1995, keeping the full equality assertion.",
+    "Enlarged the MCP pagination fixture so compact JSON serialization still exercises child paging, preserving byte-budget, marker and ordering assertions.",
+    "Fixed completion of picker-owned gradient and crop gestures from PR #618 while preserving unrelated move and text undo scopes; added real-input regression coverage.",
+    "Preserved same-frame image picker retargeting through discarded UI layout passes with viewport, document and page scoped temporary state; extended input regression coverage.",
+    "Follow-up review: report capped contrast sampling as unchecked; cache backdrop sibling indexes; honor explicit descendants; resolve requested-mode alpha and WCAG size thresholds consistently.",
+    "Follow-up review: simulate actual dry-run repairs, preserve hidden effects and accepted spacing, retain brand alpha and variable-owned padding, and avoid invented backdrops from translucent groups.",
+    "Follow-up review: synchronize same-variant property bindings, preserve valid text fill sizing, reject lossy connection imports/exports, and resync restored collaboration logs containing oversized review changes.",
+    "Follow-up review: distinguish explicit crop replacements from placement-preserving picker edits; classify text image targets by effective character fills.",
+    "Follow-up review: retain masks and text-style blends during rendering, solve coupled ratio fills without oscillation, and correct shared-edge coverage in the synthetic UI rasterizer.",
+    "Follow-up review: serialize provider writes, preserve capture-time Save As identity, expose local cancellation with keyboard access, require native provider bytes, and preserve close continuations and offline resource focus.",
+    "Corrected the original merge SHAs of the three restored draft PRs; their restoration commits remain recorded separately."
+  ],
+  "draft_checkpoint_branch": "community-integration-draft-checkpoint",
+  "draft_restoration": [
+    {
+      "number": 2556,
+      "merge_commit": "8f5c9c2e2ea29e70e44946e17d4002881b1f6b09",
+      "revert_commit": "deb77f91",
+      "restoration_commit": "e2e83ad01e946fbc296ecc26946f097234d018da",
+      "status": "restored"
+    },
+    {
+      "number": 2555,
+      "merge_commit": "d05c13e44b7d02418969ec73efa112910e5a0e96",
+      "revert_commit": "57f73d56",
+      "restoration_commit": "5615658c03ce75c1a2beed252955a0a71d3e53de",
+      "status": "restored"
+    },
+    {
+      "number": 2544,
+      "merge_commit": "fe73379e5ed37f5f2a9cb5de4621b0733a8256bb",
+      "revert_commit": "0502c19e",
+      "restoration_commit": "791339559e10f1312d2e22c4c5be551469d82598",
+      "status": "restored"
+    }
+  ],
+  "counts": {
+    "integrated": 45,
+    "deferred": 82,
+    "deferred_merge_conflicts": 80,
+    "deferred_release_infrastructure": 2,
+    "integrated_drafts_at_capture": 4
+  },
+  "pull_requests": [
+    {
+      "number": 2577,
+      "title": "Report and find instances of deleted components",
+      "url": "https://github.com/storytold/figcraft/pull/2577",
+      "head": "34abd7da2dba055c4ea87e10bfcee80f8b4f42b7",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "87a1db8b2dda0705718e99fed55eaa79b20f84ea"
+    },
+    {
+      "number": 2576,
+      "title": "M3: library.swap names the unused copies it removes (#2569)",
+      "url": "https://github.com/storytold/figcraft/pull/2576",
+      "head": "c63ad557710471c495a4477cfaede473348940cc",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/engine/src/assets/library_swap/tests.rs",
+        "docs/components-parity.md"
+      ]
+    },
+    {
+      "number": 2575,
+      "title": "M3: Swap library re-points the styles and variables of the copies it keeps (#2568)",
+      "url": "https://github.com/storytold/figcraft/pull/2575",
+      "head": "e07770073ef7a6b1967c518ceb16e5d389323aaf",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "9551b742a5ebc33c27e3cd6ee128ad3bc1189dee"
+    },
+    {
+      "number": 2574,
+      "title": "ci(deps): bump the actions group across 1 directory with 2 updates",
+      "url": "https://github.com/storytold/figcraft/pull/2574",
+      "head": "cdf20f6f27fc883f23753ac29e547d5675de1eaf",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "892ba33dedd92f6343a8b9fed0fc89d818191ec4"
+    },
+    {
+      "number": 2573,
+      "title": "MCP: allow confined sessions to join an approved server",
+      "url": "https://github.com/storytold/figcraft/pull/2573",
+      "head": "4296cf8136929bc5db317cf38c7be6ab7b6a0cc8",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "2c205328690c71775188cd4c764774b440ff31c7"
+    },
+    {
+      "number": 2570,
+      "title": "M1: a guide released past its ruler is removed",
+      "url": "https://github.com/storytold/figcraft/pull/2570",
+      "head": "0fca11df35e0b3d9fc6cf554c68a8eb2a03304d6",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "fe86cf799d2fc8d78471878a078c435d14adb40a"
+    },
+    {
+      "number": 2562,
+      "title": "ci: use artcraft-k8s-main runner on main",
+      "url": "https://github.com/storytold/figcraft/pull/2562",
+      "head": "0154ee0a2c104a6cef769d3254ed55019cd2a0f8",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Uses upstream self-hosted runner labels whose availability to this fork has not been established."
+      ],
+      "merge_commit": null
+    },
+    {
+      "number": 2561,
+      "title": "Add Russian translation (ru)",
+      "url": "https://github.com/storytold/figcraft/pull/2561",
+      "head": "141083243ac81dc0f349282a9f8f6fb6640c2960",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "54f3186eb358c19c2696e95e48cab4b771696d40"
+    },
+    {
+      "number": 2560,
+      "title": "M4: a near degenerate boolean no longer hangs Save (#2394)",
+      "url": "https://github.com/storytold/figcraft/pull/2560",
+      "head": "3a374ba85c0869a6e9e97117ae498924fbc40da2",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "c238037132a08085471308120f90642c1b51aab7"
+    },
+    {
+      "number": 2558,
+      "title": "docs(cli): explain how export resolves layer names across pages",
+      "url": "https://github.com/storytold/figcraft/pull/2558",
+      "head": "0264e32c47f9924878156d5d37404e4a73268191",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "fd3b5432ab68de2f830e9e6f3cb9950bdc056a1a"
+    },
+    {
+      "number": 2557,
+      "title": "Keep selection on the outermost section when hiding nested contents",
+      "url": "https://github.com/storytold/figcraft/pull/2557",
+      "head": "8deece232336e680e646b2670bf469650a7361a5",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "52cecdab9f72c2af735301c781e6a968eae11a8c"
+    },
+    {
+      "number": 2556,
+      "title": "fix(present): close the active tab with Cmd/Ctrl+W",
+      "url": "https://github.com/storytold/figcraft/pull/2556",
+      "head": "f818a664e6386d93ec7de54df4d5ec7a3e133fc8",
+      "draft": true,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "8f5c9c2e2ea29e70e44946e17d4002881b1f6b09"
+    },
+    {
+      "number": 2555,
+      "title": "fix(mcp): accept explicit Penpot export format",
+      "url": "https://github.com/storytold/figcraft/pull/2555",
+      "head": "f838950f9b82e932beccf03838d474ac35d01382",
+      "draft": true,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "d05c13e44b7d02418969ec73efa112910e5a0e96"
+    },
+    {
+      "number": 2554,
+      "title": "fix(home): use the usual sort order for invalid saved directions",
+      "url": "https://github.com/storytold/figcraft/pull/2554",
+      "head": "0961afab2eb00afc0fb6e7d8842d62a34dcddf96",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "19aa80e0c1b07c68b3f0ed1d48045167a7e233ea"
+    },
+    {
+      "number": 2553,
+      "title": "Handle carriage-return row endings in spreadsheet paste",
+      "url": "https://github.com/storytold/figcraft/pull/2553",
+      "head": "ba3773e1ab2f8e833839770f063f7e211d1b77f5",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "0220ea30ce7b09ff7d5e98bd06f4377f32d28a52"
+    },
+    {
+      "number": 2551,
+      "title": "docs(cli): explain selected-layer exports to a directory",
+      "url": "https://github.com/storytold/figcraft/pull/2551",
+      "head": "a6f9cd1efc20285635e50e8ddf01cfa0282ef266",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "75623bb5f9fb2010bda748c758ddd84264a9cf82"
+    },
+    {
+      "number": 2550,
+      "title": "Apply image presets to text\u2019s shared image fill",
+      "url": "https://github.com/storytold/figcraft/pull/2550",
+      "head": "301c382a794f7bae7b975b373521e41d451b8e29",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "d3031b501790741835820b220815b30a6fbd7b6e"
+    },
+    {
+      "number": 2549,
+      "title": "Keep comment pins in view when zooming to them",
+      "url": "https://github.com/storytold/figcraft/pull/2549",
+      "head": "a976caf85763c080ebbb003441732e971a2c034e",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "bd6dcef5ac2b5ec27c2b74d7c27f6927f5f6ddb7"
+    },
+    {
+      "number": 2548,
+      "title": "docs: update the download guide for current release packages",
+      "url": "https://github.com/storytold/figcraft/pull/2548",
+      "head": "03080bfd7afef77a586699c527b840e648a3d336",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "cece5041bda719fc368641ad21bbe0c212108e06"
+    },
+    {
+      "number": 2546,
+      "title": "docs(cli): clarify what a failed script rolls back",
+      "url": "https://github.com/storytold/figcraft/pull/2546",
+      "head": "0d03a241db7d40670fb6e30428a0e94fc6c6f59e",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "a87550e9c5fe022a913b64b2e5fe8e05396047b0"
+    },
+    {
+      "number": 2545,
+      "title": "Reject malformed page IDs before editing the open page",
+      "url": "https://github.com/storytold/figcraft/pull/2545",
+      "head": "9a0ba67e312136950eb8c33d9876d5d1b7c83fc1",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "de9a5c33b56228f9c9c1cab3c8ca2dd1f6c114e7"
+    },
+    {
+      "number": 2544,
+      "title": "fix(cli): avoid creating folders for empty exports",
+      "url": "https://github.com/storytold/figcraft/pull/2544",
+      "head": "9c5d7dbef784fb70a6657527fbc27f26dd2ad52a",
+      "draft": true,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "fe73379e5ed37f5f2a9cb5de4621b0733a8256bb"
+    },
+    {
+      "number": 2543,
+      "title": "fix(ui): commit plugin fields before button callbacks",
+      "url": "https://github.com/storytold/figcraft/pull/2543",
+      "head": "488304cc03c84c172d0d98601d196a668b0dde59",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "8150232c26035ec7016692d601602066fa2f9da1"
+    },
+    {
+      "number": 2542,
+      "title": "docs(cli): list Penpot as a convert input",
+      "url": "https://github.com/storytold/figcraft/pull/2542",
+      "head": "0ceac64731d5ec5d5fc4748737b3f69f27a318c2",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "e993a7145ed1e54eaa80f15eaa83ae069013841d"
+    },
+    {
+      "number": 2537,
+      "title": "fix(app): register native macOS Window menu so window tiling shortcuts work",
+      "url": "https://github.com/storytold/figcraft/pull/2537",
+      "head": "35c18751fece606061cecef35c8e38480d31d681",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "53ee58c7a14d1cdd6687d89fb58b6d51352612fa"
+    },
+    {
+      "number": 2536,
+      "title": "M1: Cmd/Ctrl-click reaches the layers under an unfilled nested frame or instance",
+      "url": "https://github.com/storytold/figcraft/pull/2536",
+      "head": "2e7a168a91ab6f9d3442f52316b17cd894eaee46",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2533,
+      "title": "M3, M6: an imported iOS kit draws as in its source (blend modes, variant bindings, text, export framing, images)",
+      "url": "https://github.com/storytold/figcraft/pull/2533",
+      "head": "e26b0aa2238dfa97bcaa5d4f4ebaf20a04ebc9ad",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "ea9281ca6910b7d70f29f76f411580266df8f2f6"
+    },
+    {
+      "number": 2532,
+      "title": "mcp: send tool results and resources as compact JSON",
+      "url": "https://github.com/storytold/figcraft/pull/2532",
+      "head": "17a7469bab3312b3f29bb00f92b0a509ca2f9367",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "e465bb4c8411ce743ed5876b9e853b004eeca5c8"
+    },
+    {
+      "number": 2509,
+      "title": "M1: image fill in Crop mode morphs and squishes on normal resize (#2499)",
+      "url": "https://github.com/storytold/figcraft/pull/2509",
+      "head": "cfef5763f4208fa9bdb7ad1469da4cc22e8ae40c",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "6f7569343cfa0569b19b0a1f3afafd08d2b76f94"
+    },
+    {
+      "number": 2503,
+      "title": "i18n(ka): update the Georgian catalog (41 strings)",
+      "url": "https://github.com/storytold/figcraft/pull/2503",
+      "head": "0a47e5e5d5a582fa3781057b064caf90d79c123a",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "4a65ffbc86b46e86e773cc6c854a57fc15bb9802"
+    },
+    {
+      "number": 2498,
+      "title": "i18n(tr): complete Turkish UI, command, and menu catalog",
+      "url": "https://github.com/storytold/figcraft/pull/2498",
+      "head": "d28438ec5596228c85a6de8572f7fc0f574ef50d",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "e8f0dc03be899d4e91dbeea24e48714ccc2b5e97"
+    },
+    {
+      "number": 2493,
+      "title": "M3: Cmd/Ctrl+L copies a link to the selected layer",
+      "url": "https://github.com/storytold/figcraft/pull/2493",
+      "head": "940b133b029fa0ec122e737a0728144e8123da81",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "8b1d14fe5326d51aedaf72fb913b7aeeeed5f1c8"
+    },
+    {
+      "number": 2492,
+      "title": "M5: A clicked layer row leaves the arrow keys to the canvas",
+      "url": "https://github.com/storytold/figcraft/pull/2492",
+      "head": "ead7e5b39023187e168bbaf322ac13f4de233ada",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2491,
+      "title": "M3: A binding the main layer doesn't have stays an override when instances are relinked",
+      "url": "https://github.com/storytold/figcraft/pull/2491",
+      "head": "807d78b86d60d84c0b6b4fd92ceca839b483ffd9",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
+    },
+    {
+      "number": 2489,
+      "title": "i18n(he): add complete Hebrew UI catalog, RTL mirroring, and web font guard",
+      "url": "https://github.com/storytold/figcraft/pull/2489",
+      "head": "f6dd6a9c3bd03ac2322c80abedc1383a8c529cee",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "50a06b27355bc62e5c324b99e5177f9c452454f5"
+    },
+    {
+      "number": 2488,
+      "title": "M3: A variable created with a group shown goes into that group",
+      "url": "https://github.com/storytold/figcraft/pull/2488",
+      "head": "0f54b38f4218512d55b1fb0983500b4d6bff347a",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
+    },
+    {
+      "number": 2487,
+      "title": "M1: Crop mode crops by the layer's sides in auto layout, up to the image, and never runs with vector edit",
+      "url": "https://github.com/storytold/figcraft/pull/2487",
+      "head": "435d85b8a448503564de712dbaac3d79338314ea",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2486,
+      "title": "M2: A locked-ratio child filling one axis of auto layout keeps its proportions",
+      "url": "https://github.com/storytold/figcraft/pull/2486",
+      "head": "0d7eeac29d7df0c206194a5cb9e7344f63132a4c",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "34b13b431aa57dcf505d4af6dcea9bc8673a300f"
+    },
+    {
+      "number": 2485,
+      "title": "M4: Text pasted while editing keeps its formatting; Shift+Cmd/Ctrl+V matches the style",
+      "url": "https://github.com/storytold/figcraft/pull/2485",
+      "head": "406bbf7aba5073f6d07b113654989939eb7c32ce",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2484,
+      "title": "M3: Library styles show in the style pickers without the Assets tab, with a source menu",
+      "url": "https://github.com/storytold/figcraft/pull/2484",
+      "head": "167ce234bc9e298bde4c0a2513865296029b6651",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
+    },
+    {
+      "number": 2483,
+      "title": "M1: Shift with a double-click goes deeper and keeps the rest of the selection",
+      "url": "https://github.com/storytold/figcraft/pull/2483",
+      "head": "97e9ada42a889e28fa5e3edefee462955d8ccf4a",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2482,
+      "title": "packaging(linux): refresh Hicolor icon cache in AppRun and support gtk4-update-icon-cache",
+      "url": "https://github.com/storytold/figcraft/pull/2482",
+      "head": "ef957a61c818b98d7118873b05a20986945e89c7",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "003a7335e34c5b5fd2b1c49085cd255937b7cea2"
+    },
+    {
+      "number": 2481,
+      "title": "M8: a frame can say which screen size it is and carry rules for other sizes",
+      "url": "https://github.com/storytold/figcraft/pull/2481",
+      "head": "f8bc54cd44c7d3548827430dd9386ac5aa29d890",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/design_context_tests.rs",
+        "crates/ui-egui/src/panels/dev_mode.rs"
+      ]
+    },
+    {
+      "number": 2476,
+      "title": "M1: A curved layer's outline bends smoothly",
+      "url": "https://github.com/storytold/figcraft/pull/2476",
+      "head": "a28dca47b55d5806b216a16e7e48bc913e58bc38",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2475,
+      "title": "M8: in vector edit mode, deleting a point selects the next one on its path",
+      "url": "https://github.com/storytold/figcraft/pull/2475",
+      "head": "20a49eb5868c43fc494e3696d507f3a02a30385a",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2474,
+      "title": "M3: Several selected instances show and set the properties they share",
+      "url": "https://github.com/storytold/figcraft/pull/2474",
+      "head": "6c590e4e8913721a9484fe06077fc13c4cf2b856",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
+    },
+    {
+      "number": 2473,
+      "title": "M3: Layers: the eye and padlock stay in view, and a name takes at most 400 pt",
+      "url": "https://github.com/storytold/figcraft/pull/2473",
+      "head": "b0569e27236cec024cd34a40f1dcc2f1c76f560d",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2472,
+      "title": "M5: At 100% a presented frame reaches the window's edges",
+      "url": "https://github.com/storytold/figcraft/pull/2472",
+      "head": "d6cef43353c768acf4857bf5ee66218806f5606f",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "4241251ae581cb1757f331f47d762f282cc07ae4"
+    },
+    {
+      "number": 2471,
+      "title": "M3: Paste with a variant's set selected adds the copied variants to it",
+      "url": "https://github.com/storytold/figcraft/pull/2471",
+      "head": "85de85d5692f63d00a7264353b3a70ef5f01670a",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md"
+      ]
+    },
+    {
+      "number": 2466,
+      "title": "M8: Code Connect for agents",
+      "url": "https://github.com/storytold/figcraft/pull/2466",
+      "head": "d243347fd08325847e84ff717c3eb346fc672108",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "536d09d00794b937b899e4b6e4c931854adc9aa4"
+    },
+    {
+      "number": 2461,
+      "title": "Commit number field edits on canvas click and clear stale drafts on selection change (#2392, #2433)",
+      "url": "https://github.com/storytold/figcraft/pull/2461",
+      "head": "29d39933423271d40cf28976ba6fd3aa45d50098",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2446,
+      "title": "M8: asset handoff for code projects",
+      "url": "https://github.com/storytold/figcraft/pull/2446",
+      "head": "bfe9a4267830dd3f189ea0b2380ead6b33a152b4",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/mcp/src/tools.rs",
+        "crates/mcp/tests/it/main.rs",
+        "docs/mcp.md"
+      ]
+    },
+    {
+      "number": 2422,
+      "title": "M6: import pattern fills",
+      "url": "https://github.com/storytold/figcraft/pull/2422",
+      "head": "2b8b8d4da6642e404b184374b8fc631e44275e98",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/file-format-parity.md"
+      ]
+    },
+    {
+      "number": 2406,
+      "title": "M9: accept legacy Welcome messages without reconnect secrets",
+      "url": "https://github.com/storytold/figcraft/pull/2406",
+      "head": "9ca592c48a67d768a89a68d02985dabc68abaa42",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
+    },
+    {
+      "number": 2404,
+      "title": "M8: remove obsolete browser live-session restriction",
+      "url": "https://github.com/storytold/figcraft/pull/2404",
+      "head": "43810b42eeb31615e3aedc26306be32887d3ffbc",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "649b82b92e877e29fc89c8e96e113349f58efd01"
+    },
+    {
+      "number": 2403,
+      "title": "M9: ignore invalid browser page server endpoints",
+      "url": "https://github.com/storytold/figcraft/pull/2403",
+      "head": "a93b57b95b4a68559261211309a76710c8004b98",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
+    },
+    {
+      "number": 2401,
+      "title": "M0.9: clarify default CLI export and render pages",
+      "url": "https://github.com/storytold/figcraft/pull/2401",
+      "head": "ceea6da487115634345468fbbc993dcc5c43c7c0",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
+    },
+    {
+      "number": 2400,
+      "title": "M0.9: reject repeated CLI scale suffixes",
+      "url": "https://github.com/storytold/figcraft/pull/2400",
+      "head": "d7de7b786b8c9554145e5f11b76bb36649497fde",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
+    },
+    {
+      "number": 2398,
+      "title": "Variables: variable.bind and aliases resolve Collection/name (#2373)",
+      "url": "https://github.com/storytold/figcraft/pull/2398",
+      "head": "5e507f3721457522289e875970ac04300a913e57",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "fbc1bfc295c84d0612f84927b877ad6be166c8ef"
+    },
+    {
+      "number": 2397,
+      "title": "Text: creating text warns when its font style draws in another face (#2180)",
+      "url": "https://github.com/storytold/figcraft/pull/2397",
+      "head": "a7f1091e74213b59947b0c7a27c05184ea958754",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "d0ecaf70a403284381124de34107d72d85f8c3b9"
+    },
+    {
+      "number": 2396,
+      "title": "Text: a fixed-size text keeps the height it is created with (#2184)",
+      "url": "https://github.com/storytold/figcraft/pull/2396",
+      "head": "f8d7dd1fb2a05ac403394985624fa3dd923544dc",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "eaae1d94967b9c18f7ae669007fcd86d04751079"
+    },
+    {
+      "number": 2393,
+      "title": "M8: require a host before opening document web links",
+      "url": "https://github.com/storytold/figcraft/pull/2393",
+      "head": "1f6c20a1c1ccc7b42acfc3a1c8084c2485b1547c",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md"
+      ]
+    },
+    {
+      "number": 2387,
+      "title": "M5: fix document-scoped prototype controls and arrow-key aliases",
+      "url": "https://github.com/storytold/figcraft/pull/2387",
+      "head": "b85b944df36f683dbf40282a6d4fce6104f1a23d",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/control/document_tests.rs",
+        "docs/prototyping-parity.md"
+      ]
+    },
+    {
+      "number": 2383,
+      "title": "M1: A drag on a section's background, or an artboard's in it, draws a marquee",
+      "url": "https://github.com/storytold/figcraft/pull/2383",
+      "head": "26860bd367bbb1e47b105fc1bd316c4e46f95c52",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2382,
+      "title": "M1: Centred auto-width text grows and shrinks about its middle",
+      "url": "https://github.com/storytold/figcraft/pull/2382",
+      "head": "b1692e44b7fab8932fc36160211a8a8137fdb748",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2381,
+      "title": "M1: Frame selection makes a frame without a fill",
+      "url": "https://github.com/storytold/figcraft/pull/2381",
+      "head": "730ea7641365625517bb518bcf468a7a41c54733",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2380,
+      "title": "M4: The eyedropper colours a stroke-only layer's stroke and shows its colour",
+      "url": "https://github.com/storytold/figcraft/pull/2380",
+      "head": "77bd448d411da72a8a88edc5d05094b527b6418d",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2364,
+      "title": "M6: Uno Platform C# Markup code target (layers and auto layout)",
+      "url": "https://github.com/storytold/figcraft/pull/2364",
+      "head": "d0457d5f07e4c0d6272f5fe62636fe8609afbfce",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "contributors/people.toml",
+        "docs/dev-mode-parity.md"
+      ]
+    },
+    {
+      "number": 2358,
+      "title": "Add initial procedural shader fills",
+      "url": "https://github.com/storytold/figcraft/pull/2358",
+      "head": "d4006e3f2bae333232e9afcc61713e1372318add",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/ui-egui/src/widgets/colorpicker.rs",
+        "docs/gaps.md",
+        "docs/target-app-parity.md"
+      ]
+    },
+    {
+      "number": 2322,
+      "title": "Claude/kind planck zb6ajv",
+      "url": "https://github.com/storytold/figcraft/pull/2322",
+      "head": "4cf4a02209d9c5b81608c1b561fbffa5e18d1745",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft-cli/src/args.rs",
+        "apps/figcraft-cli/src/main.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/control.rs",
+        "docs/cli.md"
+      ]
+    },
+    {
+      "number": 2281,
+      "title": "AI Agent Control and Multi-Agent Support",
+      "url": "https://github.com/storytold/figcraft/pull/2281",
+      "head": "86416ad429bb7762f9fab017faeab2f14126687a",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft-cli/src/args.rs",
+        "apps/figcraft-cli/src/main.rs",
+        "crates/engine/src/canvas/textedit.rs",
+        "crates/engine/src/canvas/tools.rs",
+        "crates/engine/src/session/exec.rs",
+        "crates/ui-egui/src/canvas/handles.rs",
+        "crates/ui-egui/src/control.rs",
+        "docs/cli.md",
+        "docs/control-protocol.md"
+      ]
+    },
+    {
+      "number": 2247,
+      "title": "Your name: a desktop start takes the operating system account's name instead of \"You\"",
+      "url": "https://github.com/storytold/figcraft/pull/2247",
+      "head": "01600a7cfde8ac31c687f56290e8710d218001c2",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/main.rs",
+        "contributors/people.toml"
+      ]
+    },
+    {
+      "number": 2239,
+      "title": "i18n(he): add a first Hebrew UI catalog and web font guard",
+      "url": "https://github.com/storytold/figcraft/pull/2239",
+      "head": "470558bfc0139c9c6acc99a72890c747242786c3",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/locales/he.toml",
+        "crates/ui-egui/src/home.rs"
+      ]
+    },
+    {
+      "number": 2235,
+      "title": "M8: a zoom in keeps the image on screen until the sharp one is ready",
+      "url": "https://github.com/storytold/figcraft/pull/2235",
+      "head": "586753345cac65c51bb9ed7785781e9cf12b2ab1",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "124b85f4295b3b1292a9e8f63bca99b1bf7d353c"
+    },
+    {
+      "number": 2234,
+      "title": "M6: .fig export writes slot properties and instance slot content",
+      "url": "https://github.com/storytold/figcraft/pull/2234",
+      "head": "fa5938e6493525c81a21f178b94f33a1b3c4fb3f",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/format/src/fig/export.rs",
+        "crates/format/src/fig/export/component.rs",
+        "docs/file-format-parity.md"
+      ]
+    },
+    {
+      "number": 2231,
+      "title": "M12: Boards: mind maps in the toolbar, with keys for children and siblings (#2226, step 2)",
+      "url": "https://github.com/storytold/figcraft/pull/2231",
+      "head": "ead996c237a22ce248c0646bd6de988971921610",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/boards/board.rs",
+        "crates/engine/src/boards/board/edit.rs",
+        "crates/engine/src/boards/board/items.rs",
+        "crates/ui-egui/src/canvas/board_bar.rs",
+        "docs/boards-parity.md",
+        "docs/gaps.md",
+        "docs/mcp.md",
+        "docs/roadmap.md",
+        "docs/target-app-parity.md",
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2225,
+      "title": "M7: Variables JSON: export and import text styles (#2173)",
+      "url": "https://github.com/storytold/figcraft/pull/2225",
+      "head": "02cb16715ff5ec53e542abdef55662a9a8e65401",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "docs/components-parity.md",
+        "docs/file-format-parity.md",
+        "docs/gaps.md"
+      ]
+    },
+    {
+      "number": 2212,
+      "title": "Preserve variable and conditional prototype actions in .fig exports",
+      "url": "https://github.com/storytold/figcraft/pull/2212",
+      "head": "530c159699e9970464016583d54303b69f91ae4e",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "5fa32f9a36a2438e581de8ff1abdae16d6102556"
+    },
+    {
+      "number": 2197,
+      "title": "Paste: SVG markup on the clipboard wins over a picture copied with it (#2195)",
+      "url": "https://github.com/storytold/figcraft/pull/2197",
+      "head": "bb5b1ebedb6d8bb25e5860785ad16f8be49afe42",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/svg/src/import.rs",
+        "crates/svg/src/import/budget.rs",
+        "docs/target-app-parity.md"
+      ]
+    },
+    {
+      "number": 2194,
+      "title": "M13: design review commands (engine, MCP and collab)",
+      "url": "https://github.com/storytold/figcraft/pull/2194",
+      "head": "13cd2f7d6b28dd82698fbdcf4aca65e94f67b6ec",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "f550cf41c44fcfad6788d0162ca6830b2f14dfb6"
+    },
+    {
+      "number": 2193,
+      "title": "M1: align editor icons and selection controls",
+      "url": "https://github.com/storytold/figcraft/pull/2193",
+      "head": "46dba0e7f1060f367f051eb65461d4ae4d065b9e",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "contributors/people.toml",
+        "docs/auto-layout-parity.md",
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2177,
+      "title": "M4: editable chamfered and concave corners",
+      "url": "https://github.com/storytold/figcraft/pull/2177",
+      "head": "b84878e4c1aeb43eda25f6e1a23b2ac8331c5f50",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "contributors/people.toml",
+        "crates/engine/src/cmd/props.rs",
+        "crates/ui-egui/src/panels/right/paints.rs"
+      ]
+    },
+    {
+      "number": 2162,
+      "title": "Merge release 0.17.0 back into main",
+      "url": "https://github.com/storytold/figcraft/pull/2162",
+      "head": "2345520e138be404f7f7c87d077dad124a30fd79",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "Cargo.toml"
+      ]
+    },
+    {
+      "number": 2144,
+      "title": "Canvas: a dragged layer moves with its outline, drawn from a sprite while the base stays put (#2033)",
+      "url": "https://github.com/storytold/figcraft/pull/2144",
+      "head": "b137fe589d835beffaaf455e4fd6819f65ae02f5",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2141,
+      "title": "Paste from Figma: instances link to mains pasted earlier (#2022)",
+      "url": "https://github.com/storytold/figcraft/pull/2141",
+      "head": "ce92c7df5b0db3ea614972ee35232eaeb38889f2",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/engine/src/cmd/edit/clipboard.rs",
+        "crates/engine/src/lib.rs",
+        "crates/format/src/fig.rs",
+        "crates/format/src/fig/export.rs",
+        "crates/format/src/fig/map/layer.rs",
+        "docs/file-format-parity.md"
+      ]
+    },
+    {
+      "number": 2137,
+      "title": "Auto layout: Shift+A picks Figma's sizing, gap and padding defaults",
+      "url": "https://github.com/storytold/figcraft/pull/2137",
+      "head": "a55979ada17374046636f821d70b8e064a41b46e",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/auto-layout-parity.md"
+      ]
+    },
+    {
+      "number": 2134,
+      "title": "Scale tool: variable-bound lengths stay bound on an instance at value x its scale, and bake elsewhere (#2090)",
+      "url": "https://github.com/storytold/figcraft/pull/2134",
+      "head": "46ab9db0a04e41a1f016aa3ef352cc2fc8ef903f",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/components-parity.md",
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 2129,
+      "title": "M9: a file joined on a server that keeps it asks for no save",
+      "url": "https://github.com/storytold/figcraft/pull/2129",
+      "head": "2bb74058abc128c810fccdc96e32d82fde871af2",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "docs/collaboration-parity.md"
+      ]
+    },
+    {
+      "number": 2019,
+      "title": "feat: local MCP harness integration, built-in plugin store, and plugin development workflow",
+      "url": "https://github.com/storytold/figcraft/pull/2019",
+      "head": "4cf4a02209d9c5b81608c1b561fbffa5e18d1745",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft-cli/src/args.rs",
+        "apps/figcraft-cli/src/main.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/control.rs",
+        "docs/cli.md"
+      ]
+    },
+    {
+      "number": 1999,
+      "title": "M9: Home \u25b8 Online remembers the sessions you joined (#1882)",
+      "url": "https://github.com/storytold/figcraft/pull/1999",
+      "head": "d4b772743ac449b70a2f74c6616c04ac1aa71c07",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/collab-net/src/link.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/live_tests.rs",
+        "crates/engine/src/sharing/live.rs",
+        "crates/engine/src/sharing/live/events.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/live_joining_tests.rs",
+        "docs/collaboration-parity.md",
+        "docs/mcp.md"
+      ]
+    },
+    {
+      "number": 1995,
+      "title": "M8: unsaved document events and revision-guarded control commands",
+      "url": "https://github.com/storytold/figcraft/pull/1995",
+      "head": "f3214ddd10bd2fd57420d7021e184cee69ed1695",
+      "draft": true,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "481072d339d41e74370113a4bee531221866bf3e"
+    },
+    {
+      "number": 1898,
+      "title": "ci(release): sign the Linux packages with LINUX_SIGNING_KEY",
+      "url": "https://github.com/storytold/figcraft/pull/1898",
+      "head": "b1d547b9338f1f65a39133aaa01fd51e3fa768d7",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Adds the upstream getartcraft.com Flatpak update source to stable bundles, which could replace a fork build with an upstream release. A fork-specific release and signing setup is unresolved."
+      ],
+      "merge_commit": null
+    },
+    {
+      "number": 1805,
+      "title": "Korean wraps word by word (wordBreak: keepAll)",
+      "url": "https://github.com/storytold/figcraft/pull/1805",
+      "head": "32fc3cf94b5480595a087349525111b6c7c249b2",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/automation/inspect.rs",
+        "crates/engine/src/cmd/props.rs",
+        "crates/engine/src/dev/codegen/css.rs",
+        "docs/target-app-parity.md"
+      ]
+    },
+    {
+      "number": 1792,
+      "title": "Web: optional external file providers (disabled by default)",
+      "url": "https://github.com/storytold/figcraft/pull/1792",
+      "head": "556a088bf0f8f1ea5875ad32a5ea10683bde3a63",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "0231cb32499982e5845d9162e38cdbbf7f0d6142"
+    },
+    {
+      "number": 1763,
+      "title": "fix(board): map left and right connector controls to matching ends (#\u2026",
+      "url": "https://github.com/storytold/figcraft/pull/1763",
+      "head": "59d5c3624470e787847a32c5fb74d4c61aaf2e86",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "fc3430f9d6e5832862fd0690809a345dbae392b4"
+    },
+    {
+      "number": 1742,
+      "title": "Check for Updates: modal with spinner and releases link",
+      "url": "https://github.com/storytold/figcraft/pull/1742",
+      "head": "1f21ca36c1ff2de36b7a81de5280b91a1528b4fa",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/dialogs/updates_ui.rs"
+      ]
+    },
+    {
+      "number": 1736,
+      "title": "M12: board tables size columns and rows by their borders and take cell colours",
+      "url": "https://github.com/storytold/figcraft/pull/1736",
+      "head": "2831b216b8f4894b392c979cef0d44784fd01f3d",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/boards/board_table.rs",
+        "crates/engine/src/derived.rs",
+        "crates/ui-egui/src/board_ui_tests.rs",
+        "crates/ui-egui/src/canvas/board_bar.rs",
+        "docs/boards-parity.md",
+        "docs/gaps.md",
+        "docs/roadmap.md"
+      ]
+    },
+    {
+      "number": 1624,
+      "title": "M4: keyframe animation \u2014 timeline, inspector and easing",
+      "url": "https://github.com/storytold/figcraft/pull/1624",
+      "head": "b1637b2cc99c6e6c262b7e5935b9c32c885d8a07",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/src/panels/right/paints.rs",
+        "docs/prototyping-parity.md",
+        "docs/target-app-parity.md"
+      ]
+    },
+    {
+      "number": 1602,
+      "title": "deps: bump tar, zip, roxmltree, rustls-webpki and symphonia to latest",
+      "url": "https://github.com/storytold/figcraft/pull/1602",
+      "head": "fbe4f79785e5c8e5d53ae3807515eddccc9924c8",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.toml",
+        "crates/format/src/fig.rs",
+        "crates/format/src/lib.rs",
+        "crates/format/src/penpot/export_tests.rs",
+        "crates/format/src/sketch.rs",
+        "crates/format/src/thumbnail.rs"
+      ]
+    },
+    {
+      "number": 1473,
+      "title": "Require a token for the --control channel",
+      "url": "https://github.com/storytold/figcraft/pull/1473",
+      "head": "d67874e90bb65ac0965ddea50161f3d5f4f406e2",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft-cli/src/main.rs",
+        "apps/figcraft/src/control_server.rs",
+        "apps/figcraft/src/control_server_tests.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/mcp/src/backend.rs",
+        "crates/mcp/tests/it/attached.rs",
+        "docs/cli.md"
+      ]
+    },
+    {
+      "number": 1456,
+      "title": "perf: GPU canvas rasterizer (vello, P1-P11) with CPU fallback",
+      "url": "https://github.com/storytold/figcraft/pull/1456",
+      "head": "b6d7facb5593bbd535231dd85ddbc33763b13674",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "ROADMAP.md",
+        "crates/render/src/draw.rs",
+        "crates/render/src/glass.rs",
+        "crates/render/src/lib.rs",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/canvas/render_worker.rs",
+        "docs/control-protocol.md",
+        "docs/gaps.md",
+        "docs/hardware-parity.md",
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 1451,
+      "title": "Android (6/6): docs, 50% UI scale, touch scroll arbiter, launcher icon",
+      "url": "https://github.com/storytold/figcraft/pull/1451",
+      "head": "1ab20a442bacef703d0735501650e7bba2d2ae8c",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "AGENTS.md",
+        "ATTRIBUTION.md",
+        "Cargo.lock",
+        "README.md",
+        "ROADMAP.md",
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "contributors/people.toml",
+        "crates/engine/src/lib.rs",
+        "crates/ui-egui/locales/bn.toml",
+        "crates/ui-egui/locales/cs.toml",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/id.toml",
+        "crates/ui-egui/locales/it.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ka.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/nl.toml",
+        "crates/ui-egui/locales/pl.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/ru.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/locales/th.toml",
+        "crates/ui-egui/locales/tr.toml",
+        "crates/ui-egui/locales/vi.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/dialogs.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/panels/layers.rs",
+        "crates/ui-egui/src/ui_scale.rs",
+        "docs/architecture.md",
+        "docs/gaps.md"
+      ]
+    },
+    {
+      "number": 1449,
+      "title": "Android (4/6): shared storage, JNI grant, switcher, canvas touch",
+      "url": "https://github.com/storytold/figcraft/pull/1449",
+      "head": "3ec28ca4686a99ebc98ea96d7253c7f2885c2f9e",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "AGENTS.md",
+        "Cargo.lock",
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/ui-egui/locales/bn.toml",
+        "crates/ui-egui/locales/cs.toml",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/id.toml",
+        "crates/ui-egui/locales/it.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ka.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/nl.toml",
+        "crates/ui-egui/locales/pl.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/ru.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/locales/th.toml",
+        "crates/ui-egui/locales/tr.toml",
+        "crates/ui-egui/locales/vi.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/dialogs.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "number": 1448,
+      "title": "Android (3/6): the in-app file browser serves every file dialog",
+      "url": "https://github.com/storytold/figcraft/pull/1448",
+      "head": "6bdddc68a229fb067103b6b1710f796956793c8c",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/src/dialogs.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "number": 1447,
+      "title": "Android (2/6): NativeActivity entry crate",
+      "url": "https://github.com/storytold/figcraft/pull/1447",
+      "head": "be288d625ee6a6a4394b4e0d54e1890ca48c5d97",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "number": 1446,
+      "title": "Android (1/6): move the window and launch logic into a library",
+      "url": "https://github.com/storytold/figcraft/pull/1446",
+      "head": "6e28fef0dade9aff295317b3286c06ec3d43db02",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs"
+      ]
+    },
+    {
+      "number": 1401,
+      "title": "M7: Home: project library with folders, subfolders and favorites",
+      "url": "https://github.com/storytold/figcraft/pull/1401",
+      "head": "5b5dd3a0bc30b602538115e5ce27e6ebf950f994",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/main.rs",
+        "contributors/people.toml",
+        "crates/engine/src/cmd/file.rs",
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/file_access.rs",
+        "crates/engine/src/lib.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/home.rs",
+        "crates/ui-egui/src/home/home_recents.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "docs/target-app-parity.md"
+      ]
+    },
+    {
+      "number": 1392,
+      "title": "M1: keep saved files in sync across windows (#1388)",
+      "url": "https://github.com/storytold/figcraft/pull/1392",
+      "head": "ee542c49bb6b8213cb103f776b348fb6cd0ed06f",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/main.rs",
+        "crates/engine/src/cmd/file.rs",
+        "crates/engine/src/file_access.rs",
+        "crates/engine/src/file_access_tests.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/save_disk_changes_tests.rs",
+        "crates/ui-egui/locales/bn.toml",
+        "docs/control-protocol.md",
+        "docs/gaps.md",
+        "docs/hardware-parity.md"
+      ]
+    },
+    {
+      "number": 1364,
+      "title": "Remember the native window and add GNOME Wayland caption buttons",
+      "url": "https://github.com/storytold/figcraft/pull/1364",
+      "head": "b52f058e00774944cc9401791646284715710b43",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs"
+      ]
+    },
+    {
+      "number": 1271,
+      "title": "Variables window: rewrite editor panel (WIP)",
+      "url": "https://github.com/storytold/figcraft/pull/1271",
+      "head": "c1312516a9e70ea24940389bcfadc6f7df21e270",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/engine/src/assets/style_vars.rs",
+        "crates/engine/src/variables_editor_tests.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/ka.toml",
+        "crates/ui-egui/locales/nl.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/src/colorpicker.rs",
+        "crates/ui-egui/src/dialogs/variables_panel.rs",
+        "crates/ui-egui/src/icons.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/panels/layers.rs",
+        "crates/ui-egui/src/panels/variable_ui.rs",
+        "crates/ui-egui/src/widgets.rs"
+      ]
+    },
+    {
+      "number": 1050,
+      "title": "M9: preserve portable text appearance when fonts are missing",
+      "url": "https://github.com/storytold/figcraft/pull/1050",
+      "head": "b553ec3c9d322e8aa14c1e2e27e73276579837dc",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "crates/engine/src/sharing/live/host.rs"
+      ]
+    },
+    {
+      "number": 1048,
+      "title": "M9: fetch progressive previews without replacing original images",
+      "url": "https://github.com/storytold/figcraft/pull/1048",
+      "head": "7d0ffbbdfc6d9f2e86e95e8674350d19c4c26056",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "ROADMAP.md",
+        "crates/collab/src/replica.rs",
+        "crates/format/src/image_tests.rs",
+        "crates/format/src/lib.rs",
+        "crates/format/src/penpot/export.rs",
+        "crates/pdf/Cargo.toml",
+        "crates/render/src/tests.rs"
+      ]
+    },
+    {
+      "number": 1046,
+      "title": "M9: fetch scoped original images outside collaboration snapshots",
+      "url": "https://github.com/storytold/figcraft/pull/1046",
+      "head": "fcaf56be46a8b40cb4f3d2c3666fd8ef0522793d",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "ROADMAP.md",
+        "crates/collab/src/replica.rs",
+        "crates/format/src/image_tests.rs",
+        "crates/format/src/lib.rs",
+        "crates/format/src/penpot/export.rs",
+        "crates/pdf/Cargo.toml",
+        "crates/render/src/tests.rs"
+      ]
+    },
+    {
+      "number": 941,
+      "title": "feat(ui): add context menu to customize highlight colors for main frames and layers",
+      "url": "https://github.com/storytold/figcraft/pull/941",
+      "head": "ca19f4cf2854cc1d57a86644ca2ef31758137988",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "contributors/people.toml",
+        "crates/ui-egui/src/layers_behaviour_tests.rs",
+        "crates/ui-egui/src/menus.rs",
+        "crates/ui-egui/src/panels/layers.rs"
+      ]
+    },
+    {
+      "number": 823,
+      "title": "M4: the stroke's advanced settings in a popover, the width profile among them",
+      "url": "https://github.com/storytold/figcraft/pull/823",
+      "head": "5a559803979f2d60bcc9800b3984d3c013bc954c",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/src/dialogs/variables_panel.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/right.rs",
+        "crates/ui-egui/src/shortcuts.rs",
+        "crates/ui-egui/src/widgets/colorpicker.rs",
+        "crates/ui-egui/src/widgets/style_picker.rs",
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 805,
+      "title": "feat(macos): the main menu in the menu bar (#784)",
+      "url": "https://github.com/storytold/figcraft/pull/805",
+      "head": "2c6f24e7b59ed0d808bc6a2b419ed5395daf2b60",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "apps/figcraft/Cargo.toml",
+        "apps/figcraft/src/main.rs",
+        "crates/ui-egui/Cargo.toml",
+        "crates/ui-egui/locales/cs.toml",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fi.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/id.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/nl.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/ru.toml",
+        "crates/ui-egui/locales/sv.toml",
+        "crates/ui-egui/locales/tr.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/lib.rs"
+      ]
+    },
+    {
+      "number": 803,
+      "title": "M4: the auto layout's settings popover",
+      "url": "https://github.com/storytold/figcraft/pull/803",
+      "head": "7587148dd399cbba09400ca47cfdfc71771973fa",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "crates/ui-egui/src/dialogs/variables_panel.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/panels/layout_panel.rs",
+        "crates/ui-egui/src/right.rs",
+        "crates/ui-egui/src/shortcuts.rs",
+        "crates/ui-egui/src/widgets/colorpicker.rs",
+        "crates/ui-egui/src/widgets/style_picker.rs",
+        "docs/auto-layout-parity.md",
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 779,
+      "title": "Fix blurred DX12 UI in restored Windows windows",
+      "url": "https://github.com/storytold/figcraft/pull/779",
+      "head": "0c32c20852a95e8a264b7a5aadbd4945ffe54bab",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.toml"
+      ]
+    },
+    {
+      "number": 734,
+      "title": "M9: View on another device: watch a prototype in a phone's browser",
+      "url": "https://github.com/storytold/figcraft/pull/734",
+      "head": "cb882e0bda8e49cfd437e43e85628f8b1c4bb910",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "apps/figcraft-web/src/web.rs",
+        "apps/figcraft/src/main.rs",
+        "contributors/people.toml",
+        "crates/collab-net/src/driver_tests.rs",
+        "crates/collab-net/src/host.rs",
+        "crates/collab-net/src/lib.rs",
+        "crates/collab-net/src/link.rs",
+        "crates/collab-net/src/loopback_tests.rs",
+        "crates/engine/src/live_share_tests.rs",
+        "crates/engine/src/sharing/live/host.rs",
+        "crates/engine/src/sharing/live/types.rs",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/src/live_share_tests.rs",
+        "crates/ui-egui/src/present/actions.rs",
+        "crates/ui-egui/src/present/chrome.rs",
+        "docs/gaps.md",
+        "docs/hardware-parity.md",
+        "docs/mcp.md",
+        "docs/prototyping-parity.md"
+      ]
+    },
+    {
+      "number": 618,
+      "title": "M7: keep the image adjustment popup on the selected image",
+      "url": "https://github.com/storytold/figcraft/pull/618",
+      "head": "635619d2676ba5a05fa753351c7ef952c7ecaa20",
+      "draft": false,
+      "status": "integrated",
+      "reasons": [
+        "Integrated without resolving merge conflicts; combined workspace CI and file-provider browser regressions passed."
+      ],
+      "merge_commit": "9c80e482419d76b496143974583a68668b0d6f09"
+    },
+    {
+      "number": 611,
+      "title": "Print: network printers, Grayscale and queue paper through craft-libs",
+      "url": "https://github.com/storytold/figcraft/pull/611",
+      "head": "0097eec7f00d74cde69dfd95dde75cb3ca2ecb76",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "README.md",
+        "apps/figcraft/src/main.rs",
+        "crates/engine/src/cmd/file.rs",
+        "crates/pdf/src/export_tests.rs",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/src/dialogs.rs",
+        "crates/ui-egui/src/lib.rs"
+      ]
+    },
+    {
+      "number": 590,
+      "title": "Preserve macOS app signatures in shipped DMGs",
+      "url": "https://github.com/storytold/figcraft/pull/590",
+      "head": "22dd2f8133fc8229d0f1646c74bb332f24212f41",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        ".github/workflows/release.yml",
+        "ROADMAP.md"
+      ]
+    },
+    {
+      "number": 500,
+      "title": "Authenticate the local control channel",
+      "url": "https://github.com/storytold/figcraft/pull/500",
+      "head": "d58b41f272c9049b29f29c2abd13d1056052a3d7",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft-cli/src/main.rs",
+        "apps/figcraft/src/control_server.rs",
+        "apps/figcraft/src/control_server_tests.rs",
+        "apps/figcraft/src/main.rs",
+        "crates/mcp/src/backend.rs",
+        "crates/mcp/tests/it/attached.rs",
+        "docs/cli.md",
+        "docs/control-protocol.md",
+        "docs/mcp.md"
+      ]
+    },
+    {
+      "number": 174,
+      "title": "Session restore, Dev Mode import lines, branch history entries, and plugin API 4",
+      "url": "https://github.com/storytold/figcraft/pull/174",
+      "head": "9ff853ef61ed9d4ef7ad1118df5258e879c02d82",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/args.rs",
+        "apps/figcraft/src/args_tests.rs",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/engine/src/cmd/file.rs",
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/code_connect.rs",
+        "crates/engine/src/component_codegen.rs",
+        "crates/engine/src/extensions/plugins.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/live.rs",
+        "crates/engine/src/sharing/branches.rs",
+        "crates/engine/src/textedit.rs",
+        "crates/engine/src/tools.rs",
+        "crates/engine/src/widgets.rs",
+        "crates/engine/src/widgets_tests.rs",
+        "crates/plugin/src/lib.rs",
+        "crates/plugin/src/manifest.rs",
+        "crates/plugin/src/sandbox.rs",
+        "crates/plugin/src/tests.rs",
+        "crates/plugin/src/v2_tests.rs",
+        "crates/plugin/src/widget.rs",
+        "crates/plugin/src/widget_tests.rs",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/a11y.rs",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/dialogs/plugins_ui.rs",
+        "crates/ui-egui/src/home.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/present.rs",
+        "crates/ui-egui/src/right.rs",
+        "crates/ui-egui/src/typography.rs",
+        "crates/ui-egui/src/windows.rs",
+        "docs/collaboration-parity.md",
+        "docs/dev-mode-parity.md",
+        "docs/gaps.md",
+        "docs/hardware-parity.md",
+        "docs/mcp.md",
+        "docs/parity-checklist.md",
+        "docs/plugins.md",
+        "docs/roadmap.md",
+        "docs/target-app-parity.md",
+        "docs/ui-parity.md",
+        "plugins/Cargo.lock",
+        "plugins/examples/counter/figcraft-plugin.json",
+        "plugins/examples/counter/src/lib.rs",
+        "plugins/sdk/src/lib.rs",
+        "xtask/src/main.rs"
+      ]
+    },
+    {
+      "number": 173,
+      "title": "Session restore: windows and tabs come back as they were left; Dev Mode import lines; branch history entries",
+      "url": "https://github.com/storytold/figcraft/pull/173",
+      "head": "aeebf7260d6bbe29ae92cc7a22db8d675bd10778",
+      "draft": false,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "ROADMAP.md",
+        "apps/figcraft/src/args.rs",
+        "apps/figcraft/src/args_tests.rs",
+        "apps/figcraft/src/main.rs",
+        "apps/figcraft/src/services.rs",
+        "crates/engine/src/cmd/file.rs",
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/code_connect.rs",
+        "crates/engine/src/component_codegen.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/src/sharing/branches.rs",
+        "crates/ui-egui/locales/de.toml",
+        "crates/ui-egui/locales/en.toml",
+        "crates/ui-egui/locales/es.toml",
+        "crates/ui-egui/locales/fr.toml",
+        "crates/ui-egui/locales/ja.toml",
+        "crates/ui-egui/locales/ko.toml",
+        "crates/ui-egui/locales/pt-BR.toml",
+        "crates/ui-egui/locales/zh-Hans.toml",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/home.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/windows.rs",
+        "docs/collaboration-parity.md",
+        "docs/dev-mode-parity.md",
+        "docs/gaps.md",
+        "docs/hardware-parity.md",
+        "docs/mcp.md",
+        "docs/ui-parity.md"
+      ]
+    },
+    {
+      "number": 129,
+      "title": "Spike: GPU canvas (vello) behind a feature flag",
+      "url": "https://github.com/storytold/figcraft/pull/129",
+      "head": "ef15ab67cf8c573dbc38ace3fd8361d70037b78e",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "crates/ui-egui/Cargo.toml",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/canvas_fixes_tests.rs",
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/idle_tests.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/render_worker.rs"
+      ]
+    },
+    {
+      "number": 113,
+      "title": "M4: spell check while editing text",
+      "url": "https://github.com/storytold/figcraft/pull/113",
+      "head": "e1cd613b1dfd8fd204d38757233cee9db51286d3",
+      "draft": true,
+      "status": "deferred",
+      "reasons": [
+        "Attempted against the combined branch; merge conflicts are postponed by the user."
+      ],
+      "merge_commit": null,
+      "conflict_files": [
+        "Cargo.lock",
+        "ROADMAP.md",
+        "apps/figcraft/src/main.rs",
+        "crates/engine/src/catalog.rs",
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/lib.rs",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/lib.rs",
+        "crates/ui-egui/src/menus.rs",
+        "docs/gaps.md",
+        "docs/mcp.md",
+        "docs/parity-checklist.md",
+        "docs/roadmap.md",
+        "docs/target-app-parity.md",
+        "docs/ui-parity.md"
+      ]
+    }
+  ],
+  "scope_confirmation": "The user explicitly confirmed attempting drafts and experiments while still deferring every merge conflict.",
+  "snapshot_recorded_at": "2026-11-23T17:53:35.377914+03:30",
+  "completed_at": "2026-11-23T20:24:23.892159+00:00",
+  "validated_source_commit": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+  "upstream_observation": {
+    "observed_main_commit": "b828e6c75a3a90fefc0e62f488c013ca4714a5fa",
+    "subject": "ci(release): forward ARTCRAFT_SERVICES_DISPATCH_TOKEN secret (#2578)",
+    "included": false,
+    "reason": "Newer CI-only main commit observed after the fixed integration base and captured backlog; not merged into this branch."
+  },
+  "validation_history": [
+    {
+      "source_commit": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+      "validation": {
+        "rust": "1.100.0",
+        "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
+        "passed": [
+          "cargo xtask ci (formatting; workspace Clippy with warnings denied; native unit and integration tests; doctests; i18n report; layers, assets and docs checks; wasm32 check; plugin SDK formatting, Clippy, tests and release wasm build)",
+          "wasm-pack test --headless --firefox --geckodriver /snap/bin/geckodriver apps/figcraft-web --bin figcraft-web --locked",
+          "cargo test --workspace --lib --bins --tests --no-fail-fast picker (87 UI tests passed)",
+          "git diff --check",
+          "Changed TOML files parsed successfully",
+          "bash -n packaging/linux/AppRun packaging/linux/postinst.sh packaging/linux/apprun-test.sh",
+          "bash packaging/linux/apprun-test.sh",
+          "All 45 included PR heads are ancestors of the validated source commit; all 80 conflict deferrals have file inventories; all 127 captured PRs are accounted for"
+        ],
+        "workspace_ci": {
+          "head": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+          "state": "finished",
+          "exit_code": 0,
+          "started": "2026-11-23T19:35:13.318817+00:00",
+          "finished": "2026-11-23T20:14:56.460541+00:00"
+        },
+        "native_test_results": {
+          "passed": 6398,
+          "failed": 0,
+          "ignored": 13,
+          "test_binaries": 36
+        },
+        "browser_regressions": {
+          "head": "06907880c7bd60f1038a00a9992064b3eb892d7f",
+          "state": "finished",
+          "exit_code": 0,
+          "started": "2026-11-23T20:21:58.175636+00:00",
+          "finished": "2026-11-23T20:23:46.946740+00:00"
+        },
+        "browser_test_results": {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        "platform_limits": [
+          "Native checks ran on Ubuntu under WSL, with headless UI tests; no manual screen-reader, keyboard-navigation or desktop visual review is claimed.",
+          "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
+          "Release packages and installers have not been built or installed locally.",
+          "Translation quality has not been reviewed by native speakers.",
+          "Baseline full CI was interrupted and is not claimed to have passed."
+        ],
+        "notes": [
+          "Earlier integration validation exposed missing regression-test imports, stale exact inspection metadata, a pagination fixture made too small by compact JSON, and image/gradient/crop picker interaction defects. These were corrected with assertions preserved or expanded before the final passing runs.",
+          "The first browser runtime attempt failed before assertions because WebDriver did not bind its port; the final isolated run recorded here supersedes that attempt."
+        ],
+        "browser_setup": "GECKODRIVER_REMOTE points to a prestarted /snap/bin/geckodriver on loopback; Snap Firefox remains headless."
+      }
+    },
+    {
+      "source_commit": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+      "validation": {
+        "state": "passed",
+        "rust": "1.100.0",
+        "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
+        "passed": [
+          "cargo test --workspace --lib --bins --tests --no-fail-fast",
+          "cargo fmt --all --check",
+          "cargo clippy --workspace --all-targets --keep-going -- -D warnings",
+          "cargo test --workspace --doc",
+          "cargo xtask i18n-report",
+          "cargo xtask layers",
+          "cargo xtask assets",
+          "cargo xtask docs",
+          "cargo xtask wasm",
+          "wasm-pack test --headless --firefox --geckodriver /snap/bin/geckodriver apps/figcraft-web --bin figcraft-web --locked",
+          "git diff --check",
+          "11 changed TOML files parsed successfully",
+          "All 45 included heads are ancestors; all 127 captured PRs accounted for; 80 conflict inventories retained; restored drafts reference original two-parent merge commits"
+        ],
+        "workspace_ci": {
+          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+          "state": "finished",
+          "exit_code": 0,
+          "started": "2026-11-24T13:48:09.191666+00:00",
+          "finished": "2026-11-24T14:28:27.994894+00:00",
+          "commands": [
+            "cargo test --workspace --lib --bins --tests --no-fail-fast",
+            "cargo fmt --all --check",
+            "cargo clippy --workspace --all-targets --keep-going -- -D warnings",
+            "cargo test --workspace --doc",
+            "cargo xtask i18n-report",
+            "cargo xtask layers",
+            "cargo xtask assets",
+            "cargo xtask docs",
+            "cargo xtask wasm"
+          ],
+          "runs": {
+            "review-final-native-3": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T13:48:09.191666+00:00",
+              "finished": "2026-11-24T14:10:53.368339+00:00"
+            },
+            "review-final-format-check": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:11:23.122668+00:00",
+              "finished": "2026-11-24T14:11:40.261525+00:00"
+            },
+            "review-final-clippy": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:11:40.331237+00:00",
+              "finished": "2026-11-24T14:13:33.500868+00:00"
+            },
+            "review-final-doctests": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:13:33.546008+00:00",
+              "finished": "2026-11-24T14:14:06.013149+00:00"
+            },
+            "review-final-i18n": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:14:06.068181+00:00",
+              "finished": "2026-11-24T14:22:48.472788+00:00"
+            },
+            "review-final-layers": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:22:49.275601+00:00",
+              "finished": "2026-11-24T14:25:57.042763+00:00"
+            },
+            "review-final-assets": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:25:58.127862+00:00",
+              "finished": "2026-11-24T14:25:59.194052+00:00"
+            },
+            "review-final-docs": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:25:59.245493+00:00",
+              "finished": "2026-11-24T14:26:00.497348+00:00"
+            },
+            "review-final-wasm": {
+              "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+              "state": "finished",
+              "exit_code": 0,
+              "started": "2026-11-24T14:26:00.553544+00:00",
+              "finished": "2026-11-24T14:28:27.994894+00:00"
+            }
+          }
+        },
+        "native_test_results": {
+          "passed": 6428,
+          "failed": 0,
+          "ignored": 13,
+          "test_binaries": 36
+        },
+        "browser_regressions": {
+          "head": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+          "state": "finished",
+          "exit_code": 0,
+          "started": "2026-11-24T14:30:27.449896+00:00",
+          "finished": "2026-11-24T15:09:39.403681+00:00"
+        },
+        "browser_test_results": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        "browser_setup": "GECKODRIVER_REMOTE points to a prestarted /snap/bin/geckodriver on loopback; Snap Firefox remains headless.",
+        "platform_limits": [
+          "Native checks ran on Ubuntu under WSL, with headless UI tests; no manual screen-reader, keyboard-navigation or desktop visual review is claimed.",
+          "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
+          "Release packages and installers have not been built or installed locally.",
+          "Translation quality has not been reviewed by native speakers.",
+          "Baseline full CI was interrupted and is not claimed to have passed."
+        ],
+        "notes": [
+          "All checks performed by cargo xtask ci ran separately on the exact source commit. Native unit/integration tests used Cargo --no-fail-fast so an early failure could not conceal later suite results. No new skip or ignore was introduced; the pre-existing ignored tests remain recorded in the native results.",
+          "Original successful validation remains in validation_history with its original source commit. Earlier failed/interrupted review attempts are not counted as passes.",
+          "The first completed review gate stopped at an unchanged upstream control-server test: SendError after its 100 ms reply deadline. The exact binary and all 89 application tests passed on subsequent diagnostic runs without source changes.",
+          "Review validation corrected an invalid new bound-text fixture, serialized-write test producers, and File menu focus registration. Later targeted runs identified one existing reopen producer conflicting with the new live-tab focus behavior and two new headless fixtures discarding texture deltas. These fixtures now follow the documented protocol and existing headless rendering patterns while preserving the binding, dirty-state, and close assertions.",
+          "The full native run on 4ada579f found four engine fixture issues and three missing English source keys. Fixtures now use persistent unpainted rectangles, a nonempty group, an explicit normalized grid, and the real picker preservePlacement option; every existing assertion is retained. The three English source keys were added.",
+          "That same run also had four server share-connection timeouts while new WSL commands were failing. All seven team-link tests passed together afterward without a server change; apps/figcraft-server source is unchanged from the integration base.",
+          "The full native run on 8758b0a4 passed the server and English catalog checks and failed only the existing multi-layer crop rotation assertion. The subsequent fix recomputes target-specific placement for picker rotations while preserving default explicit crop replacements; no crop or filter assertion was changed.",
+          "An oversized-start ratio regression failed before the trial-bound correction and all layout tests passed afterward.",
+          "A filtered provider diagnostic exceeded its 90-second wrapper limit during import and is not counted as a full pass. The native-only/import regression passed separately; final native results above come from the complete renewed suite.",
+          "Firefox uses supported GECKODRIVER_REMOTE with a prestarted loopback Snap WebDriver, without desktop focus."
+        ]
+      }
+    },
+    {
+      "source_commit": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+      "validation": {
+        "state": "passed_scoped",
+        "rust": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+        "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
+        "scope": "Complete engine, layout, collaboration and server test suites including doctests; affected-crate Clippy; workspace formatting, layer/docs checks and wasm gate.",
+        "passed": [
+          "cargo test -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --no-fail-fast",
+          "cargo fmt --all --check",
+          "cargo clippy -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --all-targets -- -D warnings",
+          "cargo xtask layers",
+          "cargo xtask docs",
+          "cargo xtask wasm",
+          "git diff --check",
+          "All 45 included PR heads remain ancestors; all 127 captured entries retained."
+        ],
+        "runs": {
+          "second-review-final-native": {
+            "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--no-fail-fast"
+            ],
+            "start": "2026-11-24T17:08:41.630936+00:00",
+            "finish": "2026-11-24T17:24:16.332310+00:00",
+            "exit_code": 0
+          },
+          "second-review-final-format": {
+            "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+            "args": [
+              "fmt",
+              "--all",
+              "--check"
+            ],
+            "start": "2026-11-24T17:10:41.208330+00:00",
+            "finish": "2026-11-24T17:11:29.981299+00:00",
+            "exit_code": 0
+          },
+          "second-review-final-clippy": {
+            "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+            "args": [
+              "clippy",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--all-targets",
+              "--",
+              "-D",
+              "warnings"
+            ],
+            "start": "2026-11-24T17:24:19.663837+00:00",
+            "finish": "2026-11-24T17:26:58.879409+00:00",
+            "exit_code": 0
+          },
+          "second-review-final-layers": {
+            "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+            "args": [
+              "xtask",
+              "layers"
+            ],
+            "start": "2026-11-24T17:26:59.137454+00:00",
+            "finish": "2026-11-24T17:29:09.513519+00:00",
+            "exit_code": 0
+          },
+          "second-review-final-docs": {
+            "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+            "args": [
+              "xtask",
+              "docs"
+            ],
+            "start": "2026-11-24T17:29:09.572582+00:00",
+            "finish": "2026-11-24T17:29:10.627399+00:00",
+            "exit_code": 0
+          },
+          "second-review-final-wasm": {
+            "head": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+            "args": [
+              "xtask",
+              "wasm"
+            ],
+            "start": "2026-11-24T17:29:10.682505+00:00",
+            "finish": "2026-11-24T17:31:00.415139+00:00",
+            "exit_code": 0
+          }
+        },
+        "test_results": {
+          "native": {
+            "passed": 2773,
+            "failed": 0,
+            "ignored": 5,
+            "summaries": 7
+          },
+          "doctests": {
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "summaries": 4
+          }
+        },
+        "new_regressions_passed": [
+          "reconnect_tests::second_review_clamped_snapshot_resync_survives_saved_restarts",
+          "design::tests::second_review_invisible_group_does_not_hide_a_contrast_failure",
+          "variant_binding_import_tests::second_review_same_color_local_variable_binding_survives_settlement",
+          "variant_binding_import_tests::second_review_inherited_variable_paint_resolves_in_the_instances_mode",
+          "variant_binding_import_tests::second_review_property_settlement_keeps_instance_paint_bindings_and_modes",
+          "tests::second_review_rigid_layout_frames_share_the_coupled_ratio_line",
+          "store_tests::second_review_version_one_binary_snapshots_remain_readable"
+        ],
+        "not_rerun": [
+          "Full workspace native test and Clippy gates",
+          "Headless Firefox regressions"
+        ],
+        "platform_limits": [
+          "Native checks ran on Ubuntu under WSL, with headless UI tests; no manual screen-reader, keyboard-navigation or desktop visual review is claimed.",
+          "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
+          "Release packages and installers have not been built or installed locally.",
+          "Translation quality has not been reviewed by native speakers.",
+          "Baseline full CI was interrupted and is not claimed to have passed."
+        ],
+        "notes": [
+          "Prior comprehensive validation on 4413d3b5 remains in validation_history and is not claimed for this source.",
+          "The original-production baseline reproduced restart, invisible-group contrast and rigid-layout defects. The first paint assertion expected a noncanonical binding key and is not counted as defect evidence.",
+          "A corrected paint run reproduced loss of an instance-only variable binding when its current color matches the main. Contrasting-color and inherited-mode controls passed before that fix. The first three defect regressions passed after their fixes.",
+          "The first server compatibility command selected an executable with zero tests and is not counted as a pass. The library regression then failed reading the preceding eight-field binary snapshot with an end-of-buffer error.",
+          "Snapshot format 2 persists resync; the explicit version-one decoder preserves existing binary snapshots. The complete framing/checksum equality test is retained, now covering format 2 with both flag values. Old JSON without the flag also remains readable.",
+          "Older server builds cannot read newly written format-2 snapshots; a downgrade needs compatible saved snapshots and matching logs. No live server data was changed.",
+          "No test was removed, weakened, ignored or skipped. The existing framing test version byte changed to match the explicitly versioned storage contract."
+        ]
+      }
+    },
+    {
+      "source_commit": "560f21fa237b00e83fb2f194782058e326194d59",
+      "validation": {
+        "state": "passed_scoped",
+        "rust": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+        "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
+        "scope": "Complete engine, layout, collaboration and server test suites including doctests; affected-crate Clippy; workspace formatting, layer/docs checks and wasm gate.",
+        "passed": [
+          "cargo test -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --no-fail-fast",
+          "cargo fmt --all --check",
+          "cargo clippy -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --all-targets -- -D warnings",
+          "cargo xtask layers",
+          "cargo xtask docs",
+          "cargo xtask wasm",
+          "git diff --check",
+          "All 45 included PR heads remain ancestors; all 127 captured entries retained."
+        ],
+        "runs": {
+          "third-review-final-native": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--no-fail-fast"
+            ],
+            "start": "2026-11-24T18:15:03.321800+00:00",
+            "finish": "2026-11-24T18:21:26.317786+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-format": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "fmt",
+              "--all",
+              "--check"
+            ],
+            "start": "2026-11-24T18:21:26.423141+00:00",
+            "finish": "2026-11-24T18:21:34.561555+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-clippy": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "clippy",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--all-targets",
+              "--",
+              "-D",
+              "warnings"
+            ],
+            "start": "2026-11-24T18:21:34.610278+00:00",
+            "finish": "2026-11-24T18:21:40.113120+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-layers": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "xtask",
+              "layers"
+            ],
+            "start": "2026-11-24T18:21:40.165728+00:00",
+            "finish": "2026-11-24T18:21:40.889235+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-docs": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "xtask",
+              "docs"
+            ],
+            "start": "2026-11-24T18:21:40.942273+00:00",
+            "finish": "2026-11-24T18:21:41.522751+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-wasm": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "xtask",
+              "wasm"
+            ],
+            "start": "2026-11-24T18:21:41.561892+00:00",
+            "finish": "2026-11-24T18:21:45.418660+00:00",
+            "exit_code": 0
+          }
+        },
+        "test_results": {
+          "native": {
+            "passed": 2777,
+            "failed": 0,
+            "ignored": 5,
+            "summaries": 7
+          },
+          "doctests": {
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "summaries": 4
+          }
+        },
+        "new_regressions_passed": [
+          "journal_tests::third_review_legacy_review_journal_keeps_later_edits_and_resyncs",
+          "design::tests::third_review_blended_groups_do_not_invent_contrast_or_repairs",
+          "tests::third_review_coupled_frames_keep_descendant_baselines",
+          "tests::third_review_coupled_frames_respect_padding_floors_and_settle"
+        ],
+        "not_rerun": [
+          "Full workspace native test and Clippy gates",
+          "Headless Firefox regressions"
+        ],
+        "platform_limits": [
+          "Native checks ran on Ubuntu under WSL. The UI/Firefox suites and manual screen-reader, keyboard-navigation and desktop visual review were not rerun for this follow-up.",
+          "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
+          "Release packages and installers have not been built or installed locally.",
+          "Translation quality has not been reviewed by native speakers.",
+          "Baseline full CI was interrupted and is not claimed to have passed."
+        ],
+        "notes": [
+          "All four new regression cases failed against the prior production source on 3db327d1. The initial attempt failed to compile due to a new test fixture importing BlendMode from the wrong crate; that attempt is not defect evidence.",
+          "The padding regression additionally checks retained locked ratios and stability in both flow directions with either child a frame. Existing empty-frame and shape-only controls remain unchanged.",
+          "Baseline-bearing frames use the existing measurement path; empty rigid frames remain supported by the simultaneous solver. Frame padding and included inside-stroke floors are included in trial minimums.",
+          "Legacy journal review values use the existing snapshot clamp and persist the resync requirement. Ordinary incoming edits retain their strict validation.",
+          "The blend regression covers Multiply and the unchanged Normal/PassThrough controls, and forbids a guessed repair for unknown compositing.",
+          "All new test documents and synthetic journal values are generated directly by these Rust tests from original inputs; no external assets or fixture files were added.",
+          "The initial padding test incorrectly required both siblings to have equal cross sizes even when a minimum on the cross-fill child permits a smaller fixed-cross sibling. Its assertion was corrected to compare the cross-fill child with the parent line; padded-frame floors, both ratios and repeat stability remain checked. The corrected regression also failed on the old implementation in an isolated worktree.",
+          "Four initial server loopback tests timed out while compiler checks overlapped the native suite. All four passed on isolated reruns of the same commit, without application changes. Those failures remain recorded; no timing bounds, tests or workflows were weakened.",
+          "No pre-existing tests were removed, weakened, ignored or skipped. No workflow, check-policy, dependency-pin or snapshot-format changes were made in this follow-up.",
+          "Earlier validation remains attached to its original source in validation_history. Full workspace and Firefox gates were not rerun; GitHub Actions approval is separate from local validation."
+        ],
+        "prior_attempts": {
+          "third-review-red": {
+            "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-engine",
+              "third_review",
+              "--no-fail-fast"
+            ],
+            "start": "2026-11-24T17:46:14.472882+00:00",
+            "finish": "2026-11-24T17:49:51.425618+00:00",
+            "exit_code": 101
+          },
+          "third-review-red-corrected": {
+            "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-engine",
+              "--lib",
+              "third_review",
+              "--no-fail-fast"
+            ],
+            "start": "2026-11-24T17:50:01.574506+00:00",
+            "finish": "2026-11-24T17:54:40.303440+00:00",
+            "exit_code": 101
+          },
+          "third-review-padding-baseline-cli-error": {
+            "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-layout",
+              "--lib",
+              "third_review_coupled_frames_respect_padding_floors_and_settle",
+              "tests::third_review_coupled_frames_respect_padding_floors_and_settle",
+              "--exact"
+            ],
+            "start": "2026-11-24T18:13:21.558607+00:00",
+            "finish": "2026-11-24T18:13:21.597890+00:00",
+            "exit_code": 1
+          },
+          "third-review-padding-corrected-red": {
+            "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-layout",
+              "--lib",
+              "tests::third_review_coupled_frames_respect_padding_floors_and_settle",
+              "--",
+              "--exact"
+            ],
+            "start": "2026-11-24T18:13:44.343421+00:00",
+            "finish": "2026-11-24T18:14:36.345285+00:00",
+            "exit_code": 101
+          },
+          "third-review-initial-native": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--no-fail-fast"
+            ],
+            "start": "2026-11-24T17:55:36.474208+00:00",
+            "finish": "2026-11-24T18:09:57.546149+00:00",
+            "exit_code": 101
+          },
+          "third-review-initial-format": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "fmt",
+              "--all",
+              "--check"
+            ],
+            "start": "2026-11-24T17:55:36.449222+00:00",
+            "finish": "2026-11-24T17:55:45.131115+00:00",
+            "exit_code": 0
+          },
+          "third-review-initial-clippy": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "clippy",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--all-targets",
+              "--",
+              "-D",
+              "warnings"
+            ],
+            "start": "2026-11-24T18:01:17.476691+00:00",
+            "finish": "2026-11-24T18:04:23.428313+00:00",
+            "exit_code": 0
+          },
+          "third-review-initial-layers": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "xtask",
+              "layers"
+            ],
+            "start": "2026-11-24T18:04:23.889965+00:00",
+            "finish": "2026-11-24T18:10:29.690206+00:00",
+            "exit_code": 0
+          },
+          "third-review-initial-docs": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "xtask",
+              "docs"
+            ],
+            "start": "2026-11-24T18:10:29.801433+00:00",
+            "finish": "2026-11-24T18:10:34.112042+00:00",
+            "exit_code": 0
+          },
+          "third-review-initial-wasm": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "xtask",
+              "wasm"
+            ],
+            "start": "2026-11-24T18:10:34.158537+00:00",
+            "finish": "2026-11-24T18:11:42.597399+00:00",
+            "exit_code": 0
+          },
+          "third-review-server-diagnostic-codes": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-server",
+              "--lib",
+              "codes_tests::",
+              "--",
+              "--test-threads=1"
+            ],
+            "start": "2026-11-24T18:11:52.505896+00:00",
+            "finish": "2026-11-24T18:12:26.551137+00:00",
+            "exit_code": 0
+          },
+          "third-review-server-diagnostic-owned": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-server",
+              "--lib",
+              "owned_tests::a_file_that_expired_or_was_removed_elsewhere_shows_as_gone",
+              "--",
+              "--exact"
+            ],
+            "start": "2026-11-24T18:12:35.669535+00:00",
+            "finish": "2026-11-24T18:12:39.677209+00:00",
+            "exit_code": 0
+          }
+        },
+        "initial_server_timeouts": [
+          "codes_tests::a_file_shared_online_is_joined_by_its_codes",
+          "codes_tests::a_keyed_share_gets_codes_and_stops_with_the_key",
+          "codes_tests::junk_requests_are_refused_and_never_hurt_the_server",
+          "owned_tests::a_file_that_expired_or_was_removed_elsewhere_shows_as_gone"
+        ]
+      }
+    }
+  ],
+  "review_followup": {
+    "reviewed_head": "a750a52ba9ba5c8834bfbde83629d8563f72e61b",
+    "review_url": "https://github.com/storytold/figcraft/pull/2583#pullrequestreview-6029252625",
+    "state": "validated",
+    "scope_note": "Reviewed all 13 inline findings and the 35 lower-priority claims, including the follow-up review comment. Dependency/workflow PR #2574 remains part of the requested aggregate integration; the review follow-up makes no workflow changes.",
+    "validated_source_commit": "4413d3b589933e713ff8930cd5bb5d05de24b8eb",
+    "validated_at": "2026-11-24T15:10:33.159388+00:00"
+  },
+  "review_followups": [
+    {
+      "reviewed_head": "d5da504bf5cb77a68758a9f4082cc66dfe817011",
+      "review_url": "https://github.com/storytold/figcraft/pull/2583#pullrequestreview-6042130672",
+      "state": "validated",
+      "validated_source_commit": "369590f48a39ce50a3ce119eb9c03fed00f549b4",
+      "validated_at": "2026-11-24T17:32:31.768891+00:00",
+      "comments": [
+        4682278582,
+        4682278598,
+        4682278616,
+        4682278628
+      ],
+      "fix_commits": [
+        "0185dbb3",
+        "7ce93e32",
+        "cd4a9c0b",
+        "369590f4"
+      ]
+    },
+    {
+      "reviewed_head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+      "review_url": "https://github.com/storytold/figcraft/pull/2583#pullrequestreview-6044382980",
+      "state": "validated",
+      "validated_source_commit": "560f21fa237b00e83fb2f194782058e326194d59",
+      "validated_at": "2026-11-24T18:22:26.392571+00:00",
+      "inline_threads": [
+        4684112983
+      ],
+      "outside_diff_claims": [
+        "3dbd607e4464b30d640674d8",
+        "0c8f602e0381a3e21fdd2f8f"
+      ],
+      "fix_commits": [
+        "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+        "560f21fa237b00e83fb2f194782058e326194d59"
+      ]
+    },
+    {
+      "reviewed_head": "988db7dee72d07e94fa34523a0e0947bf8a4c6ba",
+      "review_url": "https://github.com/storytold/figcraft/pull/2583#pullrequestreview-6045093610",
+      "state": "fixed",
+      "validation_state": "partial",
+      "validated_source_commit": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+      "validated_at": "2026-11-24T19:22:07.356413+00:00",
+      "comments": [
+        4684710932,
+        4684710951,
+        4684710997
+      ],
+      "fix_commits": [
+        "0d7c1a85e89459f63216c9abd1405b7dd20d8320"
+      ]
+    }
+  ]
+}

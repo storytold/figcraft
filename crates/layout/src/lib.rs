@@ -349,6 +349,7 @@ fn item_baseline(doc: &Document, id: NodeId, m: &dyn Measure, depth: usize) -> O
     }
 }
 
+#[derive(Clone)]
 struct Item {
     id: NodeId,
     main: f64,
@@ -368,6 +369,31 @@ struct Item {
     baseline: Option<f64>,
     /// Baseline alignment: offset from the line's top (computed per line).
     base_off: f64,
+    /// A layer with its aspect ratio locked that fills one axis and is fixed on the other: its
+    /// cross size over its main size, so the fixed side follows the filled one. `None` otherwise,
+    /// and in a wrapping flow (where a changed cross size would move the next lines).
+    locked_cross_per_main: Option<f64>,
+}
+
+impl Item {
+    /// The cross size for a child filling the main axis at `main`: at the locked ratio when it
+    /// has one, else `cross`. A main size of zero leaves `cross` alone rather than shrink the
+    /// layer to nothing.
+    fn cross_for_main(&self, main: f64, cross: f64) -> f64 {
+        match self.locked_cross_per_main {
+            Some(r) if self.fill_main && !self.fill_cross && main > 0.0 => clamp_size(main * r, self.min_cross, self.max_cross),
+            _ => cross,
+        }
+    }
+
+    /// The main size for a child filling the cross axis at `cross`: at the locked ratio when it
+    /// has one, else `main`. A cross size of zero leaves `main` alone.
+    fn main_for_cross(&self, cross: f64, main: f64) -> f64 {
+        match self.locked_cross_per_main {
+            Some(r) if self.fill_cross && !self.fill_main && cross > 0.0 => clamp_size(cross / r, self.min_main, self.max_main),
+            _ => main,
+        }
+    }
 }
 
 /// Split flow items into lines, preserving a single empty line when wrapping is off.
@@ -446,7 +472,7 @@ fn align_flow_lines(items: &[Item], extents: &mut [(f64, f64)], al: &AutoLayout,
 }
 
 /// Collect the size and sizing constraints of the children in flow order.
-fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool, cross_fill_off: bool) -> Vec<Item> {
+fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool, cross_fill_off: bool, wraps: bool) -> Vec<Item> {
     let mut items = Vec::with_capacity(kids.len());
     for child in kids {
         let Some(node) = doc.node(*child) else { continue };
@@ -459,6 +485,22 @@ fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool,
             let (pt, pr, pb, pl) = insets(node, al);
             if horizontal { pl + pr } else { pt + pb }
         });
+        let (main, cross) = if horizontal { (w, h) } else { (h, w) };
+        let (fill_main, fill_cross) = (sm == Sizing::Fill && !hug_main, sc == Sizing::Fill && !cross_fill_off);
+        let one_axis_fills_the_other_is_fixed = (fill_main && sc == Sizing::Fixed) || (fill_cross && sm == Sizing::Fixed);
+        // Layout gives a child its bounding box but sets its own width and height: the ratio holds
+        // only when the two agree, which a rotation (other than a half turn) breaks.
+        let [_, skew_y, skew_x, _, _, _] = node.transform.as_coeffs();
+        let unrotated = skew_y.abs() < 1e-9 && skew_x.abs() < 1e-9;
+        let locked_cross_per_main = (node.constrain_proportions
+            && one_axis_fills_the_other_is_fixed
+            && unrotated
+            && !wraps
+            && !matches!(node.kind, NodeKind::Text(_))
+            && main > 0.0
+            && cross > 0.0)
+            .then(|| cross / main)
+            .filter(|r| r.is_finite());
         items.push(Item {
             id: *child,
             main: if horizontal { w } else { h },
@@ -476,6 +518,7 @@ fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool,
             inset_main,
             baseline: None,
             base_off: 0.0,
+            locked_cross_per_main,
         });
     }
     items
@@ -504,7 +547,8 @@ fn stretch_fill_across_hug_line(
     let mut main_changed = false;
     for it in items.iter_mut().filter(|it| it.fill_cross) {
         let cross = clamp_size(line_cross, it.min_cross, it.max_cross);
-        let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
+        let main = it.main_for_cross(cross, it.main);
+        let (w, h) = if horizontal { (main, cross) } else { (cross, main) };
         resize_child(doc, it.id, w, h, m);
         let (w, h) = outer_size(doc, it.id);
         let (main, cross) = if horizontal { (w, h) } else { (h, w) };
@@ -517,6 +561,7 @@ fn stretch_fill_across_hug_line(
 /// Resize a child that fills the main axis to its distributed main size and the given cross size,
 /// and take the size it ends up with across (wrapped text, a hugging frame).
 fn resize_fill_main_item(doc: &mut Document, it: &mut Item, cross: f64, horizontal: bool, m: &dyn Measure) {
+    let cross = it.cross_for_main(it.main, cross);
     let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
     resize_child(doc, it.id, w, h, m);
     let (w, h) = outer_size(doc, it.id);
@@ -529,6 +574,157 @@ struct HugStretch<'a> {
     frame: (&'a figcraft_doc::ChildLayout, f64),
     horizontal: bool,
     flow: (f64, f64, bool),
+}
+
+/// Scale magnitudes of an axis-aligned, non-collapsed child, in its parent's coordinates.
+fn trial_scales(n: &figcraft_doc::Node) -> Option<(f64, f64)> {
+    let [sx, skew_y, skew_x, sy, _, _] = n.transform.as_coeffs();
+    (skew_y.abs() < 1e-9 && skew_x.abs() < 1e-9 && sx.is_finite() && sy.is_finite() && sx != 0.0 && sy != 0.0).then_some((sx.abs(), sy.abs()))
+}
+
+/// Express the local child bounds and insets in the same parent space as numerical trials.
+fn constrain_trial_items(doc: &Document, items: &mut [Item], horizontal: bool) -> bool {
+    for it in items.iter_mut().filter(|it| it.fill_main || it.fill_cross) {
+        let Some(n) = doc.node(it.id) else { return false };
+        let Some((sx, sy)) = trial_scales(n) else { return false };
+        let (main_scale, cross_scale) = if horizontal { (sx, sy) } else { (sy, sx) };
+        it.min_main = it.min_main.map(|v| v * main_scale);
+        it.max_main = it.max_main.map(|v| v * main_scale);
+        it.min_cross = it.min_cross.map(|v| v * cross_scale);
+        it.max_cross = it.max_cross.map(|v| v * cross_scale);
+        it.inset_main *= main_scale;
+        if let Some(al) = &n.layout {
+            let (pt, pr, pb, pl) = insets(n, al);
+            let floor = figcraft_geom::transform_rect_bbox(linear(n.transform), Rect::new(0.0, 0.0, pl + pr, pt + pb));
+            let (main, cross) = if horizontal { (floor.width(), floor.height()) } else { (floor.height(), floor.width()) };
+            if !main.is_finite() || !cross.is_finite() {
+                return false;
+            }
+            let mut min_main = it.min_main.unwrap_or(0.0).max(main);
+            let mut min_cross = it.min_cross.unwrap_or(0.0).max(cross);
+            if let Some(ratio) = it.locked_cross_per_main {
+                min_main = min_main.max(min_cross / ratio);
+                min_cross = min_cross.max(min_main * ratio);
+            }
+            it.min_main = Some(min_main);
+            it.min_cross = Some(min_cross);
+        }
+    }
+    true
+}
+
+/// A parent-space trial as local dimensions, only when the real resize can retain it.
+fn trial_local_size(doc: &Document, id: NodeId, w: f64, h: f64) -> Option<(f64, f64)> {
+    let n = doc.node(id)?;
+    let (sx, sy) = trial_scales(n)?;
+    let (w, h) = (w / sx, h / sy);
+    if !w.is_finite() || !h.is_finite() || w < 0.0 || h < 0.0 {
+        return None;
+    }
+    let cl = &n.child_layout;
+    let (mut retained_w, mut retained_h) = (clamp_size(w, cl.min_w, cl.max_w), clamp_size(h, cl.min_h, cl.max_h));
+    if let Some(al) = &n.layout {
+        let (pt, pr, pb, pl) = insets(n, al);
+        retained_w = retained_w.max(pl + pr);
+        retained_h = retained_h.max(pt + pb);
+    }
+    ((retained_w - w).abs() <= 1e-9 * w.max(1.0) && (retained_h - h).abs() <= 1e-9 * h.max(1.0)).then_some((w, h))
+}
+
+/// Coupled ratio-locked shapes need a simultaneous solution: widening a main-Fill shape
+/// grows the hugging line, which widens a cross-Fill shape and takes that main space back.
+/// The required line size is monotone decreasing in the proposed line size, so bisection
+/// finds their common size without alternating between two incompatible layouts.
+fn settle_locked_hug_line(doc: &mut Document, items: &mut [Item], lines: &[Vec<usize>], st: &HugStretch<'_>, m: &dyn Measure) -> bool {
+    if !items.iter().any(|it| it.fill_main && it.locked_cross_per_main.is_some())
+        || !items.iter().any(|it| it.fill_cross && it.locked_cross_per_main.is_some())
+        || items.iter().any(|it| it.fill_cross && it.locked_cross_per_main.is_none())
+        || items.iter().filter(|it| it.fill_main || it.fill_cross).any(|it| {
+            doc.node(it.id).is_none_or(|n| {
+                // A rigid auto-layout frame can accept the trial size just like a shape.
+                // Hug dimensions and text can remeasure themselves from their contents. A frame
+                // with a measured text baseline needs the ordinary measurement path as well:
+                // the numerical trial can only move an unmeasured bottom-edge baseline.
+                (n.layout.is_some() && (n.child_layout.sizing_h == Sizing::Hug || n.child_layout.sizing_v == Sizing::Hug))
+                    || matches!(n.kind, NodeKind::Text(_))
+                    || (it.baseline.is_some() && item_baseline(doc, it.id, m, 0).is_some())
+            })
+        })
+    {
+        return false;
+    }
+    let fallback = items.to_vec();
+    let mut original = fallback.clone();
+    if !constrain_trial_items(doc, &mut original, st.horizontal) {
+        return false;
+    }
+    let (frame, pads) = st.frame;
+    let (min, max) = if st.horizontal { (frame.min_h, frame.max_h) } else { (frame.min_w, frame.max_w) };
+    let trial = |items: &mut [Item], line: f64| {
+        items.clone_from_slice(&original);
+        for it in items.iter_mut().filter(|it| it.fill_cross) {
+            it.cross = clamp_size(line, it.min_cross, it.max_cross);
+            if let Some(ratio) = it.locked_cross_per_main {
+                it.main = clamp_size(it.cross / ratio, it.min_main, it.max_main);
+            }
+        }
+        let (main, gap, auto) = st.flow;
+        distribute_flow_lines(items, lines, main, gap, auto);
+        for it in items.iter_mut().filter(|it| it.fill_main) {
+            if let Some(ratio) = it.locked_cross_per_main {
+                // Trial zero sizes must follow the ratio too. The ordinary resize helper
+                // keeps the old cross size at zero, which would make this function jump.
+                it.cross = clamp_size(it.main * ratio, it.min_cross, it.max_cross);
+            }
+        }
+        for it in items.iter_mut().filter(|it| it.baseline.is_some() && (it.fill_main || it.fill_cross)) {
+            it.baseline = Some(it.cross)
+        }
+        let needed = flow_line_extents(items, lines, gap).first().map_or(0.0, |line| line.1);
+        clamp_size(needed + pads, min, max).max(pads) - pads
+    };
+    let mut lo = 0.0;
+    let mut hi = trial(items, 1e-9).max(1e-9);
+    for _ in 0..48 {
+        let mid = (lo + hi) / 2.0;
+        let needed = trial(items, mid);
+        if needed == mid {
+            lo = mid;
+            hi = mid;
+            break;
+        }
+        if needed > mid { lo = mid } else { hi = mid }
+    }
+    trial(items, (lo + hi) / 2.0);
+    if items
+        .iter()
+        .any(|it| it.locked_cross_per_main.is_some() && (it.main <= 0.0 || it.cross <= 0.0 || !it.main.is_finite() || !it.cross.is_finite()))
+    {
+        items.clone_from_slice(&fallback);
+        return false;
+    }
+    // Validate every conversion before resizing any child, so an unrepresentable trial
+    // leaves the document and the ordinary layout path with the original item geometry.
+    let sizes: Option<Vec<_>> = items
+        .iter()
+        .filter(|it| it.fill_main || it.fill_cross)
+        .map(|it| {
+            let (w, h) = if st.horizontal { (it.main, it.cross) } else { (it.cross, it.main) };
+            trial_local_size(doc, it.id, w, h).map(|(w, h)| (it.id, w, h))
+        })
+        .collect();
+    let Some(sizes) = sizes else {
+        items.clone_from_slice(&fallback);
+        return false;
+    };
+    for (id, w, h) in sizes {
+        resize_child(doc, id, w, h, m);
+    }
+    for it in items.iter_mut().filter(|it| it.fill_main || it.fill_cross) {
+        let (w, h) = outer_size(doc, it.id);
+        (it.main, it.cross) = if st.horizontal { (w, h) } else { (h, w) };
+    }
+    true
 }
 
 /// Stretch the cross-Fill children to a hugging frame's line (`stretch_fill_across_hug_line`). When
@@ -545,6 +741,10 @@ fn stretch_hug_line(
 ) {
     let (frame, cross_pads) = st.frame;
     let (inner_main, gap, auto_gap) = st.flow;
+    if settle_locked_hug_line(doc, items, lines, st, m) {
+        *line_extents = flow_line_extents(items, lines, gap);
+        return;
+    }
     let line = line_extents.first().map_or(0.0, |l| l.1);
     if !stretch_fill_across_hug_line(doc, items, line, (frame, cross_pads), st.horizontal, m) {
         return;
@@ -647,7 +847,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let gap = finite_or_zero(al.gap);
     let auto_gap = al.main_align.is_auto_gap();
     let wraps = al.wrap && !hug_main;
-    let mut items = flow_items(doc, &kids, horizontal, hug_main, hug_cross && wraps);
+    let mut items = flow_items(doc, &kids, horizontal, hug_main, hug_cross && wraps, wraps);
 
     // Fill across a single line of a frame that doesn't hug that axis: the size is the frame's
     // inner cross size, known up front. Resize those children first, so text that wraps (or a
@@ -656,7 +856,8 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     if !wraps && !hug_cross {
         for it in items.iter_mut().filter(|it| it.fill_cross && !it.fill_main) {
             let cross = clamp_size(inner_cross_fixed, it.min_cross, it.max_cross);
-            let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
+            let main = it.main_for_cross(cross, it.main);
+            let (w, h) = if horizontal { (main, cross) } else { (cross, main) };
             resize_child(doc, it.id, w, h, m);
             let (w, h) = outer_size(doc, it.id);
             it.main = if horizontal { w } else { h };

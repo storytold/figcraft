@@ -66,9 +66,9 @@ fn golden_tree() -> (Session, NodeId) {
 fn empty_options_keep_the_main_tree_and_document_output() {
     let (s, frame) = golden_tree();
     // Captured with this builder on origin/main (43af145a12eacd1e87f5f5e6984c49b7da040288), plus the
-    // document `id` that #1533 added. That id comes from a process-wide counter, so it is the
-    // session's own.
-    let expected = json!({
+    // document `id` that #1533 added and revision/capabilities metadata from #1995. The id
+    // comes from a process-wide counter, so it is the session's own.
+    let mut expected = json!({
         "colorProfile": "srgb",
         "currentPage": 7,
         "dirty": true,
@@ -116,6 +116,7 @@ fn empty_options_keep_the_main_tree_and_document_output() {
                                 "fontFamily": "Synthetic",
                                 "fontSize": 18.0,
                                 "fontStyle": "Bold",
+                                "fontWeight": 700,
                                 "height": 24.0,
                                 "id": 3,
                                 "letterSpacing": "1",
@@ -294,6 +295,8 @@ fn empty_options_keep_the_main_tree_and_document_output() {
         "textEdit": null,
         "variables": 0
     });
+    expected["capabilities"] = json!({"conditionalExecute": 1, "documentChangeEvents": 1});
+    expected["revision"] = json!(8);
     let expected_node = &expected["pages"][0]["children"][0];
     assert_eq!(node_json(s.doc().unwrap(), frame, 4).to_string(), expected_node.to_string());
     assert_eq!(document(&s, 4, true).to_string(), expected.to_string());

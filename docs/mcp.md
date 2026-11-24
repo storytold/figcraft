@@ -70,8 +70,9 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   and correct, for example `automation path rejected: /etc/x.png is outside the folders that may be
   written: /work/project/out`. Nothing is written and the server keeps serving.
 - Read and write authority are separate. With only `--automation-read-root` nothing can be written
-  to disk (`export` and the export commands without a `path` still return the bytes). Without either
-  flag nothing changes.
+  to disk (`export` and the export commands without a `path` still return the bytes). Headless MCP
+  refuses to start unless both `--automation-read-root` and `--automation-write-root` are supplied.
+  Attached MCP takes neither flag; the attached app's roots govern its file access.
 - The roots must be existing folders: a missing one, or a file, stops the server at startup.
   `initialize`'s `instructions` name the folders, so the agent knows where it may work.
 - **What is covered:** everything a call does, because the engine reaches the file system through
@@ -102,16 +103,42 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   refused too. A local volume's `\\?\Volume{…}\` path is let through. A link whose text is a native NT name
   (`\Device\…`, `\??\…`, `\GLOBAL??\…`) is refused as a device path, and so is a name that ends in a period or a space, in a
   path or as a link's target, since Windows trims it where it looks a name up.
-- **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
-  document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
-  `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
-  refuses, and `library.updates` / `library.list` report the refusal for each instead of the last
-  version fetched) and plugin directories are refused with `automation roots are set: commands
-  don't reach the network …`. The app started with the flags confines its own window too, so its
-  sharing is off as well. One exception: a root on a network share (a UNC path such as
-  `\\server\share\…`, or a mounted network drive) is still a root, so reading and writing inside
-  it reaches that file server, and saving there sends the document to it. Give only roots you would
-  let the agent's files go to.
+- **The network:** confined calls cannot reach a FigCraft or plugin server, except for headless
+  MCP's `collab.join` to a server explicitly allowed with `--automation-allow-server` (below).
+  Hosting, publishing and sharing a file (`collab.host`, `collab.publish`, `collab.share` …), team
+  libraries on a server (`library.check` refuses, and `library.updates` / `library.list` report the
+  refusal for each instead of the last version fetched) and plugin directories remain refused with
+  `automation roots are set: commands don't reach the network …`. The app started with the flags
+  confines its own window too, so its sharing is off as well. One exception: a root on a network
+  share (a UNC path such as `\\server\share\…`, or a mounted network drive) is still a root, so
+  reading and writing inside it reaches that file server, and saving there sends the document to
+  it. Give only roots you would let the agent's files go to.
+- **Joining one approved server (headless only):** add one or more
+  `--automation-allow-server wss://figcraft.example.com/` flags. Each URL must be a `ws://` or
+  `wss://` server address with no query or key. A join link is accepted only when its parsed
+  scheme, host and port match an allowed server and its path is within that server's path prefix.
+  The only newly permitted network operation is `collab.join` to such a server. Hosting, publishing
+  a new file, team libraries and plugin directories remain blocked; the server's administrative
+  key is not needed or accepted in the allowlist. Without this flag the network remains blocked,
+  as before.
+
+  This lets an agent join a file that was published once from the desktop app. Give headless MCP
+  the file's **edit link**, then call `collab.join` with it. The server-hosted document is the shared
+  source of truth: the agent's edits sync to the server and other clients in the live session, and
+  the server keeps confirmed edits after everyone disconnects. A later headless MCP process can
+  join again with the same link. The desktop app does not need to stay open on the publishing
+  machine. A local `.figcraft` file is not automatically kept in sync; use `file.saveAs` to save a
+  separate local snapshot inside a write root when needed.
+
+  For example:
+
+  ```sh
+  figcraft-cli mcp --automation-read-root /work/designs --automation-write-root /work/designs \
+    --automation-allow-server wss://figcraft.example.com/
+  ```
+
+  The edit link is a file-specific secret; give it only to the agent and clients you trust. Use an
+  edit link, not a view link, when the agent must change the file.
 - Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
   plugins installed from a plugin directory, the system fonts).
 - `--attach` with either flag is a usage error: the app runs the commands, so only the app can
@@ -404,11 +431,13 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `list_commands {filter?}` | Every command: id, label, menu, shortcut, undoable, params doc. |
 | `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, Leptos, Vue, SwiftUI, Jetpack Compose, ArkUI or Flutter for a layer; components take their properties as parameters and instances are calls, see Developer Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML, React, Leptos and Vue, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}` or a colour calculation (`{alpha}`, `{mix}`), `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Developer Mode below)). |
 | `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`), which keeps one copy of the document however many steps there are (an `edit.undo` step undoes the batch's edits so far together); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: name it with `"as": "card"` and `{"$ref": "card"}` anywhere in a later step's params becomes the `id` in its result (`{"$step": n}` does the same by zero-based position); `"field"` takes another key or a slash path such as `ids/0` (see Step references below). |
-| `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. |
+| `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. `warnings` reports a fontStyle that draws in another face. |
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
+| `component_mappings {ids?, unmapped?, root?}` | Which code component each design component is: `import`, `name`, `source` (and `sourceFound` under `root`, default the server's folder), a ready `snippet`, `properties` with variants, and `values` that need translating. |
+| `sync_mappings {direction, path?}` | Apply a code repository's `figcraft.connect.json` to the open design (`import`) or write the design's mappings to it (`export`); `path` defaults to that file in the server's folder. |
 | `select {ids}` | Replace the selection (`[]` deselects). |
 | `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (PNG: `sRGB` chunk, or ICC and `cICP` for Display P3; JPG: ICC profile; WebP: ICC profile for Display P3, none for sRGB) (SVG, XML and RGB PDF output are always sRGB; PDF with `cmyk` is DeviceCMYK). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
@@ -448,7 +477,7 @@ Each layer in `nodes` has `id`, `name`, `type` and:
   with the `name` of each. `explicit` holds the value they resolved to.
 - `unsupported`: `{property, why}` for what has no direct CSS equivalent. The value stays in `explicit`.
 - `code`: for a component or instance connected to code, per language, `{language, importPath, name,
-  code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
+  source?, notes?, code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
   says what it holds, and `get_node` reads it.
 - `children`, or `childCount` where the tree stops.
 
@@ -1537,7 +1566,8 @@ the tab in front. Headless sessions take it too.
 ### Live sessions
 
 People (and agents) edit one file together and see each other's cursors, selections and
-viewports. Both the headless session and the attached app can host and join (the web build can
+viewports. A headless MCP session with the required automation roots can join explicitly approved
+servers, but cannot host a local server. The attached app can host and join (the web build can
 join but not host); each call takes in what happened since the last one and sends your edits (a
 joined file opens as a new document).
 
@@ -1860,11 +1890,20 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   `@acme/ui` gives `import { Button } from "@acme/ui";` then `<Button variant="primary" icon="none">{"Buy
   now"}</Button>`. `codeConnect.remove {id?, language?}` (no language: all). `codeConnect.export
   {path?}` → `{text, links}` (or writes the file): `{version: 1, links: [{component, language,
-  importPath, name, template}]}`, sorted, meant to live in the code repository as
-  `figcraft.connect.json`; `codeConnect.import {json | path}` → `{linked, warnings}` links each
+  importPath, name, template, source?, values?, notes?}]}`, sorted, meant to live in the code
+  repository as `figcraft.connect.json` (writing a file that's there keeps its other top-level keys
+  and the links of components this design doesn't have, so several designs can share one file; a
+  file there that isn't a connect file it can read is left alone and the export refused); `codeConnect.import {json | path}` → `{linked, warnings}` links each
   entry to every component or set with that name (one undo step; at most 5,000 links and 4 MB;
-  templates up to 4,000 characters, names 100, import paths 300; invalid entries are skipped with a
-  warning). `get_node` lists a component's links as `codeLinks`. In the app, the Inspect tab's
+  templates up to 4,000 characters, names 100, import paths 300; invalid entries, a malformed `values`
+  among them, are skipped with a warning). A link can also say where the code component lives (`source`, a path inside the
+  repository), what a property's design values are called in code (`values`:
+  `{"Variant": {"Primary": "primary"}}`, so `{Variant}` renders `primary`; a value without an entry
+  keeps its design name; `{Variant ? "a" : "b"}` still reads the design's value) and `notes`, through `codeConnect.set`, the file and the Inspect tab.
+  `codeConnect.list {ids?, unmapped?, root?}` → `{components: [{id, name, type, mapped, properties,
+  links: [{language, importPath, import, name, template, snippet, source?, sourceFound?, values?,
+  notes?}]}], mapped, unmapped}` answers which code component each design component is; with `root`
+  it says whether each `source` exists there. `get_node` lists a component's links as `codeLinks`. In the app, the Inspect tab's
   Connect to code section edits them in the Code section's language, with a live preview and a
   Connected badge. An editor extension isn't needed: agents and editors read the same snippets
   through this server. Plugins whose manifest asks only for `read` also run from the Inspect tab,

@@ -16,7 +16,8 @@ pub fn ts_blend(b: BlendMode) -> tiny_skia::BlendMode {
         BlendMode::PassThrough | BlendMode::Normal => T::SourceOver,
         BlendMode::Darken => T::Darken,
         BlendMode::Multiply => T::Multiply,
-        // Plus darker has no tiny-skia mode: `composite` draws it; elsewhere the nearest one.
+        // Plus darker has no tiny-skia mode and plus lighter's (`Plus`) adds the alphas too:
+        // `composite` draws both (see [`own_blend`]); elsewhere the nearest one.
         BlendMode::PlusDarker => T::Multiply,
         BlendMode::ColorBurn => T::ColorBurn,
         BlendMode::Lighten => T::Lighten,
@@ -35,10 +36,17 @@ pub fn ts_blend(b: BlendMode) -> tiny_skia::BlendMode {
     }
 }
 
+/// The blend modes [`composite`] draws itself rather than through a tiny-skia mode.
+pub fn own_blend(b: BlendMode) -> bool {
+    matches!(b, BlendMode::PlusDarker | BlendMode::PlusLighter)
+}
+
 /// Draw `src` (top-left at `at`) onto `dst` at `opacity`, blended by `blend`.
 pub fn composite(dst: &mut Pixmap, at: (i32, i32), src: &Pixmap, opacity: f32, blend: BlendMode) {
     if blend == BlendMode::PlusDarker {
         crate::fx::plus_darker(dst, at, src, opacity);
+    } else if blend == BlendMode::PlusLighter {
+        crate::fx::plus_lighter(dst, at, src, opacity);
     } else {
         let paint = tiny_skia::PixmapPaint { opacity, blend_mode: ts_blend(blend), ..Default::default() };
         dst.draw_pixmap(at.0, at.1, src.as_ref(), &paint, Transform::identity(), None);

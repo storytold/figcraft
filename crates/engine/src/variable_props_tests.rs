@@ -61,8 +61,11 @@ fn ambiguous_and_unknown_variable_names_are_errors_but_ids_still_work() {
     assert_bound(&s, id, "fill", &vid);
     let e = s.execute("node.set", &json!({"id": id, "props": {"fill": {"$var": "missing/surface"}}})).unwrap_err().to_string();
     assert!(e.contains("no such variable `missing/surface`"), "{e}");
-    // The existing command still uses the first match, not the new strict resolver.
-    run(&mut s, "variable.bind", json!({"id": id, "field": "fill", "variable": "palette/surface"}));
+    // `variable.bind` shares the layer props' strict resolver: a bare ambiguous name is refused
+    // and a `Collection/name` binds the variable it names.
+    let e = s.execute("variable.bind", &json!({"id": id, "field": "fill", "variable": "palette/surface"})).unwrap_err().to_string();
+    assert!(e.contains("ambiguous variable `palette/surface`"), "{e}");
+    run(&mut s, "variable.bind", json!({"id": id, "field": "fill", "variable": "Theme/palette/surface"}));
     assert_bound(&s, id, "fill", &vid);
 }
 
@@ -77,9 +80,15 @@ fn variable_ids_choose_between_variables_with_the_same_name() {
     let id = create(&mut s, json!({"fill": {"$var": second}}));
     assert_eq!(s.doc().unwrap().node(id).unwrap().bound.get("fill"), Some(&second));
     assert_eq!(color(&s, id, "fill").to_hex(), "FF0000");
-    // `variable.bind` deliberately keeps its first id-or-name match.
-    run(&mut s, "variable.bind", json!({"id": id, "field": "fill", "variable": "palette/surface"}));
+    // `variable.bind` uses the same strict resolver as layer props: a bare ambiguous name is
+    // refused and qualified names choose between the variables sharing it.
+    let e = s.execute("variable.bind", &json!({"id": id, "field": "fill", "variable": "palette/surface"})).unwrap_err().to_string();
+    assert!(e.contains("ambiguous variable `palette/surface`"), "{e}");
+    run(&mut s, "variable.bind", json!({"id": id, "field": "fill", "variable": "Theme/palette/surface"}));
     assert_bound(&s, id, "fill", &first);
+    run(&mut s, "variable.bind", json!({"id": id, "field": "fill", "variable": "Other/palette/surface"}));
+    assert_eq!(s.doc().unwrap().node(id).unwrap().bound.get("fill"), Some(&second));
+    assert_eq!(color(&s, id, "fill").to_hex(), "FF0000");
     run(&mut s, "node.set", json!({"id": id, "props": {"fill": {"$var": second}}}));
     assert_eq!(s.doc().unwrap().node(id).unwrap().bound.get("fill"), Some(&second));
     assert_eq!(color(&s, id, "fill").to_hex(), "FF0000");

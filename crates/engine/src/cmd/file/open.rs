@@ -58,6 +58,9 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let variables = variables_param("file.open", p)?;
+    if boolean(p, "nativeOnly").unwrap_or(false) && string(p, "path").is_some() {
+        return Err(bad("file.open", "nativeOnly requires data and name"));
+    }
     if string(p, "path").is_none()
         && let Some(d) = string(p, "data")
     {
@@ -138,7 +141,13 @@ fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) 
     let name = req_string("file.open", p, "name")?;
     let data = data.split_once(',').map_or(data, |(_, b)| b);
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| bad("file.open", e.to_string()))?;
-    let (loaded, rest) = load_with(&bytes, &name, variables, &figcraft_format::rest::no_images)?;
+    let (loaded, rest) = if boolean(p, "nativeOnly").unwrap_or(false) {
+        let mut loaded = super::load::load_native(&bytes, &name)?;
+        loaded.issues.extend(crate::components::break_component_cycles(&mut loaded.doc));
+        (loaded, false)
+    } else {
+        load_with(&bytes, &name, variables, &figcraft_format::rest::no_images)?
+    };
     let warnings = rest || matches!(ext(&name).as_str(), "svg" | "penpot");
     let summary = import_summary(&loaded.doc);
     s.docs.push(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches));

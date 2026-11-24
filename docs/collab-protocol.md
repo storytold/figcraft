@@ -148,7 +148,15 @@ As built:
   A diff gives new keys only to the children that need them (the longest run of old keys that is
   still increasing keeps its keys) and re-spaces a parent whose keys would grow past 48 characters.
 - **Document-level objects covered now**: the file name, the current page, document colours, the
-  colour profile, image presets, annotation categories and library data (whole values); styles,
+  colour profile, image presets, annotation categories, the design review settings
+  (`DocProp::DesignReview`, sent only to clients whose `client_version` announces
+  `design-review`; a client that doesn't gets every batch, catch-up delta and snapshot without
+  them, and an accepted batch still reaches it when nothing of it is left, so sequence numbers
+  never skip; a snapshot saved with longer lists opens clamped to the limits `design.configure`
+  keeps, and a session restored from such a snapshot catches every resuming client up with that
+  snapshot, since its saved batches still hold the value past the limits. The saved session keeps
+  that resync requirement across later saves and restarts, even with an empty log; a host refuses
+  to share a file whose settings are already past the limits) and library data (whole values); styles,
   comment threads, variable collections and variables (one entry per id plus the order of ids;
   the whole list when ids aren't unique); dev-mode snapshots (per layer); images (per content
   hash, the encoded bytes as base64; as an entry applies the claim is checked: every key is
@@ -965,9 +973,15 @@ Decisions, as built:
   the host's hub hands a resumed client id from its stale connection to the new one.
 - **Session state.** `Server::state` returns what a server needs to carry on after a restart
   (`SessionState`: snapshot, sequence number, session id, client-id counter, the clients that can
-  reconnect and what was done with their batches, deleted ids, the log), as one serde value; the
-  standalone server stores it as each file's snapshot, with a journal of the changes since
-  (`Server::journaling`, `Server::replay`).
+  reconnect and what was done with their batches, deleted ids, the log and whether resuming clients
+  must receive a full snapshot), as one serde value; the standalone server stores it as each
+  file's snapshot, with a journal of the changes since
+  (`Server::journaling`, `Server::replay`). Snapshot format 2 stores the resync flag. The server
+  still reads format-1 snapshots through their original field schema; a missing flag in saved
+  JSON defaults to false. Binary snapshots use [Postcard's fixed field order](https://postcard.jamesmunns.com/wire-format),
+  so the file format byte selects the schema explicitly. The log format and client wire messages are unchanged.
+  Older server builds cannot open format-2 snapshots; downgrading requires compatible saved
+  snapshots and their matching logs.
 
 Tests: random sessions where clients drop and come back mid-session converge, with the default log
 and with logs short enough that long absences fall back to snapshots; targeted tests cover a lost

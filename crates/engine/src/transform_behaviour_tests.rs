@@ -218,6 +218,124 @@ fn ordinary_resize_and_scale_keep_image_fill_settings() {
 }
 
 #[test]
+fn crop_mode_image_resizing_without_cmd_morphs_and_with_cmd_crops() {
+    use figcraft_doc::color::{ImageScaleMode, PaintKind};
+    let mut s = session();
+    let layer = image_layer(&mut s);
+    // Set the image fill mode to Crop without an explicit crop: fill.set initializes placement crop.
+    let mut fills = s.doc().unwrap().node(layer).unwrap().fills.clone();
+    let PaintKind::Image(img) = &mut fills[0].kind else { panic!("image fill") };
+    img.scale_mode = ImageScaleMode::Crop;
+    img.crop = None;
+    ex(&mut s, "fill.set", json!({"ids": [layer], "index": 0, "paint": fills[0]}));
+
+    // Verify fill.set initialized img.crop with placement crop.
+    let initial_node = s.doc().unwrap().node(layer).unwrap().clone();
+    let PaintKind::Image(img) = &initial_node.fills[0].kind else { panic!("image fill") };
+    let Some(initial_crop) = img.crop else { panic!("crop initialized") };
+
+    let before = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    assert_eq!((before.width(), before.height()), (200, 100));
+
+    // 1. Resize without Cmd (normal resize from bottom edge: 100 -> 50).
+    // The layer height shrinks to 50, but img.crop stays unchanged, stretching/squishing the image.
+    s.pointer(&ev(PointerKind::Down, Point::new(100.0, 100.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Move, Point::new(100.0, 50.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Up, Point::new(100.0, 50.0), NONE)).unwrap();
+    assert_eq!(size(&s, layer), (200.0, 50.0));
+
+    let n = s.doc().unwrap().node(layer).unwrap().clone();
+    let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+    assert_eq!(img.crop, Some(initial_crop), "normal resize leaves crop transform unchanged");
+
+    let morphed = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    assert_eq!((morphed.width(), morphed.height()), (200, 50));
+
+    // 2. Resize with Cmd from right edge: 200 -> 100.
+    // The layer width shrinks to 100, and img.crop is updated so the pixels stay stationary on page (cropping).
+    s.pointer(&ev(PointerKind::Down, Point::new(200.0, 25.0), CMD)).unwrap();
+    s.pointer(&ev(PointerKind::Move, Point::new(100.0, 25.0), CMD)).unwrap();
+    s.pointer(&ev(PointerKind::Up, Point::new(100.0, 25.0), CMD)).unwrap();
+    assert_eq!(size(&s, layer), (100.0, 50.0));
+
+    let n = s.doc().unwrap().node(layer).unwrap().clone();
+    let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+    assert_ne!(img.crop, Some(initial_crop), "Cmd resize updates crop transform");
+
+    let cropped = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    assert_eq!((cropped.width(), cropped.height()), (100, 50));
+    // The remaining 100x50 pixels match the top-left 100x50 of morphed (pixels stayed still in layer space).
+    for y in 0..50usize {
+        assert_eq!(&cropped.data()[y * 400..(y + 1) * 400], &morphed.data()[y * 800..y * 800 + 400], "row {y}: stationary cropped pixels");
+    }
+}
+
+#[test]
+fn multi_layer_crop_mode_selection_computes_placement_per_node() {
+    use figcraft_doc::color::{ImageScaleMode, PaintKind};
+    let mut s = session();
+    let layer1 = image_layer(&mut s); // 200 x 100
+    let layer2 = id(&ex(&mut s, "shape.rectangle", json!({"x": 300, "y": 0, "width": 100, "height": 100})));
+
+    // Choose Crop mode on both layers simultaneously via fill.set with crop: None (as the picker does).
+    let mut fill = s.doc().unwrap().node(layer1).unwrap().fills[0].clone();
+    let PaintKind::Image(img) = &mut fill.kind else { panic!("image fill") };
+    img.scale_mode = ImageScaleMode::Crop;
+    img.crop = None;
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": fill, "preservePlacement": true}));
+
+    // Verify both layers received crop transforms tailored to their own dimensions, not stretched.
+    let n1 = s.doc().unwrap().node(layer1).unwrap().clone();
+    let n2 = s.doc().unwrap().node(layer2).unwrap().clone();
+    let PaintKind::Image(img1) = &n1.fills[0].kind else { panic!("image fill") };
+    let PaintKind::Image(img2) = &n2.fills[0].kind else { panic!("image fill") };
+
+    let crop1 = img1.crop.expect("layer1 crop initialized");
+    let crop2 = img2.crop.expect("layer2 crop initialized");
+
+    // layer1 (200x100) and layer2 (100x100) have different aspect ratios, so their crop transforms must differ.
+    assert_ne!(crop1, crop2, "differently sized layers must have distinct crop transforms");
+
+    // Both should match expected placement crop for their respective dimensions (iw=200, ih=100 from image_layer):
+    assert_eq!(crop1, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(crop2, [0.5, 0.0, 0.0, 1.0, 0.25, 0.0]);
+
+    // Rotate 90° on the multi-selection (as the picker's Rotate button does):
+    let mut rot_fill = n1.fills[0].clone();
+    let PaintKind::Image(img) = &mut rot_fill.kind else { panic!("image fill") };
+    img.rotation = 1;
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": rot_fill, "preservePlacement": true}));
+
+    let n1_rot = s.doc().unwrap().node(layer1).unwrap().clone();
+    let n2_rot = s.doc().unwrap().node(layer2).unwrap().clone();
+    let PaintKind::Image(img1_rot) = &n1_rot.fills[0].kind else { panic!("image fill") };
+    let PaintKind::Image(img2_rot) = &n2_rot.fills[0].kind else { panic!("image fill") };
+
+    let crop1_rot = img1_rot.crop.expect("layer1 rotated crop initialized");
+    let crop2_rot = img2_rot.crop.expect("layer2 rotated crop initialized");
+    assert_ne!(crop1_rot, crop2_rot, "differently sized layers must have distinct rotated crop transforms");
+    assert_eq!(crop1_rot, [1.0, 0.0, 0.0, 0.25, 0.0, 0.375]);
+    assert_eq!(crop2_rot, [1.0, 0.0, 0.0, 0.5, 0.0, 0.25]);
+
+    // Shared filter edit on multi-selection in Crop mode (e.g. Exposure slider):
+    let mut filter_fill = n1_rot.fills[0].clone();
+    let PaintKind::Image(img) = &mut filter_fill.kind else { panic!("image fill") };
+    img.filters.exposure = 0.5;
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": filter_fill, "preservePlacement": true}));
+
+    let n1_filt = s.doc().unwrap().node(layer1).unwrap().clone();
+    let n2_filt = s.doc().unwrap().node(layer2).unwrap().clone();
+    let PaintKind::Image(img1_filt) = &n1_filt.fills[0].kind else { panic!("image fill") };
+    let PaintKind::Image(img2_filt) = &n2_filt.fills[0].kind else { panic!("image fill") };
+
+    // Both layers keep their distinct crop transforms; neither is overwritten by the other.
+    assert_eq!(img1_filt.crop, Some(crop1_rot));
+    assert_eq!(img2_filt.crop, Some(crop2_rot));
+    assert_eq!(img1_filt.filters.exposure, 0.5);
+    assert_eq!(img2_filt.filters.exposure, 0.5);
+}
+
+#[test]
 fn command_crop_preserves_each_image_fill_and_leaves_tiles() {
     use figcraft_doc::color::{Color, ImageScaleMode, Paint, PaintKind};
     let mut s = session();

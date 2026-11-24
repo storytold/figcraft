@@ -151,6 +151,15 @@ pub(crate) fn reachable(addr: SocketAddr) -> SocketAddr {
 }
 
 impl LiveLink for NetLink {
+    fn automation_join_allowed(&self, link: &str, allowed_servers: &[String]) -> bool {
+        let Ok((invite, _)) = Invite::parse_join(link) else {
+            return false;
+        };
+        allowed_servers
+            .iter()
+            .any(|allowed| Endpoint::parse(allowed).is_ok_and(|(endpoint, query)| query.is_empty() && invite.server.is_within(&endpoint)))
+    }
+
     /// Host the open file on `o.bind`: a join code's short secret when `o.short`, and a second,
     /// view-only secret with its invite link when `o.view`.
     fn host(&mut self, session: SessionId, o: HostOptions) -> Result<SessionInfo, String> {

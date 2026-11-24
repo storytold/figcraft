@@ -57,9 +57,8 @@ fmv-macos-events = "=0.1.0"
 # Paste reads the clipboard's public.png as is, keeping the screen density a screenshot records.
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSString"] }
-# A macOS app menu whose Quit (⌘Q) asks the app first (sends the root window a close request, the
-# same guarded path as the close button); winit's default Quit ends the process through
-# `terminate:`, losing unsaved changes without a word (issue #857).
+# Native macOS app menu (whose Quit (⌘Q) asks the app first via the guarded close path, issue
+# #857) and Window menu (so AppKit registers `windowsMenu` and Move & Resize window tiling).
 craft-menu = { workspace = true }
 
 [dev-dependencies]

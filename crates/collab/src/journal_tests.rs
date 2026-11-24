@@ -323,3 +323,75 @@ fn a_resume_after_a_clean_restart_catches_up_with_the_log() {
     let mut r = Server::restore(s.state().unwrap(), "", Limits::default()).unwrap();
     assert!(matches!(catch_up_of(&mut r, &mut a), message::CatchUp::Delta(_)));
 }
+
+#[test]
+fn third_review_legacy_review_journal_keeps_later_edits_and_resyncs() {
+    replay_legacy_review_journal(None);
+}
+
+#[test]
+fn fourth_review_mixed_image_and_review_journals_keep_later_edits() {
+    use crate::image_tests::{put, sha256_hex};
+    let bytes = b"own mixed-journal image";
+    let key = sha256_hex(bytes);
+    for image in [(put(&key, 2, 1, bytes), true), (put(&key, 2, 1, b"different original bytes"), false)] {
+        replay_legacy_review_journal(Some(image));
+    }
+}
+
+fn replay_legacy_review_journal(image: Option<(crate::Change, bool)>) {
+    use crate::change::{Change, DocProp, Json};
+    let mut s = Server::new(base(), "", Limits::default());
+    s.journaling(true);
+    let mut a = join_as(&mut s, Access::Edit);
+    let mut reader = join_as(&mut s, Access::Edit);
+    let page = s.document().first_page().unwrap();
+    let saved = s.state().unwrap();
+    s.take_journal();
+    let m = edit(&mut a, |d| d.design_review.grid = 12.0);
+    send(&mut s, a.id(), m, &mut [&mut a]);
+    let m = edit(&mut a, |d| d.node_mut(page).unwrap().name = "After review settings".into());
+    send(&mut s, a.id(), m, &mut [&mut a]);
+    let mut journal = s.take_journal();
+    let oversized = figcraft_doc::DesignReview { grid: 12.0, radii: vec![4.0; figcraft_doc::MAX_RADII + 1], ..Default::default() };
+    let mut replaced = false;
+    for j in &mut journal {
+        if let Journal::Accepted(acc) = j {
+            let mut review_batch = false;
+            for change in &mut acc.changes {
+                if let Change::SetDoc { prop: DocProp::DesignReview, value } = change {
+                    *value = Json::of(&oversized).unwrap();
+                    replaced = true;
+                    review_batch = true;
+                }
+            }
+            if review_batch && let Some((image, _)) = &image {
+                acc.changes.push(image.clone());
+            }
+        }
+    }
+    assert!(replaced);
+    let mut restored = Server::restore(saved, "", Limits::default()).unwrap();
+    for j in journal {
+        let bytes = message::encode(&j).unwrap();
+        restored.replay(message::decode(&bytes, bytes.len()).unwrap()).expect("a legacy review value must not discard the rest of the journal");
+    }
+    assert_eq!(restored.seq(), s.seq());
+    assert_eq!(restored.document().node(page).unwrap().name, s.document().node(page).unwrap().name);
+    assert_eq!(restored.document().design_review.radii.len(), figcraft_doc::MAX_RADII);
+    assert_eq!(restored.document().design_review.grid, oversized.grid);
+    if let Some((_, keep)) = image {
+        assert_eq!(restored.document().images.len(), usize::from(keep), "valid images survive; forged image data is still omitted");
+    }
+    let bytes = message::encode(&restored.state().unwrap()).unwrap();
+    let mut restarted = Server::restore(message::decode(&bytes, bytes.len()).unwrap(), "", Limits::default()).unwrap();
+    reader.disconnect();
+    let ClientMsg::Hello(h) = reader.reconnect(hello()) else { panic!("not a reconnect") };
+    let (_, out) = restarted.join(h).unwrap();
+    assert!(
+        matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: crate::CatchUp::Snapshot(_), .. })),
+        "normalization must require a snapshot even after a saved restart"
+    );
+    deliver(&mut reader, &out);
+    assert_eq!(reader.document(), restarted.document());
+}

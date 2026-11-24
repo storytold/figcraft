@@ -51,8 +51,12 @@ screenshot returns a PNG of the page or of given layers to look at. undo/redo st
 Comments: comment.list returns threads (text, anchor node id, frame, page, x/y, replies); fix open ones, \
 reply with what changed, then resolve (a reply reopens a thread). To react to new feedback, call \
 wait_for_changes {after, timeoutMs} and pass the returned cursor back. \
+Design review: design.audit {scope} reports spacing, radii, type, colour, contrast, copy and naming findings \
+with severities; design.fix repairs the fixable ones as one undo step; design.rules lists the rules and \
+presets; design.configure {preset, grid, radii, brand, disabled} sets the file's design system, and \
+design.assert {failOn, minScore} is a read-only CI gate. \
 Resources: figcraft://document, figcraft://node/{id}, figcraft://command/{id}, figcraft://comments. \
-prompts/list has workflows, including fix_comments.";
+prompts/list has workflows, including fix_comments and design_review.";
 
 /// An MCP server bound to one backend.
 pub struct Server {
@@ -237,7 +241,12 @@ impl Server {
     fn roots_note(&self) -> String {
         let Some(r) = &self.roots else { return String::new() };
         let j = r.to_json();
-        format!(" Files: only these folders may be read: {}; written: {} (any other path is refused).", j["read"], j["write"])
+        let files = format!(" Files: only these folders may be read: {}; written: {} (any other path is refused).", j["read"], j["write"]);
+        if r.allowed_servers().is_empty() {
+            files
+        } else {
+            format!("{files} Collaboration: may join only links on {}; other network requests are refused.", j["allowedServers"])
+        }
     }
 
     fn notification(&mut self, method: &str) {
@@ -291,7 +300,7 @@ impl Server {
                     resources::ReadError::NotFound(uri) => (RESOURCE_NOT_FOUND, format!("resource not found: {uri}")),
                     resources::ReadError::Backend(why) => (INTERNAL_ERROR, why),
                 })?;
-                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}]}))
+                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": serde_json::to_string(&v).unwrap_or_default()}]}))
             }
             "prompts/list" => Ok(prompts::list()),
             "prompts/get" => {

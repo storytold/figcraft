@@ -69,6 +69,9 @@ struct App {
     /// Documents and quit requests from Finder, the Dock and Open With.
     #[cfg(target_os = "macos")]
     apple_events: fmv_macos_events::Inbox,
+    /// Native macOS menu bar (app menu with guarded Quit + Window menu for macOS tiling).
+    #[cfg(target_os = "macos")]
+    native_menu: Option<craft_menu::NativeMenu>,
 }
 
 impl eframe::App for App {
@@ -84,6 +87,14 @@ impl eframe::App for App {
         }
         let title = with_app(|fig| {
             control_server::drain_queue(&self.queue, &mut fig.control_queue);
+            #[cfg(target_os = "macos")]
+            if let Some(menu) = self.native_menu.as_mut() {
+                let modal = ctx.memory(|m| m.top_modal_layer().is_some());
+                menu.set_gate(craft_menu::Gate { modal, recording_shortcut: false, text_editing: false });
+                for cmd in menu.take_clicks(ctx) {
+                    figcraft_ui_egui::windows::guard(fig, ctx, |fig| figcraft_ui_egui::menus::invoke(fig, &cmd.id));
+                }
+            }
             // Phase-safe background work: control queues, autosave/recovery deadlines, live polling.
             // It runs on logic-only callbacks too, so it never reads UI input.
             figcraft_ui_egui::windows::guard(fig, ctx, |fig| fig.background_tick(ctx));
@@ -117,6 +128,10 @@ impl eframe::App for App {
         // winit gives an undecorated window its caption back when it changes the window's flags
         // (maximize, restore, ...): take it off again before the frame is laid out (#1343).
         self.window_frame.run();
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = self.native_menu.as_mut() {
+            menu.raw_input(raw_input);
+        }
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
         if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
@@ -297,15 +312,11 @@ fn main() -> eframe::Result {
                 graphics.opened(&state.adapter.get_info());
             }
             with_app(|fig| fig.services.set_egui_context(&cc.egui_ctx));
-            // winit's own Quit (⌘Q) ends the process through `terminate:` without ever asking the
-            // app, so unsaved changes are lost with no warning (issue #857). This menu's Quit
-            // sends the root window a close request instead, and the unsaved-changes question
-            // asks just as it does for the close button. Failure keeps winit's menu: the app
-            // runs, but ⌘Q ends it without asking.
+            // Install the macOS app and Window menus through craft-menu: Quit (⌘Q) still asks the app
+            // before closing (#857), and registering the Window menu lets AppKit attach Move & Resize
+            // (Fn+Ctrl+Arrow window tiling) and the live window list.
             #[cfg(target_os = "macos")]
-            if let Err(e) = craft_menu::mac::install_app_menu(&cc.egui_ctx, "FigCraft") {
-                log::warn!("app menu: kept winit's Quit, which ends the app without asking: {e}");
-            }
+            let native_menu = install_macos_menu(&cc.egui_ctx);
             Ok(Box::new(App {
                 queue,
                 ctx_slot,
@@ -316,6 +327,8 @@ fn main() -> eframe::Result {
                 window_frame: window_frame::WindowFrame::new(custom_titlebar),
                 #[cfg(target_os = "macos")]
                 apple_events: apple_events.connect(&cc.egui_ctx),
+                #[cfg(target_os = "macos")]
+                native_menu,
             }))
         }),
     );
@@ -371,6 +384,33 @@ fn window_chrome(viewport: egui::ViewportBuilder, title_bar: figcraft_ui_egui::T
         TitleBar::Native => viewport.with_decorations(true),
         TitleBar::Custom => viewport.with_decorations(false),
     }
+}
+
+/// Minimal native macOS menu bar: the FigCraft app menu (About, Services, Hide, guarded Quit)
+/// and AppKit's Window menu (Minimize, Zoom, Bring All to Front, plus OS-injected Move & Resize
+/// window tiling).
+#[cfg(target_os = "macos")]
+fn macos_menu_layout() -> craft_menu::Layout {
+    let mut bar = craft_menu::MenuBar::default();
+    bar.menus.push(craft_menu::Menu::new(
+        "FigCraft",
+        vec![craft_menu::Item::new("help.about", "About FigCraft").role(craft_menu::ItemRole::About).into()],
+    ));
+    craft_menu::mac_layout(&bar, &craft_menu::LayoutOptions::new("FigCraft"))
+}
+
+/// Install the native macOS app + Window menu bar, falling back to the app-only menu on failure.
+#[cfg(target_os = "macos")]
+fn install_macos_menu(ctx: &egui::Context) -> Option<craft_menu::NativeMenu> {
+    let layout = macos_menu_layout();
+    if let Some(menu) = craft_menu::mac::install(ctx, &layout.bar) {
+        return Some(menu);
+    }
+    log::warn!("macOS menu bar: could not install Window menu; falling back to app menu only");
+    if let Err(e) = craft_menu::mac::install_app_menu(ctx, "FigCraft") {
+        log::warn!("app menu: kept winit's Quit, which ends the app without asking: {e}");
+    }
+    None
 }
 
 #[cfg(test)]
@@ -434,5 +474,31 @@ mod start_tests {
         assert!(!opens_new_file(false, true, false), "Home when the preference asks");
         assert!(opens_new_file(false, true, true), "--control still starts with a document");
         assert!(!opens_new_file(true, false, false), "a first run shows the home screen");
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_menu_tests {
+    use craft_menu::{Builtin, MenuRole, Node, Standard};
+
+    #[test]
+    fn macos_menu_includes_app_menu_and_window_menu() {
+        let layout = super::macos_menu_layout();
+        assert!(layout.clashes.is_empty(), "unexpected shortcut clashes: {:?}", layout.clashes);
+
+        let app_menu = layout.bar.menu(MenuRole::App).expect("macOS menu bar has an App menu");
+        assert!(
+            app_menu.children.iter().any(|n| matches!(n, Node::Item(it) if Builtin::of(&it.command) == Some(Builtin::Quit))),
+            "App menu keeps craft-menu's guarded Quit item"
+        );
+        assert!(app_menu.children.iter().any(|n| matches!(n, Node::Item(it) if it.command.id == "help.about")), "App menu keeps About FigCraft");
+
+        let window_menu = layout.bar.menu(MenuRole::Window).expect("macOS menu bar registers a Window menu for OS tiling");
+        for kind in [Standard::Minimize, Standard::Zoom, Standard::BringAllToFront] {
+            assert!(
+                window_menu.children.iter().any(|n| matches!(n, Node::Standard { kind: k, .. } if *k == kind)),
+                "Window menu missing standard item {kind:?}"
+            );
+        }
     }
 }

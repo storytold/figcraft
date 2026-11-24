@@ -279,6 +279,16 @@ fn menu_level(app: &mut FigApp, ui: &mut Ui, prefix: &str) -> bool {
                 continue;
             }
             last_sep = false;
+            if m.id == "file.saveAs"
+                && let Ok(doc) = app.session.ds()
+                && let Some(request) = app.file_providers.pending_save(doc.uid)
+                && item(ui, tr("Cancel pending provider save"), "", true, false, &t)
+            {
+                if app.file_providers.cancel_save(&request).is_ok() {
+                    app.toast(tr("Provider save cancelled; the document is still unsaved"));
+                }
+                return true;
+            }
             if m.id == "file.openRecent" {
                 if recent_menu(app, ui, prefix, m.label, &i18n::menu_item(m.id, m.label), &t) {
                     return true;
@@ -313,7 +323,14 @@ fn menu_level(app: &mut FigApp, ui: &mut Ui, prefix: &str) -> bool {
 /// File ▸ Open recent: the recent files (greyed when the file is gone) and Clear recent. `key` is
 /// the menu's English label, `label` the one shown. Returns whether an item ran.
 fn recent_menu(app: &mut FigApp, ui: &mut Ui, prefix: &str, key: &str, label: &str, t: &Tokens) -> bool {
+    enum Picked {
+        Provider,
+        Device(serde_json::Value),
+    }
     let picked = submenu(ui, &format!("{prefix}/{key}"), label, t, |ui| {
+        if app.file_providers.recent_ui(ui) {
+            return Some(Picked::Provider);
+        }
         let recents: Vec<&String> = crate::home_recents::listed(&app.session.prefs.recent_files).collect();
         let mut picked = None;
         for p in recents.iter().copied() {
@@ -330,9 +347,10 @@ fn recent_menu(app: &mut FigApp, ui: &mut Ui, prefix: &str, key: &str, label: &s
         if item(ui, tr("Clear recent"), "", !recents.is_empty(), false, t) && !recents.is_empty() {
             picked = Some(json!({"clear": true}));
         }
-        picked
+        picked.map(Picked::Device)
     });
-    let Some(params) = picked else { return false };
+    let Some(picked) = picked else { return false };
+    let Picked::Device(params) = picked else { return true };
     // Through the user path, so an import report shows; `file.openRecent` also drops a file that is gone.
     if app.run_user("file.openRecent", params).is_some_and(|r| r.get("index").is_some()) {
         app.ui.home = false;
@@ -396,6 +414,9 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
     }
     // Main menu.
     if app.ui.main_menu {
+        if let Some(opener) = ctx.memory(|m| m.focused()) {
+            a11y::popup(&mut app.ui.nav, opener, main_menu_id());
+        }
         let mut close = false;
         let area = egui::Area::new(main_menu_id())
             .fixed_pos(pos2(8.0, crate::tabs::HEIGHT + 48.0))
@@ -636,3 +657,44 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
 
 /// The context menu's Copy as submenu: its key in the tree, and the marker row in the entries.
 const COPY_AS: &str = "Copy as";
+
+#[cfg(test)]
+mod provider_cancel_tests {
+    use super::*;
+
+    #[test]
+    fn review_unanswered_provider_save_can_be_cancelled_from_the_keyboard() {
+        let mut ui = crate::layers_drag_tests::Ui::new(figcraft_engine::Session::new());
+        ui.app.file_providers.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
+        ui.app.file_providers.connect("test".into(), "Test storage".into(), "account".into()).unwrap();
+        ui.app.session.execute("shape.rectangle", &json!({"width":20,"height":20})).unwrap();
+        crate::file_provider_app::save(&mut ui.app, false).unwrap();
+        let uid = ui.app.session.ds().unwrap().uid;
+        let request = ui.app.file_providers.pending_save(uid).unwrap();
+        ui.app.file_providers.take_events(); // A provider which never answers.
+        ui.ctx.enable_accesskit();
+        ui.app.ui.main_menu = true;
+        ui.app.ui.nav.keyboard = true;
+        tree::set_open(&ui.ctx, main_menu_id(), "", Some("File"));
+        ui.frame(vec![]);
+        let output = ui.frame_output(vec![]);
+        let nodes = output.platform_output.accesskit_update.unwrap().nodes;
+        assert!(nodes.iter().any(|(_, n)| n.role() == egui::accesskit::Role::MenuItem && n.label() == Some("Cancel pending provider save")));
+        for _ in 0..80 {
+            if a11y::focused_name(&ui.ctx) == "Cancel pending provider save" {
+                break;
+            }
+            ui.frame(vec![
+                egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() },
+                egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: false, repeat: false, modifiers: Default::default() },
+            ]);
+        }
+        assert_eq!(a11y::focused_name(&ui.ctx), "Cancel pending provider save", "the menu action must receive actual keyboard focus");
+        ui.frame(vec![egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+        ui.frame(vec![]);
+        assert!(ui.app.file_providers.pending_save(uid).is_none());
+        assert!(ui.app.file_providers.result(request, "saved".into(), "late".into()).is_err());
+        assert!(ui.app.session.ds().unwrap().is_dirty());
+        assert!(!ui.app.ui.main_menu);
+    }
+}

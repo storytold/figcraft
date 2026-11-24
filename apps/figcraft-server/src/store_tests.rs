@@ -340,15 +340,41 @@ fn temporary_directories_are_removed() {
 
 #[test]
 fn snapshot_encoding_keeps_the_existing_framing_and_checksum() {
-    let state = Server::new(doc("Snapshot framing"), "", figcraft_collab::Limits::default()).state().unwrap();
-    let body = figcraft_collab::message::encode(&state).unwrap();
+    for resync in [false, true] {
+        let mut state = Server::new(doc("Snapshot framing"), "", figcraft_collab::Limits::default()).state().unwrap();
+        state.resync = resync;
+        let body = figcraft_collab::message::encode(&state).unwrap();
+        let mut expected = b"FCSN\x02".to_vec();
+        expected.extend_from_slice(&37u64.to_le_bytes());
+        expected.extend_from_slice(&crc32fast::hash(&body).to_le_bytes());
+        expected.extend_from_slice(&body);
+        let encoded = disk::encode_snapshot(37, &state).unwrap();
+        assert_eq!(encoded, expected);
+        assert_eq!(disk::decode_snapshot(&encoded).unwrap(), (37, state));
+    }
+}
+
+#[test]
+fn second_review_version_one_binary_snapshots_remain_readable() {
+    let state = Server::new(doc("Legacy snapshot"), "", figcraft_collab::Limits::default()).state().unwrap();
+    // Own synthetic version-one body: postcard encodes a struct as its ordered fields.
+    let body = figcraft_collab::message::encode(&(
+        state.session,
+        &state.snapshot,
+        state.seq,
+        state.next_client,
+        &state.issued,
+        &state.deleted,
+        &state.removed,
+        &state.log,
+    ))
+    .unwrap();
     let mut legacy = b"FCSN\x01".to_vec();
     legacy.extend_from_slice(&37u64.to_le_bytes());
     legacy.extend_from_slice(&crc32fast::hash(&body).to_le_bytes());
     legacy.extend_from_slice(&body);
-    let encoded = disk::encode_snapshot(37, &state).unwrap();
-    assert_eq!(encoded, legacy);
-    assert_eq!(disk::decode_snapshot(&encoded).unwrap(), (37, state));
+    assert_eq!(disk::check_snapshot(&legacy).unwrap(), 37);
+    assert_eq!(disk::decode_snapshot(&legacy).unwrap(), (37, state), "old snapshots must load without a resync field");
 }
 
 #[test]

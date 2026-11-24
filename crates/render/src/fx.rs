@@ -288,6 +288,22 @@ pub(crate) fn overlap_rows(dst: &mut Pixmap, at: (i32, i32), src: &Pixmap, mut f
 /// `max(0, backdrop + source - 1)`, through the W3C general compositing formula), which
 /// tiny-skia lacks.
 pub fn plus_darker(dst: &mut Pixmap, at: (i32, i32), src: &Pixmap, opacity: f32) {
+    plus(dst, at, src, opacity, false);
+}
+
+/// Composite `src` at `opacity` onto `dst` (top-left at `at`) with plus-lighter as the reference
+/// tool draws it: the premultiplied colours add up (`min(1, cb + cs)` on an opaque backdrop, the
+/// source counted at its opacity) and the alphas combine as source-over does. tiny-skia's `Plus`
+/// adds the alphas too, so a fill stack over a translucent one came out opaque; the W3C general
+/// formula comes out darker where the sum saturates (a 60% `#444` over 80% grey: 0.92 instead of
+/// 0.96). Both checked on renders of synthetic files.
+pub fn plus_lighter(dst: &mut Pixmap, at: (i32, i32), src: &Pixmap, opacity: f32) {
+    plus(dst, at, src, opacity, true);
+}
+
+/// Linear dodge (`lighter`, see [`plus_lighter`]) or burn (the general formula, premultiplied:
+/// `cs (1 - ab) + cb (1 - as) + as ab B(Cb, Cs)`).
+fn plus(dst: &mut Pixmap, at: (i32, i32), src: &Pixmap, opacity: f32, lighter: bool) {
     let o = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 0.0 };
     overlap_rows(dst, at, src, |dp, sp, _, _| {
         for (d, s) in dp.chunks_exact_mut(4).zip(sp.chunks_exact(4)) {
@@ -297,12 +313,13 @@ pub fn plus_darker(dst: &mut Pixmap, at: (i32, i32), src: &Pixmap, opacity: f32)
                 continue;
             }
             let da = f(d[3]);
+            let alpha = (sa + da - sa * da).clamp(0.0, 1.0);
             for c in 0..3 {
                 let (sc, dc) = (f(s[c]) * o, f(d[c]));
-                let v = sc * (1.0 - da) + dc * (1.0 - sa) + (sa * dc + da * sc - sa * da).max(0.0);
+                let v = if lighter { (sc + dc).min(alpha) } else { sc * (1.0 - da) + dc * (1.0 - sa) + (sa * dc + da * sc - sa * da).max(0.0) };
                 d[c] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
             }
-            d[3] = ((sa + da - sa * da).clamp(0.0, 1.0) * 255.0).round() as u8;
+            d[3] = (alpha * 255.0).round() as u8;
         }
     });
 }

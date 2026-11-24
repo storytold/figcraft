@@ -469,3 +469,268 @@ fn fill_children_whose_tiny_clampings_add_up_past_the_tolerance_still_settle() {
         assert!((pos(&d, *k).2 - 100.0).abs() < 1e-6, "{:?}", pos(&d, *k));
     }
 }
+
+#[test]
+fn review_coupled_ratio_fills_use_the_hugging_lines_main_space_and_settle() {
+    for horizontal in [false, true] {
+        for gap in [0.0, 12.0] {
+            let (mut d, f, k) = setup(if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical });
+            let frame = d.get_mut(f).unwrap();
+            (frame.width, frame.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+            let al = frame.layout.as_mut().unwrap();
+            al.padding = [0.0; 4];
+            al.gap = gap;
+            if horizontal {
+                frame.child_layout.sizing_v = Sizing::Hug
+            } else {
+                frame.child_layout.sizing_h = Sizing::Hug
+            }
+            for (index, id) in k.iter().enumerate() {
+                let n = d.get_mut(*id).unwrap();
+                n.width = 100.0;
+                n.height = 100.0;
+                n.constrain_proportions = true;
+                (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                    if horizontal == (index == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+            }
+            layout_frame(&mut d, f, &NoMeasure);
+            let a = d.node(k[0]).unwrap();
+            let b = d.node(k[1]).unwrap();
+            let used = if horizontal { a.width + b.width } else { a.height + b.height };
+            assert!((used + gap - 300.0).abs() < 1e-6, "main space was left unused: {used}, gap {gap}");
+            assert!((a.width - a.height).abs() < 1e-6 && (b.width - b.height).abs() < 1e-6, "both ratios must hold");
+            assert!((a.width - b.width).abs() < 1e-6, "the cross fill shares the main fill's line");
+            let before = [pos(&d, k[0]), pos(&d, k[1])];
+            layout_frame(&mut d, f, &NoMeasure);
+            for (old, new) in before.into_iter().zip([pos(&d, k[0]), pos(&d, k[1])]) {
+                assert!((old.2 - new.2).abs() < 1e-6 && (old.3 - new.3).abs() < 1e-6, "a second layout must not oscillate");
+            }
+        }
+    }
+}
+
+#[test]
+fn second_review_rigid_layout_frames_share_the_coupled_ratio_line() {
+    for horizontal in [false, true] {
+        for frame_child in 0..2 {
+            let mode = if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical };
+            let (mut d, f, k) = setup(mode);
+            let parent = d.get_mut(f).unwrap();
+            (parent.width, parent.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+            parent.layout.as_mut().unwrap().padding = [0.0; 4];
+            parent.layout.as_mut().unwrap().gap = 0.0;
+            if horizontal {
+                parent.child_layout.sizing_v = Sizing::Hug;
+            } else {
+                parent.child_layout.sizing_h = Sizing::Hug;
+            }
+            for (index, id) in k.iter().enumerate() {
+                let n = d.get_mut(*id).unwrap();
+                (n.width, n.height) = (100.0, 100.0);
+                n.constrain_proportions = true;
+                (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                    if horizontal == (index == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+                if index == frame_child {
+                    n.kind = NodeKind::Frame;
+                    n.layout = Some(AutoLayout { mode, ..Default::default() });
+                }
+            }
+            layout_frame(&mut d, f, &NoMeasure);
+            let a = d.node(k[0]).unwrap();
+            let b = d.node(k[1]).unwrap();
+            let used = if horizontal { a.width + b.width } else { a.height + b.height };
+            let available = if horizontal { d.node(f).unwrap().width } else { d.node(f).unwrap().height };
+            assert!((used - available).abs() < 1e-6, "rigid frames must not leave main-axis space unused: {used} of {available}");
+            assert!((a.width - a.height).abs() < 1e-6 && (b.width - b.height).abs() < 1e-6);
+            assert!((a.width - b.width).abs() < 1e-6, "both children must share the hugging line");
+            let before = [pos(&d, k[0]), pos(&d, k[1])];
+            layout_frame(&mut d, f, &NoMeasure);
+            assert_eq!(before, [pos(&d, k[0]), pos(&d, k[1])], "the next layout must keep the settled geometry");
+        }
+    }
+}
+
+#[test]
+fn review_oversized_initial_ratio_fills_still_solve_the_available_space() {
+    for horizontal in [false, true] {
+        let (mut d, f, k) = setup(if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical });
+        let frame = d.get_mut(f).unwrap();
+        (frame.width, frame.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+        let al = frame.layout.as_mut().unwrap();
+        al.padding = [0.0; 4];
+        al.gap = 0.0;
+        if horizontal {
+            frame.child_layout.sizing_v = Sizing::Hug
+        } else {
+            frame.child_layout.sizing_h = Sizing::Hug
+        }
+        for (index, id) in k.iter().enumerate() {
+            let n = d.get_mut(*id).unwrap();
+            (n.width, n.height) = if index == 1 {
+                (1000.0, 1000.0)
+            } else if horizontal {
+                (100.0, 1000.0)
+            } else {
+                (1000.0, 100.0)
+            };
+            n.constrain_proportions = true;
+            (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                if horizontal == (index == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+        }
+        layout_frame(&mut d, f, &NoMeasure);
+        let a = d.node(k[0]).unwrap();
+        let b = d.node(k[1]).unwrap();
+        let (main, cross) = if horizontal { (a.width + b.width, a.height) } else { (a.height + b.height, a.width) };
+        assert!((main - 300.0).abs() < 1e-6, "the initial oversized child must not select a spurious zero-width solution: {main}");
+        let own_main = if horizontal { a.width } else { a.height };
+        assert!((cross - 10.0 * own_main).abs() < 1e-6);
+        assert!((b.width - b.height).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn third_review_coupled_frames_keep_descendant_baselines() {
+    let (mut d, f, k) = setup(LayoutMode::Horizontal);
+    let parent = d.get_mut(f).unwrap();
+    parent.width = 400.0;
+    parent.child_layout.sizing_v = Sizing::Hug;
+    let al = parent.layout.as_mut().unwrap();
+    al.padding = [0.0; 4];
+    al.gap = 0.0;
+    al.cross_align = CrossAlign::Baseline;
+    for (i, id) in k.iter().enumerate() {
+        let n = d.get_mut(*id).unwrap();
+        (n.width, n.height) = (100.0, 100.0);
+        n.constrain_proportions = true;
+        (n.child_layout.sizing_h, n.child_layout.sizing_v) = if i == 0 { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+    }
+    let a = d.get_mut(k[0]).unwrap();
+    a.kind = NodeKind::Frame;
+    a.layout = Some(AutoLayout { mode: LayoutMode::Horizontal, ..Default::default() });
+    let t = text(&mut d, k[0], "Nested label");
+    let c = d.create(f, NodeKind::Rectangle, "Icon", 0.0, 0.0, 20.0, 20.0).unwrap();
+    let m = FakeMeasure([(t, (40.0, 20.0, 10.0))].into());
+    layout_frame(&mut d, f, &m);
+    let label_base = pos(&d, k[0]).1 + pos(&d, t).1 + m.text_baseline(&d, t).unwrap();
+    let icon_bottom = pos(&d, c).1 + pos(&d, c).3;
+    assert!((label_base - icon_bottom).abs() < 1e-6, "the icon must align with the descendant text, not the frame bottom");
+}
+
+#[test]
+fn third_review_coupled_frames_respect_padding_floors_and_settle() {
+    for horizontal in [false, true] {
+        for padded_child in 0..2 {
+            let mode = if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical };
+            let (mut d, f, k) = setup(mode);
+            let parent = d.get_mut(f).unwrap();
+            (parent.width, parent.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+            parent.layout.as_mut().unwrap().padding = [0.0; 4];
+            parent.layout.as_mut().unwrap().gap = 0.0;
+            if horizontal {
+                parent.child_layout.sizing_v = Sizing::Hug;
+            } else {
+                parent.child_layout.sizing_h = Sizing::Hug;
+            }
+            for (i, id) in k.iter().enumerate() {
+                let n = d.get_mut(*id).unwrap();
+                (n.width, n.height) = (100.0, 100.0);
+                n.constrain_proportions = true;
+                (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                    if horizontal == (i == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+                if i == padded_child {
+                    n.kind = NodeKind::Frame;
+                    n.layout = Some(AutoLayout {
+                        mode,
+                        padding: if horizontal { [100.0, 0.0, 100.0, 0.0] } else { [0.0, 100.0, 0.0, 100.0] },
+                        ..Default::default()
+                    });
+                }
+            }
+            layout_frame(&mut d, f, &NoMeasure);
+            let a = pos(&d, k[0]);
+            let b = pos(&d, k[1]);
+            let cross = |v: (f64, f64, f64, f64)| if horizontal { v.3 } else { v.2 };
+            let parent_cross = cross(pos(&d, f));
+            assert!((cross(b) - parent_cross).abs() < 1e-6, "the cross-fill child must match the retained line: {a:?} {b:?}");
+            let padded = if padded_child == 0 { a } else { b };
+            assert!(cross(padded) >= 200.0 - 1e-6, "the frame's padding must fit");
+            assert!((a.2 - a.3).abs() < 1e-6 && (b.2 - b.3).abs() < 1e-6, "retained padding floors must preserve both locked ratios");
+            let before = [pos(&d, f), a, b];
+            layout_frame(&mut d, f, &NoMeasure);
+            for (old, new) in before.into_iter().zip([pos(&d, f), pos(&d, k[0]), pos(&d, k[1])]) {
+                assert!((old.2 - new.2).abs() < 1e-6 && (old.3 - new.3).abs() < 1e-6, "the next layout must retain the geometry: {old:?} {new:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn fourth_review_scaled_coupled_children_commit_the_trial_in_local_space() {
+    for horizontal in [false, true] {
+        for scaled_child in 0..2 {
+            for as_frame in [false, true] {
+                for (sx, sy) in [(2.0, 0.5), (-0.5, 2.0)] {
+                    let mode = if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical };
+                    let (mut d, f, k) = setup(mode);
+                    let parent = d.get_mut(f).unwrap();
+                    (parent.width, parent.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+                    parent.layout.as_mut().unwrap().padding = [0.0; 4];
+                    parent.layout.as_mut().unwrap().gap = 0.0;
+                    if horizontal {
+                        parent.child_layout.sizing_v = Sizing::Hug;
+                    } else {
+                        parent.child_layout.sizing_h = Sizing::Hug;
+                    }
+                    for (i, id) in k.iter().enumerate() {
+                        let n = d.get_mut(*id).unwrap();
+                        (n.width, n.height) = (100.0, 100.0);
+                        n.constrain_proportions = true;
+                        (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                            if horizontal == (i == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+                        if i == scaled_child {
+                            n.transform = Affine::new([sx, 0.0, 0.0, sy, 0.0, 0.0]);
+                            if as_frame {
+                                n.kind = NodeKind::Frame;
+                                n.layout = Some(AutoLayout { mode, ..Default::default() });
+                                n.child_layout.min_w = Some(80.0);
+                                n.child_layout.min_h = Some(80.0);
+                                n.child_layout.max_w = Some(100.0);
+                                n.child_layout.max_h = Some(100.0);
+                            }
+                        }
+                    }
+                    layout_frame(&mut d, f, &NoMeasure);
+                    let (aw, ah) = outer_size(&d, k[0]);
+                    let (bw, bh) = outer_size(&d, k[1]);
+                    let parent_cross = if horizontal { d.node(f).unwrap().height } else { d.node(f).unwrap().width };
+                    let filled_cross = if horizontal { bh } else { bw };
+                    let max_cross = if as_frame && scaled_child == 1 { 100.0 * if horizontal { sy.abs() } else { sx.abs() } } else { f64::INFINITY };
+                    assert!((filled_cross - parent_cross.min(max_cross)).abs() < 1e-6, "the fill must match its line up to its own local maximum");
+                    let main_used = if horizontal { aw + bw } else { ah + bh };
+                    assert!(main_used <= 300.0 + 1e-6, "scaling must not apply the solved size twice: {main_used}");
+                    if !as_frame {
+                        assert!((main_used - 300.0).abs() < 1e-6, "unconstrained fills must use the available space");
+                    }
+                    for id in &k {
+                        let n = d.node(*id).unwrap();
+                        assert!((n.width - n.height).abs() < 1e-6, "local locked proportions must survive scale and flips");
+                    }
+                    if as_frame {
+                        let n = d.node(k[scaled_child]).unwrap();
+                        assert!(
+                            n.width >= 80.0 - 1e-6 && n.height >= 80.0 - 1e-6 && n.width <= 100.0 + 1e-6 && n.height <= 100.0 + 1e-6,
+                            "local frame bounds must still hold"
+                        );
+                    }
+                    let before = [pos(&d, f), pos(&d, k[0]), pos(&d, k[1])];
+                    layout_frame(&mut d, f, &NoMeasure);
+                    for (old, new) in before.into_iter().zip([pos(&d, f), pos(&d, k[0]), pos(&d, k[1])]) {
+                        for (a, b) in [old.0, old.1, old.2, old.3].into_iter().zip([new.0, new.1, new.2, new.3]) {
+                            assert!((a - b).abs() < 1e-6, "a second layout must retain the committed scaled geometry");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

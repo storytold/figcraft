@@ -335,10 +335,18 @@ impl Lives {
 
     /// Start a session on the link for command `cmd`: `start` gets the link and the new
     /// session's id, which comes back with what it returned.
-    fn start<T>(&mut self, cmd: &str, start: impl FnOnce(&mut dyn LiveLink, SessionId) -> Result<T>) -> Result<(SessionId, T)> {
+    fn start<T>(
+        &mut self,
+        cmd: &str,
+        join_link: Option<&str>,
+        start: impl FnOnce(&mut dyn LiveLink, SessionId) -> Result<T>,
+    ) -> Result<(SessionId, T)> {
         let link = self.link.as_deref_mut().ok_or_else(|| unavailable(cmd))?;
-        if let Some(why) = crate::file_access::network_refused() {
-            return Err(EngineError::Disabled(cmd.to_string(), why));
+        if let Some(roots) = crate::file_access::current() {
+            let allowed = cmd == "collab.join" && join_link.is_some_and(|invite| link.automation_join_allowed(invite, roots.allowed_servers()));
+            if !allowed {
+                return Err(EngineError::Disabled(cmd.to_string(), crate::file_access::NETWORK_REFUSED.into()));
+            }
         }
         let id = self.last.saturating_add(1);
         let out = start(link, id)?;

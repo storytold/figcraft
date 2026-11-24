@@ -339,6 +339,47 @@ fn a_truncated_text_keeps_truncating_when_its_box_is_resized() {
 }
 
 #[test]
+fn a_fixed_size_text_keeps_the_height_it_is_created_with() {
+    // #2184: a fixed-size text created with a top-level `height` keeps it; `props` are applied
+    // after the text is measured, so the measured height used to overwrite it.
+    use figcraft_doc::TextAutoResize;
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let style = || json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24});
+    let create = |s: &mut Session, params: Value| id(s.execute("node.create", &params).unwrap());
+    let mut base_style = style().as_object().unwrap().clone();
+    for (mode, want) in [("none", TextAutoResize::None), ("truncate", TextAutoResize::Truncate)] {
+        base_style.insert("textAutoResize".into(), json!(mode));
+        let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": Value::Object(base_style.clone())}));
+        assert_eq!(size(&s, t), (200.0, 100.0), "mode {mode}");
+        assert_eq!(resize_mode(&s, t), want, "mode {mode} stays");
+    }
+    // #2184 follow-up: with the proportions locked, the height reapply must not rescale the
+    // top-level width (a lone height would be treated as a linked resize).
+    let mut props = style().as_object().unwrap().clone();
+    props.insert("textAutoResize".into(), json!("none"));
+    props.insert("constrainProportions".into(), json!(true));
+    let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": Value::Object(props)}));
+    assert_eq!(size(&s, t), (200.0, 100.0), "a locked height reapply keeps the width");
+    assert_eq!(resize_mode(&s, t), TextAutoResize::None);
+    // A `height` inside `props` wins over the top-level one.
+    let mut props = style().as_object().unwrap().clone();
+    props.insert("textAutoResize".into(), json!("none"));
+    props.insert("height".into(), json!(30));
+    let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": Value::Object(props)}));
+    assert_eq!(size(&s, t).1, 30.0, "props height wins");
+    assert_eq!(resize_mode(&s, t), TextAutoResize::None);
+    // Auto-height text still measures its own height, ignoring the top-level one.
+    let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": style()}));
+    assert_eq!(resize_mode(&s, t), TextAutoResize::Height);
+    assert_eq!(size(&s, t), (200.0, 24.0), "one line tall, not 100");
+    // Auto-width text still measures both sides.
+    let t = create(&mut s, json!({"type": "text", "text": "Title", "height": 100, "props": style()}));
+    assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight);
+    assert_eq!(size(&s, t), (40.0, 24.0), "as wide as its line and one line tall");
+}
+
+#[test]
 fn max_lines_on_auto_height_text_hugs_that_many_lines() {
     // #1377: an auto-height text with max lines grows up to that many lines and ends in an
     // ellipsis; the layer reports its max lines.
@@ -959,4 +1000,14 @@ fn setting_characters_as_a_command_never_renames_the_layer() {
     assert_eq!(layer_name(&s, t), "Title");
     s.execute("node.set", &json!({"id": t, "props": {"characters": "Site em 7 dias"}})).unwrap();
     assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("Site em 7 dias", "Title"), "the field keeps its name");
+}
+
+#[test]
+fn review_restoring_locked_text_height_preserves_fill_sizing() {
+    let mut s = Session::new();
+    let parent = id(s.execute("node.create", &json!({"type":"frame","width":300,"height":200,"props":{"layout":"horizontal"}})).unwrap());
+    let child=id(s.execute("node.create",&json!({"type":"text","parent":parent,"text":"Title","width":100,"height":80,"props":{"textAutoResize":"none","sizingH":"fill","constrainProportions":true}})).unwrap());
+    let node = s.doc().unwrap().node(child).unwrap();
+    assert_eq!(node.child_layout.sizing_h, figcraft_doc::Sizing::Fill);
+    assert!(node.width > 100.0, "the text still fills the wider parent");
 }
