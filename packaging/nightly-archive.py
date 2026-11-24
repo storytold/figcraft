@@ -67,7 +67,9 @@ def member_info(stage_root, name, incoming):
     if not stat.S_ISREG(status.st_mode):
         raise ValueError(f"nightly member must be a regular file: {name}")
     # The same fields TarFile.gettarinfo records for a regular file.
-    info = tarfile.TarInfo(os.path.basename(destination))
+    # The header keeps the validated stage name, not the resolved one: a stage symlink must
+    # never rename a member or leave a required name out of the archive.
+    info = tarfile.TarInfo(name)
     info.type = tarfile.REGTYPE
     info.mode = stat.S_IMODE(status.st_mode)
     info.uid, info.gid = status.st_uid, status.st_gid
