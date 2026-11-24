@@ -162,3 +162,51 @@ fn layers_that_are_not_their_outline_cast_from_their_pixels() {
         c.card
     }));
 }
+
+/// A rectangle with a dark shadow of `radius` and `spread`, drawn through `transform`.
+fn slab(transform: figcraft_geom::Affine, size: (f64, f64), radius: f64, spread: f64) -> (figcraft_doc::Document, NodeId) {
+    let mut d = figcraft_doc::Document::new("slab");
+    let page = d.first_page().unwrap();
+    let r = d.create(page, figcraft_doc::NodeKind::Rectangle, "Slab", 0.0, 0.0, size.0, size.1).unwrap();
+    let n = d.get_mut(r).unwrap();
+    n.transform = transform;
+    n.fills = vec![Paint::solid(Color::WHITE)];
+    n.effects.push(figcraft_doc::Effect {
+        kind: EffectKind::DropShadow(Shadow { radius, spread, offset: (0.0, 0.0), color: Color::BLACK, ..Shadow::default() }),
+        visible: true,
+    });
+    (d, page)
+}
+
+/// A spread grows the outline in the layer's own units: stretched six times one way and squeezed
+/// as much the other, it reaches six times as far that way, not as far as the scale of an area
+/// (here 1) says.
+#[test]
+fn a_spread_reaches_as_far_as_the_layer_is_stretched() {
+    let stretched = figcraft_geom::Affine::translate((120.0, 60.0)) * figcraft_geom::Affine::scale_non_uniform(6.0, 1.0 / 6.0);
+    let (d, page) = slab(stretched, (20.0, 240.0), 0.0, 10.0);
+    let v = View { origin: (0.0, 0.0), scale: 1.0, width: 360, height: 160 };
+    let new = render_view_single(&d, page, &v, &white()).unwrap();
+    FROM_PIXELS.with(|f| f.set(true));
+    let old = render_view_single(&d, page, &v, &white()).unwrap();
+    FROM_PIXELS.with(|f| f.set(false));
+    // Black 50 pixels left of the slab (its spread is 60 there), in both.
+    let at = |p: &Pixmap, x: usize, y: usize| p.data()[(y * 360 + x) * 4];
+    assert_eq!((at(&new, 70, 80), at(&old, 70, 80)), (0, 0), "the shadow 50 pixels out");
+    let apart = new.data().iter().zip(old.data()).filter(|(a, b)| a.abs_diff(**b) > 8).count();
+    assert!(apart < 400, "{apart} channels apart");
+}
+
+/// A shadow across a view as wide as a pixmap gets is drawn: the pixmap it is blurred in is a
+/// blur's reach wider still.
+#[test]
+fn a_shadow_shows_across_the_widest_view() {
+    let (d, page) = slab(figcraft_geom::Affine::translate((-100.0, 4.0)), (17_000.0, 10.0), 6.0, 0.0);
+    let v = View { origin: (0.0, 0.0), scale: 1.0, width: 16_384, height: 30 };
+    let pix = render_view_single(&d, page, &v, &white()).unwrap();
+    // Two rows under the slab (white without a shadow), at both ends and in the middle.
+    for x in [10usize, 8_000, 16_370] {
+        let red = pix.data()[(16 * 16_384 + x) * 4];
+        assert!(red < 245, "a shadow under the slab at {x}: {red}");
+    }
+}

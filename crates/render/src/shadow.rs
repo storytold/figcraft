@@ -351,13 +351,29 @@ const FULL_RES_SIGMA: f64 = 8.0;
 /// The most a shadow is drawn smaller by before its blur: a blur of 4 to 8 small pixels.
 const MAX_SMALLER: u32 = 256;
 
-/// A whole pixel range `[lo, hi)` as `(start, length)`; `None` when empty or past any pixmap.
-fn span(lo: f64, hi: f64) -> Option<(i32, u32)> {
+/// The longest side of a pixmap.
+const MAX_SIDE: u32 = 16_384;
+/// What the pixmap a shadow is blurred in may have more than [`MAX_SIDE`] a side: the blur's
+/// reach both ways at full resolution (under [`FULL_RES_SIGMA`]: 34 pixels) and a pixel's slack.
+/// Drawn smaller, it is far under the limit.
+const BLUR_ROOM: u32 = 128;
+
+/// A whole pixel range `[lo, hi)` as `(start, length)`; `None` when empty or longer than `most`.
+fn span(lo: f64, hi: f64, most: u32) -> Option<(i32, u32)> {
     if !(lo.is_finite() && hi.is_finite() && hi > lo && lo.abs() < 1e9 && hi.abs() < 1e9) {
         return None;
     }
     let len = (hi - lo) as u32;
-    (1..=16_384).contains(&len).then_some((lo as i32, len))
+    (1..=most).contains(&len).then_some((lo as i32, len))
+}
+
+/// The most `xf` stretches a length, in any direction (its largest singular value): how far a
+/// distance in local units can reach on the pixmap.
+fn stretch(xf: Affine) -> f64 {
+    let c = xf.as_coeffs();
+    let sum = c[0] * c[0] + c[1] * c[1] + c[2] * c[2] + c[3] * c[3];
+    let det = c[0] * c[3] - c[1] * c[2];
+    ((sum + (sum * sum - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt()
 }
 
 /// The drop shadow `s` cast by `outlines` (local space, drawn at `xf` into a `size` pixmap), where
@@ -384,13 +400,15 @@ pub fn outline_drop_shadow(
     let cast = Affine::translate((dx, dy)) * xf;
     // Where the shadow can show: its outlines, spread and blurred, on the pixmap.
     let reach = (sigma * 4.0).ceil() + 2.0;
-    let px = xf.determinant().abs().sqrt();
+    // A spread grows the outline in local units: on the pixmap, as far as the transform
+    // stretches them the most (it need not scale both ways alike).
+    let px = stretch(xf);
     let grown = if px.is_finite() { (spread.abs() * px * SPREAD_MITER_LIMIT).min(MAX_SPREAD_PX) } else { 0.0 };
     let shape =
         outlines.iter().map(|(p, _)| figcraft_geom::transform_rect_bbox(cast, figcraft_geom::Shape::bounding_box(p))).reduce(|a, b| a.union(b))?;
     let shows = shape.inflate(grown + reach, grown + reach).intersect(figcraft_geom::Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1)));
-    let (x0, w) = span(shows.x0.floor(), shows.x1.ceil())?;
-    let (y0, h) = span(shows.y0.floor(), shows.y1.ceil())?;
+    let (x0, w) = span(shows.x0.floor(), shows.x1.ceil(), MAX_SIDE)?;
+    let (y0, h) = span(shows.y0.floor(), shows.y1.ceil(), MAX_SIDE)?;
     let smaller = if sigma >= FULL_RES_SIGMA { (2f64.powi((sigma / 4.0).log2().floor() as i32) as u32).clamp(1, MAX_SMALLER) } else { 1 };
     let k = f64::from(smaller);
     // The small pixmap's pixels are `k` device pixels a side, counted from the shape's origin
@@ -398,8 +416,10 @@ pub fn outline_drop_shadow(
     // what blurs into it take in.
     let c = cast.as_coeffs();
     let (ax, ay) = if smaller > 1 { (c[4], c[5]) } else { (0.0, 0.0) };
-    let (i0, lw) = span(((f64::from(x0) - reach - ax) / k).floor() - 1.0, ((f64::from(x0) + f64::from(w) + reach - ax) / k).ceil() + 1.0)?;
-    let (j0, lh) = span(((f64::from(y0) - reach - ay) / k).floor() - 1.0, ((f64::from(y0) + f64::from(h) + reach - ay) / k).ceil() + 1.0)?;
+    let (i0, lw) =
+        span(((f64::from(x0) - reach - ax) / k).floor() - 1.0, ((f64::from(x0) + f64::from(w) + reach - ax) / k).ceil() + 1.0, MAX_SIDE + BLUR_ROOM)?;
+    let (j0, lh) =
+        span(((f64::from(y0) - reach - ay) / k).floor() - 1.0, ((f64::from(y0) + f64::from(h) + reach - ay) / k).ceil() + 1.0, MAX_SIDE + BLUR_ROOM)?;
     let small = Affine::new([c[0] / k, c[1] / k, c[2] / k, c[3] / k, (c[4] - ax) / k - f64::from(i0), (c[5] - ay) / k - f64::from(j0)]);
     let mut low = spread_alpha(outlines, spread, small, lw, lh)?;
     fx::blur(&mut low, sigma / k);
