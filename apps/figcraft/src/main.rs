@@ -254,8 +254,20 @@ fn main() -> eframe::Result {
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let args: Vec<String> = if nightly {
-        // The Launcher hands over the file names after the profile tokens, as separate arguments.
-        arguments.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+        // The launcher hands these over after `--`, which `parse` takes as file names verbatim (that
+        // is what keeps a file called `--screenshot` a file). "Open with" and a drop onto the
+        // launcher pass `file://` URLs (`%U`), so decode those here as a plain argument would be;
+        // every other name stays exactly as given.
+        arguments
+            .iter()
+            .map(|a| {
+                let arg = a.to_string_lossy();
+                match args::file_url_path(&arg) {
+                    Some(path) => path,
+                    None => arg.into_owned(),
+                }
+            })
+            .collect()
     } else {
         std::env::args().skip(1).collect()
     };
@@ -467,12 +479,15 @@ fn main() -> eframe::Result {
         }),
     );
     let frames = window.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map_or(0, egui::Context::cumulative_frame_nr);
+    // The fallback for a start that never reached `on_exit`; elsewhere the exit hook did it. It runs
+    // before the graphics handoff: on Unix the fallback `exec`s the restarted window from inside
+    // `graphics.finish`, so a record finished after it would never be written and the restarted
+    // window would report an unclean exit (and a Windows restart races the lease instead). A
+    // renderer handoff is a controlled completion (`nightly_session::complete`).
+    nightly_session::finish_once(&nightly_record, nightly_notice.load(std::sync::atomic::Ordering::Relaxed));
     // Start again on other graphics, or say why instead of quitting silently: release builds on
     // Windows have no console. A handoff start does not reach the window here.
-    let outcome = graphics.finish(result, frames, port.is_some());
-    // The fallback for a start that never reached `on_exit`; elsewhere the exit hook did it.
-    nightly_session::finish_once(&nightly_record, nightly_notice.load(std::sync::atomic::Ordering::Relaxed));
-    outcome
+    graphics.finish(result, frames, port.is_some())
 }
 
 /// With nothing to open, whether the window starts in a new file rather than on the home screen.

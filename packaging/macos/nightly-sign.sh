@@ -60,8 +60,9 @@ trap cleanup EXIT
 imported="$(GITHUB_ENV='' RUNNER_TEMP="$WORK" DIST="$WORK/dist" bash "$HERE/import-cert.sh")"
 IDENTITY="$(sed -n 's/^MACOS_SIGN_IDENTITY=//p' <<<"$imported")"
 KEYCHAIN="$(sed -n 's/^MACOS_KEYCHAIN=//p' <<<"$imported")"
-[[ "$IDENTITY" =~ ^[0-9A-F]{40}$ ]] && mac_nightly_keychain_is_ours "$KEYCHAIN" "$WORK" \
-  || mac_nightly_die 'import-cert.sh did not import a signing identity into this run directory'
+if ! { [[ "$IDENTITY" =~ ^[0-9A-F]{40}$ ]] && mac_nightly_keychain_is_ours "$KEYCHAIN" "$WORK"; }; then
+  mac_nightly_die 'import-cert.sh did not import a signing identity into this run directory'
+fi
 mac_nightly_identity_is_team "$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -F " $IDENTITY " || true)" "$IDENTITY" "$APPLE_TEAM_ID" \
   || mac_nightly_die "the imported identity is not a Developer ID Application of team $APPLE_TEAM_ID"
 echo "==> FigCraft Nightly $VERSION for macOS (aarch64), identity: $IDENTITY"

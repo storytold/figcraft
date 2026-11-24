@@ -101,18 +101,19 @@ if [[ "$IS_NIGHTLY" = 1 ]]; then
       -e '/^MimeType=/d' \
       "$STAGE/usr/share/applications/$APP_ID.desktop" >"$STAGE/usr/share/applications/$APP_ID.desktop.tmp"
   mv "$STAGE/usr/share/applications/$APP_ID.desktop.tmp" "$STAGE/usr/share/applications/$APP_ID.desktop"
-  rm -rf "$STAGE/usr/share/mime"
 fi
-install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
+# No document associations for a Nightly: the mime package, the desktop's MimeType lines and the
+# metainfo mediatypes all stay out, so it never takes a file type from the stable app.
+if [[ "$IS_NIGHTLY" = 0 ]]; then
+  install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
+fi
 mkdir -p "$STAGE/usr/share/metainfo"
-# The AppStream metadata carries the Nightly's id and launcher, and no document types: a Nightly
-# never takes a file association from the stable app.
+# The AppStream metadata carries the Nightly's name and launcher and no document types. Its id,
+# launchable and icon keep the stable values here: the deb/rpm, the AppImage and the Flatpak each
+# rename them to the id they actually install (and the Flatpak's differs from the AppImage's).
 META_NIGHTLY=()
 if [[ "$IS_NIGHTLY" = 1 ]]; then
-  META_NIGHTLY=(-e "s|<id>$APP_ID</id>|<id>$APP_ID.nightly-v1</id>|g"
-    -e "s|<name>FigCraft</name>|<name>FigCraft Nightly</name>|g"
-    -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$APP_ID.nightly-v1.desktop</launchable>|g"
-    -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$APP_ID.nightly-v1</icon>|g"
+  META_NIGHTLY=(-e "s|<name>FigCraft</name>|<name>FigCraft Nightly</name>|g"
     -e 's|<binary>figcraft</binary>|<binary>figcraft-nightly</binary>|g'
     -e '/<mediatype>/d')
 fi
@@ -247,11 +248,9 @@ if has appimage; then
     APPIMAGE_ID="$APP_ID.nightly-v1"
     NIGHTLY_ICON="$ROOT/assets/app-icon/figcraft-nightly.png"
     [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
-    # The nightly entry point is the shared launcher (see packaging/linux/nightly-launch.sh), which
-    # starts the GUI on the Launcher's nightly-v1 profile; AppRun runs it in place of the GUI.
-    awk -v real='"$APPDIR/usr/bin/figcraft"' '{ gsub(/@REAL_BIN@/, real); print }' \
-      "$HERE/nightly-launch.sh" >"$APPDIR/usr/bin/figcraft-nightly"
-    chmod 755 "$APPDIR/usr/bin/figcraft-nightly"
+    # AppRun runs the staged launcher (`usr/bin/figcraft-nightly`, which starts the GUI beside it).
+    # Its `$(dirname "$0")` form resolves the same way under the AppImage runtime and an extracted
+    # AppDir, and never needs the runtime's `$APPDIR` to be exported.
     # shellcheck disable=SC2016
     awk -v old_id="$APP_ID" -v new_id="$APPIMAGE_ID" '
       $0 == "DESK_ID=" old_id { print "DESK_ID=" new_id; next }
@@ -272,7 +271,10 @@ if has appimage; then
     # No document associations for a Nightly: the mime package, the desktop's MimeType lines (above)
     # and the metainfo mediatypes all stay out, so it never takes a file type from the stable app.
     rm -rf "$APPDIR/usr/share/mime"
-    sed -e "s|<binary>figcraft</binary>|<binary>figcraft-nightly</binary>|g" \
+    sed -e "s|<id>$APP_ID</id>|<id>$APPIMAGE_ID</id>|g" \
+        -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$APPIMAGE_ID.desktop</launchable>|g" \
+        -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$APPIMAGE_ID</icon>|g" \
+        -e "s|<binary>figcraft</binary>|<binary>figcraft-nightly</binary>|g" \
         -e '/<mediatype>/d' \
         "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml" >"$APPDIR/usr/share/metainfo/$APPIMAGE_ID.metainfo.xml"
     rm -f "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml"

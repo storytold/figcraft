@@ -19,14 +19,14 @@ OUTPUT="$DIST/figcraft-$VERSION-linux-x86_64-nightly.tar.gz"
 nightly_build_gui
 STAGE="$NIGHTLY_WORK/stage"
 mkdir -p "$STAGE"
-# The archive's entry point is the shared launcher (figcraft-nightly), which starts the GUI on the
-# Launcher's nightly-v1 profile; the GUI itself sits beside it as figcraft, so an unpacked tar is
-# isolated too, even when started straight from its folder.
-cp "$NIGHTLY_GUI" "$STAGE/figcraft"
+# The standard nightly layout: the archive's entry point `figcraft` is the shared launcher, which
+# starts the GUI on the Launcher's nightly-v1 profile, and the GUI itself sits beside it as
+# `figcraft-bin`. An unpacked tar is isolated too, even when started straight from its folder.
+cp "$NIGHTLY_GUI" "$STAGE/figcraft-bin"
+chmod 755 "$STAGE/figcraft-bin"
+awk -v real='"$(dirname "$0")/figcraft-bin"' '{ gsub(/@REAL_BIN@/, real); print }' \
+  "$HERE/nightly-launch.sh" >"$STAGE/figcraft"
 chmod 755 "$STAGE/figcraft"
-awk -v real='"$(dirname "$0")/figcraft"' '{ gsub(/@REAL_BIN@/, real); print }' \
-  "$HERE/nightly-launch.sh" >"$STAGE/figcraft-nightly"
-chmod 755 "$STAGE/figcraft-nightly"
 cp "$ROOT/assets/app-icon/figcraft-nightly.png" "$STAGE/figcraft-nightly.png"
 nightly_copy_notices "$STAGE"
 # The private mktemp cwd is the helper authority root, not a CLI path parent.

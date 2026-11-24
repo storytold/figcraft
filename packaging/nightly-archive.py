@@ -33,7 +33,7 @@ def checked_entries(root, stage):
     total = 0
     for entry in entries:
         name = entry.name
-        if name not in {"figcraft", "figcraft-nightly", "figcraft-nightly.png"} and not notice(name):
+        if name not in {"figcraft", "figcraft-bin", "figcraft-nightly.png"} and not notice(name):
             raise ValueError(f"unexpected nightly member: {name}")
         if len(name.encode("utf-8")) > 100:
             raise ValueError(f"nightly member must be a short regular file: {name}")
@@ -44,9 +44,10 @@ def checked_entries(root, stage):
         if name.casefold() in folded:
             raise ValueError(f"case-colliding nightly member: {name}")
         folded.add(name.casefold())
-    # figcraft is the GUI binary and figcraft-nightly the launcher that starts it on the Launcher's
-    # nightly-v1 profile (packaging/linux/nightly-launch.sh), so an unpacked archive is isolated.
-    required = {"figcraft", "figcraft-nightly", "figcraft-nightly.png", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"}
+    # The standard nightly layout: figcraft is the launcher that starts the GUI on the Launcher's
+    # nightly-v1 profile (packaging/linux/nightly-launch.sh), and figcraft-bin is that GUI, so an
+    # unpacked archive is isolated too.
+    required = {"figcraft", "figcraft-bin", "figcraft-nightly.png", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"}
     if not required.issubset({item.name for item in entries}):
         raise ValueError("required GUI/icon/notices missing")
     return entries

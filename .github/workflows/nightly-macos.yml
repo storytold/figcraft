@@ -36,7 +36,7 @@ jobs:
       RUST_BACKTRACE: 1
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,7 +53,7 @@ jobs:
         uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
         with:
           targets: aarch64-apple-darwin
-      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: ${{ steps.rust.outputs.toolchain }}
           targets: ${{ steps.rust.outputs.targets }}
@@ -83,7 +83,7 @@ jobs:
         run: bash packaging/macos/nightly-verify.sh --expect unsigned --input "$RUNNER_TEMP/nightly-dist/figcraft-$FIGCRAFT_VERSION-macos-aarch64-nightly.zip"
       # Keeps the verified unsigned zip briefly for keyless signer tests and hand testing. Unsigned only.
       - name: Keep the unsigned archive
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: figcraft-nightly-macos-aarch64-unsigned
           path: ${{ runner.temp }}/nightly-dist/figcraft-${{ env.FIGCRAFT_VERSION }}-macos-aarch64-nightly.zip

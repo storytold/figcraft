@@ -110,9 +110,17 @@ fi
 if [[ "$TEST" = 1 ]]; then
   flatpak install --user -y --noninteractive --reinstall "$OUT"
   flatpak info --user "$FLATPAK_ID"
-  if [[ -x "$WORK/stage/bin/figcraft-cli" ]]; then smoke=figcraft-cli; else smoke=figcraft; fi
+  # The Nightly bundle installs the launcher (its desktop entry's command) and no document types, so
+  # its query goes through that launcher and its file list has no share/mime to look for.
+  paths='/app/share/applications /app/share/metainfo /app/share/icons/hicolor/*/apps'
+  if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
+    smoke=figcraft-nightly
+  else
+    paths="$paths /app/share/mime/packages"
+    if [[ -x "$WORK/stage/bin/figcraft-cli" ]]; then smoke=figcraft-cli; else smoke=figcraft; fi
+  fi
   flatpak run --command="$smoke" "$FLATPAK_ID" --version
-  flatpak run --command=sh "$FLATPAK_ID" -c 'ls /app/share/applications /app/share/metainfo /app/share/mime/packages /app/share/icons/hicolor/*/apps'
+  flatpak run --command=sh "$FLATPAK_ID" -c "ls $paths"
 fi
 echo "==> done"
 ls -lh "$OUT"

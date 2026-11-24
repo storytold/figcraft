@@ -226,7 +226,7 @@ fn validate_for(
         // bundle (ai.storyteller.figcraft.nightly) is a separate sandbox and is allowed.
         let flatpak = env("FLATPAK_ID").filter(|v| !v.is_empty());
         if let Some(id) = flatpak
-            && id != OsString::from(NIGHTLY_FLATPAK_ID)
+            && id != NIGHTLY_FLATPAK_ID
         {
             return Err("nightly-v1 cannot inherit another app's Flatpak instance; use its own package or the native Launcher".into());
         }

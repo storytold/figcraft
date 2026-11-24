@@ -58,6 +58,11 @@ expect "$(printf 'CONFIG=%s\nDATA=%s\n%s\n<%s>\n<%s>\n' "$XDG_CONFIG_HOME/figcra
 # A version query is answered by the GUI itself: no profile directory is created for it.
 expect "$(printf 'CONFIG=%s\nDATA=%s\n<--version>\n' "$XDG_CONFIG_HOME" "$XDG_DATA_HOME")" --version
 expect "$(printf 'CONFIG=%s\nDATA=%s\n<-V>\n' "$XDG_CONFIG_HOME" "$XDG_DATA_HOME")" -V
+# The Launcher's own protocol passes through untouched: never a second pair, and the caller's
+# folders are left as they were.
+expect "$(printf 'CONFIG=%s\nDATA=%s\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n<%s>\n<-->\n<%s>\n' \
+  "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$work/launcher profile" 'a.figcraft')" \
+  --launch-profile nightly-v1 --profile-root "$work/launcher profile" -- 'a.figcraft'
 [[ ! -e "$XDG_DATA_HOME/figcraft-nightly" ]] || { echo "FAIL: a version query created the profile" >&2; exit 1; }
 
 echo "PASS: Arch Nightly handoff starts the nightly-v1 profile and preserves launch arguments"
