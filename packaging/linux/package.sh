@@ -9,7 +9,7 @@
 #
 # figcraft-cli is built and shipped next to figcraft once apps/figcraft-cli exists.
 #
-# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
+# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"] [--arch-tar-dir DIRECTORY]
 #
 # Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool for the AppImage
 # (downloaded into $CARGO_TARGET_DIR if missing). Build on an old distro (CI: Ubuntu 22.04,
@@ -33,10 +33,16 @@ verify_sha256() {
 
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar"
+ARCH_TAR_DIR=
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
+    --arch-tar-dir)
+      [[ -n "${2:-}" ]] || { echo "error: --arch-tar-dir needs a directory" >&2; exit 2; }
+      ARCH_TAR_DIR="$2"
+      shift 2
+      ;;
     -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -50,9 +56,20 @@ case "$ARCH" in
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
 export FIGCRAFT_MAINTAINER="${FIGCRAFT_MAINTAINER:-FigCraft maintainers <figcraft@storyteller.ai>}"
+IS_NIGHTLY=0
+if [[ "${FIGCRAFT_BUILD_CHANNEL:-}" == nightly-v1 || "$VERSION" == *-nightly* ]]; then
+  IS_NIGHTLY=1
+  export FIGCRAFT_BUILD_CHANNEL=nightly-v1
+  export FIGCRAFT_OVERRIDE_VERSION="$VERSION"
+fi
 BASENAME="figcraft-$VERSION-linux-$ARCH"
 
-echo "==> FigCraft $VERSION for Linux $ARCH ($FORMATS; ${BINS[*]})"
+if [[ -n "$ARCH_TAR_DIR" && "$IS_NIGHTLY" != 1 ]]; then
+  echo "error: --arch-tar-dir is only for Nightly builds" >&2
+  exit 2
+fi
+
+echo "==> FigCraft $VERSION for Linux $ARCH ($FORMATS; ${BINS[*]}; channel=${FIGCRAFT_BUILD_CHANNEL:-stable})"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked "${CARGO_PKGS[@]}" ${CROSS_TARGET:+--target "$CROSS_TARGET"})
@@ -68,6 +85,11 @@ for bin in "${BINS[@]}"; do
   "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/$bin" 2>/dev/null || true
 done
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
+if [[ "$IS_NIGHTLY" = 1 ]]; then
+  sed -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.figcraft.nightly-v1|' \
+      "$STAGE/usr/share/applications/$APP_ID.desktop" >"$STAGE/usr/share/applications/$APP_ID.desktop.tmp"
+  mv "$STAGE/usr/share/applications/$APP_ID.desktop.tmp" "$STAGE/usr/share/applications/$APP_ID.desktop"
+fi
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$FIGCRAFT_BUILD_DATE/g" \
@@ -94,16 +116,83 @@ if has tar; then
   echo "wrote $DIST/$BASENAME.tar.gz"
 fi
 
+# The Arch handoff keeps the same basename as the plain tarball in a separate directory.
+# Flatpak, OCI and direct tar consumers still get the original binary, not this launcher.
+if [[ -n "$ARCH_TAR_DIR" ]]; then
+  mkdir -p "$ARCH_TAR_DIR"
+  if [[ "$(cd "$ARCH_TAR_DIR" && pwd -P)" == "$(cd "$DIST" && pwd -P)" ]]; then
+    echo "error: the Arch tar directory must differ from the release directory" >&2
+    exit 2
+  fi
+  bash "$HERE/nightly-arch-tar.sh" "$STAGE/usr" "$WORK/arch-tar" "$ARCH_TAR_DIR" "$BASENAME"
+fi
+
 # ---- .deb / .rpm --------------------------------------------------------------------------------
 if has deb || has rpm; then
   command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
   export VERSION
   export NFPM_ARCH="$DEB_ARCH"
+  NFPM_STAGE="$STAGE"
+  export NFPM_NAME="figcraft"
+  export NFPM_BIN="figcraft"
+  export NFPM_CLI="figcraft-cli"
+  if [[ "$IS_NIGHTLY" = 1 ]]; then
+    NIGHTLY_DESK_ID="$APP_ID.nightly-v1"
+    NIGHTLY_ICON="$ROOT/assets/app-icon/figcraft-nightly.png"
+    [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
+    export NFPM_NAME="figcraft-nightly"
+    export NFPM_BIN="figcraft-nightly"
+    export NFPM_CLI="figcraft-nightly-cli"
+    NFPM_STAGE="$WORK/nfpm-root"
+    rm -rf "$NFPM_STAGE"
+    cp -R "$STAGE" "$NFPM_STAGE"
+    install -Dm755 "$NFPM_STAGE/usr/bin/figcraft" "$NFPM_STAGE/usr/lib/figcraft-nightly/figcraft"
+    cat >"$NFPM_STAGE/usr/bin/$NFPM_BIN" <<'WRAPPER'
+#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
+  exec /usr/lib/figcraft-nightly/figcraft "$@"
+fi
+config_base="${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}"
+data_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
+export XDG_CONFIG_HOME="$config_base/figcraft-nightly"
+export XDG_DATA_HOME="$data_base/figcraft-nightly"
+exec /usr/lib/figcraft-nightly/figcraft "$@"
+WRAPPER
+    chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_BIN"
+    rm -f "$NFPM_STAGE/usr/bin/figcraft"
+    if [[ "$HAS_CLI" = 1 ]]; then
+      mv "$NFPM_STAGE/usr/bin/figcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
+    fi
+    mv "$NFPM_STAGE/usr/share/doc/figcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
+    sed -e "s|^Exec=figcraft\([[:space:]]\|$\)|Exec=$NFPM_BIN\1|" \
+        -e "s|^TryExec=figcraft$|TryExec=$NFPM_BIN|" \
+        -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
+        -e "s|^Name=FigCraft$|Name=FigCraft Nightly|" \
+        -e '/^MimeType=/d' \
+        "$NFPM_STAGE/usr/share/applications/$APP_ID.desktop" >"$NFPM_STAGE/usr/share/applications/$NIGHTLY_DESK_ID.desktop"
+    rm -f "$NFPM_STAGE/usr/share/applications/$APP_ID.desktop"
+    sed -e "s|<id>$APP_ID</id>|<id>$NIGHTLY_DESK_ID</id>|g" \
+        -e "s|<name>FigCraft</name>|<name>FigCraft Nightly</name>|g" \
+        -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$NIGHTLY_DESK_ID.desktop</launchable>|g" \
+        -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$NIGHTLY_DESK_ID</icon>|g" \
+        -e "s|<binary>figcraft</binary>|<binary>$NFPM_BIN</binary>|g" \
+        "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml" >"$NFPM_STAGE/usr/share/metainfo/$NIGHTLY_DESK_ID.metainfo.xml"
+    rm -f "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
+    rm -rf "$NFPM_STAGE/usr/share/mime"
+    rm -rf "$NFPM_STAGE/usr/share/icons/hicolor"
+    install -Dm644 "$NIGHTLY_ICON" \
+      "$NFPM_STAGE/usr/share/icons/hicolor/256x256/apps/$NIGHTLY_DESK_ID.png"
+  fi
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
   # Without the CLI, drop its `#cli` lines.
+  DROP_LIB_TREE=
+  # shellcheck disable=SC2016
+  [[ -d "$NFPM_STAGE/usr/lib" ]] || DROP_LIB_TREE='\|^  - src: \${STAGE}/usr/lib/|,+2d;'
   cli_filter='/#cli$/d'
   [[ "$HAS_CLI" = 1 ]] && cli_filter='s/ #cli$//'
-  sed -e "s|\${STAGE}|$STAGE|g" -e "$cli_filter" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  # shellcheck disable=SC2016
+  sed -e "${DROP_LIB_TREE}s|\${STAGE}|$NFPM_STAGE|g;s|\${NFPM_BIN}|$NFPM_BIN|g;s|\${NFPM_CLI}|$NFPM_CLI|g" -e "$cli_filter" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
   done
@@ -135,9 +224,44 @@ if has appimage; then
   # app_id to our icon instead of the generic Wayland logo (opt-out env in the
   # script header). Logic is covered by packaging/linux/apprun-test.sh.
   install -Dm755 "$HERE/AppRun" "$APPDIR/AppRun"
-  cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
-  cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
-  ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
+  if [[ "$IS_NIGHTLY" = 1 ]]; then
+    APPIMAGE_ID="$APP_ID.nightly-v1"
+    NIGHTLY_ICON="$ROOT/assets/app-icon/figcraft-nightly.png"
+    [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
+    # shellcheck disable=SC2016
+    awk -v old_id="$APP_ID" -v new_id="$APPIMAGE_ID" '
+      $0 == "DESK_ID=" old_id { print "DESK_ID=" new_id; next }
+      $0 == "exec \"$APPDIR/usr/bin/figcraft\" \"$@\"" {
+        print "if [ \"${1:-}\" = \"--version\" ] || [ \"${1:-}\" = \"-V\" ]; then"
+        print "  exec \"$APPDIR/usr/bin/figcraft\" \"$@\""
+        print "fi"
+        print "config_base=\"${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}\""
+        print "data_base=\"${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}\""
+        print "export XDG_CONFIG_HOME=\"$config_base/figcraft-nightly\""
+        print "export XDG_DATA_HOME=\"$data_base/figcraft-nightly\""
+        print "exec \"$APPDIR/usr/bin/figcraft\" \"$@\""
+        next
+      }
+      { print }
+    ' "$APPDIR/AppRun" >"$APPDIR/AppRun.tmp"
+    mv "$APPDIR/AppRun.tmp" "$APPDIR/AppRun"
+    chmod 755 "$APPDIR/AppRun"
+    sed -e "s|^Icon=$APP_ID$|Icon=$APPIMAGE_ID|" \
+        -e "s|^Name=FigCraft$|Name=FigCraft Nightly|" \
+        -e '/^MimeType=/d' \
+        "$APPDIR/usr/share/applications/$APP_ID.desktop" >"$APPDIR/usr/share/applications/$APPIMAGE_ID.desktop"
+    rm -f "$APPDIR/usr/share/applications/$APP_ID.desktop"
+    cp "$APPDIR/usr/share/applications/$APPIMAGE_ID.desktop" "$APPDIR/$APPIMAGE_ID.desktop"
+    rm -rf "$APPDIR/usr/share/icons/hicolor"
+    install -Dm644 "$NIGHTLY_ICON" \
+      "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APPIMAGE_ID.png"
+    cp "$NIGHTLY_ICON" "$APPDIR/$APPIMAGE_ID.png"
+    ln -s "$APPIMAGE_ID.png" "$APPDIR/.DirIcon"
+  else
+    cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
+    cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
+    ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
+  fi
 
   TOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
   if [[ -z "$TOOL" ]]; then
@@ -178,11 +302,20 @@ if has appimage; then
   # next to each AppImage on GitHub Releases. `latest` is the newest published release that is
   # not a pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
   REPO="${GITHUB_REPOSITORY:-storytold/figcraft}"
-  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|figcraft-*-linux-$ARCH.AppImage.zsync"
+  UPDATE_ARGS=()
+  if [[ "$IS_NIGHTLY" = 0 ]]; then
+    UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|figcraft-*-linux-$ARCH.AppImage.zsync"
+    UPDATE_ARGS=(-u "$UPDATE_INFO")
+  else
+    # Nightly releases are GitHub pre-releases (`latest` only selects stable releases), so point
+    # zsync update metadata at pre-release tags matching `-nightly` rather than stable `latest`.
+    UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest-pre|figcraft-*-nightly*-linux-$ARCH.AppImage.zsync"
+    UPDATE_ARGS=(-u "$UPDATE_INFO")
+  fi
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
   # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
   # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
-  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" -u "$UPDATE_INFO" "$APPDIR" "$OUT")
+  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" "${UPDATE_ARGS[@]}" "$APPDIR" "$OUT")
   echo "wrote $OUT"
   if [[ -s "$OUT.zsync" ]]; then
     echo "wrote $OUT.zsync"
