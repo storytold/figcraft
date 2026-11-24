@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 
+use craft_ui::shell::embed::CloseDecision;
 use egui::{Context, Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportId};
 use figcraft_engine::{DocState, Session};
 use serde_json::{Value, json};
@@ -373,19 +374,28 @@ pub fn list(app: &FigApp) -> Value {
     )
 }
 
-/// The window drawing now was asked to close (its close button, the system's): its files close
-/// with it, after asking when one has unsaved changes. The main window closes last: while other
-/// windows are open it takes over one of them. The desktop app calls it from the main window's
-/// `logic` (which runs even while the window is minimised); other windows call it themselves.
+/// Another window drawing now was asked to close (its close button, the system's): its files
+/// close with it, after asking when one has unsaved changes. The main window's close goes through
+/// the runtime's close path ([`close_decision`]).
 pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
     if app.ui.quit || !ctx.input(|i| i.viewport().close_requested()) {
         return;
     }
-    let unsaved = !app.unsaved().is_empty();
-    if app.windows.current == 0 && (unsaved || !app.windows.list.is_empty()) {
-        ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-    }
     request_close(app, ctx);
+}
+
+/// The main window was asked to close (its close button, the system's, a quit): its files close
+/// with it, after asking when one has unsaved changes. The main window closes last: while other
+/// windows are open it takes over one of them, and the window stays open. Runs in the runtime's
+/// close path ([`FigApp::close_path`]), from the main window's `logic`, which runs even while the
+/// window is minimised.
+pub(crate) fn close_decision(app: &mut FigApp, ctx: &Context) -> CloseDecision {
+    if app.ui.quit {
+        return CloseDecision::Close;
+    }
+    let hold = !app.unsaved().is_empty() || !app.windows.list.is_empty();
+    request_close(app, ctx);
+    if hold { CloseDecision::Hold } else { CloseDecision::Close }
 }
 
 /// The custom title bar's Close button uses the same unsaved-file check as a system close event.

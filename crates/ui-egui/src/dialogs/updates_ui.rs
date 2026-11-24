@@ -1,13 +1,17 @@
-//! Software updates, background check at startup, and startup prompt modal.
+//! Software updates, background check at startup, and startup prompt modal. The flow itself is
+//! `craft_update::updater::Updater`; its dialogs run on the app's
+//! [`DialogHost`](craft_ui::dialog::DialogHost) ([`FigApp::framework_dialogs`]).
 
 use crate::FigApp;
 
 #[cfg(target_arch = "wasm32")]
 use crate::i18n::tr;
 #[cfg(not(target_arch = "wasm32"))]
-use craft_update::updater::{Action, Status, Updater};
+use craft_ui::dialog::DialogResult;
 #[cfg(not(target_arch = "wasm32"))]
-use craft_update::{CheckResultDialog, CheckResultResponse};
+use craft_update::stack_dialogs::{CheckChoice, UpdateCheckDialog};
+#[cfg(not(target_arch = "wasm32"))]
+use craft_update::updater::{Action, Status, Updater};
 
 pub(crate) struct Runtime {
     #[cfg(not(target_arch = "wasm32"))]
@@ -83,9 +87,9 @@ pub(crate) fn tick(app: &mut FigApp, ctx: &egui::Context) {
         let rt = &mut app.updates_rt;
         rt.repaint = Some(ctx.clone());
         if std::mem::take(&mut rt.check_requested) {
-            rt.updater.check_now(ctx);
+            rt.updater.check_now();
         } else if rt.startup_check {
-            rt.updater.check_at_start(ctx);
+            rt.updater.check_at_start();
         }
         rt.updater.tick(ctx);
     }
@@ -101,27 +105,52 @@ fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
     !prompt_open && !matches!(status, Status::Idle)
 }
 
-pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
+/// One frame of the update flow, in the main window only: answers the result dialog closed in the
+/// last pass, drives the startup prompt, keeps the result dialog open and current while the updater
+/// has something to report, then runs the dialog host.
+pub(crate) fn show(app: &mut FigApp, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if ctx.viewport_id() != egui::ViewportId::ROOT {
+            return;
+        }
         // The updater asks to close only when no document has unsaved changes; the install starts when the app exits.
         let clean = !app.session.docs.iter().any(|d| d.is_dirty());
-        match app.updates_rt.updater.show_if(ctx, clean) {
+        // Answered before the dialog is kept open below, so a dismissed outcome does not open again at once.
+        match app.framework_dialogs.take::<UpdateCheckDialog>() {
+            Some(DialogResult::Ok(CheckChoice::CheckNow | CheckChoice::CheckAgain)) => app.updates_rt.check_requested = true,
+            // The next `run` asks the window to close once no document has unsaved changes.
+            Some(DialogResult::Ok(CheckChoice::RestartToUpdate)) => app.updates_rt.updater.restart_to_update(),
+            Some(DialogResult::Ok(CheckChoice::Update)) => {
+                app.updates_rt.updater.request_install(clean);
+            }
+            Some(DialogResult::Ok(CheckChoice::Download)) => ctx.open_url(egui::OpenUrl::new_tab(crate::UPDATE_APP.releases_url())),
+            // Closing the dialog dismisses the outcome it showed.
+            Some(_) => app.updates_rt.updater.dismiss_status(),
+            None => {}
+        }
+        match app.updates_rt.updater.run(&mut app.framework_dialogs, clean) {
             Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             // The whole application, not just the window that drew the prompt: the root window's guarded close.
             Action::Close => ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
-            Action::None => {}
+            _ => {}
         }
-        let rt = &mut app.updates_rt;
-        if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
-            match CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).show(ctx, rt.updater.status()) {
-                CheckResultResponse::None => {}
-                CheckResultResponse::Close => rt.updater.dismiss_status(),
-                CheckResultResponse::CheckAgain => rt.check_requested = true,
-                // The next `show_if` asks the window to close once no document has unsaved changes.
-                CheckResultResponse::RestartToUpdate => rt.updater.restart_to_update(),
-            }
+        let updater = &app.updates_rt.updater;
+        let shows = result_window_shows(updater.status(), updater.prompt_open());
+        let (status, installing, message) = (updater.status().clone(), updater.is_installing(), updater.status_message());
+        let dialogs = &mut app.framework_dialogs;
+        if shows && !dialogs.is_open::<UpdateCheckDialog>() {
+            dialogs.open(UpdateCheckDialog::new(env!("CARGO_PKG_VERSION")));
+        } else if !shows && dialogs.is_open::<UpdateCheckDialog>() {
+            dialogs.cancel::<UpdateCheckDialog>(&ctx);
         }
+        if let Some(dialog) = dialogs.get_mut::<UpdateCheckDialog>() {
+            dialog.set_status(status);
+            dialog.set_installing(installing);
+            dialog.set_message(message);
+        }
+        app.framework_dialogs.run(ui);
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -133,7 +162,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
             .resizable(false)
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 if let Some(msg) = &app.updates_rt.status_message {
                     ui.label(msg);
                 }
