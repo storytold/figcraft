@@ -484,10 +484,11 @@ fn moved_points_area(before: &Document, after: &Document, page: NodeId, id: Node
     for (sa, sb) in na.segments.iter().zip(&nb.segments) {
         let (ha, hb) = (hull(wa, na, sa)?, hull(wb, nb, sb)?);
         // Apart by more than float noise. When the box follows a moved point every local
-        // coordinate shifts and the transform shifts back: a point that stayed put comes out
-        // within a few ulps of where it was (1e-13 units at coordinates in the thousands), far
-        // under this; a move this small is a billionth of a pixel at any zoom there is.
-        let near = |x: f64, y: f64| (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0);
+        // coordinate shifts and the transform shifts back: a point that stayed put comes out a
+        // few ulps from where it was. 64 of them is far above that and far under a pixel at any
+        // zoom, wherever on the page the vector lies (a tenth of a millionth of a unit at
+        // coordinates of ten million).
+        let near = |x: f64, y: f64| (x - y).abs() <= 64.0 * f64::EPSILON * x.abs().max(y.abs()).max(1.0);
         let apart = ha.iter().zip(&hb).any(|(p, q)| !(near(p.x, q.x) && near(p.y, q.y)));
         let styled =
             |i: usize| na.vertices.get(i).zip(nb.vertices.get(i)).is_none_or(|(x, y)| (x.radius, x.cap, x.join) != (y.radius, y.cap, y.join));
