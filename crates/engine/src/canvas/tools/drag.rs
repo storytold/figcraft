@@ -249,7 +249,11 @@ impl Session {
                 let raw = d;
                 let snap_on = self.ds().map(|ds| ds.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl;
                 let mut guides = Vec::new();
-                if self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
+                let boards = {
+                    let doc = self.doc()?;
+                    ids.iter().all(|i| doc.node(*i).is_some_and(crate::snap::always_on_pixels))
+                };
+                if boards || self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
                     // Keep the box's origin on whole pixels (a rotated parent frame's, inside one);
                     // snapping to layers comes after, so it wins on the axes it snaps.
                     d = targets.round_move(d);
@@ -258,6 +262,11 @@ impl Session {
                     let (c, g2) = targets.snap_move(d, SNAP_PX / ev.zoom.max(1e-6));
                     d += c;
                     guides = g2;
+                }
+                if boards {
+                    // Frames, sections and components stay on whole pixels even where a layer
+                    // they snap to doesn't.
+                    d = targets.round_move(d);
                 }
                 let ids = ids.clone();
                 let dup = *duplicate;
@@ -343,6 +352,9 @@ impl Session {
                             doc.reparent(*m, page, None)?;
                         }
                         move_world(doc, *m, d.x, d.y)?;
+                        if doc.node(*m).is_some_and(crate::snap::always_on_pixels) {
+                            shifted &= !crate::snap::settle_on_pixels(doc, *m)?;
+                        }
                     }
                     drop_target = (flow && target != page).then_some(target);
                     Ok(())
@@ -521,7 +533,13 @@ impl Session {
         // The pixel grid: an upright box's dragged sides land on whole pixels (the Scale tool
         // scales by the factor as dragged). Snapping to layers comes after, so it wins on the axes
         // it snaps.
-        if !scale_tool && self.ds().map(|d| d.view.snap_pixel).unwrap_or(true) && crate::guides::axis_aligned(frame) {
+        // Frames, sections and components land on whole pixels whatever the setting, also where a
+        // layer they snap to doesn't.
+        let boards = {
+            let doc = self.doc()?;
+            !scale_tool && crate::guides::axis_aligned(frame) && ids.iter().all(|i| doc.node(*i).is_some_and(crate::snap::always_on_pixels))
+        };
+        if boards || !scale_tool && self.ds().map(|d| d.view.snap_pixel).unwrap_or(true) && crate::guides::axis_aligned(frame) {
             p = Point::new(p.x.round(), p.y.round());
         }
         if let Some(t) = &targets {
@@ -529,6 +547,9 @@ impl Session {
             p.x += dx;
             p.y += dy;
             guides = g;
+        }
+        if boards {
+            p = Point::new(p.x.round(), p.y.round());
         }
         let q = frame.inverse() * p;
         let is_line = r.single && ids.first().and_then(|i| self.doc().ok()?.node(*i).map(|n| matches!(n.kind, NodeKind::Line))).unwrap_or(false);

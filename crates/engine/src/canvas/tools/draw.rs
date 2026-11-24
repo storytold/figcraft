@@ -30,7 +30,10 @@ impl Session {
         let tool = self.tool.tool;
         let mut p = ev.p();
         let mut guides = Vec::new();
-        let pixel = self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
+        // Frames and sections land on whole pixels whatever the setting, also where a layer they
+        // snap to doesn't (see `snap::always_on_pixels`).
+        let board = matches!(tool, ToolId::Frame | ToolId::Section);
+        let pixel = board || self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
         // The pixel grid first: snapping to layers comes after, so it wins on the axes it snaps.
         if pixel {
             p = Point::new(p.x.round(), p.y.round());
@@ -40,6 +43,9 @@ impl Session {
             p.x += dx;
             p.y += dy;
             guides = g;
+        }
+        if board {
+            p = Point::new(p.x.round(), p.y.round());
         }
         let mut created = id;
         let page = self.page()?;
@@ -100,6 +106,9 @@ impl Session {
                 n.transform = pw.inverse() * Affine::translate((r.x0, r.y0));
             }
             doc.insert(n, parent, None)?;
+            if board {
+                crate::snap::settle_on_pixels(doc, nid)?;
+            }
             if let Some(d) = &defaults {
                 // Best effort: a default the shape can't take leaves it as drawn.
                 let _ = crate::cmd::edit::apply_copied_props("edit.setDefaultProperties", doc, nid, d);
