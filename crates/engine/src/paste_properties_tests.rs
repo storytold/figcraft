@@ -75,3 +75,20 @@ fn links_another_file_lacks_paste_as_values() {
     assert_eq!((nb.fills.clone(), nb.strokes.clone()), (copied.fills, copied.strokes), "the values arrive");
     assert!(nb.bound.is_empty() && nb.styles.fill.is_none() && nb.styles.stroke.is_none(), "{:?} {:?}", nb.bound, nb.styles);
 }
+
+#[test]
+fn a_missing_style_unlinks_the_layers_own() {
+    let mut s = Session::new();
+    let (a, b) = (frame(&mut s, 0.0), frame(&mut s, 200.0));
+    // B's own style gives the same colour, so the paste changes no value that would unlink it.
+    let gone = s.execute("style.create", &json!({"type": "paint", "name": "Gone", "value": "#00FF00"})).unwrap()["id"].clone();
+    let own = s.execute("style.create", &json!({"type": "paint", "name": "Own", "value": "#00FF00"})).unwrap()["id"].clone();
+    s.execute("style.apply", &json!({"ids": [a], "style": gone, "target": "stroke"})).unwrap();
+    s.execute("style.apply", &json!({"ids": [b], "style": own, "target": "stroke"})).unwrap();
+    s.execute("edit.copyProperties", &json!({"id": a})).unwrap();
+    s.execute("style.delete", &json!({"style": gone})).unwrap();
+
+    s.execute("edit.pasteProperties", &json!({"ids": [b]})).unwrap();
+    let nb = s.doc().unwrap().node(b).unwrap();
+    assert!(nb.styles.stroke.is_none(), "A's strokes had no style here, so B's aren't linked: {:?}", nb.styles);
+}

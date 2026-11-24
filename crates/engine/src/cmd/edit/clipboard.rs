@@ -461,9 +461,13 @@ pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, prop
     };
     m.retain(|k, _| takes(k));
     // A style or variable of another file (the copy came from another tab) isn't here to link to:
-    // the values it gave are pasted without the link.
+    // the values it gave are pasted without a link, so the layer's own link goes too.
     let here = |v: &Value| v.as_str().is_none_or(|sid| doc.style(sid).is_some());
-    m.retain(|k, v| !k.ends_with("Style") || k.starts_with("font") || here(v));
+    for (k, v) in m.iter_mut() {
+        if k.ends_with("Style") && !k.starts_with("font") && !here(v) {
+            *v = Value::Null;
+        }
+    }
     if let Some(Value::Object(copied)) = m.get_mut("boundVariables") {
         copied.retain(|_, v| v.as_str().is_some_and(|vid| doc.variables.get_by_id(vid).is_some()));
     }
