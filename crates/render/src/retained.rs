@@ -467,6 +467,12 @@ fn moved_points_area(before: &Document, after: &Document, page: NodeId, id: Node
         return None;
     }
     let (wa, wb) = (before.world_transform(id), after.world_transform(id));
+    // The box following the points moves the layer; anything else a transform does (a scale, a
+    // turn) changes every stroke's width or direction on the page, whether its path moved or not.
+    let (ca, cb) = (wa.as_coeffs(), wb.as_coeffs());
+    if ca.iter().zip(&cb).take(4).any(|(x, y)| (x - y).abs() > 1e-12 * x.abs().max(1.0)) {
+        return None;
+    }
     // A segment on the page: its ends and handles.
     let hull = |w: figcraft_geom::Affine, net: &figcraft_doc::VectorNetwork, s: &figcraft_doc::Segment| {
         let (pa, pb) = (net.vertices.get(s.a)?.point(), net.vertices.get(s.b)?.point());
@@ -477,8 +483,12 @@ fn moved_points_area(before: &Document, after: &Document, page: NodeId, id: Node
     let mut hulls = Vec::with_capacity(na.segments.len());
     for (sa, sb) in na.segments.iter().zip(&nb.segments) {
         let (ha, hb) = (hull(wa, na, sa)?, hull(wb, nb, sb)?);
-        // Looks apart: a ten-thousandth of a unit is under a pixel at any zoom there is.
-        let apart = ha.iter().zip(&hb).any(|(p, q)| (p.x - q.x).abs() > 1e-4 || (p.y - q.y).abs() > 1e-4);
+        // Apart by more than float noise. When the box follows a moved point every local
+        // coordinate shifts and the transform shifts back: a point that stayed put comes out
+        // within a few ulps of where it was (1e-13 units at coordinates in the thousands), far
+        // under this; a move this small is a billionth of a pixel at any zoom there is.
+        let near = |x: f64, y: f64| (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0);
+        let apart = ha.iter().zip(&hb).any(|(p, q)| !(near(p.x, q.x) && near(p.y, q.y)));
         let styled =
             |i: usize| na.vertices.get(i).zip(nb.vertices.get(i)).is_none_or(|(x, y)| (x.radius, x.cap, x.join) != (y.radius, y.cap, y.join));
         if apart || styled(sa.a) || styled(sa.b) {
@@ -500,9 +510,13 @@ fn moved_points_area(before: &Document, after: &Document, page: NodeId, id: Node
     }
     let area = area?;
     // As far as the stroke reaches from the path, on the page.
+    // The most the transform stretches a length in any direction (its largest singular value):
+    // under a skew that is more than either axis is stretched.
     let stretch = |w: figcraft_geom::Affine| {
         let c = w.as_coeffs();
-        (c[0].hypot(c[1])).max(c[2].hypot(c[3]))
+        let sum = c[0] * c[0] + c[1] * c[1] + c[2] * c[2] + c[3] * c[3];
+        let det = c[0] * c[3] - c[1] * c[2];
+        ((sum + (sum * sum - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt()
     };
     let reach = (a.outline_reach() * stretch(wa)).max(b.outline_reach() * stretch(wb));
     reach.is_finite().then(|| area.inflate(reach, reach))

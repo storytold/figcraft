@@ -170,3 +170,31 @@ fn a_moved_point_redraws_a_vector_whole_when_its_look_depends_on_all_of_it() {
         check(&mut r, &d2, page, &v, what);
     }
 }
+
+/// A vector's strokes are as wide on the page as its transform makes them. Scaled up with its
+/// points scaled down to match, its paths stay where they were and every stroke doubles: with a
+/// point moved too, all of it is drawn again, not the area around that point.
+#[test]
+fn a_moved_point_with_a_scaled_vector_redraws_all_of_it() {
+    let mut d = Document::new("ridge");
+    let page = d.first_page().unwrap();
+    let id = ridge(&mut d, page, 6);
+    let n = d.get_mut(id).unwrap();
+    n.strokes = vec![Paint::solid(Color::from_hex("203040").unwrap())];
+    n.stroke.weight = 3.0;
+    let doc = Arc::new(d);
+    let v = View { origin: (10.0, 10.0), scale: 3.0, width: 780, height: 420 };
+    let mut r = Retained::default();
+    check(&mut r, &doc, page, &v, "first");
+    let mut d2 = (*doc).clone();
+    let n = d2.get_mut(id).unwrap();
+    n.transform *= Affine::scale(2.0);
+    (n.width, n.height) = (n.width / 2.0, n.height / 2.0);
+    if let NodeKind::Vector { network } = &mut n.kind {
+        for p in &mut network.vertices {
+            (p.x, p.y) = (p.x / 2.0, p.y / 2.0);
+        }
+    }
+    move_point(&mut d2, id, 6, (2.0, -3.5));
+    check(&mut r, &Arc::new(d2), page, &v, "scaled, a point moved");
+}
