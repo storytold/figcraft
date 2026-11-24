@@ -122,3 +122,44 @@ fn a_nested_pass_through_frames_fills_blend_with_the_backdrop_under_shadows() {
         assert!(near(px(&pix, 100, 100), [247, 248, 0], 3), "{:?} with {} effects", px(&pix, 100, 100), effects.len());
     }
 }
+
+#[test]
+fn review_pass_through_text_style_blends_survive_a_shadow() {
+    figcraft_text::scan_system_fonts();
+    for run_fill in [false, true] {
+        let (mut d, page) = page();
+        rect(&mut d, page, (0.0, 0.0, 200.0, 200.0), vec![Paint::solid(hex("2A7FFF"))]);
+        let mut text = figcraft_doc::TextData::new("I");
+        text.style.font_size = 120.0;
+        let paints = vec![blended("FFFF00", 1.0, BlendMode::Multiply)];
+        if run_fill {
+            let mut style = text.style.clone();
+            style.fills = Some(paints);
+            text.runs.push(figcraft_doc::StyleRun { start: 0, end: 1, style });
+        } else {
+            text.style.fills = Some(paints)
+        }
+        let id = d.create(page, NodeKind::Text(text), "Styled text", 20.0, 20.0, 150.0, 160.0).unwrap();
+        let n = d.get_mut(id).unwrap();
+        n.fills.clear();
+        n.blend = BlendMode::PassThrough;
+        let plain = render(&d);
+        d.get_mut(id).unwrap().effects = vec![faint()];
+        let shaded = render(&d);
+        let mut checked = 0;
+        for y in 20..170 {
+            for x in 20..170 {
+                let expected = px(&plain, x, y);
+                if expected[2] < 10 {
+                    checked += 1;
+                    assert!(
+                        near(px(&shaded, x, y), expected, 3),
+                        "a shadow changed the text's backdrop blend: {expected:?} -> {:?}",
+                        px(&shaded, x, y)
+                    );
+                }
+            }
+        }
+        assert!(checked > 0, "the synthetic glyph must paint opaque interior pixels");
+    }
+}

@@ -242,13 +242,26 @@ fn paint_each(
                 .and_then(|b| int_rect(Rect::new(b.left().into(), b.top().into(), b.right().into(), b.bottom().into()), (pix.width(), pix.height())));
             let Some(r) = area else { continue };
             // Past the layer budget, the paint draws in the nearest mode tiny-skia has instead.
-            let held = crate::layer_budget::Held::take(r.width(), r.height(), 1);
+            let held = crate::layer_budget::Held::take(r.width(), r.height(), if mask.is_some() { 2 } else { 1 });
             let Some(mut alone) = held.as_ref().and_then(|_| Pixmap::new(r.width(), r.height())) else {
                 pix.fill_path(path, &paint, rule, ts_transform(xf), mask);
                 continue;
             };
+            // The isolated paint uses local pixels, while the incoming clip is in `pix` space.
+            let local_mask = mask.and_then(|mask| {
+                let mut local = Mask::new(r.width(), r.height())?;
+                for (y, row) in local.data_mut().chunks_exact_mut(r.width() as usize).enumerate() {
+                    let start = (r.y() as usize + y) * mask.width() as usize + r.x() as usize;
+                    row.copy_from_slice(&mask.data()[start..start + r.width() as usize]);
+                }
+                Some(local)
+            });
+            if mask.is_some() && local_mask.is_none() {
+                pix.fill_path(path, &paint, rule, ts_transform(xf), mask);
+                continue;
+            }
             let t = ts_transform(Affine::translate((-f64::from(r.x()), -f64::from(r.y()))) * xf);
-            alone.fill_path(path, &tiny_skia::Paint { blend_mode: tiny_skia::BlendMode::SourceOver, ..paint }, rule, t, None);
+            alone.fill_path(path, &tiny_skia::Paint { blend_mode: tiny_skia::BlendMode::SourceOver, ..paint }, rule, t, local_mask.as_ref());
             crate::paint::composite(pix, (r.x(), r.y()), &alone, 1.0, p.blend);
             continue;
         }
@@ -959,6 +972,7 @@ fn blends_through(doc: &Document, n: &Node, backdrop: bool) -> bool {
 fn paints_blend(n: &Node) -> bool {
     let own = |p: &Paint| p.visible && !matches!(p.blend, BlendMode::Normal | BlendMode::PassThrough);
     n.fills.iter().any(own)
+        || matches!(&n.kind, NodeKind::Text(t) if t.style.fills.as_deref().is_some_and(|fills| fills.iter().any(own)) || t.runs.iter().any(|run| run.style.fills.as_deref().is_some_and(|fills| fills.iter().any(own))))
         || n.strokes.iter().any(own)
         || region_painted(n).is_some_and(|net| net.regions.iter().any(|r| r.fills.as_deref().is_some_and(|f| f.iter().any(own))))
 }
@@ -1338,4 +1352,55 @@ fn fract_ok(_v: f64) -> bool {
 /// `snap_px` forgives.
 fn on_whole_pixels(r: Rect) -> bool {
     [r.x0, r.y0, r.x1, r.y1].into_iter().all(|v| (snap_px(v) - v.round()).abs() < 1e-9)
+}
+
+#[cfg(test)]
+mod review_mask_tests {
+    use super::*;
+
+    #[test]
+    fn isolated_plus_blends_keep_offset_and_fractional_masks() {
+        let doc = Document::new("synthetic mask regression");
+        let bounds = Bounds::default();
+        let ctx = Ctx {
+            doc: &doc,
+            scale: 1.0,
+            outline_mode: false,
+            outline: crate::Outline::default(),
+            outlined: &[],
+            skip: &[],
+            lod: false,
+            preview: false,
+            magnified_image_pixels: false,
+            under: None,
+            time: 0.0,
+            bounds: &bounds,
+            casting: false,
+        };
+        let path = tiny_skia::PathBuilder::from_rect(tiny_skia::Rect::from_xywh(0.0, 0.0, 40.0, 30.0).unwrap());
+        let xf = Affine::translate((20.0, 10.0));
+        let mut mask = Mask::new(80, 60).unwrap();
+        for y in 10..40 {
+            for x in 20..40 {
+                mask.data_mut()[y * 80 + x] = if x < 30 { 255 } else { 128 };
+            }
+        }
+        for blend in [BlendMode::PlusLighter, BlendMode::PlusDarker] {
+            let mut unmasked = Pixmap::new(80, 60).unwrap();
+            unmasked.fill(tiny_skia::Color::from_rgba8(128, 128, 128, 255));
+            let untouched = unmasked.pixel(45, 20).unwrap();
+            let mut masked = unmasked.clone();
+            let paint = Paint { blend, ..Paint::solid(figcraft_color::Color::from_rgb8_const(64, 64, 64)) };
+            paint_each(&mut unmasked, &path, std::slice::from_ref(&paint), 40.0, 30.0, xf, FillRule::Winding, &ctx, None);
+            paint_each(&mut masked, &path, &[paint], 40.0, 30.0, xf, FillRule::Winding, &ctx, Some(&mask));
+            assert_eq!(masked.pixel(45, 20), Some(untouched), "zero coverage must leave the backdrop intact: {blend:?}");
+            assert_eq!(masked.pixel(25, 20), unmasked.pixel(25, 20), "opaque coverage preserves the blend");
+            let partial = masked.pixel(35, 20).unwrap().red();
+            let full = unmasked.pixel(35, 20).unwrap().red();
+            assert!(
+                partial > full.min(untouched.red()) && partial < full.max(untouched.red()),
+                "fractional coverage must blend partially: {blend:?}"
+            );
+        }
+    }
 }

@@ -469,3 +469,42 @@ fn fill_children_whose_tiny_clampings_add_up_past_the_tolerance_still_settle() {
         assert!((pos(&d, *k).2 - 100.0).abs() < 1e-6, "{:?}", pos(&d, *k));
     }
 }
+
+#[test]
+fn review_coupled_ratio_fills_use_the_hugging_lines_main_space_and_settle() {
+    for horizontal in [false, true] {
+        for gap in [0.0, 12.0] {
+            let (mut d, f, k) = setup(if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical });
+            let frame = d.get_mut(f).unwrap();
+            (frame.width, frame.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+            let al = frame.layout.as_mut().unwrap();
+            al.padding = [0.0; 4];
+            al.gap = gap;
+            if horizontal {
+                frame.child_layout.sizing_v = Sizing::Hug
+            } else {
+                frame.child_layout.sizing_h = Sizing::Hug
+            }
+            for (index, id) in k.iter().enumerate() {
+                let n = d.get_mut(*id).unwrap();
+                n.width = 100.0;
+                n.height = 100.0;
+                n.constrain_proportions = true;
+                (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                    if horizontal == (index == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+            }
+            layout_frame(&mut d, f, &NoMeasure);
+            let a = d.node(k[0]).unwrap();
+            let b = d.node(k[1]).unwrap();
+            let used = if horizontal { a.width + b.width } else { a.height + b.height };
+            assert!((used + gap - 300.0).abs() < 1e-6, "main space was left unused: {used}, gap {gap}");
+            assert!((a.width - a.height).abs() < 1e-6 && (b.width - b.height).abs() < 1e-6, "both ratios must hold");
+            assert!((a.width - b.width).abs() < 1e-6, "the cross fill shares the main fill's line");
+            let before = [pos(&d, k[0]), pos(&d, k[1])];
+            layout_frame(&mut d, f, &NoMeasure);
+            for (old, new) in before.into_iter().zip([pos(&d, k[0]), pos(&d, k[1])]) {
+                assert!((old.2 - new.2).abs() < 1e-6 && (old.3 - new.3).abs() < 1e-6, "a second layout must not oscillate");
+            }
+        }
+    }
+}

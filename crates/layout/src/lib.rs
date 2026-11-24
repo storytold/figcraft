@@ -349,6 +349,7 @@ fn item_baseline(doc: &Document, id: NodeId, m: &dyn Measure, depth: usize) -> O
     }
 }
 
+#[derive(Clone)]
 struct Item {
     id: NodeId,
     main: f64,
@@ -575,6 +576,57 @@ struct HugStretch<'a> {
     flow: (f64, f64, bool),
 }
 
+/// Coupled ratio-locked shapes need a simultaneous solution: widening a main-Fill shape
+/// grows the hugging line, which widens a cross-Fill shape and takes that main space back.
+/// The required line size is monotone decreasing in the proposed line size, so bisection
+/// finds their common size without alternating between two incompatible layouts.
+fn settle_locked_hug_line(doc: &mut Document, items: &mut [Item], lines: &[Vec<usize>], st: &HugStretch<'_>, m: &dyn Measure) -> bool {
+    if !items.iter().any(|it| it.fill_main && it.locked_cross_per_main.is_some())
+        || !items.iter().any(|it| it.fill_cross && it.locked_cross_per_main.is_some())
+        || items.iter().any(|it| it.fill_cross && it.locked_cross_per_main.is_none())
+        || items
+            .iter()
+            .filter(|it| it.fill_main || it.fill_cross)
+            .any(|it| doc.node(it.id).is_none_or(|n| n.layout.is_some() || matches!(n.kind, NodeKind::Text(_))))
+    {
+        return false;
+    }
+    let original = items.to_vec();
+    let (frame, pads) = st.frame;
+    let (min, max) = if st.horizontal { (frame.min_h, frame.max_h) } else { (frame.min_w, frame.max_w) };
+    let trial = |items: &mut [Item], line: f64| {
+        items.clone_from_slice(&original);
+        for it in items.iter_mut().filter(|it| it.fill_cross) {
+            it.cross = clamp_size(line, it.min_cross, it.max_cross);
+            it.main = it.main_for_cross(it.cross, it.main);
+        }
+        let (main, gap, auto) = st.flow;
+        distribute_flow_lines(items, lines, main, gap, auto);
+        for it in items.iter_mut().filter(|it| it.fill_main) {
+            it.cross = it.cross_for_main(it.main, it.cross);
+        }
+        for it in items.iter_mut().filter(|it| it.baseline.is_some() && (it.fill_main || it.fill_cross)) {
+            it.baseline = Some(it.cross)
+        }
+        let needed = flow_line_extents(items, lines, gap).first().map_or(0.0, |line| line.1);
+        clamp_size(needed + pads, min, max).max(pads) - pads
+    };
+    let mut lo = 0.0;
+    let mut hi = trial(items, 1e-9).max(1e-9);
+    for _ in 0..48 {
+        let mid = (lo + hi) / 2.0;
+        if trial(items, mid) > mid { lo = mid } else { hi = mid }
+    }
+    trial(items, (lo + hi) / 2.0);
+    for it in items.iter_mut().filter(|it| it.fill_main || it.fill_cross) {
+        let (w, h) = if st.horizontal { (it.main, it.cross) } else { (it.cross, it.main) };
+        resize_child(doc, it.id, w, h, m);
+        let (w, h) = outer_size(doc, it.id);
+        (it.main, it.cross) = if st.horizontal { (w, h) } else { (h, w) };
+    }
+    true
+}
+
 /// Stretch the cross-Fill children to a hugging frame's line (`stretch_fill_across_hug_line`). When
 /// a main size changed (a text reflowed), the space the main-Fill children were given is stale:
 /// share it again, resize them (a child filling both axes keeps the line's size across), measure
@@ -589,6 +641,10 @@ fn stretch_hug_line(
 ) {
     let (frame, cross_pads) = st.frame;
     let (inner_main, gap, auto_gap) = st.flow;
+    if settle_locked_hug_line(doc, items, lines, st, m) {
+        *line_extents = flow_line_extents(items, lines, gap);
+        return;
+    }
     let line = line_extents.first().map_or(0.0, |l| l.1);
     if !stretch_fill_across_hug_line(doc, items, line, (frame, cross_pads), st.horizontal, m) {
         return;
