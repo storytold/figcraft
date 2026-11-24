@@ -67,7 +67,7 @@ those values and `producer_workflow_id` in the same reviewed change that promote
 - `.github/workflows/nightly-sign.yml`: top-level release registration, enabled for manual dispatch,
   and identical on `main` and `release` after reviewed promotion. It rejects wrong repository/event/actual
   branch, including same-name tags. Its constant whole-run concurrency (`figcraft-nightly-release`) is
-  distinct from stable, cancellation is off and `queue: max` must be hosted-qualified. The caller itself
+  distinct from stable and cancellation is off. The caller itself
   passes no credentials; only the shared callee's sign jobs bind the `release` environment.
 - Shared reusable entrypoints are `nightly-unsigned.yml` and `nightly-release.yml` in
   `storytold/craft-common-actions`. Both must resolve to a **real reviewed public immutable commit**;
@@ -80,7 +80,7 @@ those values and `producer_workflow_id` in the same reviewed change that promote
 `python3 packaging/nightly-release-tests.py` verifies the nightly workflow and policy contracts locally:
 - Exact context guards on `nightly.yml` and `nightly-sign.yml` (reading every `if:` form and continuation line).
 - No registered nightly schedule (`workflow_dispatch` only).
-- Signer root concurrency serialization (`figcraft-nightly-release`, `queue: max`, `cancel-in-progress: false`).
+- Signer root concurrency serialization (`figcraft-nightly-release`, `cancel-in-progress: false`).
 - No cache actions, cache setup options, `environment:`, or `secrets:` in the app callers.
 - Matching `uses` and `tooling-revision` 40-hex commit pin across both callers and the installed policy.
 - Exact `manual_actors` match between `nightly.yml` and `.github/nightly-signing-policy.json`, with empty `automatic_signer_actors`.

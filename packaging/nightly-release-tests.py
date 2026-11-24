@@ -35,12 +35,12 @@ def assert_nightly_serialization(source):
             continue
         if not line[0].isspace():
             break
-        row = re.fullmatch(r"  (group|cancel-in-progress|queue): ([^#]+?)(?: +#.*)?", line)
+        row = re.fullmatch(r"  (group|cancel-in-progress): ([^#]+?)(?: +#.*)?", line)
         if row is None or row[1] in values:
             raise ValueError("malformed or duplicate nightly concurrency entry")
         values[row[1]] = row[2].rstrip()
-    if values != {"group": "figcraft-nightly-release", "cancel-in-progress": "false", "queue": "max"}:
-        raise ValueError("nightly serialization must use its stable group, max queue and no cancellation")
+    if values != {"group": "figcraft-nightly-release", "cancel-in-progress": "false"}:
+        raise ValueError("nightly serialization must use its stable group and no cancellation")
 
 
 def job_conditions(jobs):
@@ -158,14 +158,10 @@ class TrustedSourcePreparation(unittest.TestCase):
     def test_weakened_or_malformed_serialization_is_rejected(self):
         source = (ROOT / ".github/workflows/nightly-sign.yml").read_text()
         for old, new in (
-            ("queue: max", "queue: single"),
-            ("queue: max", "queue: invalid"),
-            ("queue: max", "queue: ${{ github.run_id }}"),
-            ("queue: max", "queue:"),
-            ("queue: max", "queue: max\n  queue: single"),
             ("cancel-in-progress: false", "cancel-in-progress: true"),
             ("cancel-in-progress: false", "cancel-in-progress: ${{ github.event_name == 'push' }}"),
             ("cancel-in-progress: false\n", ""),
+            ("cancel-in-progress: false", "cancel-in-progress: false\n  cancel-in-progress: false"),
             ("group: figcraft-nightly-release", "group: ${{ github.run_id }}"),
             ("group: figcraft-nightly-release", "group: release-${{ github.ref }}"),
             ("concurrency:\n", "concurrency: ${{ github.run_id }}\n"),

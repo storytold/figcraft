@@ -19,7 +19,6 @@ permissions: {}
 concurrency:
   group: figcraft-nightly-release
   cancel-in-progress: false
-  queue: max
 
 jobs:
   release:

@@ -64,7 +64,7 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
   [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
   sed -e "s|^Icon=$APP_ID$|Icon=$FLATPAK_ID|" \
       -e "s|^Name=FigCraft$|Name=FigCraft Nightly|" \
-      -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.figcraft.nightly-v1|' \
+      -e "s|^StartupWMClass=.*|StartupWMClass=$FLATPAK_ID|" \
       -e '/^MimeType=/d' \
       "$WORK/stage/share/applications/$APP_ID.desktop" >"$WORK/stage/share/applications/$FLATPAK_ID.desktop"
   rm -f "$WORK/stage/share/applications/$APP_ID.desktop"
