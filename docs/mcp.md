@@ -2047,7 +2047,9 @@ Pass the returned target list to:
   `strokes/<i>/color`. A color style on the list and an earlier binding of the slot are removed.
   Text ranges with fills of their own take the variable's value in the layer's modes, without a
   binding. Gradients and other variable types are refused; scopes only filter what the Selection
-  colors menu offers, as for `variable.bind`.
+  colors row's style picker offers, as for `variable.bind`. With `library` (an enabled library's id,
+  name or path) the variable is one that library publishes, copied in linked and read-only in the
+  same undo step, as `selection.applyColorStyle` does with a library style.
 - `selection.detachColor {targets}` to unlink the color style and the color variable of those
   slots, keeping their values.
 

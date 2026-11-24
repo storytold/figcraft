@@ -266,6 +266,8 @@ mod save_as_tests;
 #[cfg(test)]
 mod select_all_tests;
 #[cfg(test)]
+mod selection_colors_picker_tests;
+#[cfg(test)]
 mod selection_colors_tests;
 #[cfg(test)]
 mod shortcut_keys_tests;

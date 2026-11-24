@@ -692,3 +692,44 @@ fn a_library_that_is_not_a_string_is_refused_rather_than_linking_a_local_style()
     assert_eq!(s.doc().unwrap().node(a).unwrap().styles.fill, None);
     assert_eq!(fill(&s, a), "FF0000");
 }
+
+#[test]
+fn a_row_binds_a_published_library_color_variable_copied_in_in_one_undo_step() {
+    #[allow(clippy::disallowed_methods)]
+    let fixture = Fixture(std::env::temp_dir().join(format!("figcraft-selection-colors-variable-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&fixture.0);
+    std::fs::create_dir(&fixture.0).unwrap();
+    let path = fixture.0.join("library.figcraft");
+    let mut publisher = Session::new();
+    run(&mut publisher, "variable.createCollection", json!({"name":"Palette"}));
+    run(&mut publisher, "variable.create", json!({"collection":"Palette","name":"Sea","type":"color","value":"#008080"}));
+    run(&mut publisher, "variable.create", json!({"collection":"Palette","name":"Gap","type":"number","value":8}));
+    let library = run(&mut publisher, "library.publish", json!({}))["id"].clone();
+    run(&mut publisher, "file.saveAs", json!({"path":path}));
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#00ff00");
+    run(&mut s, "library.add", json!({"path":path}));
+    let red = group(&s, &[a, b], "FF0000");
+    let before = s.undo_depth();
+    run(&mut s, "selection.bindColorVariable", json!({"targets":red.targets,"variable":"Sea","library":library}));
+    let doc = s.doc().unwrap();
+    let bound = doc.node(a).unwrap().bound.get("fills/0/color").cloned().expect("the fill is bound");
+    assert!(figcraft_engine::library::is_remote_variable(doc, &bound), "a linked copy of the library's variable");
+    assert_eq!(fill(&s, a), "008080");
+    assert_eq!(fill(&s, b), "00FF00");
+    assert_eq!(s.undo_depth().0, before.0 + 1);
+    s.undo().unwrap();
+    assert!(s.doc().unwrap().variables.get(&bound).is_none(), "undo takes the copy back");
+    assert_eq!(fill(&s, a), "FF0000");
+    // A variable the library doesn't publish as a color is refused, changing nothing.
+    let before = s.undo_depth();
+    for variable in ["Gap", "Missing"] {
+        assert!(
+            s.execute("selection.bindColorVariable", &json!({"targets":red.targets,"variable":variable,"library":library})).is_err(),
+            "{variable}"
+        );
+    }
+    assert_eq!(s.undo_depth(), before);
+    assert!(s.doc().unwrap().node(a).unwrap().bound.is_empty());
+}

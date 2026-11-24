@@ -4,10 +4,9 @@
 use std::sync::Arc;
 
 use egui::{Id, Ui};
-use figcraft_color::{Color, Paint};
-use figcraft_doc::{Document, NodeId, PublishedLibrary, Style, StyleKind, VariableType};
-use figcraft_engine::library;
-use figcraft_engine::selection_colors::{PaintTarget, SelectionColor, bind_refusal, collect, create_refusal, in_scope};
+use figcraft_color::Color;
+use figcraft_doc::{Document, NodeId};
+use figcraft_engine::selection_colors::{PaintTarget, SelectionColor, collect};
 use serde_json::json;
 
 use crate::a11y::Tip;
@@ -77,7 +76,6 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
     // layer has children (frame, group, component, instance).
     let has_children = ids.iter().any(|id| doc.node(*id).is_some_and(|n| !n.children.is_empty()));
     if colors.len() < 2 && !(colors.len() == 1 && has_children) {
-        ui.data_mut(|d| d.remove::<CreateForm>(create_form_id()));
         return;
     }
     let t = Tokens::get(ui.ctx());
@@ -169,37 +167,9 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                         }
                         widgets::tight_end_n(ui, if linked_name.is_some() { 3 } else { 2 }, |ui| {
                             let styles = icons::button(ui, Icon::Styles, 24.0, false, tr("Color styles"));
-                            crate::right::menu_popup(&styles).show(|ui| {
-                                style_items(app, ui, doc, group, &t);
-                                if linked_name.is_none() {
-                                    ui.separator();
-                                    if create_refusal(doc, &group.targets).is_none() && crate::right::menu_item(ui, tr("Create style"), "") {
-                                        open_create_form(app, ui, doc, group);
-                                        ui.close();
-                                    }
-                                    let variables: Vec<_> = doc
-                                        .variables
-                                        .variables
-                                        .iter()
-                                        .filter(|v| {
-                                            v.kind == VariableType::Color
-                                                && bind_refusal(doc, &group.targets, &v.id).is_none()
-                                                && in_scope(doc, &group.targets, &v.id)
-                                        })
-                                        .collect();
-                                    if !variables.is_empty() {
-                                        ui.separator();
-                                        widgets::label(ui, tr("Color variables"), t.text_secondary);
-                                    }
-                                    for v in variables {
-                                        if crate::right::menu_item(ui, &v.name, "") {
-                                            app.run("selection.bindColorVariable", json!({"targets": group.targets, "variable": v.id}));
-                                            app.ui.picker = None;
-                                            ui.close();
-                                        }
-                                    }
-                                }
-                            });
+                            if styles.clicked() {
+                                crate::style_picker::open_for_colors(app, ui, &group.targets);
+                            }
                             if linked_name.is_some() {
                                 let detach = if group.style.is_some() { tr("Detach style") } else { tr("Detach variable") };
                                 if icons::button(ui, Icon::Detach, 24.0, false, detach).clicked() {
@@ -217,106 +187,6 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
     });
     ui.add_space(8.0);
     widgets::separator(ui);
-    create_form(app, ui.ctx(), uid);
-}
-
-/// The paint styles a row's Styles menu offers: this file's (not library copies), then each enabled
-/// library's published ones under its name (a library this session hasn't read offers none). A choice
-/// applies the style to the row's targets.
-fn style_items(app: &mut FigApp, ui: &mut Ui, doc: &Document, group: &SelectionColor, t: &Tokens) {
-    let paint = |s: &&Style| matches!(s.kind, StyleKind::Paint { .. });
-    let local: Vec<&Style> = library::local_styles(doc).filter(paint).collect();
-    let libs = crate::variable_ui::libraries(app, doc);
-    let offered: Vec<(&PublishedLibrary, Vec<&Style>)> = libs
-        .iter()
-        .map(|l| (l.as_ref(), l.doc.styles.iter().filter(|s| l.manifest.style(&s.id).is_some_and(|x| x.published)).filter(paint).collect::<Vec<_>>()))
-        .filter(|(_, list)| !list.is_empty())
-        .collect();
-    if local.is_empty() && offered.is_empty() {
-        widgets::label(ui, tr("No color styles"), t.text_secondary);
-    }
-    for style in local {
-        if crate::right::menu_item(ui, &style.name, "") {
-            app.run("selection.applyColorStyle", json!({"targets": group.targets, "style": style.id}));
-            app.ui.picker = None;
-            ui.close();
-        }
-    }
-    for (lib, list) in offered {
-        ui.separator();
-        widgets::label(ui, &lib.manifest.name, t.text_secondary);
-        for style in list {
-            if crate::right::menu_item(ui, &style.name, "") {
-                app.run("selection.applyColorStyle", json!({"targets": group.targets, "style": style.id, "library": lib.manifest.id}));
-                app.ui.picker = None;
-                ui.close();
-            }
-        }
-    }
-}
-
-/// The Create style window's state: the document and row it was opened for, and the name typed.
-#[derive(Clone)]
-struct CreateForm {
-    document: u64,
-    targets: Vec<PaintTarget>,
-    paint: Paint,
-    name: String,
-}
-
-fn create_form_id() -> Id {
-    Id::unique("selection_color_create_style")
-}
-
-/// Open the Create style window for `group`, with the next free "Color n" name.
-fn open_create_form(app: &mut FigApp, ui: &Ui, doc: &Document, group: &SelectionColor) {
-    let Ok(ds) = app.session.ds() else { return };
-    let form = CreateForm {
-        document: ds.uid,
-        targets: group.targets.clone(),
-        paint: group.paint.clone(),
-        name: crate::style_picker::next_name(doc, "Color"),
-    };
-    app.ui.picker = None;
-    ui.data_mut(|d| d.insert_temp(create_form_id(), form));
-}
-
-/// The Create style window: the row's paint, a name, Cancel and Create (Enter creates). Create runs
-/// `selection.createColorStyle`; when it fails (a name in use, a row that changed) the window stays
-/// open with the name for correction.
-fn create_form(app: &mut FigApp, ctx: &egui::Context, document: u64) {
-    let Some(mut form) = ctx.data(|d| d.get_temp::<CreateForm>(create_form_id())) else { return };
-    if form.document != document {
-        ctx.data_mut(|d| d.remove::<CreateForm>(create_form_id()));
-        return;
-    }
-    let (mut open, mut cancel, mut create) = (true, false, false);
-    crate::dialogs::window(tr("Create style"), ctx).id(create_form_id().with("window")).open(&mut open).show(ctx, |ui| {
-        ui.set_width(240.0);
-        ui.horizontal(|ui| {
-            widgets::swatch(ui, &form.paint, 24.0);
-            ui.label(widgets::paint_name(&form.paint));
-        });
-        ui.add_space(6.0);
-        let name = ui.add(egui::TextEdit::singleline(&mut form.name).hint_text(tr("Name")).desired_width(220.0));
-        widgets::select_all_on_focus(ui, &name, &form.name);
-        if ui.memory(|m| m.focused().is_none()) {
-            name.request_focus();
-        }
-        ui.add_space(10.0);
-        let ready = !form.name.trim().is_empty();
-        ui.horizontal(|ui| {
-            cancel = widgets::button(ui, tr("Cancel"), false, true).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let enter = name.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            create = (widgets::button(ui, tr("Create"), true, ready).clicked() || enter) && ready;
-        });
-    });
-    let made = create && app.run("selection.createColorStyle", json!({"targets": form.targets, "name": form.name.trim()})).is_some();
-    if open && !cancel && !made {
-        ctx.data_mut(|d| d.insert_temp(create_form_id(), form));
-    } else {
-        ctx.data_mut(|d| d.remove::<CreateForm>(create_form_id()));
-    }
 }
 
 #[cfg(test)]
@@ -607,27 +477,6 @@ mod tests {
     }
 
     #[test]
-    fn styles_menu_applies_a_color_variable_to_the_row() {
-        let (mut p, a, b) = Panel::new();
-        p.app.run("variable.createCollection", json!({"name":"Theme"}));
-        p.app.run("variable.create", json!({"collection":"Theme","name":"Accent","type":"color","value":"#00ff00"}));
-        p.app.run("variable.create", json!({"collection":"Theme","name":"Gap","type":"number","value":8}));
-        let red = p.frame(vec![]).into_iter().find(|(s, _)| s == "FF0000").unwrap().1;
-        p.click(Pos2::new(228.0, red.y));
-        let texts = p.frame(vec![]);
-        assert!(texts.iter().any(|(s, _)| s == "Color variables"));
-        assert!(!texts.iter().any(|(s, _)| s == "Gap"));
-        let accent = texts.iter().find(|(s, _)| s == "Accent").unwrap().1;
-        p.click(accent);
-        let doc = p.app.session.doc().unwrap();
-        assert_eq!(doc.node(a).unwrap().fills[0].solid_color().unwrap().to_hex(), "00FF00");
-        assert!(!doc.node(a).unwrap().bound.is_empty());
-        assert!(doc.node(b).unwrap().bound.is_empty());
-        assert!(p.app.ui.last_error.is_none());
-        assert!(p.frame(vec![]).iter().any(|(s, _)| s == "Accent"));
-    }
-
-    #[test]
     fn a_linked_row_detaches_its_style_or_variable() {
         let (mut p, a, b) = Panel::new();
         p.app.run("style.create", json!({"type":"paint","name":"Brand","value":"#ff0000"}));
@@ -644,102 +493,6 @@ mod tests {
         assert!(doc.node(b).unwrap().bound.is_empty());
         let texts = p.frame(vec![]);
         assert!(texts.iter().any(|(s, _)| s == "FF0000") && texts.iter().any(|(s, _)| s == "0000FF"));
-        assert!(p.app.ui.last_error.is_none());
-    }
-
-    fn text_at(texts: &[(String, Pos2)], s: &str) -> Pos2 {
-        texts.iter().rev().find(|(t, _)| t == s).unwrap_or_else(|| panic!("{s:?} isn't drawn")).1
-    }
-
-    #[test]
-    fn styles_menu_offers_an_enabled_librarys_published_color_styles() {
-        let dir = std::env::temp_dir().join(format!("figcraft-selection-colors-panel-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir(&dir).unwrap();
-        let path = dir.join("library.figcraft");
-        let mut publisher = Session::new();
-        publisher.execute("style.create", &json!({"type":"paint","name":"Ocean","value":"#00ffff"})).unwrap();
-        publisher.execute("style.create", &json!({"type":"paint","name":"_Draft","value":"#ffff00"})).unwrap();
-        publisher.execute("library.publish", &json!({})).unwrap();
-        publisher.execute("file.saveAs", &json!({"path":path})).unwrap();
-        let (mut p, a, b) = Panel::new();
-        p.app.run("library.add", json!({"path":path}));
-        let red = text_at(&p.frame(vec![]), "FF0000");
-        p.click(Pos2::new(228.0, red.y));
-        let texts = p.frame(vec![]);
-        let library_name = p.app.session.doc().unwrap().libraries.enabled[0].name.clone();
-        assert!(texts.iter().any(|(s, _)| *s == library_name), "library styles are listed under the library's name");
-        assert!(!texts.iter().any(|(s, _)| s == "_Draft"), "unpublished styles aren't offered");
-        p.click(text_at(&texts, "Ocean"));
-        let _ = std::fs::remove_dir_all(&dir);
-        let doc = p.app.session.doc().unwrap();
-        let copy = doc.node(a).unwrap().styles.fill.clone().unwrap();
-        assert!(library::is_remote_style(doc, &copy));
-        assert_eq!(doc.node(a).unwrap().fills[0].solid_color().unwrap().to_hex(), "00FFFF");
-        assert!(doc.node(b).unwrap().styles.fill.is_none());
-        assert!(p.app.ui.last_error.is_none());
-        // The copy is listed under its library, not as one of this file's styles.
-        let blue = text_at(&p.frame(vec![]), "0000FF");
-        p.click(Pos2::new(228.0, blue.y));
-        let texts = p.frame(vec![]);
-        assert_eq!(texts.iter().filter(|(s, _)| s == "Ocean").count(), 2, "the linked row's name and the library's entry");
-    }
-
-    #[test]
-    fn create_style_names_the_row_links_it_and_stays_open_on_a_taken_name() {
-        let (mut p, a, b) = Panel::new();
-        let red = text_at(&p.frame(vec![]), "FF0000");
-        p.click(Pos2::new(228.0, red.y));
-        let create = text_at(&p.frame(vec![]), "Create style");
-        p.click(create);
-        for _ in 0..2 {
-            p.frame(vec![]);
-        }
-        let form = p.ctx.data(|d| d.get_temp::<CreateForm>(create_form_id())).expect("Create style opens its window");
-        assert_eq!(form.name, "Color 1");
-        // Another style takes the name first: Create fails and the window stays for a new name.
-        p.app.run("style.create", json!({"type":"paint","name":"Color 1","value":"#00ff00"}));
-        let button = text_at(&p.frame(vec![]), "Create");
-        p.click(button);
-        assert!(p.ctx.data(|d| d.get_temp::<CreateForm>(create_form_id())).is_some());
-        assert!(p.app.session.doc().unwrap().node(a).unwrap().styles.fill.is_none());
-        p.ctx.data_mut(|d| d.get_temp_mut_or_insert_with(create_form_id(), || form.clone()).name = "Brand".into());
-        let before = p.app.session.undo_depth();
-        let button = text_at(&p.frame(vec![]), "Create");
-        p.click(button);
-        assert!(p.ctx.data(|d| d.get_temp::<CreateForm>(create_form_id())).is_none());
-        let doc = p.app.session.doc().unwrap();
-        let brand = doc.style("Brand").unwrap().id.clone();
-        assert_eq!(doc.node(a).unwrap().styles.fill.as_deref(), Some(brand.as_str()));
-        assert!(doc.node(b).unwrap().styles.fill.is_none());
-        assert_eq!(p.app.session.undo_depth().0, before.0 + 1);
-        assert!(p.frame(vec![]).iter().any(|(s, _)| s == "Brand"));
-    }
-
-    #[test]
-    fn create_style_is_left_out_for_a_row_whose_list_holds_other_paints() {
-        let (mut p, a, _) = Panel::new();
-        p.app.run("fill.add", json!({"id":a,"paint":"#00ff00"}));
-        let red = text_at(&p.frame(vec![]), "FF0000");
-        p.click(Pos2::new(228.0, red.y));
-        let texts = p.frame(vec![]);
-        assert!(texts.iter().any(|(s, _)| s == "No color styles"), "the Styles menu opens");
-        assert!(!texts.iter().any(|(s, _)| s == "Create style"));
-    }
-
-    #[test]
-    fn a_linked_rows_styles_menu_switches_its_style() {
-        let (mut p, a, _) = Panel::new();
-        p.app.run("style.create", json!({"type":"paint","name":"Brand","value":"#ff0000"}));
-        p.app.run("style.create", json!({"type":"paint","name":"Accent","value":"#00ff00"}));
-        p.app.run("style.apply", json!({"id":a,"style":"Brand","target":"fill"}));
-        let row = text_at(&p.frame(vec![]), "Brand");
-        p.click(Pos2::new(196.0, row.y));
-        let texts = p.frame(vec![]);
-        assert!(!texts.iter().any(|(s, _)| s == "Create style"), "a linked row has a style already");
-        p.click(text_at(&texts, "Accent"));
-        let doc = p.app.session.doc().unwrap();
-        assert_eq!(doc.node(a).unwrap().styles.fill.as_deref(), doc.style("Accent").map(|s| s.id.as_str()));
         assert!(p.app.ui.last_error.is_none());
     }
 }
