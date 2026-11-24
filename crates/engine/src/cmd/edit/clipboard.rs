@@ -456,7 +456,7 @@ pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, prop
     let takes = |k: &str| {
         let text = k.starts_with("font") || k.starts_with("paragraph") || matches!(k, "lineHeight" | "letterSpacing" | "textStyle");
         let corner = k == "cornerSmoothing" || k.ends_with("Radius");
-        let grid = k == "gridStyle" || k == "grids" || k.starts_with("grids/");
+        let grid = k == "gridStyle" || k == "grids" || k.starts_with("layoutGrids/");
         (is_text || !text) && (corners || !corner) && (frame || !grid)
     };
     m.retain(|k, _| takes(k));
@@ -472,14 +472,31 @@ pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, prop
         copied.retain(|_, v| v.as_str().is_some_and(|vid| doc.variables.get_by_id(vid).is_some()));
     }
     // The layer's own bindings on what is pasted give way to the copied layer's: kept, a binding
-    // would hold the old value over the pasted one.
+    // would hold the old value over the pasted one. A binding on what the copy doesn't carry (a
+    // text layer's font size, pasted from a frame) stays.
     if let Some(Value::Object(copied)) = m.get("boundVariables") {
         let mut bound: serde_json::Map<String, Value> =
-            n.bound.keys().filter(|f| copied_binding(f) && takes(f)).map(|f| (f.clone(), Value::Null)).collect();
+            n.bound.keys().filter(|f| copied_binding(f) && m.contains_key(pasted_key(f))).map(|f| (f.clone(), Value::Null)).collect();
         bound.extend(copied.iter().filter(|(f, _)| takes(f)).map(|(f, v)| (f.clone(), v.clone())));
         m.insert("boundVariables".into(), Value::Object(bound));
     }
     crate::cmd::props::apply(cmd, doc, id, &m)
+}
+
+/// The key of the properties [`copy_props_of`] copies that sets what a variable bound to `field`
+/// sets: a corner's radius is `cornerRadius`, a side's stroke weight `strokeWeight`, the font
+/// weight `fontStyle`, a layout grid's field `grids` and a paint's or effect's field its list.
+fn pasted_key(field: &str) -> &str {
+    match field {
+        "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "cornerRadius",
+        f if crate::cmd::props::STROKE_SIDES.contains(&f) => "strokeWeight",
+        "fontWeight" => "fontStyle",
+        f => match f.split_once('/') {
+            Some(("layoutGrids", _)) => "grids",
+            Some((list, _)) => list,
+            None => f,
+        },
+    }
 }
 
 /// Whether a variable bound to `field` goes with the properties [`copy_props_of`] copies: not a

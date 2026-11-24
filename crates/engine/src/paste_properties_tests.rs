@@ -92,3 +92,18 @@ fn a_missing_style_unlinks_the_layers_own() {
     let nb = s.doc().unwrap().node(b).unwrap();
     assert!(nb.styles.stroke.is_none(), "A's strokes had no style here, so B's aren't linked: {:?}", nb.styles);
 }
+
+#[test]
+fn a_binding_on_what_the_copy_doesnt_carry_stays() {
+    let mut s = Session::new();
+    let a = frame(&mut s, 0.0);
+    let t = id(s.execute("text.create", &json!({"text": "Hi", "x": 0, "y": 200})).unwrap());
+    s.execute("variable.createCollection", &json!({"name": "Tokens"})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Tokens", "name": "body", "type": "number", "value": 18})).unwrap();
+    s.execute("variable.bind", &json!({"ids": [t], "field": "fontSize", "variable": "body"})).unwrap();
+    let before = s.doc().unwrap().node(t).unwrap().bound.get("fontSize").cloned();
+
+    copy_onto(&mut s, a, t);
+    let nt = s.doc().unwrap().node(t).unwrap();
+    assert!(before.is_some() && nt.bound.get("fontSize") == before.as_ref(), "a frame carries no font size: {:?}", nt.bound);
+}
