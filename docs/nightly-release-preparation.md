@@ -75,6 +75,34 @@ those values and `producer_workflow_id` in the same reviewed change that promote
 - `packaging/windows/sign.ps1 -Required` is the app-owned Windows adapter. Invoke it only from the
   immutable **release execution SHA** checkout, never the producer's main source or extracted archive.
 
+## App-side entry points and the nightly profile
+
+The producer's platform legs call these app-owned producers, each of which refuses signing material in
+the compilation step:
+
+| Platform | Producer | Signed by |
+|---|---|---|
+| Windows | `pwsh packaging/windows/package.ps1 -Arch x64 -Nightly -BuildOnly` (through `packaging/windows/nightly.ps1`) | `packaging/windows/sign.ps1 -Required` in the release-ref signer |
+| Linux | `bash packaging/linux/nightly.sh --arch x86_64` | the shared signer's detached `.asc` (`.github/nightly-linux-signing-key.asc`) |
+| macOS | `bash packaging/macos/nightly.sh --arch aarch64` | `packaging/macos/nightly-sign.sh`, checked by `packaging/macos/nightly-verify.sh` |
+
+Inputs, all required: `FIGCRAFT_BUILD_CHANNEL=nightly-v1`, `FIGCRAFT_VERSION`
+(`X.Y.Z-nightly.YYYYMMDD.<run>.<attempt>.g<sha12>`), `FIGCRAFT_BUILD_SHA` (40 hex) and
+`FIGCRAFT_BUILD_DATE` (the run's UTC date), with an absolute `CARGO_TARGET_DIR` and `DIST`;
+`CRAFT_FONTS_DIR`/`CRAFT_FONTS_REQUIRED=1` are optional. The build script refuses a nightly without
+an exact version, so the feed identity and the binary cannot disagree. `packaging/nightly-common.sh`
+runs `<> --version` after the build and expects `FigCraft <version> (nightly-v1)`; the Launcher's form
+`--launch-profile nightly-v1 --profile-root <dir> --version` is answered before any window opens.
+
+**The profile.** A nightly build refuses to start without `--launch-profile nightly-v1
+--profile-root <absolute dir>` and keeps every piece of user state there: preferences and recent
+files, recovery copies, installed plugins and the suite's font store. It never reads or writes
+`~/.config/FigCraft` (macOS: `~/Library/Application Support/FigCraft`, Windows: `%APPDATA%\FigCraft`),
+a portable copy's `config/`, or the shared `craft-fonts` store; the validator refuses a root that
+overlaps any stable folder, a link or an alias. The Linux formats reach it through one launcher
+(`packaging/linux/nightly-launch.sh`) that every package format installs as its entry point, with the
+profile at `$XDG_DATA_HOME/figcraft-nightly/profile`.
+
 ## Local regression checks
 
 `python3 packaging/nightly-release-tests.py` verifies the nightly workflow and policy contracts locally:

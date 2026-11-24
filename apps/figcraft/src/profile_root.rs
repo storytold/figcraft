@@ -6,6 +6,8 @@ use std::path::{Component, Path, PathBuf};
 /// The portable marker and folder FigCraft already uses (`craft_settings::Portable::DEFAULT`): a
 /// `portable` file beside the executable keeps the settings in `config/` beside it.
 const PORTABLE_MARKER: &str = "portable";
+/// The Nightly's own Flatpak id: its sandbox is its own, so it is not the stable app's instance.
+const NIGHTLY_FLATPAK_ID: &str = "ai.storyteller.figcraft.nightly";
 /// What a portable copy holds beside its marker.
 const PORTABLE_EXES: [&str; 3] = ["figcraft.exe", "figcraft", "FigCraft.app"];
 
@@ -218,10 +220,16 @@ fn validate_for(
     if env("FIGCRAFT_CONFIG_DIR").is_some_and(|v| !v.is_empty()) {
         return Err("nightly-v1 cannot be combined with FIGCRAFT_CONFIG_DIR".into());
     }
-    if platform != Platform::Windows && env("FLATPAK_ID").is_some_and(|v| !v.is_empty()) {
-        // These rows are native tar/app-bundle launches, not a Flatpak package. Inheriting its
-        // runtime socket namespace could point another profile at the stable app's socket.
-        return Err("nightly-v1 native packages cannot inherit a Flatpak instance; launch through the native Launcher".into());
+    if platform != Platform::Windows {
+        // A native tar/app-bundle launch must not inherit another app's Flatpak runtime namespace,
+        // which could point this profile at the stable app's socket. The Nightly's own Flatpak
+        // bundle (ai.storyteller.figcraft.nightly) is a separate sandbox and is allowed.
+        let flatpak = env("FLATPAK_ID").filter(|v| !v.is_empty());
+        if let Some(id) = flatpak
+            && id != OsString::from(NIGHTLY_FLATPAK_ID)
+        {
+            return Err("nightly-v1 cannot inherit another app's Flatpak instance; use its own package or the native Launcher".into());
+        }
     }
     let chosen = canonical_future(root)?;
     if is_portable_layout(root) || is_portable_layout(&chosen) {
@@ -582,6 +590,9 @@ mod tests {
         fixture.env.remove("FIGCRAFT_CONFIG_DIR");
         fixture.env.insert("FLATPAK_ID".into(), "ai.storyteller.figcraft".into());
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("Flatpak"));
+        // The Nightly's own Flatpak bundle is a separate sandbox: its profile is allowed.
+        fixture.env.insert("FLATPAK_ID".into(), NIGHTLY_FLATPAK_ID.into());
+        assert!(fixture.check(Platform::Linux, &fixture.home().join("nightly/profile")).is_ok());
         fixture.env.remove("FLATPAK_ID");
         fixture.env.remove("HOME");
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("HOME"));

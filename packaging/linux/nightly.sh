@@ -10,6 +10,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ "$ARCH" == x86_64 && "$(uname -s)" == Linux ]] || { echo 'only native Linux x86_64 nightly packaging is supported' >&2; exit 2; }
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../nightly-common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../nightly-common.sh"
 nightly_init linux "$ARCH" x86_64-unknown-linux-gnu
@@ -18,9 +19,15 @@ OUTPUT="$DIST/figcraft-$VERSION-linux-x86_64-nightly.tar.gz"
 nightly_build_gui
 STAGE="$NIGHTLY_WORK/stage"
 mkdir -p "$STAGE"
+# The archive's entry point is the shared launcher (figcraft-nightly), which starts the GUI on the
+# Launcher's nightly-v1 profile; the GUI itself sits beside it as figcraft, so an unpacked tar is
+# isolated too, even when started straight from its folder.
 cp "$NIGHTLY_GUI" "$STAGE/figcraft"
 chmod 755 "$STAGE/figcraft"
-cp "$ROOT/assets/app-icon/figcraft-512.png" "$STAGE/figcraft-nightly.png"
+awk -v real='"$(dirname "$0")/figcraft"' '{ gsub(/@REAL_BIN@/, real); print }' \
+  "$HERE/nightly-launch.sh" >"$STAGE/figcraft-nightly"
+chmod 755 "$STAGE/figcraft-nightly"
+cp "$ROOT/assets/app-icon/figcraft-nightly.png" "$STAGE/figcraft-nightly.png"
 nightly_copy_notices "$STAGE"
 # The private mktemp cwd is the helper authority root, not a CLI path parent.
 (cd "$NIGHTLY_WORK" && python3 "$ROOT/packaging/nightly-archive.py" linux stage archive.tar.gz)

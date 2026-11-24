@@ -62,9 +62,10 @@ tar -xzf "$TARBALL" -C "$WORK/stage" --strip-components=1
 if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
   NIGHTLY_ICON="$ROOT/assets/app-icon/figcraft-nightly.png"
   [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
+  # The window's app id is the flavor's (WindowId), which is not the bundle's own id.
   sed -e "s|^Icon=$APP_ID$|Icon=$FLATPAK_ID|" \
       -e "s|^Name=FigCraft$|Name=FigCraft Nightly|" \
-      -e "s|^StartupWMClass=.*|StartupWMClass=$FLATPAK_ID|" \
+      -e "s|^StartupWMClass=.*|StartupWMClass=$FLATPAK_ID-v1|" \
       -e '/^MimeType=/d' \
       "$WORK/stage/share/applications/$APP_ID.desktop" >"$WORK/stage/share/applications/$FLATPAK_ID.desktop"
   rm -f "$WORK/stage/share/applications/$APP_ID.desktop"
@@ -72,13 +73,19 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
       -e "s|<name>FigCraft</name>|<name>FigCraft Nightly</name>|g" \
       -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$FLATPAK_ID.desktop</launchable>|g" \
       -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$FLATPAK_ID</icon>|g" \
+      -e "s|<binary>figcraft</binary>|<binary>figcraft-nightly</binary>|g" \
+      -e '/<mediatype>/d' \
       "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml" >"$WORK/stage/share/metainfo/$FLATPAK_ID.metainfo.xml"
   rm -f "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml"
-  mv "$WORK/stage/share/mime/packages/$APP_ID.xml" "$WORK/stage/share/mime/packages/$FLATPAK_ID.xml"
+  # No document associations for a Nightly: it never takes a file type from the stable app.
+  rm -rf "$WORK/stage/share/mime"
   rm -rf "$WORK/stage/share/icons/hicolor"
   install -Dm644 "$NIGHTLY_ICON" \
     "$WORK/stage/share/icons/hicolor/256x256/apps/$FLATPAK_ID.png"
   sed -e "s|ai\.storyteller\.figcraft|$FLATPAK_ID|g" \
+      -e "s|^command: figcraft$|command: figcraft-nightly|" \
+      -e "s|^      - install -Dm644 share/mime/packages/.*$||" \
+      -e "s|^      - install -Dm755 bin/figcraft /app/bin/figcraft$|      - install -Dm755 bin/figcraft /app/bin/figcraft\n      - install -Dm755 bin/figcraft-nightly /app/bin/figcraft-nightly|" \
       "$HERE/flatpak/$APP_ID.bundle.yml" >"$WORK/$FLATPAK_ID.yml"
 else
   cp "$HERE/flatpak/$APP_ID.bundle.yml" "$WORK/$FLATPAK_ID.yml"

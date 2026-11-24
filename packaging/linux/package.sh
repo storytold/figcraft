@@ -86,13 +86,37 @@ for bin in "${BINS[@]}"; do
 done
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 if [[ "$IS_NIGHTLY" = 1 ]]; then
+  # The nightly entry point is the shared launcher (packaging/linux/nightly-launch.sh): every
+  # format starts the GUI on the Launcher's nightly-v1 profile, so nothing reads or writes the
+  # stable app's user state. The deb/rpm wrapper and the AppImage entry below specialise its path.
+  awk -v real='"$(dirname "$0")/figcraft"' '{ gsub(/@REAL_BIN@/, real); print }' \
+    "$HERE/nightly-launch.sh" >"$STAGE/usr/bin/figcraft-nightly"
+  chmod 755 "$STAGE/usr/bin/figcraft-nightly"
+  # The entry starts the launcher, names the Nightly and registers no file types (a Nightly never
+  # takes a document association from the stable app). `#` delimits, so \(...\|...\) is alternation.
   sed -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.figcraft.nightly-v1|' \
+      -e "s#^Exec=figcraft\([[:space:]]\|$\)#Exec=figcraft-nightly\1#" \
+      -e "s|^TryExec=figcraft$|TryExec=figcraft-nightly|" \
+      -e "s|^Name=FigCraft$|Name=FigCraft Nightly|" \
+      -e '/^MimeType=/d' \
       "$STAGE/usr/share/applications/$APP_ID.desktop" >"$STAGE/usr/share/applications/$APP_ID.desktop.tmp"
   mv "$STAGE/usr/share/applications/$APP_ID.desktop.tmp" "$STAGE/usr/share/applications/$APP_ID.desktop"
+  rm -rf "$STAGE/usr/share/mime"
 fi
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
-sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$FIGCRAFT_BUILD_DATE/g" \
+# The AppStream metadata carries the Nightly's id and launcher, and no document types: a Nightly
+# never takes a file association from the stable app.
+META_NIGHTLY=()
+if [[ "$IS_NIGHTLY" = 1 ]]; then
+  META_NIGHTLY=(-e "s|<id>$APP_ID</id>|<id>$APP_ID.nightly-v1</id>|g"
+    -e "s|<name>FigCraft</name>|<name>FigCraft Nightly</name>|g"
+    -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$APP_ID.nightly-v1.desktop</launchable>|g"
+    -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$APP_ID.nightly-v1</icon>|g"
+    -e 's|<binary>figcraft</binary>|<binary>figcraft-nightly</binary>|g'
+    -e '/<mediatype>/d')
+fi
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$FIGCRAFT_BUILD_DATE/g" "${META_NIGHTLY[@]}" \
   "$HERE/$APP_ID.metainfo.xml.in" >"$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
 mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
@@ -112,6 +136,8 @@ has() { local format="$1"; case " $FORMATS " in *" $format "*) return 0 ;; *) re
 if has tar; then
   mkdir -p "$WORK/tar"
   cp -R "$STAGE/usr" "$WORK/tar/$BASENAME"
+  # GUI only: a Nightly has no CLI (the stable tarball keeps shipping it).
+  if [[ "$IS_NIGHTLY" = 1 ]]; then rm -f "$WORK/tar/$BASENAME/bin/figcraft-cli"; fi
   tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
   echo "wrote $DIST/$BASENAME.tar.gz"
 fi
@@ -147,18 +173,10 @@ if has deb || has rpm; then
     rm -rf "$NFPM_STAGE"
     cp -R "$STAGE" "$NFPM_STAGE"
     install -Dm755 "$NFPM_STAGE/usr/bin/figcraft" "$NFPM_STAGE/usr/lib/figcraft-nightly/figcraft"
-    cat >"$NFPM_STAGE/usr/bin/$NFPM_BIN" <<'WRAPPER'
-#!/bin/sh
-set -eu
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
-  exec /usr/lib/figcraft-nightly/figcraft "$@"
-fi
-config_base="${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}"
-data_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
-export XDG_CONFIG_HOME="$config_base/figcraft-nightly"
-export XDG_DATA_HOME="$data_base/figcraft-nightly"
-exec /usr/lib/figcraft-nightly/figcraft "$@"
-WRAPPER
+    # The shared launcher (packaging/linux/nightly-launch.sh) starts the GUI on the Launcher's
+    # nightly-v1 profile, so the package never reads or writes the stable app's user state.
+    awk -v real='/usr/lib/figcraft-nightly/figcraft' '{ gsub(/@REAL_BIN@/, real); print }' \
+      "$HERE/nightly-launch.sh" >"$NFPM_STAGE/usr/bin/$NFPM_BIN"
     chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_BIN"
     rm -f "$NFPM_STAGE/usr/bin/figcraft"
     if [[ "$HAS_CLI" = 1 ]]; then
@@ -177,6 +195,7 @@ WRAPPER
         -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$NIGHTLY_DESK_ID.desktop</launchable>|g" \
         -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$NIGHTLY_DESK_ID</icon>|g" \
         -e "s|<binary>figcraft</binary>|<binary>$NFPM_BIN</binary>|g" \
+        -e '/<mediatype>/d' \
         "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml" >"$NFPM_STAGE/usr/share/metainfo/$NIGHTLY_DESK_ID.metainfo.xml"
     rm -f "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
     rm -rf "$NFPM_STAGE/usr/share/mime"
@@ -228,18 +247,16 @@ if has appimage; then
     APPIMAGE_ID="$APP_ID.nightly-v1"
     NIGHTLY_ICON="$ROOT/assets/app-icon/figcraft-nightly.png"
     [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
+    # The nightly entry point is the shared launcher (see packaging/linux/nightly-launch.sh), which
+    # starts the GUI on the Launcher's nightly-v1 profile; AppRun runs it in place of the GUI.
+    awk -v real='"$APPDIR/usr/bin/figcraft"' '{ gsub(/@REAL_BIN@/, real); print }' \
+      "$HERE/nightly-launch.sh" >"$APPDIR/usr/bin/figcraft-nightly"
+    chmod 755 "$APPDIR/usr/bin/figcraft-nightly"
     # shellcheck disable=SC2016
     awk -v old_id="$APP_ID" -v new_id="$APPIMAGE_ID" '
       $0 == "DESK_ID=" old_id { print "DESK_ID=" new_id; next }
       $0 == "exec \"$APPDIR/usr/bin/figcraft\" \"$@\"" {
-        print "if [ \"${1:-}\" = \"--version\" ] || [ \"${1:-}\" = \"-V\" ]; then"
-        print "  exec \"$APPDIR/usr/bin/figcraft\" \"$@\""
-        print "fi"
-        print "config_base=\"${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}\""
-        print "data_base=\"${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}\""
-        print "export XDG_CONFIG_HOME=\"$config_base/figcraft-nightly\""
-        print "export XDG_DATA_HOME=\"$data_base/figcraft-nightly\""
-        print "exec \"$APPDIR/usr/bin/figcraft\" \"$@\""
+        print "exec \"$APPDIR/usr/bin/figcraft-nightly\" \"$@\""
         next
       }
       { print }
@@ -252,6 +269,13 @@ if has appimage; then
         "$APPDIR/usr/share/applications/$APP_ID.desktop" >"$APPDIR/usr/share/applications/$APPIMAGE_ID.desktop"
     rm -f "$APPDIR/usr/share/applications/$APP_ID.desktop"
     cp "$APPDIR/usr/share/applications/$APPIMAGE_ID.desktop" "$APPDIR/$APPIMAGE_ID.desktop"
+    # No document associations for a Nightly: the mime package, the desktop's MimeType lines (above)
+    # and the metainfo mediatypes all stay out, so it never takes a file type from the stable app.
+    rm -rf "$APPDIR/usr/share/mime"
+    sed -e "s|<binary>figcraft</binary>|<binary>figcraft-nightly</binary>|g" \
+        -e '/<mediatype>/d' \
+        "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml" >"$APPDIR/usr/share/metainfo/$APPIMAGE_ID.metainfo.xml"
+    rm -f "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml"
     rm -rf "$APPDIR/usr/share/icons/hicolor"
     install -Dm644 "$NIGHTLY_ICON" \
       "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APPIMAGE_ID.png"
