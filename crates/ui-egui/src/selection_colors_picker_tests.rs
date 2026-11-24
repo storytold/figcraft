@@ -124,6 +124,14 @@ fn create_style_in_the_picker_links_the_row_and_edits_its_name() {
     assert_eq!(doc.node(a).unwrap().styles.fill.as_deref(), Some(made.as_str()));
     assert!(doc.node(b).unwrap().styles.fill.is_none());
     assert!(shows(&mut u, "Edit style"), "the picker edits the new style");
+    // The name is selected for typing over; going back to the list keeps it.
+    u.frame(vec![Event::Text("Brand".into())]);
+    let back = controls(&mut u, Role::Button, "Back to styles");
+    click(&mut u, *back.first().expect("the editor's back button"));
+    let doc = u.app.session.doc().unwrap();
+    assert_eq!(doc.style(&made).map(|s| s.name.as_str()), Some("Brand"), "the new style is renamed");
+    assert_eq!(doc.node(a).unwrap().styles.fill.as_deref(), Some(made.as_str()), "the row still links to it");
+    assert!(doc.node(b).unwrap().styles.fill.is_none());
 }
 
 #[test]
