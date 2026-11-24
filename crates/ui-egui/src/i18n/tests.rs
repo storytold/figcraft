@@ -601,7 +601,7 @@ fn hebrew_tags_and_plurals() {
     assert!(!plural_one(he, 0) && plural_one(he, 1) && !plural_one(he, 2) && !plural_one(he, 5));
     let singular = fill(counted(he, "{n} layers", 1), &[("n", &1)]);
     let dual = fill(counted(he, "{n} layers", 2), &[("n", &2)]);
-    assert_eq!(singular, "שכבה 1");
+    assert_eq!(singular, "1 שכבה");
     assert_eq!(dual, "2 שכבות");
 }
 
