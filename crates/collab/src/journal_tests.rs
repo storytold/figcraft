@@ -326,6 +326,20 @@ fn a_resume_after_a_clean_restart_catches_up_with_the_log() {
 
 #[test]
 fn third_review_legacy_review_journal_keeps_later_edits_and_resyncs() {
+    replay_legacy_review_journal(None);
+}
+
+#[test]
+fn fourth_review_mixed_image_and_review_journals_keep_later_edits() {
+    use crate::image_tests::{put, sha256_hex};
+    let bytes = b"own mixed-journal image";
+    let key = sha256_hex(bytes);
+    for image in [(put(&key, 2, 1, bytes), true), (put(&key, 2, 1, b"different original bytes"), false)] {
+        replay_legacy_review_journal(Some(image));
+    }
+}
+
+fn replay_legacy_review_journal(image: Option<(crate::Change, bool)>) {
     use crate::change::{Change, DocProp, Json};
     let mut s = Server::new(base(), "", Limits::default());
     s.journaling(true);
@@ -343,11 +357,16 @@ fn third_review_legacy_review_journal_keeps_later_edits_and_resyncs() {
     let mut replaced = false;
     for j in &mut journal {
         if let Journal::Accepted(acc) = j {
+            let mut review_batch = false;
             for change in &mut acc.changes {
                 if let Change::SetDoc { prop: DocProp::DesignReview, value } = change {
                     *value = Json::of(&oversized).unwrap();
                     replaced = true;
+                    review_batch = true;
                 }
+            }
+            if review_batch && let Some((image, _)) = &image {
+                acc.changes.push(image.clone());
             }
         }
     }
@@ -361,6 +380,9 @@ fn third_review_legacy_review_journal_keeps_later_edits_and_resyncs() {
     assert_eq!(restored.document().node(page).unwrap().name, s.document().node(page).unwrap().name);
     assert_eq!(restored.document().design_review.radii.len(), figcraft_doc::MAX_RADII);
     assert_eq!(restored.document().design_review.grid, oversized.grid);
+    if let Some((_, keep)) = image {
+        assert_eq!(restored.document().images.len(), usize::from(keep), "valid images survive; forged image data is still omitted");
+    }
     let bytes = message::encode(&restored.state().unwrap()).unwrap();
     let mut restarted = Server::restore(message::decode(&bytes, bytes.len()).unwrap(), "", Limits::default()).unwrap();
     reader.disconnect();

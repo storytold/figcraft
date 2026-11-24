@@ -274,15 +274,15 @@ impl Server {
                 if acc.seq != self.seq + 1 {
                     return Err(Error::Protocol(format!("batch {} after {}", acc.seq, self.seq)));
                 }
+                // Older journals can carry review values accepted before today's limits. Keep
+                // their bounded settings and later edits, but never resume from the old delta.
+                if docprops::clamp_snapshot_design_review(&mut acc.changes) {
+                    self.resync = true;
+                }
                 // A log written before the image checks may hold an image entry they refuse: the
                 // batch replays without it, so the edits after it aren't dropped with the rest of
                 // the log, and resuming clients catch up with the snapshot.
                 if acc.changes.iter().any(Change::is_image) && self.state.clone().apply_kept(&mut acc.changes, Change::is_image)? > 0 {
-                    self.resync = true;
-                }
-                // Older journals can carry review values accepted before today's limits. Keep
-                // their bounded settings and later edits, but never resume from the old delta.
-                if docprops::clamp_snapshot_design_review(&mut acc.changes) {
                     self.resync = true;
                 }
                 self.accept(acc.author, self.seq, &acc.changes)?;

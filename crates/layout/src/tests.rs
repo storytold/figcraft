@@ -663,3 +663,74 @@ fn third_review_coupled_frames_respect_padding_floors_and_settle() {
         }
     }
 }
+
+#[test]
+fn fourth_review_scaled_coupled_children_commit_the_trial_in_local_space() {
+    for horizontal in [false, true] {
+        for scaled_child in 0..2 {
+            for as_frame in [false, true] {
+                for (sx, sy) in [(2.0, 0.5), (-0.5, 2.0)] {
+                    let mode = if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical };
+                    let (mut d, f, k) = setup(mode);
+                    let parent = d.get_mut(f).unwrap();
+                    (parent.width, parent.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+                    parent.layout.as_mut().unwrap().padding = [0.0; 4];
+                    parent.layout.as_mut().unwrap().gap = 0.0;
+                    if horizontal {
+                        parent.child_layout.sizing_v = Sizing::Hug;
+                    } else {
+                        parent.child_layout.sizing_h = Sizing::Hug;
+                    }
+                    for (i, id) in k.iter().enumerate() {
+                        let n = d.get_mut(*id).unwrap();
+                        (n.width, n.height) = (100.0, 100.0);
+                        n.constrain_proportions = true;
+                        (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                            if horizontal == (i == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+                        if i == scaled_child {
+                            n.transform = Affine::new([sx, 0.0, 0.0, sy, 0.0, 0.0]);
+                            if as_frame {
+                                n.kind = NodeKind::Frame;
+                                n.layout = Some(AutoLayout { mode, ..Default::default() });
+                                n.child_layout.min_w = Some(80.0);
+                                n.child_layout.min_h = Some(80.0);
+                                n.child_layout.max_w = Some(100.0);
+                                n.child_layout.max_h = Some(100.0);
+                            }
+                        }
+                    }
+                    layout_frame(&mut d, f, &NoMeasure);
+                    let (aw, ah) = outer_size(&d, k[0]);
+                    let (bw, bh) = outer_size(&d, k[1]);
+                    let parent_cross = if horizontal { d.node(f).unwrap().height } else { d.node(f).unwrap().width };
+                    let filled_cross = if horizontal { bh } else { bw };
+                    let max_cross = if as_frame && scaled_child == 1 { 100.0 * if horizontal { sy.abs() } else { sx.abs() } } else { f64::INFINITY };
+                    assert!((filled_cross - parent_cross.min(max_cross)).abs() < 1e-6, "the fill must match its line up to its own local maximum");
+                    let main_used = if horizontal { aw + bw } else { ah + bh };
+                    assert!(main_used <= 300.0 + 1e-6, "scaling must not apply the solved size twice: {main_used}");
+                    if !as_frame {
+                        assert!((main_used - 300.0).abs() < 1e-6, "unconstrained fills must use the available space");
+                    }
+                    for id in &k {
+                        let n = d.node(*id).unwrap();
+                        assert!((n.width - n.height).abs() < 1e-6, "local locked proportions must survive scale and flips");
+                    }
+                    if as_frame {
+                        let n = d.node(k[scaled_child]).unwrap();
+                        assert!(
+                            n.width >= 80.0 - 1e-6 && n.height >= 80.0 - 1e-6 && n.width <= 100.0 + 1e-6 && n.height <= 100.0 + 1e-6,
+                            "local frame bounds must still hold"
+                        );
+                    }
+                    let before = [pos(&d, f), pos(&d, k[0]), pos(&d, k[1])];
+                    layout_frame(&mut d, f, &NoMeasure);
+                    for (old, new) in before.into_iter().zip([pos(&d, f), pos(&d, k[0]), pos(&d, k[1])]) {
+                        for (a, b) in [old.0, old.1, old.2, old.3].into_iter().zip([new.0, new.1, new.2, new.3]) {
+                            assert!((a - b).abs() < 1e-6, "a second layout must retain the committed scaled geometry");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

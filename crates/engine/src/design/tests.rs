@@ -1331,3 +1331,39 @@ fn third_review_blended_groups_do_not_invent_contrast_or_repairs() {
         }
     }
 }
+
+#[test]
+fn fourth_review_blended_frame_overflow_uses_painted_bounds_and_clips() {
+    // Command-level audits use real text layout and repair state for each compositing case.
+    use figcraft_color::BlendMode;
+    for (blend, clip, opacity, ink, contrast) in [
+        (BlendMode::Multiply, false, 1.0, "#FFFFFF", false),
+        (BlendMode::Normal, false, 1.0, "#FFFFFF", true),
+        (BlendMode::PassThrough, false, 1.0, "#FFFFFF", true),
+        (BlendMode::Normal, false, 0.5, "#FFFFFF", false),
+        (BlendMode::Multiply, true, 1.0, "#000000", true),
+    ] {
+        let mut s = Session::new();
+        let frame = id(&ex(&mut s, "node.create", json!({"type":"frame","width":400,"height":200,"props":{"fill":"#000000"}})));
+        let overlay = id(&ex(&mut s, "node.create", json!({"type":"frame","parent":frame,"x":10,"y":10,"width":40,"height":40})));
+        let n = s.doc_mut().unwrap().get_mut(overlay).unwrap();
+        n.fills.clear();
+        n.clip = clip;
+        n.blend = blend;
+        n.opacity = opacity;
+        ex(&mut s, "node.create", json!({"type":"rectangle","parent":overlay,"x":80,"width":200,"height":100,"props":{"fill":"#FFFFFF"}}));
+        let text = id(&ex(&mut s, "text.create", json!({"parent":frame,"text":"Ink","x":100,"y":20,"props":{"fill":ink}})));
+        let before = s.doc().unwrap().node(text).unwrap().clone();
+        let args = json!({"ids":[text],"rules":["color.contrast"]});
+        let report = ex(&mut s, "design.audit", args.clone());
+        assert_eq!(
+            has(&report, "color.contrast"),
+            contrast,
+            "overflow must inherit its frame's composition while clipped overflow paints nothing: {report}"
+        );
+        if !contrast {
+            ex(&mut s, "design.fix", args);
+            assert_eq!(s.doc().unwrap().node(text).unwrap(), &before, "do not repair guessed contrast in overflow");
+        }
+    }
+}
