@@ -127,6 +127,7 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
     // A design-app paste replaces the copied layers, not the copied rows: a `fill.copy` before it
     // still pastes afterwards.
     let props = s.clipboard.props.take();
+    let props_source_doc = s.clipboard.props_source_doc;
     let paint = s.clipboard.paint.take();
     let stroke = s.clipboard.stroke.take();
     let paint_images = std::mem::take(&mut s.clipboard.paint_images);
@@ -138,6 +139,7 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
         nodes,
         images,
         props,
+        props_source_doc,
         paint,
         stroke,
         paint_images,
@@ -444,7 +446,24 @@ pub(super) fn copy_props(s: &mut Session, p: &Value) -> Result<Value> {
     let id = targets(s, p).first().copied().ok_or_else(|| bad("edit.copyProperties", "select one layer"))?;
     let v = copy_props_of(s.doc()?, id);
     s.clipboard.props = Some(v.clone());
+    s.clipboard.props_source_doc = s.ds()?.uid;
     Ok(v)
+}
+
+/// Copied properties `props` without their style and variable links, for a paste into another
+/// file: the copied ids name the source file's styles and variables, and the same ids here can
+/// name unrelated ones. The values paste unlinked, and the layer's own links on them go.
+fn without_links(mut props: Value) -> Value {
+    if let Some(m) = props.as_object_mut() {
+        for (k, v) in m.iter_mut() {
+            if k.ends_with("Style") && !k.starts_with("font") {
+                *v = Value::Null;
+            } else if k == "boundVariables" {
+                *v = json!({});
+            }
+        }
+    }
+    props
 }
 
 /// Give layer `id` the properties [`copy_props_of`] copied (`props`), those it can take: the text
@@ -460,8 +479,8 @@ pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, prop
         (is_text || !text) && (corners || !corner) && (frame || !grid)
     };
     m.retain(|k, _| takes(k));
-    // A style or variable of another file (the copy came from another tab) isn't here to link to:
-    // the values it gave are pasted without a link, so the layer's own link goes too.
+    // A style or variable the file doesn't have (deleted since the copy) isn't here to link to: the
+    // values it gave are pasted without a link, so the layer's own link goes too.
     let here = |v: &Value| v.as_str().is_none_or(|sid| doc.style(sid).is_some());
     for (k, v) in m.iter_mut() {
         if k.ends_with("Style") && !k.starts_with("font") && !here(v) {
@@ -527,7 +546,10 @@ fn copied_binding(field: &str) -> bool {
 }
 
 pub(super) fn paste_props(s: &mut Session, p: &Value) -> Result<Value> {
-    let props = s.clipboard.props.clone().ok_or_else(|| EngineError::Disabled("edit.pasteProperties".into(), "no copied properties".into()))?;
+    let mut props = s.clipboard.props.clone().ok_or_else(|| EngineError::Disabled("edit.pasteProperties".into(), "no copied properties".into()))?;
+    if s.ds()?.uid != s.clipboard.props_source_doc {
+        props = without_links(props);
+    }
     let ids = req_targets("edit.pasteProperties", s, p)?;
     let doc = s.doc_mut()?;
     for i in ids {

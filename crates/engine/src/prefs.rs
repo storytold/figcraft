@@ -197,6 +197,9 @@ pub struct Clipboard {
     pub images: std::collections::BTreeMap<String, figcraft_doc::ImageData>,
     /// Copied properties (Copy properties / Paste properties).
     pub props: Option<Value>,
+    /// The file the copied properties came from: their style and variable ids name its styles and
+    /// variables, and in another file the same ids can name unrelated ones.
+    pub props_source_doc: u64,
     /// A copied fill or stroke row (`fill.copy`, `stroke.copy`): whether it's a fill, and the paint.
     pub paint: Option<(bool, figcraft_color::Paint)>,
     /// The stroke settings (`weight`, alignment, sides…) copied with a stroke's paint.

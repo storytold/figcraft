@@ -70,6 +70,13 @@ fn links_another_file_lacks_paste_as_values() {
     let copied = s.doc().unwrap().node(a).unwrap().clone();
     s.execute("file.new", &json!({})).unwrap();
     let b = frame(&mut s, 0.0);
+    // This file's own style and variable come out with the copied ids: they are not the copied ones.
+    s.execute("variable.createCollection", &json!({"name": "Theirs"})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theirs", "name": "ink", "type": "color", "value": "#0000FF"})).unwrap();
+    s.execute("style.create", &json!({"type": "paint", "name": "Ink", "value": "#0000FF"})).unwrap();
+    let doc = s.doc().unwrap();
+    let vid = copied.bound["fills/0/color"].as_str();
+    assert!(doc.style(st.as_str().unwrap()).is_some() && doc.variables.get_by_id(vid).is_some(), "the ids are taken here");
     s.execute("edit.pasteProperties", &json!({"ids": [b]})).unwrap();
     let nb = s.doc().unwrap().node(b).unwrap();
     assert_eq!((nb.fills.clone(), nb.strokes.clone()), (copied.fills, copied.strokes), "the values arrive");
