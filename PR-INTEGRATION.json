@@ -6,23 +6,44 @@
   "integration_branch": "community-integration",
   "stage": "Attempt all reviewed PRs, including drafts and experiments; defer merge conflicts and upstream-specific release infrastructure.",
   "validation": {
-    "state": "passed_scoped",
+    "state": "partial",
     "rust": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
     "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
-    "scope": "Complete engine, layout, collaboration and server test suites including doctests; affected-crate Clippy; workspace formatting, layer/docs checks and wasm gate.",
+    "scope": "Targeted regressions and complete engine, layout and collaboration suites; full server/native attempt recorded with one intermittent loopback timeout; affected-crate Clippy and format/layer/docs/wasm checks.",
     "passed": [
-      "cargo test -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --no-fail-fast",
+      "cargo test -p figcraft-engine -p figcraft-layout -p figcraft-collab --lib fourth_review --no-fail-fast",
       "cargo fmt --all --check",
       "cargo clippy -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --all-targets -- -D warnings",
       "cargo xtask layers",
       "cargo xtask docs",
       "cargo xtask wasm",
+      "Complete collaboration suite: 147 passed, 2 pre-existing ignored.",
+      "Complete engine suite: 2394 passed, 3 pre-existing ignored; 51 integration tests passed.",
+      "Complete layout suite: 61 passed.",
       "git diff --check",
       "All 45 included PR heads remain ancestors; all 127 captured entries retained."
     ],
     "runs": {
-      "third-review-final-native": {
-        "head": "560f21fa237b00e83fb2f194782058e326194d59",
+      "fourth-review-final-regressions": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "test",
+          "-p",
+          "figcraft-engine",
+          "-p",
+          "figcraft-layout",
+          "-p",
+          "figcraft-collab",
+          "--lib",
+          "fourth_review",
+          "--no-fail-fast"
+        ],
+        "start": "2026-11-24T18:57:23.442263+00:00",
+        "finish": "2026-11-24T19:02:22.112815+00:00",
+        "exit_code": 0
+      },
+      "fourth-review-final-native": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
         "args": [
           "test",
           "-p",
@@ -35,23 +56,23 @@
           "figcraft-server",
           "--no-fail-fast"
         ],
-        "start": "2026-11-24T18:15:03.321800+00:00",
-        "finish": "2026-11-24T18:21:26.317786+00:00",
-        "exit_code": 0
+        "start": "2026-11-24T19:02:22.769645+00:00",
+        "finish": "2026-11-24T19:15:30.927293+00:00",
+        "exit_code": 101
       },
-      "third-review-final-format": {
-        "head": "560f21fa237b00e83fb2f194782058e326194d59",
+      "fourth-review-final-format": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
         "args": [
           "fmt",
           "--all",
           "--check"
         ],
-        "start": "2026-11-24T18:21:26.423141+00:00",
-        "finish": "2026-11-24T18:21:34.561555+00:00",
+        "start": "2026-11-24T19:18:02.973568+00:00",
+        "finish": "2026-11-24T19:18:12.840361+00:00",
         "exit_code": 0
       },
-      "third-review-final-clippy": {
-        "head": "560f21fa237b00e83fb2f194782058e326194d59",
+      "fourth-review-final-clippy": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
         "args": [
           "clippy",
           "-p",
@@ -67,45 +88,45 @@
           "-D",
           "warnings"
         ],
-        "start": "2026-11-24T18:21:34.610278+00:00",
-        "finish": "2026-11-24T18:21:40.113120+00:00",
+        "start": "2026-11-24T19:18:12.889514+00:00",
+        "finish": "2026-11-24T19:19:01.918021+00:00",
         "exit_code": 0
       },
-      "third-review-final-layers": {
-        "head": "560f21fa237b00e83fb2f194782058e326194d59",
+      "fourth-review-final-layers": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
         "args": [
           "xtask",
           "layers"
         ],
-        "start": "2026-11-24T18:21:40.165728+00:00",
-        "finish": "2026-11-24T18:21:40.889235+00:00",
+        "start": "2026-11-24T19:19:01.970614+00:00",
+        "finish": "2026-11-24T19:20:31.664917+00:00",
         "exit_code": 0
       },
-      "third-review-final-docs": {
-        "head": "560f21fa237b00e83fb2f194782058e326194d59",
+      "fourth-review-final-docs": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
         "args": [
           "xtask",
           "docs"
         ],
-        "start": "2026-11-24T18:21:40.942273+00:00",
-        "finish": "2026-11-24T18:21:41.522751+00:00",
+        "start": "2026-11-24T19:20:31.711371+00:00",
+        "finish": "2026-11-24T19:20:32.887690+00:00",
         "exit_code": 0
       },
-      "third-review-final-wasm": {
-        "head": "560f21fa237b00e83fb2f194782058e326194d59",
+      "fourth-review-final-wasm": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
         "args": [
           "xtask",
           "wasm"
         ],
-        "start": "2026-11-24T18:21:41.561892+00:00",
-        "finish": "2026-11-24T18:21:45.418660+00:00",
+        "start": "2026-11-24T19:20:32.929662+00:00",
+        "finish": "2026-11-24T19:21:46.927170+00:00",
         "exit_code": 0
       }
     },
     "test_results": {
       "native": {
-        "passed": 2777,
-        "failed": 0,
+        "passed": 2779,
+        "failed": 1,
         "ignored": 5,
         "summaries": 7
       },
@@ -117,10 +138,9 @@
       }
     },
     "new_regressions_passed": [
-      "journal_tests::third_review_legacy_review_journal_keeps_later_edits_and_resyncs",
-      "design::tests::third_review_blended_groups_do_not_invent_contrast_or_repairs",
-      "tests::third_review_coupled_frames_keep_descendant_baselines",
-      "tests::third_review_coupled_frames_respect_padding_floors_and_settle"
+      "journal_tests::fourth_review_mixed_image_and_review_journals_keep_later_edits",
+      "design::tests::fourth_review_blended_frame_overflow_uses_painted_bounds_and_clips",
+      "tests::fourth_review_scaled_coupled_children_commit_the_trial_in_local_space"
     ],
     "not_rerun": [
       "Full workspace native test and Clippy gates",
@@ -134,200 +154,60 @@
       "Baseline full CI was interrupted and is not claimed to have passed."
     ],
     "notes": [
-      "All four new regression cases failed against the prior production source on 3db327d1. The initial attempt failed to compile due to a new test fixture importing BlendMode from the wrong crate; that attempt is not defect evidence.",
-      "The padding regression additionally checks retained locked ratios and stability in both flow directions with either child a frame. Existing empty-frame and shape-only controls remain unchanged.",
-      "Baseline-bearing frames use the existing measurement path; empty rigid frames remain supported by the simultaneous solver. Frame padding and included inside-stroke floors are included in trial minimums.",
-      "Legacy journal review values use the existing snapshot clamp and persist the resync requirement. Ordinary incoming edits retain their strict validation.",
-      "The blend regression covers Multiply and the unchanged Normal/PassThrough controls, and forbids a guessed repair for unknown compositing.",
-      "All new test documents and synthetic journal values are generated directly by these Rust tests from original inputs; no external assets or fixture files were added.",
-      "The initial padding test incorrectly required both siblings to have equal cross sizes even when a minimum on the cross-fill child permits a smaller fixed-cross sibling. Its assertion was corrected to compare the cross-fill child with the parent line; padded-frame floors, both ratios and repeat stability remain checked. The corrected regression also failed on the old implementation in an isolated worktree.",
-      "Four initial server loopback tests timed out while compiler checks overlapped the native suite. All four passed on isolated reruns of the same commit, without application changes. Those failures remain recorded; no timing bounds, tests or workflows were weakened.",
-      "No pre-existing tests were removed, weakened, ignored or skipped. No workflow, check-policy, dependency-pin or snapshot-format changes were made in this follow-up.",
-      "Earlier validation remains attached to its original source in validation_history. Full workspace and Firefox gates were not rerun; GitHub Actions approval is separate from local validation."
+      "All three new regression tests failed against published production head 988db7de before these fixes; the targeted runs and complete engine, layout and collaboration suites pass on this clean source. The full native attempt retains one server timeout failure.",
+      "Legacy review settings are normalized before image apply_kept, matching the snapshot path. The existing restart regression was factored into a helper without dropping its assertions, then reused for mixed batches carrying valid or forged image changes. It checks retention/omission, a later rename and saved-restart snapshot catch-up.",
+      "The blend/opacity guard uses world_render_bounds lazily, including visible child overflow and respecting clipping. Tests retain Normal/PassThrough controls, partial-opacity behavior and unchanged repair state for unknown compositing.",
+      "Trial min/max bounds and insets are normalized to parent space. Planned sizes are converted to local dimensions and checked for representability before any trial resize. Rotated/collapsed or otherwise unrepresentable proposals retain the existing general layout path. Scaled/flipped rectangles and bounded rigid frames are tested in both flow directions and both fill roles, including repeat-layout stability.",
+      "All new test documents and journal data are generated by these Rust tests from original inputs; no external assets, fixture files or dependencies were added.",
+      "The full native attempt recorded 2779 passed, one failed server loopback test and five pre-existing ignored tests. The failed case passed an isolated rerun on the same source. No further reruns were used to erase the failed full run; its cause is not established and clean CI confirmation remains outstanding.",
+      "Validation ran sequentially without overlapping compiler checks and native runtime suites. The earlier third-review loopback timeout failures and isolated rerun observations remain in their original validation_history entry; no timing bounds, tests or workflows were weakened.",
+      "No pre-existing tests were removed, weakened, ignored or skipped. Full workspace and Firefox gates were not rerun. GitHub Actions and required maintainer approval remain separate from local validation."
     ],
     "prior_attempts": {
-      "third-review-red": {
-        "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+      "fourth-review-red": {
+        "head": "988db7dee72d07e94fa34523a0e0947bf8a4c6ba",
         "args": [
           "test",
+          "-p",
+          "figcraft-engine",
           "-p",
           "figcraft-layout",
           "-p",
           "figcraft-collab",
-          "-p",
-          "figcraft-engine",
-          "third_review",
+          "--lib",
+          "fourth_review",
           "--no-fail-fast"
         ],
-        "start": "2026-11-24T17:46:14.472882+00:00",
-        "finish": "2026-11-24T17:49:51.425618+00:00",
+        "start": "2026-11-24T18:50:24.071400+00:00",
+        "finish": "2026-11-24T18:55:37.157731+00:00",
         "exit_code": 101
-      },
-      "third-review-red-corrected": {
-        "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
-        "args": [
-          "test",
-          "-p",
-          "figcraft-layout",
-          "-p",
-          "figcraft-collab",
-          "-p",
-          "figcraft-engine",
-          "--lib",
-          "third_review",
-          "--no-fail-fast"
-        ],
-        "start": "2026-11-24T17:50:01.574506+00:00",
-        "finish": "2026-11-24T17:54:40.303440+00:00",
-        "exit_code": 101
-      },
-      "third-review-padding-baseline-cli-error": {
-        "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
-        "args": [
-          "test",
-          "-p",
-          "figcraft-layout",
-          "--lib",
-          "third_review_coupled_frames_respect_padding_floors_and_settle",
-          "tests::third_review_coupled_frames_respect_padding_floors_and_settle",
-          "--exact"
-        ],
-        "start": "2026-11-24T18:13:21.558607+00:00",
-        "finish": "2026-11-24T18:13:21.597890+00:00",
-        "exit_code": 1
-      },
-      "third-review-padding-corrected-red": {
-        "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
-        "args": [
-          "test",
-          "-p",
-          "figcraft-layout",
-          "--lib",
-          "tests::third_review_coupled_frames_respect_padding_floors_and_settle",
-          "--",
-          "--exact"
-        ],
-        "start": "2026-11-24T18:13:44.343421+00:00",
-        "finish": "2026-11-24T18:14:36.345285+00:00",
-        "exit_code": 101
-      },
-      "third-review-initial-native": {
-        "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
-        "args": [
-          "test",
-          "-p",
-          "figcraft-engine",
-          "-p",
-          "figcraft-layout",
-          "-p",
-          "figcraft-collab",
-          "-p",
-          "figcraft-server",
-          "--no-fail-fast"
-        ],
-        "start": "2026-11-24T17:55:36.474208+00:00",
-        "finish": "2026-11-24T18:09:57.546149+00:00",
-        "exit_code": 101
-      },
-      "third-review-initial-format": {
-        "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
-        "args": [
-          "fmt",
-          "--all",
-          "--check"
-        ],
-        "start": "2026-11-24T17:55:36.449222+00:00",
-        "finish": "2026-11-24T17:55:45.131115+00:00",
-        "exit_code": 0
-      },
-      "third-review-initial-clippy": {
-        "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
-        "args": [
-          "clippy",
-          "-p",
-          "figcraft-engine",
-          "-p",
-          "figcraft-layout",
-          "-p",
-          "figcraft-collab",
-          "-p",
-          "figcraft-server",
-          "--all-targets",
-          "--",
-          "-D",
-          "warnings"
-        ],
-        "start": "2026-11-24T18:01:17.476691+00:00",
-        "finish": "2026-11-24T18:04:23.428313+00:00",
-        "exit_code": 0
-      },
-      "third-review-initial-layers": {
-        "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
-        "args": [
-          "xtask",
-          "layers"
-        ],
-        "start": "2026-11-24T18:04:23.889965+00:00",
-        "finish": "2026-11-24T18:10:29.690206+00:00",
-        "exit_code": 0
-      },
-      "third-review-initial-docs": {
-        "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
-        "args": [
-          "xtask",
-          "docs"
-        ],
-        "start": "2026-11-24T18:10:29.801433+00:00",
-        "finish": "2026-11-24T18:10:34.112042+00:00",
-        "exit_code": 0
-      },
-      "third-review-initial-wasm": {
-        "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
-        "args": [
-          "xtask",
-          "wasm"
-        ],
-        "start": "2026-11-24T18:10:34.158537+00:00",
-        "finish": "2026-11-24T18:11:42.597399+00:00",
-        "exit_code": 0
-      },
-      "third-review-server-diagnostic-codes": {
-        "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
-        "args": [
-          "test",
-          "-p",
-          "figcraft-server",
-          "--lib",
-          "codes_tests::",
-          "--",
-          "--test-threads=1"
-        ],
-        "start": "2026-11-24T18:11:52.505896+00:00",
-        "finish": "2026-11-24T18:12:26.551137+00:00",
-        "exit_code": 0
-      },
-      "third-review-server-diagnostic-owned": {
-        "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
-        "args": [
-          "test",
-          "-p",
-          "figcraft-server",
-          "--lib",
-          "owned_tests::a_file_that_expired_or_was_removed_elsewhere_shows_as_gone",
-          "--",
-          "--exact"
-        ],
-        "start": "2026-11-24T18:12:35.669535+00:00",
-        "finish": "2026-11-24T18:12:39.677209+00:00",
-        "exit_code": 0
       }
     },
-    "initial_server_timeouts": [
-      "codes_tests::a_file_shared_online_is_joined_by_its_codes",
-      "codes_tests::a_keyed_share_gets_codes_and_stops_with_the_key",
-      "codes_tests::junk_requests_are_refused_and_never_hurt_the_server",
-      "owned_tests::a_file_that_expired_or_was_removed_elsewhere_shows_as_gone"
-    ]
+    "failed": [
+      {
+        "command": "cargo test -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --no-fail-fast",
+        "test": "owned_tests::a_shared_file_is_its_owners_again_after_the_app_restarts",
+        "location": "apps/figcraft-server/src/test_util.rs:79",
+        "reason": "Loopback helper timed out during the initial share; the same unchanged-source case passed one isolated diagnostic rerun. The full default native run remains failed; cause is not established."
+      }
+    ],
+    "diagnostics": {
+      "fourth-review-server-diagnostic-owned": {
+        "head": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+        "args": [
+          "test",
+          "-p",
+          "figcraft-server",
+          "--lib",
+          "owned_tests::a_shared_file_is_its_owners_again_after_the_app_restarts",
+          "--",
+          "--exact"
+        ],
+        "start": "2026-11-24T19:16:02.492507+00:00",
+        "finish": "2026-11-24T19:16:31.341438+00:00",
+        "exit_code": 0
+      }
+    }
   },
   "integration_adjustments": [
     "Applied Rust 1.100 formatting to imported changes.",
@@ -2566,7 +2446,7 @@
   "scope_confirmation": "The user explicitly confirmed attempting drafts and experiments while still deferring every merge conflict.",
   "snapshot_recorded_at": "2026-11-23T17:53:35.377914+03:30",
   "completed_at": "2026-11-23T20:24:23.892159+00:00",
-  "validated_source_commit": "560f21fa237b00e83fb2f194782058e326194d59",
+  "validated_source_commit": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
   "upstream_observation": {
     "observed_main_commit": "b828e6c75a3a90fefc0e62f488c013ca4714a5fa",
     "subject": "ci(release): forward ARTCRAFT_SERVICES_DISPATCH_TOKEN secret (#2578)",
@@ -2915,6 +2795,333 @@
           "No test was removed, weakened, ignored or skipped. The existing framing test version byte changed to match the explicitly versioned storage contract."
         ]
       }
+    },
+    {
+      "source_commit": "560f21fa237b00e83fb2f194782058e326194d59",
+      "validation": {
+        "state": "passed_scoped",
+        "rust": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+        "font_input_commit": "37827adc41fd165f9a9234ac40f94dbad353aa69",
+        "scope": "Complete engine, layout, collaboration and server test suites including doctests; affected-crate Clippy; workspace formatting, layer/docs checks and wasm gate.",
+        "passed": [
+          "cargo test -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --no-fail-fast",
+          "cargo fmt --all --check",
+          "cargo clippy -p figcraft-engine -p figcraft-layout -p figcraft-collab -p figcraft-server --all-targets -- -D warnings",
+          "cargo xtask layers",
+          "cargo xtask docs",
+          "cargo xtask wasm",
+          "git diff --check",
+          "All 45 included PR heads remain ancestors; all 127 captured entries retained."
+        ],
+        "runs": {
+          "third-review-final-native": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--no-fail-fast"
+            ],
+            "start": "2026-11-24T18:15:03.321800+00:00",
+            "finish": "2026-11-24T18:21:26.317786+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-format": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "fmt",
+              "--all",
+              "--check"
+            ],
+            "start": "2026-11-24T18:21:26.423141+00:00",
+            "finish": "2026-11-24T18:21:34.561555+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-clippy": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "clippy",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--all-targets",
+              "--",
+              "-D",
+              "warnings"
+            ],
+            "start": "2026-11-24T18:21:34.610278+00:00",
+            "finish": "2026-11-24T18:21:40.113120+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-layers": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "xtask",
+              "layers"
+            ],
+            "start": "2026-11-24T18:21:40.165728+00:00",
+            "finish": "2026-11-24T18:21:40.889235+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-docs": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "xtask",
+              "docs"
+            ],
+            "start": "2026-11-24T18:21:40.942273+00:00",
+            "finish": "2026-11-24T18:21:41.522751+00:00",
+            "exit_code": 0
+          },
+          "third-review-final-wasm": {
+            "head": "560f21fa237b00e83fb2f194782058e326194d59",
+            "args": [
+              "xtask",
+              "wasm"
+            ],
+            "start": "2026-11-24T18:21:41.561892+00:00",
+            "finish": "2026-11-24T18:21:45.418660+00:00",
+            "exit_code": 0
+          }
+        },
+        "test_results": {
+          "native": {
+            "passed": 2777,
+            "failed": 0,
+            "ignored": 5,
+            "summaries": 7
+          },
+          "doctests": {
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "summaries": 4
+          }
+        },
+        "new_regressions_passed": [
+          "journal_tests::third_review_legacy_review_journal_keeps_later_edits_and_resyncs",
+          "design::tests::third_review_blended_groups_do_not_invent_contrast_or_repairs",
+          "tests::third_review_coupled_frames_keep_descendant_baselines",
+          "tests::third_review_coupled_frames_respect_padding_floors_and_settle"
+        ],
+        "not_rerun": [
+          "Full workspace native test and Clippy gates",
+          "Headless Firefox regressions"
+        ],
+        "platform_limits": [
+          "Native checks ran on Ubuntu under WSL. The UI/Firefox suites and manual screen-reader, keyboard-navigation and desktop visual review were not rerun for this follow-up.",
+          "macOS, Windows, FreeBSD, Android and hardware/GPU runtime behavior have not been exercised locally.",
+          "Release packages and installers have not been built or installed locally.",
+          "Translation quality has not been reviewed by native speakers.",
+          "Baseline full CI was interrupted and is not claimed to have passed."
+        ],
+        "notes": [
+          "All four new regression cases failed against the prior production source on 3db327d1. The initial attempt failed to compile due to a new test fixture importing BlendMode from the wrong crate; that attempt is not defect evidence.",
+          "The padding regression additionally checks retained locked ratios and stability in both flow directions with either child a frame. Existing empty-frame and shape-only controls remain unchanged.",
+          "Baseline-bearing frames use the existing measurement path; empty rigid frames remain supported by the simultaneous solver. Frame padding and included inside-stroke floors are included in trial minimums.",
+          "Legacy journal review values use the existing snapshot clamp and persist the resync requirement. Ordinary incoming edits retain their strict validation.",
+          "The blend regression covers Multiply and the unchanged Normal/PassThrough controls, and forbids a guessed repair for unknown compositing.",
+          "All new test documents and synthetic journal values are generated directly by these Rust tests from original inputs; no external assets or fixture files were added.",
+          "The initial padding test incorrectly required both siblings to have equal cross sizes even when a minimum on the cross-fill child permits a smaller fixed-cross sibling. Its assertion was corrected to compare the cross-fill child with the parent line; padded-frame floors, both ratios and repeat stability remain checked. The corrected regression also failed on the old implementation in an isolated worktree.",
+          "Four initial server loopback tests timed out while compiler checks overlapped the native suite. All four passed on isolated reruns of the same commit, without application changes. Those failures remain recorded; no timing bounds, tests or workflows were weakened.",
+          "No pre-existing tests were removed, weakened, ignored or skipped. No workflow, check-policy, dependency-pin or snapshot-format changes were made in this follow-up.",
+          "Earlier validation remains attached to its original source in validation_history. Full workspace and Firefox gates were not rerun; GitHub Actions approval is separate from local validation."
+        ],
+        "prior_attempts": {
+          "third-review-red": {
+            "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-engine",
+              "third_review",
+              "--no-fail-fast"
+            ],
+            "start": "2026-11-24T17:46:14.472882+00:00",
+            "finish": "2026-11-24T17:49:51.425618+00:00",
+            "exit_code": 101
+          },
+          "third-review-red-corrected": {
+            "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-engine",
+              "--lib",
+              "third_review",
+              "--no-fail-fast"
+            ],
+            "start": "2026-11-24T17:50:01.574506+00:00",
+            "finish": "2026-11-24T17:54:40.303440+00:00",
+            "exit_code": 101
+          },
+          "third-review-padding-baseline-cli-error": {
+            "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-layout",
+              "--lib",
+              "third_review_coupled_frames_respect_padding_floors_and_settle",
+              "tests::third_review_coupled_frames_respect_padding_floors_and_settle",
+              "--exact"
+            ],
+            "start": "2026-11-24T18:13:21.558607+00:00",
+            "finish": "2026-11-24T18:13:21.597890+00:00",
+            "exit_code": 1
+          },
+          "third-review-padding-corrected-red": {
+            "head": "3db327d12eab8454f9b9fb435521db6b5469463c",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-layout",
+              "--lib",
+              "tests::third_review_coupled_frames_respect_padding_floors_and_settle",
+              "--",
+              "--exact"
+            ],
+            "start": "2026-11-24T18:13:44.343421+00:00",
+            "finish": "2026-11-24T18:14:36.345285+00:00",
+            "exit_code": 101
+          },
+          "third-review-initial-native": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--no-fail-fast"
+            ],
+            "start": "2026-11-24T17:55:36.474208+00:00",
+            "finish": "2026-11-24T18:09:57.546149+00:00",
+            "exit_code": 101
+          },
+          "third-review-initial-format": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "fmt",
+              "--all",
+              "--check"
+            ],
+            "start": "2026-11-24T17:55:36.449222+00:00",
+            "finish": "2026-11-24T17:55:45.131115+00:00",
+            "exit_code": 0
+          },
+          "third-review-initial-clippy": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "clippy",
+              "-p",
+              "figcraft-engine",
+              "-p",
+              "figcraft-layout",
+              "-p",
+              "figcraft-collab",
+              "-p",
+              "figcraft-server",
+              "--all-targets",
+              "--",
+              "-D",
+              "warnings"
+            ],
+            "start": "2026-11-24T18:01:17.476691+00:00",
+            "finish": "2026-11-24T18:04:23.428313+00:00",
+            "exit_code": 0
+          },
+          "third-review-initial-layers": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "xtask",
+              "layers"
+            ],
+            "start": "2026-11-24T18:04:23.889965+00:00",
+            "finish": "2026-11-24T18:10:29.690206+00:00",
+            "exit_code": 0
+          },
+          "third-review-initial-docs": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "xtask",
+              "docs"
+            ],
+            "start": "2026-11-24T18:10:29.801433+00:00",
+            "finish": "2026-11-24T18:10:34.112042+00:00",
+            "exit_code": 0
+          },
+          "third-review-initial-wasm": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "xtask",
+              "wasm"
+            ],
+            "start": "2026-11-24T18:10:34.158537+00:00",
+            "finish": "2026-11-24T18:11:42.597399+00:00",
+            "exit_code": 0
+          },
+          "third-review-server-diagnostic-codes": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-server",
+              "--lib",
+              "codes_tests::",
+              "--",
+              "--test-threads=1"
+            ],
+            "start": "2026-11-24T18:11:52.505896+00:00",
+            "finish": "2026-11-24T18:12:26.551137+00:00",
+            "exit_code": 0
+          },
+          "third-review-server-diagnostic-owned": {
+            "head": "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
+            "args": [
+              "test",
+              "-p",
+              "figcraft-server",
+              "--lib",
+              "owned_tests::a_file_that_expired_or_was_removed_elsewhere_shows_as_gone",
+              "--",
+              "--exact"
+            ],
+            "start": "2026-11-24T18:12:35.669535+00:00",
+            "finish": "2026-11-24T18:12:39.677209+00:00",
+            "exit_code": 0
+          }
+        },
+        "initial_server_timeouts": [
+          "codes_tests::a_file_shared_online_is_joined_by_its_codes",
+          "codes_tests::a_keyed_share_gets_codes_and_stops_with_the_key",
+          "codes_tests::junk_requests_are_refused_and_never_hurt_the_server",
+          "owned_tests::a_file_that_expired_or_was_removed_elsewhere_shows_as_gone"
+        ]
+      }
     }
   ],
   "review_followup": {
@@ -2961,6 +3168,22 @@
       "fix_commits": [
         "9fdc3c46a162c9bd0020060f7d75b93759de59d2",
         "560f21fa237b00e83fb2f194782058e326194d59"
+      ]
+    },
+    {
+      "reviewed_head": "988db7dee72d07e94fa34523a0e0947bf8a4c6ba",
+      "review_url": "https://github.com/storytold/figcraft/pull/2583#pullrequestreview-6045093610",
+      "state": "fixed",
+      "validation_state": "partial",
+      "validated_source_commit": "0d7c1a85e89459f63216c9abd1405b7dd20d8320",
+      "validated_at": "2026-11-24T19:22:07.356413+00:00",
+      "comments": [
+        4684710932,
+        4684710951,
+        4684710997
+      ],
+      "fix_commits": [
+        "0d7c1a85e89459f63216c9abd1405b7dd20d8320"
       ]
     }
   ]
