@@ -650,8 +650,10 @@ fn third_review_coupled_frames_respect_padding_floors_and_settle() {
             let a = pos(&d, k[0]);
             let b = pos(&d, k[1]);
             let cross = |v: (f64, f64, f64, f64)| if horizontal { v.3 } else { v.2 };
-            assert!((cross(a) - cross(b)).abs() < 1e-6, "both children must agree with the retained line: {a:?} {b:?}");
-            assert!(cross(a) >= 200.0 - 1e-6, "the frame's padding must fit");
+            let parent_cross = cross(pos(&d, f));
+            assert!((cross(b) - parent_cross).abs() < 1e-6, "the cross-fill child must match the retained line: {a:?} {b:?}");
+            let padded = if padded_child == 0 { a } else { b };
+            assert!(cross(padded) >= 200.0 - 1e-6, "the frame's padding must fit");
             assert!((a.2 - a.3).abs() < 1e-6 && (b.2 - b.3).abs() < 1e-6, "retained padding floors must preserve both locked ratios");
             let before = [pos(&d, f), a, b];
             layout_frame(&mut d, f, &NoMeasure);
