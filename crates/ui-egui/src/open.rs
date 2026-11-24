@@ -7,9 +7,16 @@ use super::{OsStr, Path, theme};
 pub(crate) const OPEN_EXTENSIONS: &[&str] =
     &["figcraft", "fig", "jam", "penpot", "sketch", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"];
 
+/// [`OPEN_EXTENSIONS`] and the camera raw files, which open as an image too: what File ▸ Open offers.
+pub(crate) fn open_extensions() -> Vec<&'static str> {
+    OPEN_EXTENSIONS.iter().chain(figcraft_format::raw::EXTENSIONS.iter()).copied().collect()
+}
+
 /// Whether `path` names a file type that opens as a document (the extension, in any case).
 pub(crate) fn opens(path: &Path) -> bool {
-    path.extension().and_then(OsStr::to_str).is_some_and(|e| OPEN_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|e| OPEN_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)) || figcraft_format::raw::is_extension(e))
 }
 
 /// Whether `path` is a whole document (`.figcraft`, `.fig`, `.jam`, `.penpot`, `.sketch`, file JSON) rather than an image or SVG:

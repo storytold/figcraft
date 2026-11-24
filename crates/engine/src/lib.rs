@@ -543,6 +543,8 @@ mod proto_run_tests;
 #[cfg(test)]
 mod proto_tail_tests;
 #[cfg(test)]
+mod raw_tests;
+#[cfg(test)]
 mod rest_slot_tests;
 #[cfg(test)]
 mod retained_walk_tests;
