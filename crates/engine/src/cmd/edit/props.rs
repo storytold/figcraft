@@ -469,7 +469,7 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
             {
                 match &old.kind {
                     figcraft_color::PaintKind::Image(old_img) if old_img.image == img.image => {
-                        if old_img.rotation != img.rotation && img.crop.is_none() {
+                        if old_img.rotation != img.rotation && (preserve_placement || img.crop.is_none()) {
                             img.crop = None;
                             img.crop = Some(img.placement_crop(iw, ih, nw, nh));
                         } else if img.crop.is_none() {
@@ -515,7 +515,7 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
         {
             match &old.kind {
                 figcraft_color::PaintKind::Image(old_img) if old_img.image == img.image => {
-                    if old_img.rotation != img.rotation && img.crop.is_none() {
+                    if old_img.rotation != img.rotation && (preserve_placement || img.crop.is_none()) {
                         img.crop = None;
                         img.crop = Some(img.placement_crop(iw, ih, n.width, n.height));
                     } else if img.crop.is_none() {
