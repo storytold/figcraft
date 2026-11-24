@@ -78,3 +78,18 @@ fn several_overlapping_layers_get_the_copy_right_under_the_lowest() {
     let pasted = paste_over(&mut s, vec![b, a]);
     assert_eq!(top_left(&s, pasted[0]), (50.0, 130.0));
 }
+
+#[test]
+fn several_absolute_layers_of_an_auto_layout_get_the_copy_below_the_lowest() {
+    let mut s = Session::new();
+    let rows: Vec<NodeId> =
+        (0..3).map(|k| id(&s.execute("shape.rectangle", &json!({"x": 0, "y": k * 30, "width": 40, "height": 20})).unwrap())).collect();
+    s.execute("layout.add", &json!({"ids": rows, "direction": "vertical"})).unwrap();
+    s.execute("node.set", &json!({"ids": rows, "props": {"absolute": true}})).unwrap();
+    s.execute("edit.copy", &json!({"ids": [rows[0]]})).unwrap();
+    let (x, y0) = top_left(&s, rows[1]);
+    let (_, y1) = top_left(&s, rows[2]);
+    let pasted = paste_over(&mut s, vec![rows[2], rows[0], rows[1]]);
+    assert_eq!(pasted.len(), 1);
+    assert_eq!(top_left(&s, pasted[0]), (x, y1 + 20.0 + (y1 - y0 - 20.0)), "the layout doesn't place them, so below the lowest");
+}

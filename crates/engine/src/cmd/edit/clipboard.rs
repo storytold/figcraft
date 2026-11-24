@@ -415,8 +415,8 @@ pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
 
 /// The selected layer Paste over selection pastes after, and where the copies' top-left goes.
 ///
-/// One layer: that layer, at its position. Several in one auto layout frame: the last of them in the
-/// flow, which the layout follows. Several elsewhere: the lowest (then rightmost), with the copies
+/// One layer: that layer, at its position. Several in one auto layout frame's flow (none absolutely
+/// positioned): the last of them in the flow, which the layout follows. Several elsewhere: the lowest (then rightmost), with the copies
 /// below it, as far below as it is from the selected layers above it. A selection with nothing above
 /// its lowest layer is a row: the copies go right of the rightmost, as far as it is from its
 /// neighbour on the left. Layers that overlap every way get the copies right under the lowest.
@@ -427,8 +427,8 @@ fn last_seen(doc: &Document, sel: &[NodeId]) -> Option<(NodeId, Option<(f64, f64
         return Some((first, top_left(first)));
     }
     let parent = doc.node(first).and_then(|n| n.parent);
-    let one_flow =
-        parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some()) && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.parent == parent));
+    let one_flow = parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+        && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.parent == parent && !n.child_layout.absolute));
     if one_flow {
         let last = sel.iter().copied().max_by_key(|i| doc.index_in_parent(*i))?;
         return Some((last, top_left(last)));
