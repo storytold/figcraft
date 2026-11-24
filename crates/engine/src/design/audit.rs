@@ -1374,7 +1374,7 @@ fn paint_behind(
     depth: usize,
     overrides: Option<&BTreeMap<CollectionId, ModeId>>,
 ) -> Option<Behind> {
-    if !node.visible {
+    if !node.visible || node.opacity <= 0.0 {
         return None;
     }
     if depth > 64 {

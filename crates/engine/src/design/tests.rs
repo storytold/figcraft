@@ -1284,3 +1284,25 @@ fn review_transparent_sibling_groups_are_not_opaque_backdrops() {
     ex(&mut s, "design.fix", json!({"ids":[text],"rules":["color.contrast"]}));
     assert_eq!(s.doc().unwrap().node(text).unwrap(), &before, "do not repair an invented contrast failure");
 }
+
+#[test]
+fn second_review_invisible_group_does_not_hide_a_contrast_failure() {
+    for opacity in [0.0, 0.5] {
+        let mut s = Session::new();
+        let frame = id(&ex(&mut s, "node.create", json!({"type":"frame","width":200,"height":100,"props":{"fill":"#FFFFFF"}})));
+        let child = id(&ex(&mut s, "node.create", json!({"type":"rectangle","parent":frame,"width":200,"height":100,"props":{"fill":"#000000"}})));
+        let group = id(&ex(&mut s, "object.group", json!({"ids":[child]})));
+        s.doc_mut().unwrap().get_mut(group).unwrap().opacity = opacity;
+        let text = id(&ex(&mut s, "text.create", json!({"parent":frame,"text":"Invisible ink","x":10,"y":10,"props":{"fill":"#FFFFFF"}})));
+        let report = ex(&mut s, "design.audit", json!({"ids":[text],"rules":["color.contrast"]}));
+        assert_eq!(
+            has(&report, "color.contrast"),
+            opacity == 0.0,
+            "skip invisible paint, but do not invent a backdrop for translucent groups: {report}"
+        );
+        if opacity == 0.0 {
+            let result = s.execute("design.assert", &json!({"ids":[text],"rules":["color.contrast"]}));
+            assert!(result.is_err(), "the gate must reject white ink on its white frame: {result:?}");
+        }
+    }
+}
