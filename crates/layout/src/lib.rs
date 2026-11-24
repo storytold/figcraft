@@ -584,10 +584,14 @@ fn settle_locked_hug_line(doc: &mut Document, items: &mut [Item], lines: &[Vec<u
     if !items.iter().any(|it| it.fill_main && it.locked_cross_per_main.is_some())
         || !items.iter().any(|it| it.fill_cross && it.locked_cross_per_main.is_some())
         || items.iter().any(|it| it.fill_cross && it.locked_cross_per_main.is_none())
-        || items
-            .iter()
-            .filter(|it| it.fill_main || it.fill_cross)
-            .any(|it| doc.node(it.id).is_none_or(|n| n.layout.is_some() || matches!(n.kind, NodeKind::Text(_))))
+        || items.iter().filter(|it| it.fill_main || it.fill_cross).any(|it| {
+            doc.node(it.id).is_none_or(|n| {
+                // A rigid auto-layout frame can accept the trial size just like a shape.
+                // Hug dimensions and text can remeasure themselves from their contents.
+                (n.layout.is_some() && (n.child_layout.sizing_h == Sizing::Hug || n.child_layout.sizing_v == Sizing::Hug))
+                    || matches!(n.kind, NodeKind::Text(_))
+            })
+        })
     {
         return false;
     }

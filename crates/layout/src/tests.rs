@@ -510,6 +510,47 @@ fn review_coupled_ratio_fills_use_the_hugging_lines_main_space_and_settle() {
 }
 
 #[test]
+fn second_review_rigid_layout_frames_share_the_coupled_ratio_line() {
+    for horizontal in [false, true] {
+        for frame_child in 0..2 {
+            let mode = if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical };
+            let (mut d, f, k) = setup(mode);
+            let parent = d.get_mut(f).unwrap();
+            (parent.width, parent.height) = if horizontal { (300.0, 100.0) } else { (100.0, 300.0) };
+            parent.layout.as_mut().unwrap().padding = [0.0; 4];
+            parent.layout.as_mut().unwrap().gap = 0.0;
+            if horizontal {
+                parent.child_layout.sizing_v = Sizing::Hug;
+            } else {
+                parent.child_layout.sizing_h = Sizing::Hug;
+            }
+            for (index, id) in k.iter().enumerate() {
+                let n = d.get_mut(*id).unwrap();
+                (n.width, n.height) = (100.0, 100.0);
+                n.constrain_proportions = true;
+                (n.child_layout.sizing_h, n.child_layout.sizing_v) =
+                    if horizontal == (index == 0) { (Sizing::Fill, Sizing::Fixed) } else { (Sizing::Fixed, Sizing::Fill) };
+                if index == frame_child {
+                    n.kind = NodeKind::Frame;
+                    n.layout = Some(AutoLayout { mode, ..Default::default() });
+                }
+            }
+            layout_frame(&mut d, f, &NoMeasure);
+            let a = d.node(k[0]).unwrap();
+            let b = d.node(k[1]).unwrap();
+            let used = if horizontal { a.width + b.width } else { a.height + b.height };
+            let available = if horizontal { d.node(f).unwrap().width } else { d.node(f).unwrap().height };
+            assert!((used - available).abs() < 1e-6, "rigid frames must not leave main-axis space unused: {used} of {available}");
+            assert!((a.width - a.height).abs() < 1e-6 && (b.width - b.height).abs() < 1e-6);
+            assert!((a.width - b.width).abs() < 1e-6, "both children must share the hugging line");
+            let before = [pos(&d, k[0]), pos(&d, k[1])];
+            layout_frame(&mut d, f, &NoMeasure);
+            assert_eq!(before, [pos(&d, k[0]), pos(&d, k[1])], "the next layout must keep the settled geometry");
+        }
+    }
+}
+
+#[test]
 fn review_oversized_initial_ratio_fills_still_solve_the_available_space() {
     for horizontal in [false, true] {
         let (mut d, f, k) = setup(if horizontal { LayoutMode::Horizontal } else { LayoutMode::Vertical });
