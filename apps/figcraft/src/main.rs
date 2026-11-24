@@ -200,6 +200,14 @@ fn main() -> eframe::Result {
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
     session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
+    // The preferences first: a file named on the command line opens where it was left and goes to
+    // the top of the recent files, and they hold the online files a recovered document may be one of.
+    let recovery = recovery::Shared::default();
+    let svc = services::Desktop::load(recovery.clone());
+    svc.follow_system_dark(wake(&ctx_slot));
+    if let Some(prefs) = svc.prefs.clone() {
+        session.prefs = prefs;
+    }
     // A file that won't open is said in the window too: it may have been double-clicked.
     let mut failed_open = None;
     for f in &args.files {
@@ -212,13 +220,6 @@ fn main() -> eframe::Result {
     let mut opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
     // Documents a crashed or killed run left unsaved come back; this run keeps its own copies.
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
-    // The preferences first: they hold the online files a recovered document may be one of.
-    let recovery = recovery::Shared::default();
-    let svc = services::Desktop::load(recovery.clone());
-    svc.follow_system_dark(wake(&ctx_slot));
-    if let Some(prefs) = svc.prefs.clone() {
-        session.prefs = prefs;
-    }
     let recovered = recovery_root.as_deref().map(|r| recovery::recover_all(r, &mut session)).unwrap_or_default();
     let mut copies = recovery_root.as_deref().and_then(recovery::Recovery::start);
     // Copies of online files stay until their files arrive from their servers.
