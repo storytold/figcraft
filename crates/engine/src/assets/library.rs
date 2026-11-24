@@ -1485,10 +1485,13 @@ fn from_published(doc: &mut Document, src: &Document, src_path: Option<&str>, ro
 
 /// The main in `doc` that pasting main component `main`, copied from another document `src`,
 /// makes an instance of: `doc`'s copy of it from the library `src` publishes, as
-/// [`adopt_pasted`] uses for instances. `None` when `src` doesn't publish it, so the paste copies
-/// the main itself.
+/// [`adopt_pasted`] uses for instances. `None` when `src` doesn't offer it, so the paste copies
+/// the main itself: also when the library holds it only because an offered component uses it.
 pub fn published_main(doc: &mut Document, src: &Document, src_path: Option<&str>, main: NodeId) -> Result<Option<NodeId>> {
     let Some(root) = asset_root(src, main) else { return Ok(None) };
+    if !src.published.as_ref().and_then(|l| l.manifest.component(root)).is_some_and(|a| a.published) {
+        return Ok(None);
+    }
     Ok(from_published(doc, src, src_path, &[root])?.get(&main).copied())
 }
 

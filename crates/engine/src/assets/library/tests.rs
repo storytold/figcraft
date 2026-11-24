@@ -698,7 +698,8 @@ fn library_links_follow_a_moved_folder() {
 
 /// A main component copied from a library file and pasted into another file is an instance of it
 /// from that library, which gets enabled, as pasting an instance of it is; a variant is an instance
-/// of that variant. A component the library doesn't offer pastes as a copy of itself.
+/// of that variant. A component the library doesn't offer pastes as a copy of itself, also one the
+/// library holds because an offered component uses it.
 #[test]
 fn a_main_pasted_from_its_library_file_is_an_instance_of_it() {
     let d = dir("paste-main");
@@ -719,7 +720,13 @@ fn a_main_pasted_from_its_library_file_is_an_instance_of_it() {
     ex(&mut s, "component.combineVariants", json!({"ids": sizes.clone()}));
     let spare = idv(&ex(&mut s, "frame.create", json!({"x": 300, "y": 300, "width": 10, "height": 10, "name": "_Spare"})));
     let spare = idv(&ex(&mut s, "component.create", json!({"ids": [spare]})));
+    let icon = idv(&ex(&mut s, "frame.create", json!({"x": 400, "y": 300, "width": 10, "height": 10, "name": "_Icon"})));
+    let icon = idv(&ex(&mut s, "component.create", json!({"ids": [icon]})));
+    let badge = idv(&ex(&mut s, "frame.create", json!({"x": 500, "y": 300, "width": 30, "height": 30, "name": "Badge"})));
+    ex(&mut s, "instance.create", json!({"component": icon, "x": 5, "y": 5, "parent": badge}));
+    ex(&mut s, "component.create", json!({"ids": [badge]}));
     let lid = publish_to(&mut s, &lib_path);
+    assert!(s.doc().unwrap().published.as_ref().unwrap().manifest.component(icon).is_some_and(|a| !a.published));
     let at = s.doc().unwrap().world_bounds(k.button).unwrap();
     ex(&mut s, "file.new", json!({"name": "Design"}));
     let paste = |s: &mut Session, main: NodeId| -> NodeId {
@@ -751,6 +758,9 @@ fn a_main_pasted_from_its_library_file_is_an_instance_of_it() {
     let copy = paste(&mut s, spare);
     assert!(matches!(node(&s, copy).kind, NodeKind::Component { .. }), "not offered by the library: a copy");
     assert!(!s.doc().unwrap().is_remote(copy));
+    let icon_copy = paste(&mut s, icon);
+    assert!(matches!(node(&s, icon_copy).kind, NodeKind::Component { .. }), "only used by an offered component: a copy");
+    assert!(!s.doc().unwrap().is_remote(icon_copy));
     healthy(&s);
     let _ = std::fs::remove_dir_all(d);
 }
