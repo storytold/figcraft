@@ -1,4 +1,4 @@
-use super::diff::{diff_groups, variable_groups};
+use super::diff::{binding_group, diff_groups, variable_groups};
 use super::instances::{field_group, path_map};
 use super::{BTreeMap, BTreeSet, Document, MAX_DEPTH, Node, NodeId, NodeKind, default_instance_name, holds_content};
 
@@ -213,6 +213,15 @@ pub fn rebase_instance_with(doc: &mut Document, inst: NodeId, mains: &mut MainPa
         let source = valid_source.filter(|source| sources.contextual(*source, &contexts)).filter(|_| main.is_some()).or(main);
         let mut overrides: BTreeSet<String> = n.overrides.iter().filter(|g| !matches!(g.as_str(), "component" | "props")).cloned().collect();
         if let Some(m) = source.and_then(|source| doc.node(source)) {
+            // A local paint binding is an override even when its current value matches the main.
+            // Comparing only resolved paint would discard the binding during a later rebuild.
+            for (key, variable) in &n.bound {
+                if m.bound.get(key) != Some(variable)
+                    && let Some(group @ ("fills" | "strokes")) = binding_group(key)
+                {
+                    overrides.insert(group.into());
+                }
+            }
             let mut bound: Vec<&str> = m.prop_refs.keys().map(|f| field_group(f)).collect();
             bound.extend(variable_groups(n, m));
             overrides.extend(value_groups(m, n).into_iter().filter(|g| !bound.contains(&g.as_str())));

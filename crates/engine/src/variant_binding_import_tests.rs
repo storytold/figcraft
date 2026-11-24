@@ -182,8 +182,7 @@ fn a_text_reads_the_property_the_instance_sets_though_the_set_lists_it_under_ano
     assert_eq!(t.characters, "Stop");
 }
 
-#[test]
-fn review_bound_text_refreshes_children_without_a_variant_switch_on_open() {
+fn bound_text_kit() -> Value {
     let mut file = kit_file(true);
     // This case binds a defined property; the separate alias fixture above intentionally uses
     // different ids for an enclosing main's explicit override and must retain that override.
@@ -197,6 +196,12 @@ fn review_bound_text_refreshes_children_without_a_variant_switch_on_open() {
         json!({"Label#9:9":{"type":"VARIABLE_ALIAS","id":"VariableID:1"}});
     file["document"]["children"][0]["children"][2]["children"][0]["children"][0]["boundVariables"]["componentProperties"] =
         json!({"Label#9:9":{"type":"VARIABLE_ALIAS","id":"VariableID:1"}});
+    file
+}
+
+#[test]
+fn review_bound_text_refreshes_children_without_a_variant_switch_on_open() {
+    let file = bound_text_kit();
     let data = base64::engine::general_purpose::STANDARD.encode(file.to_string());
     let mut s = Session::new();
     s.execute("file.open", &json!({"data":data,"name":"kit.json","variables":variables()})).unwrap();
@@ -207,4 +212,54 @@ fn review_bound_text_refreshes_children_without_a_variant_switch_on_open() {
     let label = doc.subtree(chip.id).into_iter().filter_map(|id| doc.node(id)).find(|n| n.name == "Label").unwrap();
     let NodeKind::Text(t) = &label.kind else { panic!("not text") };
     assert_eq!(t.characters, "Dark", "the bound text must reach the rendered child; instance={:?}, binding={:?}", chip.kind, chip.bound);
+}
+
+fn paint_bound_kit(inherited: bool, dark: f64) -> Session {
+    // Own synthetic REST fixture, extending the kit above with mode-bound paint.
+    let mut file = bound_text_kit();
+    let binding = json!({"color":{"type":"VARIABLE_ALIAS","id":"VariableID:2"}});
+    if inherited {
+        file["document"]["children"][0]["children"][0]["children"][0]["children"][0]["fills"][0]["boundVariables"] = binding.clone();
+        file["document"]["children"][0]["children"][1]["children"][0]["children"][0]["fills"][0]["boundVariables"] = binding.clone();
+    }
+    let used = &mut file["document"]["children"][0]["children"][2]["children"][0]["children"][0];
+    used["children"][0]["fills"][0]["boundVariables"] = binding;
+    let mut vars = variables();
+    vars["meta"]["variables"]["VariableID:2"] = json!({
+        "id":"VariableID:2", "name":"Ink", "variableCollectionId":"VC:1", "resolvedType":"COLOR",
+        "valuesByMode":{"1:0":{"r":1,"g":1,"b":1,"a":1},"1:1":{"r":dark,"g":dark,"b":dark,"a":1}}
+    });
+    vars["meta"]["variableCollections"]["VC:1"]["variableIds"].as_array_mut().unwrap().push(json!("VariableID:2"));
+    let data = base64::engine::general_purpose::STANDARD.encode(file.to_string());
+    let mut s = Session::new();
+    s.execute("file.open", &json!({"data":data,"name":"kit.json","variables":vars})).unwrap();
+    s
+}
+
+fn assert_bound_paint(s: &Session, dark: f64) {
+    let doc = s.doc().unwrap();
+    let label = doc.subtree(dark_chip(s)).into_iter().filter_map(|id| doc.node(id)).find(|n| n.name == "Label").unwrap();
+    let NodeKind::Text(text) = &label.kind else { panic!("not text") };
+    assert_eq!(text.characters, "Dark", "the bound property must have settled before checking the paint");
+    let child = doc.subtree(dark_chip(s)).into_iter().filter_map(|id| doc.node(id)).find(|n| n.name == "Base").unwrap();
+    assert!(child.bound.contains_key("fill"), "the imported paint binding must survive settlement: {:?}", child.bound);
+    assert!((f64::from(child.fills[0].solid_color().unwrap().r) - dark).abs() < 0.01, "resolve the retained paint in the instance's Dark mode");
+    let bytes = figcraft_format::save_bytes(doc, None).unwrap();
+    let (saved, _) = figcraft_format::load_bytes(&bytes).unwrap();
+    assert_eq!(saved.node(child.id).unwrap().bound, child.bound, "the binding must remain available for native save/reopen");
+}
+
+#[test]
+fn second_review_property_settlement_keeps_instance_paint_bindings_and_modes() {
+    assert_bound_paint(&paint_bound_kit(false, 0.0), 0.0);
+}
+
+#[test]
+fn second_review_inherited_variable_paint_resolves_in_the_instances_mode() {
+    assert_bound_paint(&paint_bound_kit(true, 0.0), 0.0);
+}
+
+#[test]
+fn second_review_same_color_local_variable_binding_survives_settlement() {
+    assert_bound_paint(&paint_bound_kit(false, 0.8), 0.8);
 }
