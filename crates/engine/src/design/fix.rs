@@ -54,20 +54,15 @@ pub(crate) fn run(
     let mut by_rule: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut changed = 0usize;
     let mut skipped = 0usize;
-    if dry_run {
-        changed = targets.len();
-        for (_, rule) in &targets {
-            *by_rule.entry(*rule).or_default() += 1;
-        }
-    } else {
-        for (id, rule) in &targets {
-            match apply(doc, *id, rule, &settings) {
-                Some(true) => {
-                    changed += 1;
-                    *by_rule.entry(*rule).or_default() += 1;
-                }
-                _ => skipped += 1,
+    // Both modes simulate the same repairs on fix_cmd's document copy. Only a real run
+    // commits that copy, so interacting findings produce an honest preview too.
+    for (id, rule) in &targets {
+        match apply(doc, *id, rule, &settings) {
+            Some(true) => {
+                changed += 1;
+                *by_rule.entry(*rule).or_default() += 1;
             }
+            _ => skipped += 1,
         }
     }
     let after = collect(doc, roots, anchor, anchor_path, scope, &settings, max_nodes);
@@ -159,8 +154,7 @@ fn apply_contrast(doc: &mut Document, id: NodeId) -> Option<bool> {
     let fg = text_color(n, t)?;
     let bg = backdrop(doc, n)?;
     let size = t.style.font_size;
-    let large = size >= 24.0 || (size >= 18.0 && t.style.weight() >= 700);
-    let need = if large { 3.0 } else { 4.5 };
+    let need = super::audit::contrast_needed(size, t.style.weight());
     if fg.contrast(bg) >= need {
         return Some(false);
     }
@@ -187,7 +181,10 @@ fn apply_contrast(doc: &mut Document, id: NodeId) -> Option<bool> {
 /// The closest shade of `fg` towards black (light backdrop) or white (dark backdrop) that meets
 /// `need` against `bg`, by bisection.
 fn accessible(fg: Color, bg: Color, need: f32) -> Color {
-    let target = if bg.luminance() > 0.5 { Color::BLACK } else { Color::WHITE };
+    let mut target = if bg.luminance() > 0.5 { Color::BLACK } else { Color::WHITE };
+    if target.contrast(bg) < need {
+        target = if target == Color::BLACK { Color::WHITE } else { Color::BLACK };
+    }
     let (mut lo, mut hi) = (0.0f32, 1.0f32);
     let mut best = target;
     for _ in 0..24 {
@@ -228,13 +225,13 @@ fn apply_spacing(n: &mut Node, settings: &Settings) -> Option<bool> {
     let mut changed = false;
     if al.mode != LayoutMode::Grid {
         let gap = settings.snap(al.gap);
-        if (gap - al.gap).abs() > 1e-6 {
+        if !settings.on_grid(al.gap) {
             al.gap = gap;
             changed = true;
         }
         if al.wrap {
             let cross = settings.snap(al.cross_gap);
-            if (cross - al.cross_gap).abs() > 1e-6 {
+            if !settings.on_grid(al.cross_gap) {
                 al.cross_gap = cross;
                 changed = true;
             }
@@ -242,7 +239,7 @@ fn apply_spacing(n: &mut Node, settings: &Settings) -> Option<bool> {
     }
     for side in &mut al.padding {
         let value = settings.snap(*side);
-        if (value - *side).abs() > 1e-6 {
+        if !settings.on_grid(*side) {
             *side = value;
             changed = true;
         }
@@ -312,7 +309,8 @@ fn apply_glow(n: &mut Node) -> Option<bool> {
 fn apply_neutral_shadows(n: &mut Node) -> Option<bool> {
     let mut changed = false;
     for e in &mut n.effects {
-        if let EffectKind::DropShadow(s) | EffectKind::InnerShadow(s) = &mut e.kind
+        if e.visible
+            && let EffectKind::DropShadow(s) | EffectKind::InnerShadow(s) = &mut e.kind
             && is_colored_shadow(s)
         {
             s.color = Color::new(0.0, 0.0, 0.0, s.color.a);

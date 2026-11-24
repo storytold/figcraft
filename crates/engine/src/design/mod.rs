@@ -30,14 +30,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "design.audit",
             "Check design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], minSeverity?: low|medium|high (default low), preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes; the contrast check uses them), limit?: 1000-1000000 (nodes before the report says truncated; default 50000)} → {preset, grid, modes?, scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, limit, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated, unchecked: [{rule, reason, layers?}]}  reads the design and reports the AI-slop tells; changes nothing (unchecked names the rules the run could not check: truncated, or a measure cap)",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], minSeverity?: low|medium|high (default low), preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes; the contrast check uses them), limit?: 1000-1000000 (nodes before the report says truncated; default 50000)} → {preset, grid, modes?, scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, limit, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated, unchecked: [{rule, reason, layers?}]}  reads the design and reports the AI-slop tells; changes nothing (unchecked names the rules the run could not check: truncated, a background sampling cap, or a measure cap)",
             false,
             audit_cmd
         ),
         spec!(
             "design.fix",
             "Fix design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), exact?: bool (with ids: repair only findings on those layers, not their descendants), limit?: 1000-1000000 (nodes the walk looks at; default 50000), dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), exact?: bool (with ids: repair only findings on those layers, not their descendants), limit?: 1000-1000000 (nodes the walk looks at; default 50000), dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}, truncated} (truncated: true refuses repairs; narrow the scope or raise limit before retrying)  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
             true,
             fix_cmd
         ),
@@ -165,7 +165,7 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         .as_array()
         .map(|v| {
             v.iter()
-                .filter(|e| e["reason"].as_str() == Some("measure-cap"))
+                .filter(|e| !matches!(e["reason"].as_str(), Some("disabled") | Some("preset")))
                 .filter_map(|e| e["rule"].as_str())
                 .filter(|rule| filter.as_ref().is_none_or(|set| set.contains(*rule)))
                 .collect()
@@ -173,7 +173,7 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         .unwrap_or_default();
     if !unchecked.is_empty() {
         return Err(EngineError::Other(format!(
-            "design review failed: the audit did not measure all of {} on this scope (past the per-run measure cap), so what it skipped is unchecked; audit a smaller scope, then assert again",
+            "design review failed: the audit did not measure all of {} on this scope (past a sampling or per-run measure cap), so what it skipped is unchecked; audit a smaller scope, then assert again",
             unchecked.join(", ")
         )));
     }
@@ -323,7 +323,11 @@ fn settings_json(config: &DesignReview) -> Value {
         .iter()
         .map(|c| {
             let rgba = c.to_rgba8();
-            format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])
+            if rgba[3] == 255 {
+                format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])
+            } else {
+                format!("#{:02X}{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2], rgba[3])
+            }
         })
         .collect();
     json!({
@@ -455,6 +459,14 @@ fn top_most(doc: &Document, ids: &[NodeId]) -> Vec<NodeId> {
         let mut nested = false;
         while let Some(pid) = parent {
             if depth > 256 {
+                break;
+            }
+            // The audit never enters instance children or hidden/locked subtrees. A layer
+            // explicitly named below such a boundary still needs its own root.
+            if doc
+                .node(pid)
+                .is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::Instance { .. }) || !n.visible || n.locked || n.opacity <= 0.001)
+            {
                 break;
             }
             if ids.contains(&pid) {

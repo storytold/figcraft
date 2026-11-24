@@ -82,7 +82,7 @@ impl Settings {
         !self.disabled.contains(id) && super::rules::enabled(id, self.preset)
     }
 
-    fn on_grid(&self, v: f64) -> bool {
+    pub(super) fn on_grid(&self, v: f64) -> bool {
         v.is_finite() && ((v / self.grid) - (v / self.grid).round()).abs() <= 0.01
     }
 
@@ -196,6 +196,8 @@ pub(crate) struct Report {
     pub(crate) text_unmeasured: usize,
     /// How many clip-holding frames the walk saw past the clipping-measure cap, likewise.
     pub(crate) frames_unmeasured: usize,
+    /// Text layers whose background sampling reached its work cap.
+    pub(crate) contrast_unchecked: usize,
 }
 
 /// A colour token's default-mode value, for the hardcoded-value check.
@@ -257,6 +259,7 @@ impl Tokens {
 
 struct Ctx<'a> {
     doc: &'a Document,
+    child_indices: BTreeMap<NodeId, BackdropChildren>,
     findings: Vec<Finding>,
     visited: usize,
     text_nodes: usize,
@@ -281,6 +284,7 @@ struct Ctx<'a> {
     text_unmeasured: usize,
     /// Clip-holding frames seen past the clipping-measure cap.
     frames_unmeasured: usize,
+    contrast_unchecked: usize,
 }
 
 /// Walk `roots` and collect every finding. `design.audit` reports them; `design.fix` acts on the
@@ -296,6 +300,7 @@ pub(crate) fn collect(
 ) -> Report {
     let mut ctx = Ctx {
         doc,
+        child_indices: BTreeMap::new(),
         findings: Vec::new(),
         visited: 0,
         text_nodes: 0,
@@ -311,6 +316,7 @@ pub(crate) fn collect(
         max_nodes,
         text_unmeasured: 0,
         frames_unmeasured: 0,
+        contrast_unchecked: 0,
     };
     for root in roots {
         ctx.walk(*root);
@@ -323,6 +329,7 @@ pub(crate) fn collect(
         limit: max_nodes,
         text_unmeasured: ctx.text_unmeasured,
         frames_unmeasured: ctx.frames_unmeasured,
+        contrast_unchecked: ctx.contrast_unchecked,
     }
 }
 
@@ -367,9 +374,14 @@ pub(crate) fn run(
             unchecked.push(json!({"rule": r.id, "reason": "truncated"}));
         }
     } else {
-        for (rule, layers) in [("layout.text-overflow", report.text_unmeasured), ("layout.clipped", report.frames_unmeasured)] {
+        for (rule, layers) in [
+            ("layout.text-overflow", report.text_unmeasured),
+            ("layout.clipped", report.frames_unmeasured),
+            ("color.contrast", report.contrast_unchecked),
+        ] {
             if layers > 0 && settings.enabled(rule) {
-                unchecked.push(json!({"rule": rule, "reason": "measure-cap", "layers": layers}));
+                unchecked
+                    .push(json!({"rule": rule, "reason": if rule == "color.contrast" { "backdrop-cap" } else { "measure-cap" }, "layers": layers}));
             }
         }
     }
@@ -484,7 +496,7 @@ impl Ctx<'_> {
     /// A fixed-size auto layout frame that clips children which overflow it: the rows exist but
     /// are invisible — the usual headless surprise. Hug frames grow, so they cannot clip.
     fn check_clipping(&mut self, n: &Node, path: &str) {
-        if !n.clip || n.children.is_empty() || n.layout.is_none() {
+        if !self.settings.enabled("layout.clipped") || !n.clip || n.children.is_empty() || n.layout.is_none() {
             return;
         }
         // An instance mirrors its main; the main is audited where it lives.
@@ -689,7 +701,7 @@ impl Ctx<'_> {
         // A hairline border is for container-like shapes; an icon's stroke is its whole drawing,
         // so full opacity is the intent there, not a stray border.
         let container_like = matches!(&n.kind, NodeKind::Frame | NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Component { .. });
-        if container_like && has_stroke(n) && border_is_strong(self.doc, n) {
+        if container_like && has_stroke(n) && border_is_strong(self.doc, n, &mut self.child_indices) {
             self.push(
                 "color.border-opacity",
                 n.id,
@@ -831,7 +843,7 @@ impl Ctx<'_> {
         // A fixed-width text box whose stored height is shorter than the laid-out text clips or
         // overlaps what follows it. Truncating boxes and auto-width boxes are intentional.
         let overflow_asked = self.settings.enabled("layout.text-overflow");
-        if !chars.is_empty() && n.width > 0.0 && matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Height) {
+        if overflow_asked && !chars.is_empty() && n.width > 0.0 && matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Height) {
             if self.measured >= MAX_TEXT_MEASURED {
                 // The box was seen but not laid out: an assertion on this rule cannot prove a pass.
                 // A file that disabled the rule would never have measured it either way, so it
@@ -861,18 +873,25 @@ impl Ctx<'_> {
         if mixed_fills {
             return;
         }
-        let (fg, bg) = if self.settings.modes.is_empty() {
-            (text_color(n, t), backdrop(self.doc, n))
-        } else {
-            (text_color_in(self.doc, n, t, &self.settings.modes), backdrop_in(self.doc, n, Some(&self.settings.modes)))
+        let modes = (!self.settings.modes.is_empty()).then_some(&self.settings.modes);
+        let fg = match modes {
+            Some(modes) => text_color_in(self.doc, n, t, modes),
+            None => text_color(n, t),
         };
-        let (Some(fg), Some(bg)) = (fg, bg) else { return };
+        let Some(fg) = fg else { return };
+        let bg = match backdrop_sample(self.doc, n, modes, &mut self.child_indices) {
+            Some(Behind::Known(c)) => c,
+            Some(Behind::Capped) => {
+                self.contrast_unchecked += 1;
+                return;
+            }
+            _ => return,
+        };
         let ratio = fg.contrast(bg);
         if !ratio.is_finite() {
             return;
         }
-        let large = size >= 24.0 || (size >= 18.0 && weight >= 700);
-        let need = if large { 3.0 } else { 4.5 };
+        let need = contrast_needed(size, weight);
         if ratio >= need {
             return;
         }
@@ -968,7 +987,8 @@ impl Ctx<'_> {
                 }
                 let keys = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
                 for (i, key) in keys.iter().enumerate() {
-                    if !n.bound.contains_key(*key)
+                    if !n.bound.contains_key("padding")
+                        && !n.bound.contains_key(*key)
                         && let Some(v) = al.padding.get(i).copied()
                     {
                         check(v, key);
@@ -1116,7 +1136,7 @@ fn has_stroke(n: &Node) -> bool {
 
 /// Whether a stroke reads as a strong border rather than a hairline: its colour blended over what
 /// is behind it, compared with that backdrop. With no known backdrop, the paint's alpha decides.
-fn border_is_strong(doc: &Document, n: &Node) -> bool {
+fn border_is_strong(doc: &Document, n: &Node, indices: &mut BTreeMap<NodeId, BackdropChildren>) -> bool {
     let Some(p) = n.strokes.iter().rev().find(|p| p.visible) else { return false };
     if p.blend != BlendMode::Normal {
         return false;
@@ -1124,7 +1144,11 @@ fn border_is_strong(doc: &Document, n: &Node) -> bool {
     let Some(c) = p.solid_color() else { return p.opacity > 0.12 };
     // An inside stroke sits on the layer's own fill; centre and outside strokes sit on what is
     // behind it. Default strokes are inside, so a border on a dark panel is judged on that panel.
-    let bg = if n.stroke.align == StrokeAlign::Inside { solid_fill(n).or_else(|| backdrop(doc, n)) } else { backdrop(doc, n) };
+    let bg = if n.stroke.align == StrokeAlign::Inside {
+        solid_fill(n).or_else(|| backdrop_color(doc, n, indices))
+    } else {
+        backdrop_color(doc, n, indices)
+    };
     match bg {
         Some(bg) => blend(c, bg).contrast(bg) > 1.5,
         None => c.a > 0.12,
@@ -1210,9 +1234,6 @@ fn solid_fill_in(doc: &Document, n: &Node, overrides: &BTreeMap<CollectionId, Mo
         return None;
     }
     let PaintKind::Solid { color } = &p.kind else { return None };
-    if color.a < 0.95 {
-        return None;
-    }
     let color = bound_color(doc, n, true, index, *color, overrides);
     (color.a >= 0.95).then_some(color)
 }
@@ -1225,11 +1246,19 @@ fn text_color_in(doc: &Document, n: &Node, t: &TextData, overrides: &BTreeMap<Co
         return None;
     }
     let PaintKind::Solid { color } = &p.kind else { return None };
-    if color.a < 0.95 {
-        return None;
-    }
     let color = bound_color(doc, n, true, index, *color, overrides);
     (color.a >= 0.95).then_some(color)
+}
+
+/// WCAG large text: 18pt regular or 14pt bold, expressed at 96 CSS pixels per inch.
+pub(crate) fn contrast_needed(size: f64, weight: u16) -> f32 {
+    if size >= 24.0 || (size >= 14.0 * 96.0 / 72.0 && weight >= 700) { 3.0 } else { 4.5 }
+}
+
+/// Indexed once per parent: text/line leaves cannot paint a background and need no sampling.
+struct BackdropChildren {
+    positions: BTreeMap<NodeId, usize>,
+    painted: Vec<usize>,
 }
 
 /// What lies directly behind a layer, or why it cannot be sampled.
@@ -1237,6 +1266,8 @@ enum Behind {
     Known(Color),
     /// A gradient, image, translucency or partial cover: the audit does not guess.
     Unknown,
+    /// Sampling stopped at a work limit, so a gate must refuse incomplete evidence.
+    Capped,
 }
 
 /// The first opaque solid behind a layer. At each ancestor level, look at the siblings painted
@@ -1244,11 +1275,23 @@ enum Behind {
 /// ancestor's own fill. The old version only walked ancestors, so white text on a dark rectangle
 /// sibling was compared with the page behind both and reported as unreadable.
 pub(crate) fn backdrop(doc: &Document, n: &Node) -> Option<Color> {
-    backdrop_in(doc, n, None)
+    backdrop_color(doc, n, &mut BTreeMap::new())
+}
+
+fn backdrop_color(doc: &Document, n: &Node, indices: &mut BTreeMap<NodeId, BackdropChildren>) -> Option<Color> {
+    match backdrop_sample(doc, n, None, indices) {
+        Some(Behind::Known(c)) => Some(c),
+        _ => None,
+    }
 }
 
 /// [`backdrop`], resolving bound colours in `overrides` when given.
-fn backdrop_in(doc: &Document, n: &Node, overrides: Option<&BTreeMap<CollectionId, ModeId>>) -> Option<Color> {
+fn backdrop_sample(
+    doc: &Document,
+    n: &Node,
+    overrides: Option<&BTreeMap<CollectionId, ModeId>>,
+    indices: &mut BTreeMap<NodeId, BackdropChildren>,
+) -> Option<Behind> {
     let target = doc.world_bounds(n.id)?;
     let mut current = n.id;
     for _ in 0..256 {
@@ -1258,23 +1301,24 @@ fn backdrop_in(doc: &Document, n: &Node, overrides: Option<&BTreeMap<CollectionI
         if parent.opacity < 0.99 {
             return None;
         }
-        match sibling_behind(doc, parent, current, target, overrides) {
-            Some(Behind::Known(c)) => return Some(c),
-            Some(Behind::Unknown) => return None,
-            None => {}
+        if let Some(behind) = sibling_behind(doc, parent, current, target, overrides, indices) {
+            return Some(behind);
         }
         if let NodeKind::Page { background, .. } = &parent.kind {
-            return if background.a >= 0.95 { Some(*background) } else { None };
+            return Some(if background.a >= 0.95 { Behind::Known(*background) } else { Behind::Unknown });
         }
         if parent.fills.iter().any(|p| p.visible) {
-            return match overrides {
-                Some(modes) => solid_fill_in(doc, parent, modes),
-                None => solid_fill(parent),
-            };
+            return Some(
+                match overrides {
+                    Some(modes) => solid_fill_in(doc, parent, modes),
+                    None => solid_fill(parent),
+                }
+                .map_or(Behind::Unknown, Behind::Known),
+            );
         }
         current = parent_id;
     }
-    None
+    Some(Behind::Capped)
 }
 
 /// The topmost sibling painted below `current` that covers `target`, if it has visible paint.
@@ -1284,12 +1328,31 @@ fn sibling_behind(
     current: NodeId,
     target: figcraft_geom::Rect,
     overrides: Option<&BTreeMap<CollectionId, ModeId>>,
+    indices: &mut BTreeMap<NodeId, BackdropChildren>,
 ) -> Option<Behind> {
-    let index = parent.children.iter().position(|c| *c == current)?;
+    let children = indices.entry(parent.id).or_insert_with(|| BackdropChildren {
+        positions: parent.children.iter().enumerate().map(|(i, id)| (*id, i)).collect(),
+        painted: parent
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, id)| {
+                let n = doc.node(*id)?;
+                (n.visible
+                    && (!n.children.is_empty() || (!matches!(n.kind, NodeKind::Text(_) | NodeKind::Line) && n.fills.iter().any(|p| p.visible))))
+                .then_some(i)
+            })
+            .collect(),
+    });
+    let index = *children.positions.get(&current)?;
     let reverse = parent.layout.as_ref().is_some_and(|l| l.reverse_z);
-    // Last child on top: siblings before `index` are below it. First on top: siblings after are.
-    let total = if reverse { parent.children.len().saturating_sub(index + 1) } else { index };
-    let order: Box<dyn Iterator<Item = usize>> = if reverse { Box::new(index + 1..parent.children.len()) } else { Box::new((0..index).rev()) };
+    let below = if reverse {
+        &children.painted[children.painted.partition_point(|i| *i <= index)..]
+    } else {
+        &children.painted[..children.painted.partition_point(|i| *i < index)]
+    };
+    let total = below.len();
+    let order: Box<dyn Iterator<Item = usize> + '_> = if reverse { Box::new(below.iter().copied()) } else { Box::new(below.iter().rev().copied()) };
     for i in order.take(MAX_BACKDROP_SCAN) {
         let Some(sibling) = parent.children.get(i).and_then(|id| doc.node(*id)) else { continue };
         if let Some(behind) = paint_behind(doc, sibling, target, 1, overrides) {
@@ -1297,7 +1360,7 @@ fn sibling_behind(
         }
     }
     // Past the cap the topmost paint is unknown, not the page behind the container.
-    (total > MAX_BACKDROP_SCAN).then_some(Behind::Unknown)
+    (total > MAX_BACKDROP_SCAN).then_some(Behind::Capped)
 }
 
 /// The topmost paint a layer (and what it contains) puts under `target`: its children first (they
@@ -1311,10 +1374,17 @@ fn paint_behind(
     depth: usize,
     overrides: Option<&BTreeMap<CollectionId, ModeId>>,
 ) -> Option<Behind> {
-    if depth > 64 || !node.visible {
+    if !node.visible {
         return None;
     }
+    if depth > 64 {
+        return Some(Behind::Capped);
+    }
     let bounds = doc.world_bounds(node.id);
+    // Children share their group's opacity; their opaque paint is not an opaque backdrop.
+    if node.opacity < 0.99 && !node.children.is_empty() && bounds.is_some_and(|b| overlaps(b, target)) {
+        return Some(Behind::Unknown);
+    }
     let clipped_away = node.clip && bounds.is_some_and(|b| !contains(b, target));
     if !clipped_away {
         let reverse = node.layout.as_ref().is_some_and(|l| l.reverse_z);
@@ -1327,7 +1397,7 @@ fn paint_behind(
             }
         }
         if node.children.len() > MAX_BACKDROP_SCAN {
-            return Some(Behind::Unknown);
+            return Some(Behind::Capped);
         }
     }
     if matches!(&node.kind, NodeKind::Text(_) | NodeKind::Line) || !node.fills.iter().any(|p| p.visible) {

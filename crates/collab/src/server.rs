@@ -199,7 +199,8 @@ impl Server {
         // a saved batch still carries the value past the limits, and a resuming client would
         // refuse it, so the clamped snapshot is what everyone catches up with.
         let puts_images = state.log.iter().flat_map(|a| &a.changes).any(Change::is_image);
-        server.resync = left_out > 0 || puts_images || review_clamped;
+        let oversized_review_log = state.log.iter().flat_map(|batch| &batch.changes).any(docprops::over_limit_design_review);
+        server.resync = left_out > 0 || puts_images || review_clamped || oversized_review_log;
         if contiguous && state.log.last().is_none_or(|a| a.seq == state.seq) {
             for a in state.log {
                 server.remember(a);

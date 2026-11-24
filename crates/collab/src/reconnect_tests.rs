@@ -394,3 +394,30 @@ fn resume_needs_the_issued_secret() {
     let resend = come_back(&mut s, &mut host);
     assert!(resend.is_empty());
 }
+
+#[test]
+fn review_an_oversized_saved_batch_resyncs_even_when_the_snapshot_is_valid() {
+    use crate::change::{Change, DocProp, Json};
+    let mut server = Server::new(base(), "tok", Limits::default());
+    let mut writer = join(&mut server);
+    let mut reader = join(&mut server);
+    let message = edit(&mut writer, |doc| doc.design_review.grid = 8.0).unwrap();
+    let out = server.receive(writer.id(), message);
+    deliver(&mut writer, &out);
+    reader.disconnect();
+    let mut state = server.state().unwrap();
+    assert!(state.snapshot.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::DesignReview, .. })));
+    let oversized = figcraft_doc::DesignReview { radii: vec![4.0; figcraft_doc::MAX_RADII + 1], ..Default::default() };
+    for change in state.log.iter_mut().flat_map(|batch| &mut batch.changes) {
+        if let Change::SetDoc { prop: DocProp::DesignReview, value } = change {
+            *value = Json::of(&oversized).unwrap();
+        }
+    }
+    let mut restored = Server::restore(state, "tok", Limits::default()).unwrap();
+    assert!(restored.document().design_review.over_limits().is_empty());
+    let ClientMsg::Hello(hello) = reader.reconnect(hello()) else { panic!("no reconnect") };
+    let (_, out) = restored.join(hello).unwrap();
+    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })), "the invalid delta must not be replayed");
+    deliver(&mut reader, &out);
+    assert_eq!(reader.seq(), restored.seq());
+}

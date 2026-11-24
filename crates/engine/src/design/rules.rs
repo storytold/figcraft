@@ -57,8 +57,18 @@ pub(crate) struct Rule {
 }
 
 pub(crate) const RULES: &[Rule] = &[
-    Rule { id: "spacing.off-grid", severity: Severity::Medium, fixable: true, description: "Auto layout gap or padding is not on the 4px grid" },
-    Rule { id: "radius.off-scale", severity: Severity::Low, fixable: true, description: "A corner radius is not on the 4px scale or a pill" },
+    Rule {
+        id: "spacing.off-grid",
+        severity: Severity::Medium,
+        fixable: true,
+        description: "Auto layout gap or padding is not on the configured spacing grid",
+    },
+    Rule {
+        id: "radius.off-scale",
+        severity: Severity::Low,
+        fixable: true,
+        description: "A corner radius is not on the configured radius scale or a pill",
+    },
     Rule { id: "type.sizes", severity: Severity::Medium, fixable: false, description: "More than five font sizes in one scope" },
     Rule { id: "type.families", severity: Severity::Medium, fixable: false, description: "More than two font families in one scope" },
     Rule { id: "type.weight", severity: Severity::Low, fixable: true, description: "A heading uses a weight above 600" },

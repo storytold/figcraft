@@ -120,12 +120,17 @@ fn selection_scope_ignores_other_layers() {
 fn a_nested_selection_is_audited_once() {
     let mut s = Session::new();
     let f = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100})));
-    let child = id(&ex(&mut s, "node.create", json!({"type": "rectangle", "parent": f, "x": 0, "y": 0, "width": 20, "height": 20})));
+    let child = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "rectangle", "parent": f, "x": 0, "y": 0, "width": 20, "height": 20,"props":{"cornerRadius":7}}),
+    ));
     s.set_selection(vec![f, child]);
     let r = ex(&mut s, "design.audit", json!({"scope": "selection"}));
     // The rectangle is only in the report through the frame's subtree.
     let rect_findings = r["findings"].as_array().unwrap().iter().filter(|f| f["path"].as_str().unwrap().contains("Rectangle")).count();
-    assert!(rect_findings <= 1, "{r}");
+    assert!(rect_findings >= 1, "the child is not dropped: {r}");
+    assert_eq!(rule_nodes(&r, "radius.off-scale"), vec![child.0], "the child's deterministic finding occurs once: {r}");
 }
 
 #[test]
@@ -633,6 +638,8 @@ fn a_padding_binding_owns_the_spacing() {
     let n = s.doc().unwrap().node(f).unwrap();
     let al = n.layout.as_ref().unwrap();
     assert_eq!((al.gap, al.padding[0]), (13.0, 11.0), "a padding binding owns the whole layout");
+    let tokens = ex(&mut s, "design.audit", json!({"ids":[f],"preset":"strict","rules":["token.hardcoded-number"]}));
+    assert!(!has(&tokens, "token.hardcoded-number"), "bound shorthand padding is already token owned: {tokens}");
 }
 
 #[test]
@@ -820,18 +827,18 @@ fn assert_refuses_a_scope_that_checks_nothing() {
 fn a_limit_reached_by_hidden_nodes_is_not_truncation() {
     let mut s = Session::new();
     let page = s.page().unwrap();
-    {
-        let doc = s.doc_mut().unwrap();
-        for i in 0..10 {
-            let id = doc.create(page, NodeKind::Rectangle, &format!("Filler {i}"), 0.0, 0.0, 1.0, 1.0).unwrap();
-            doc.get_mut(id).unwrap().visible = false;
-        }
+    for i in 0..999 {
+        s.doc_mut().unwrap().create(page, NodeKind::Group, &format!("Visible {i}"), 400.0, 400.0, 1.0, 1.0).unwrap();
     }
-    ex(&mut s, "text.create", json!({"text": "0", "x": 0.0, "y": 0.0, "props": {"fill": "#FFFFFF"}}));
-    // Exactly limit visible nodes were audited; the stacked hidden ones are skips, not unchecked
-    // work, so the walk is whole and the badge's finding stands on its own.
-    let r = ex(&mut s, "design.audit", json!({"scope": "page", "limit": 1_001, "rules": ["color.contrast"]}));
-    assert_eq!(r["truncated"], false, "{r}");
+    ex(&mut s, "text.create", json!({"text":"0","x":0,"y":0,"props":{"fill":"#FFFFFF"}}));
+    for i in 0..10 {
+        let doc = s.doc_mut().unwrap();
+        let id = doc.create(page, NodeKind::Rectangle, &format!("Hidden {i}"), 0.0, 0.0, 1.0, 1.0).unwrap();
+        doc.get_mut(id).unwrap().visible = false;
+    }
+    let r = ex(&mut s, "design.audit", json!({"scope":"page","limit":1001,"rules":["color.contrast"]}));
+    assert_eq!(r["nodes"], 1001, "the visible budget is exactly exhausted: {r}");
+    assert_eq!(r["truncated"], false, "hidden tail is not unchecked work: {r}");
     assert!(has(&r, "color.contrast"), "{r}");
 }
 
@@ -1141,4 +1148,134 @@ fn a_bad_parent_error_names_the_node() {
     let err = s.execute("node.create", &json!({"type": "rectangle", "parent": t, "x": 0, "y": 0})).unwrap_err().to_string();
     assert!(err.contains("TEXT \"Label\""), "{err}");
     assert!(err.contains("can't contain"), "{err}");
+}
+
+#[test]
+fn review_capped_backdrop_is_not_a_clean_contrast_gate() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type":"frame","width":300,"height":200})));
+    ex(&mut s, "node.create", json!({"type":"rectangle","parent":f,"width":300,"height":200,"props":{"fill":"#000000"}}));
+    for _ in 0..513 {
+        let doc = s.doc_mut().unwrap();
+        let outside = doc.create(f, NodeKind::Rectangle, "Outside", 400.0, 400.0, 10.0, 10.0).unwrap();
+        doc.get_mut(outside).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::WHITE)];
+    }
+    let text = id(&ex(&mut s, "text.create", json!({"text":"Hidden failure","parent":f,"x":10,"y":10,"props":{"fill":"#000000"}})));
+    let args = json!({"ids":[text],"rules":["color.contrast"]});
+    let audit = ex(&mut s, "design.audit", args.clone());
+    assert!(!has(&audit, "color.contrast"), "the capped scan cannot see the background: {audit}");
+    assert!(audit["unchecked"].as_array().unwrap().iter().any(|v| v["rule"] == "color.contrast" && v["reason"] == "backdrop-cap"), "{audit}");
+    assert!(s.execute("design.assert", &args).is_err(), "incomplete evidence must not pass");
+    let mut skipped = args.clone();
+    skipped["allowSkipped"] = json!(true);
+    assert!(s.execute("design.assert", &skipped).is_err(), "allowSkipped cannot waive incomplete sampling");
+}
+
+#[test]
+fn review_requested_mode_resolves_opacity_before_sampling() {
+    for (surface, ink) in [("#FFFFFF00", "#111111"), ("#FFFFFF", "#11111100"), ("#FFFFFF00", "#11111100")] {
+        let mut s = Session::new();
+        ex(&mut s, "variable.createCollection", json!({"name":"Theme"}));
+        ex(&mut s, "variable.addMode", json!({"collection":"Theme","name":"Dark"}));
+        for (name, base, dark) in [("surface", surface, "#222222"), ("ink", ink, "#777777")] {
+            ex(&mut s, "variable.create", json!({"collection":"Theme","name":name,"type":"color","value":base}));
+            ex(&mut s, "variable.set", json!({"variable":name,"mode":"Dark","value":dark}));
+        }
+        let f = id(&ex(&mut s, "node.create", json!({"type":"frame","width":200,"height":100,"props":{"fill":surface}})));
+        let t = id(&ex(&mut s, "text.create", json!({"text":"Read me","parent":f,"x":10,"y":10,"props":{"fill":ink}})));
+        ex(&mut s, "variable.bind", json!({"ids":[f],"field":"fill","variable":"surface"}));
+        ex(&mut s, "variable.bind", json!({"ids":[t],"field":"fill","variable":"ink"}));
+        let audit = ex(&mut s, "design.audit", json!({"ids":[t],"rules":["color.contrast"],"modes":{"Theme":"Dark"}}));
+        assert!(has(&audit, "color.contrast"), "opaque requested colors must be sampled: {surface}/{ink}: {audit}");
+    }
+}
+
+#[test]
+fn review_explicit_instance_descendants_are_audited() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type":"frame","width":200,"height":100,"props":{"fill":"#FFFFFF"}})));
+    ex(&mut s, "text.create", json!({"text":"Unreadable","parent":f,"x":10,"y":10,"props":{"fill":"#FFFFFF"}}));
+    s.set_selection(vec![f]);
+    ex(&mut s, "component.create", json!({}));
+    let instance = id(&ex(&mut s, "instance.create", json!({"component":f})));
+    let child = s.doc().unwrap().node(instance).unwrap().children[0];
+    let alone = ex(&mut s, "design.audit", json!({"ids":[child],"rules":["color.contrast"]}));
+    assert!(rule_nodes(&alone, "color.contrast").contains(&child.0), "{alone}");
+    let args = json!({"ids":[instance,child],"rules":["color.contrast"]});
+    let together = ex(&mut s, "design.audit", args.clone());
+    assert!(rule_nodes(&together, "color.contrast").contains(&child.0), "{together}");
+    assert!(s.execute("design.assert", &args).is_err());
+}
+
+#[test]
+fn review_dry_run_matches_interacting_repairs_and_preserves_hidden_shadows() {
+    let mut s = Session::new();
+    let f = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type":"frame","width":100,"height":100,"props":{"effects":[
+        {"type":"dropShadow","color":"#FF000080","offset":[0,0],"radius":24},
+        {"type":"dropShadow","color":"#00FF0080","offset":[4,4],"radius":2,"visible":false}]}}),
+    ));
+    let before = s.doc().unwrap().clone();
+    let preview = ex(&mut s, "design.fix", json!({"ids":[f],"rules":["color.glow","color.colored-shadow"],"dryRun":true}));
+    assert_eq!(s.doc().unwrap(), &before, "a preview must not edit the live document");
+    let actual = ex(&mut s, "design.fix", json!({"ids":[f],"rules":["color.glow","color.colored-shadow"]}));
+    for key in ["changed", "skipped", "byRule", "before", "after"] {
+        assert_eq!(preview[key], actual[key], "preview differs at {key}");
+    }
+    assert_eq!(s.doc().unwrap().node(f).unwrap().effects, vec![before.node(f).unwrap().effects[1].clone()], "hidden paint is preserved exactly");
+}
+
+#[test]
+fn review_spacing_repairs_leave_accepted_near_grid_values_unchanged() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type":"frame","width":100,"height":100,"props":{"layout":"vertical","gap":4.02,"padding":11}})));
+    ex(&mut s, "design.fix", json!({"ids":[f],"rules":["spacing.off-grid"]}));
+    let layout = s.doc().unwrap().node(f).unwrap().layout.as_ref().unwrap();
+    assert_eq!(layout.gap, 4.02, "the audit accepted the gap");
+    assert_ne!(layout.padding[0], 11.0, "the rejected padding is repaired");
+}
+
+#[test]
+fn review_contrast_uses_the_bold_cutoff_and_a_reachable_repair_shade() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "node.create", json!({"type":"frame","width":300,"height":200,"props":{"fill":"#999999"}})));
+    let t = id(&ex(
+        &mut s,
+        "text.create",
+        json!({"parent":f,"text":"Read this","x":10,"y":10,"props":{"fontSize":18,"fontWeight":700,"fill":"#999999"}}),
+    ));
+    ex(&mut s, "design.fix", json!({"ids":[t],"rules":["color.contrast"]}));
+    let n = s.doc().unwrap().node(t).unwrap();
+    let NodeKind::Text(text) = &n.kind else { panic!("not text") };
+    let color = super::audit::text_color(n, text).unwrap();
+    assert!(
+        color.contrast(figcraft_color::Color::from_hex("999999").unwrap()) >= 4.5,
+        "18px bold is not large text, and black-side repair can reach the ratio"
+    );
+    let report = ex(&mut s, "design.audit", json!({"ids":[t],"rules":["color.contrast"]}));
+    assert!(!has(&report, "color.contrast"), "{report}");
+}
+
+#[test]
+fn review_brand_settings_round_trip_their_alpha() {
+    let mut s = Session::new();
+    let settings = ex(&mut s, "design.configure", json!({"brand":["#FF000080","#00AA00"]}));
+    let before = s.doc().unwrap().design_review.clone();
+    ex(&mut s, "design.configure", settings);
+    assert_eq!(s.doc().unwrap().design_review, before, "reapplying returned settings must preserve brand ownership");
+}
+
+#[test]
+fn review_transparent_sibling_groups_are_not_opaque_backdrops() {
+    let mut s = Session::new();
+    let group = id(&ex(&mut s, "node.create", json!({"type":"group","width":200,"height":100,"props":{"opacity":0}})));
+    ex(&mut s, "node.create", json!({"type":"rectangle","parent":group,"width":200,"height":100,"props":{"fill":"#000000"}}));
+    let text = id(&ex(&mut s, "text.create", json!({"text":"Legible","x":10,"y":10,"props":{"fill":"#000000"}})));
+    let before = s.doc().unwrap().node(text).unwrap().clone();
+    let report = ex(&mut s, "design.audit", json!({"ids":[text],"rules":["color.contrast"]}));
+    assert!(!has(&report, "color.contrast"), "invisible black is not the backdrop: {report}");
+    ex(&mut s, "design.fix", json!({"ids":[text],"rules":["color.contrast"]}));
+    assert_eq!(s.doc().unwrap().node(text).unwrap(), &before, "do not repair an invented contrast failure");
 }

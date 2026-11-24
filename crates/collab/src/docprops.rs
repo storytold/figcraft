@@ -403,6 +403,11 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
     apply_indexed(doc, change, &mut Index::default())
 }
 
+pub(crate) fn over_limit_design_review(change: &Change) -> bool {
+    matches!(change, Change::SetDoc { prop: DocProp::DesignReview, value }
+        if value.read::<figcraft_doc::DesignReview>("design review").is_ok_and(|config| !config.over_limits().is_empty()))
+}
+
 /// Clamp the review settings a snapshot carries to the limits this build keeps, in place, and say
 /// whether it changed them: an older or looser snapshot may hold longer radii, brand or disabled
 /// lists, and the file opens with what fits — the preset, grid and the rest of each list exactly
