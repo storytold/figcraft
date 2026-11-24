@@ -686,6 +686,8 @@ mod widget_shapes_tests;
 mod widgets_tests;
 
 #[cfg(test)]
+mod export_bounds_tests;
+#[cfg(test)]
 mod page_view_tests;
 #[cfg(test)]
 mod selection_reorder_tests;
