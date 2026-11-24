@@ -13,10 +13,10 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/figcraft"
 
 [workspace.dependencies]
-craft-xml = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-svg = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed", default-features = false, features = ["tree"] }
-craft-vectordrawable = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-pdf = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
+craft-xml = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-svg = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b", default-features = false, features = ["tree"] }
+craft-vectordrawable = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-pdf = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
 # internal
 figcraft-geom = { path = "crates/geom" }
 figcraft-color = { path = "crates/color" }
@@ -39,44 +39,44 @@ figcraft-plugin = { path = "crates/plugin" }
 
 # Keep every craft-libs crate on one rev.
 # Which paths stored in a document may be followed (craft-libs).
-craft-docpath = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
+craft-docpath = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
 # Who draws the window frame on Linux — the compositor or the app — so every Craft app shows the
 # same native titlebar per desktop (craft-libs). FigCraft reads the probe result and maps it to its
 # own `TitleBar`; the UI runtime takes its window system from here too.
-craft-window = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
+craft-window = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/aiongg/craft-libs", version = "=0.1.0", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed", features = ["ui"] }
+craft-update = { git = "https://github.com/aiongg/craft-libs", version = "=0.1.0", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b", features = ["ui"] }
 # The suite's font store: exact lookup of a missing font in the pinned Google Fonts and Noto
 # indexes, and checksum-verified installs into the one folder every Craft app reads (craft-libs).
-craft-font-store = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-font-catalog = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
+craft-font-store = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-font-catalog = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
 # The UI runtime FigCraft's egui UI is hosted by (`crates/ui-egui/src/framework.rs`) and the
 # framework dialogs on it (craft-libs): who the app is to those dialogs, the runtime's key
 # bindings, the theme mode and the interface direction.
-craft-ui = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-host = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-keymap = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-theme = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-i18n = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
+craft-ui = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-host = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-keymap = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-theme = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-i18n = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
 # The macOS app menu whose Quit (⌘Q) asks the app before quitting, like the window's close button
 # (craft-libs; the menu it replaces quits straight through `terminate:` and loses unsaved work).
-craft-menu = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
+craft-menu = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
 # Where the settings live: the suite's folder rules, portable mode included (craft-libs).
-craft-settings = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
+craft-settings = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
 
 # Penpot export container only; JSON values cross this boundary, not shared model types.
-craft-penpot = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
+craft-penpot = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
 
 # The design-file formats (craft-libs): the .fig container and its kiwi encoding, the mapping of
 # a .fig message onto the REST file JSON, and that JSON's shared helpers.
-craft-sketch = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-zip = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-fig = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-figcraft-format = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-figma-rest = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-jpeg = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-image-codecs = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
-craft-gif = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed", features = ["frames"] }
+craft-sketch = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-zip = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-fig = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-figcraft-format = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-figma-rest = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-jpeg = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-image-codecs = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }
+craft-gif = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b", features = ["frames"] }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
@@ -205,4 +205,4 @@ winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457
 
 # craft-libs' vendored krilla 0.8.2: decoded PNGs are capped at 1 GiB and reserved fallibly, and a
 # panic while drawing unwinds without aborting.
-krilla = { git = "https://github.com/aiongg/craft-libs", rev = "ea3b99e892474928d315ba9f93784f3736ca52ed" }
+krilla = { git = "https://github.com/aiongg/craft-libs", rev = "4e806d57a557600dca26fa5442680ea5c3569a1b" }

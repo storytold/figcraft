@@ -351,7 +351,8 @@ fn number_field_impl(
     }
     match lead {
         Lead::Text(s) => {
-            let galley = crate::bidi::name_galley(ui.painter(), s, regular(11.0), t.text_secondary, lead_w - 12.0);
+            // Whole points: egui rounds wrap width to GUI_ROUNDING, which wraps a fractional label column.
+            let galley = crate::bidi::name_galley(ui.painter(), s, regular(11.0), t.text_secondary, (lead_w - 12.0).ceil());
             // A label cut short shows whole on hover.
             if galley.elided {
                 lead_resp.clone().on_hover_text(s);
