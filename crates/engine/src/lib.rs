@@ -688,6 +688,8 @@ mod widgets_tests;
 #[cfg(test)]
 mod page_view_tests;
 #[cfg(test)]
+mod paste_properties_tests;
+#[cfg(test)]
 mod selection_reorder_tests;
 #[cfg(test)]
 mod selection_spacing_tests;

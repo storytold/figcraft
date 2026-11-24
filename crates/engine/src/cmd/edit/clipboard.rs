@@ -417,7 +417,19 @@ pub(super) fn copy_props_of(doc: &Document, id: NodeId) -> Value {
         v["cornerRadius"] = json!(n.corners.radii);
         v["cornerSmoothing"] = json!(n.corners.smoothing);
     }
+    // A frame's layout grids go with its look, as its fills do.
+    if n.kind.is_frame_like() {
+        v["grids"] = json!(n.grids);
+        v["gridStyle"] = json!(n.styles.grid);
+    }
+    // The links behind the values: the styles and the variables they come from, so the pasted
+    // layer follows them as the copied one does.
+    v["fillStyle"] = json!(n.styles.fill);
+    v["strokeStyle"] = json!(n.styles.stroke);
+    v["effectStyle"] = json!(n.styles.effect);
+    v["boundVariables"] = Value::Object(n.bound.iter().filter(|(f, _)| copied_binding(f)).map(|(f, v)| (f.clone(), json!(v))).collect());
     if let NodeKind::Text(t) = &n.kind {
+        v["textStyle"] = json!(n.styles.text);
         v["fontFamily"] = json!(t.style.font_family);
         v["fontStyle"] = json!(t.style.font_style);
         v["fontSize"] = json!(t.style.font_size);
@@ -439,15 +451,58 @@ pub(super) fn copy_props(s: &mut Session, p: &Value) -> Result<Value> {
 /// properties only to text, the corners only to a layer with corners.
 pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, props: &Value) -> Result<()> {
     let mut m = props.as_object().cloned().unwrap_or_default();
-    let is_text = matches!(doc.get(id)?.kind, NodeKind::Text(_));
-    if !is_text {
-        m.retain(|k, _| !k.starts_with("font") && k != "lineHeight" && k != "letterSpacing");
+    let n = doc.get(id)?;
+    let (is_text, corners, frame) = (matches!(n.kind, NodeKind::Text(_)), n.kind.has_corner_radius(), n.kind.is_frame_like());
+    let takes = |k: &str| {
+        let text = k.starts_with("font") || k.starts_with("paragraph") || matches!(k, "lineHeight" | "letterSpacing" | "textStyle");
+        let corner = k == "cornerSmoothing" || k.ends_with("Radius");
+        let grid = k == "gridStyle" || k == "grids" || k.starts_with("grids/");
+        (is_text || !text) && (corners || !corner) && (frame || !grid)
+    };
+    m.retain(|k, _| takes(k));
+    // A style or variable of another file (the copy came from another tab) isn't here to link to:
+    // the values it gave are pasted without the link.
+    let here = |v: &Value| v.as_str().is_none_or(|sid| doc.style(sid).is_some());
+    m.retain(|k, v| !k.ends_with("Style") || k.starts_with("font") || here(v));
+    if let Some(Value::Object(copied)) = m.get_mut("boundVariables") {
+        copied.retain(|_, v| v.as_str().is_some_and(|vid| doc.variables.get_by_id(vid).is_some()));
     }
-    if !doc.get(id)?.kind.has_corner_radius() {
-        m.remove("cornerRadius");
-        m.remove("cornerSmoothing");
+    // The layer's own bindings on what is pasted give way to the copied layer's: kept, a binding
+    // would hold the old value over the pasted one.
+    if let Some(Value::Object(copied)) = m.get("boundVariables") {
+        let mut bound: serde_json::Map<String, Value> =
+            n.bound.keys().filter(|f| copied_binding(f) && takes(f)).map(|f| (f.clone(), Value::Null)).collect();
+        bound.extend(copied.iter().filter(|(f, _)| takes(f)).map(|(f, v)| (f.clone(), v.clone())));
+        m.insert("boundVariables".into(), Value::Object(bound));
     }
     crate::cmd::props::apply(cmd, doc, id, &m)
+}
+
+/// Whether a variable bound to `field` goes with the properties [`copy_props_of`] copies: not a
+/// size, auto layout spacing, visibility or text content.
+fn copied_binding(field: &str) -> bool {
+    !matches!(
+        field,
+        "width"
+            | "height"
+            | "minWidth"
+            | "maxWidth"
+            | "minHeight"
+            | "maxHeight"
+            | "gap"
+            | "columnGap"
+            | "rowGap"
+            | "crossGap"
+            | "padding"
+            | "paddingHorizontal"
+            | "paddingVertical"
+            | "paddingTop"
+            | "paddingRight"
+            | "paddingBottom"
+            | "paddingLeft"
+            | "visible"
+            | "characters"
+    )
 }
 
 pub(super) fn paste_props(s: &mut Session, p: &Value) -> Result<Value> {
