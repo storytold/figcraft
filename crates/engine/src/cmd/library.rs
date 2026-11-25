@@ -224,7 +224,7 @@ fn component_arg(s: &mut Session, cmd: &str, p: &Value) -> Result<(LibraryLink, 
 
 /// The `library` and a published variable named by `param` (id, else name): (library, the
 /// variable's id in the library).
-fn variable_arg(s: &mut Session, cmd: &str, p: &Value, param: &str) -> Result<(Arc<PublishedLibrary>, VariableId)> {
+pub(crate) fn variable_arg(s: &mut Session, cmd: &str, p: &Value, param: &str) -> Result<(Arc<PublishedLibrary>, VariableId)> {
     let (link, lib) = library(s, cmd, p)?;
     let key = req_string(cmd, p, param)?;
     let id = published_variables(&lib).find(|v| v.id == key).or_else(|| published_variables(&lib).find(|v| v.name == key)).map(|v| v.id.clone());
@@ -233,7 +233,7 @@ fn variable_arg(s: &mut Session, cmd: &str, p: &Value, param: &str) -> Result<(A
 }
 
 /// Copy library variable `key` in (with what it aliases); its local id.
-fn import_variable(s: &mut Session, lib: &PublishedLibrary, key: &str) -> Result<VariableId> {
+pub(crate) fn import_variable(s: &mut Session, lib: &PublishedLibrary, key: &str) -> Result<VariableId> {
     let map = import_variables(s.doc_mut()?, lib, &BTreeSet::from([key.to_string()]), &BTreeSet::new(), false);
     map.variables.get(key).cloned().ok_or_else(|| EngineError::Other("the variable didn't import".into()))
 }

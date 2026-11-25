@@ -141,7 +141,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "selection.bindColorVariable",
             "Apply selection color variable",
-            "{targets, variable (id or name)}; binds the color variable to matching solid fill/stroke slots, replacing a color style there (text ranges with fills of their own take its value in the layer's modes)",
+            "{targets, variable (id or name), library? (an enabled library: id, name or path; the variable is then one it publishes, copied in)}; binds the color variable to matching solid fill/stroke slots, replacing a color style there (text ranges with fills of their own take its value in the layer's modes)",
             true,
             bind_variable
         ),
@@ -322,8 +322,19 @@ fn list_field(doc: &Document, target: &PaintTarget) -> Option<String> {
     {
         return None;
     }
+    Some(slot_field(target))
+}
+
+/// The binding key of the paint slot `target` stands for: `fills/<i>/color` or `strokes/<i>/color`.
+fn slot_field(target: &PaintTarget) -> String {
     let list = if target.fills { BoundList::Fills } else { BoundList::Strokes };
-    Some(format!("{}/{}/color", list.prefix(), target.index))
+    format!("{}/{}/color", list.prefix(), target.index)
+}
+
+/// The variable scopes of the paint slots `targets` stand for, one for each slot that has one: a
+/// color variable whose scopes cover them all is offered for the targets.
+pub fn scopes(doc: &Document, targets: &[PaintTarget]) -> Vec<&'static str> {
+    targets.iter().filter_map(|target| crate::cmd::variables::field_scope(doc, target.id, &slot_field(target))).collect()
 }
 
 /// Why `variable` can't be applied to `targets` (`selection.bindColorVariable`), if it can't: a
@@ -338,8 +349,7 @@ pub fn bind_refusal(doc: &Document, targets: &[PaintTarget], variable: &str) -> 
         if !target.paint(doc).is_some_and(|paint| matches!(paint.kind, PaintKind::Solid { .. })) {
             return Some("color variables bind to solid paints".into());
         }
-        let list = if target.fills { BoundList::Fills } else { BoundList::Strokes };
-        let field = format!("{}/{}/color", list.prefix(), target.index);
+        let field = slot_field(target);
         if !crate::cmd::variables::field_takes(doc, target.id, &field, var.kind) {
             return Some(format!("`{field}` doesn't take a color variable"));
         }
@@ -351,17 +361,19 @@ pub fn bind_refusal(doc: &Document, targets: &[PaintTarget], variable: &str) -> 
 /// none), so the Selection colors menu offers it there.
 pub fn in_scope(doc: &Document, targets: &[PaintTarget], variable: &str) -> bool {
     let Some(var) = doc.variables.get(variable) else { return false };
-    targets.iter().all(|target| {
-        let list = if target.fills { BoundList::Fills } else { BoundList::Strokes };
-        let field = format!("{}/{}/color", list.prefix(), target.index);
-        crate::cmd::variables::field_scope(doc, target.id, &field).is_none_or(|scope| var.in_scope(scope))
-    })
+    scopes(doc, targets).into_iter().all(|scope| var.in_scope(scope))
 }
 
 fn bind_variable(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "selection.bindColorVariable";
     let targets = checked_targets(s, p, CMD)?;
     let name = req_string(CMD, p, "variable")?;
+    let name = if get(p, "library").is_some() {
+        let (lib, key) = crate::cmd::library::variable_arg(s, CMD, p, "variable")?;
+        crate::cmd::library::import_variable(s, &lib, &key)?
+    } else {
+        name
+    };
     let doc = s.doc()?;
     if let Some(why) = bind_refusal(doc, &targets, &name) {
         return Err(bad(CMD, why));

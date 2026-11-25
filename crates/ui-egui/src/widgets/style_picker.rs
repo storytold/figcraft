@@ -7,6 +7,7 @@
 //! local style's edit button (or a right-click) edits its name, description and values; `+`
 //! creates a style from the selection (for text, the selected chars); the detach button unlinks
 //! it. Colour slots also list colour variables to bind (this file's, then each enabled library's).
+//! Opened from a Selection colors row ([`open_for_colors`]) it acts on that row's paints instead.
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{Paint, PaintKind};
@@ -14,6 +15,7 @@ use figcraft_doc::{
     Document, GridKind, ListStyle, Node, NodeId, ParagraphStyle, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, WrapStyle, trim_num,
 };
 use figcraft_engine::library;
+use figcraft_engine::selection_colors::{self, PaintTarget};
 use serde_json::{Value, json};
 
 use crate::FigApp;
@@ -160,6 +162,33 @@ pub struct Picker {
     y: f32,
     query: String,
     edit: Option<Editing>,
+    /// Whose styles the list shows (the source menu over the list).
+    source: Source,
+    /// The Selection colors row it was opened for: a pick applies to these paints
+    /// (`selection.*` commands) instead of `slot` of `ids`.
+    colors: Option<Vec<PaintTarget>>,
+}
+
+/// The source menu's choice: every source, this file's styles, or one enabled library's (by
+/// manifest id).
+#[derive(Clone, Debug, Default, PartialEq)]
+enum Source {
+    #[default]
+    All,
+    ThisFile,
+    Library(String),
+}
+
+impl Source {
+    /// Whether the styles of `lib` (`None`: this file) are listed.
+    fn shows(&self, lib: Option<&PublishedLibrary>) -> bool {
+        match (self, lib) {
+            (Source::All, _) => true,
+            (Source::ThisFile, None) => true,
+            (Source::Library(id), Some(l)) => l.manifest.id == *id,
+            _ => false,
+        }
+    }
 }
 
 impl Picker {
@@ -174,7 +203,17 @@ pub fn open(app: &mut FigApp, ui: &Ui, ids: &[NodeId], slot: StyleSlot) {
     // Opening the style picker closes the colour picker (it would linger beside it).
     crate::colorpicker::close(app);
     app.ui.style_picker_popover = None;
-    app.ui.style_picker = Some(Picker { slot, ids: ids.to_vec(), y, query: String::new(), edit: None });
+    app.ui.style_picker = Some(Picker { slot, ids: ids.to_vec(), y, query: String::new(), edit: None, source: Source::All, colors: None });
+}
+
+/// Open the picker for a Selection colors row, level with the pointer: the style or colour
+/// variable picked applies to the row's paints `targets`, and Detach and `+` act on them.
+pub fn open_for_colors(app: &mut FigApp, ui: &Ui, targets: &[PaintTarget]) {
+    let ids = app.session.selection();
+    open(app, ui, &ids, StyleSlot::Fill);
+    if let Some(p) = &mut app.ui.style_picker {
+        p.colors = Some(targets.to_vec());
+    }
 }
 
 /// Open the picker for `slot` of the selection (the control channel), optionally editing `style`.
@@ -183,11 +222,17 @@ pub fn open_for_selection(app: &mut FigApp, slot: StyleSlot, style: Option<&str>
     let edit = style.and_then(|s| app.session.doc().ok()?.style(s).map(editing));
     crate::colorpicker::close(app);
     app.ui.style_picker_popover = None;
-    app.ui.style_picker = Some(Picker { slot, ids, y: 140.0, query: String::new(), edit });
+    app.ui.style_picker = Some(Picker { slot, ids, y: 140.0, query: String::new(), edit, source: Source::All, colors: None });
 }
 
 fn editing(s: &Style) -> Editing {
     Editing { id: s.id.clone(), name: s.name.clone(), description: s.description.clone(), focus: false }
+}
+
+/// The style a Selection colors row's paints `targets` link to, as [`link_of`] answers for a
+/// slot: the row as the selection colors of `ids` list it now (a row that changed links to none).
+fn colors_link(doc: &Document, ids: &[NodeId], targets: &[PaintTarget]) -> Option<Option<String>> {
+    Some(selection_colors::collect(doc, ids).into_iter().find(|c| c.targets == targets).and_then(|c| c.style))
 }
 
 /// The style `slot` of `ids` links to: `Some(Some(id))` one style, `Some(None)` none, None when
@@ -266,6 +311,15 @@ impl Key {
             q["target"] = json!(slot.key());
         }
         (if self.library.is_some() { "library.applyStyle" } else { "style.apply" }, q)
+    }
+
+    /// The command (and its params) applying this colour style to a Selection colors row's paints.
+    fn apply_to_colors(&self, targets: &[PaintTarget]) -> (&'static str, Value) {
+        let mut q = json!({"targets": targets, "style": self.style});
+        if let Some(lib) = &self.library {
+            q["library"] = json!(lib);
+        }
+        ("selection.applyColorStyle", q)
     }
 }
 
@@ -522,12 +576,37 @@ fn offered<'a>(doc: &'a Document, lib: Option<&'a PublishedLibrary>, slot: Style
     }
 }
 
+/// The source menu over the style list (shown when the file has libraries): All libraries, This
+/// file, then each library by name, the chosen one ticked.
+fn source_menu(ui: &mut Ui, libs: &[std::sync::Arc<PublishedLibrary>], source: &mut Source) {
+    let label = match source {
+        Source::All => tr("All libraries").to_string(),
+        Source::ThisFile => tr("This file").to_string(),
+        Source::Library(id) => libs.iter().find(|l| l.manifest.id == *id).map(|l| l.manifest.name.clone()).unwrap_or_default(),
+    };
+    let resp = widgets::dropdown(ui, &label, W, None);
+    crate::right::menu_popup(&resp).width(W).show(|ui| {
+        let mut choices = vec![(Source::All, tr("All libraries").to_string()), (Source::ThisFile, tr("This file").to_string())];
+        choices.extend(libs.iter().map(|l| (Source::Library(l.manifest.id.clone()), l.manifest.name.clone())));
+        for (choice, name) in choices {
+            let mark = if *source == choice { "✓ " } else { "   " };
+            if crate::right::menu_item(ui, &format!("{mark}{name}"), "") {
+                *source = choice;
+                ui.close();
+            }
+        }
+    });
+}
+
 /// The style list: header, search, this file's and the libraries' styles by folder, and (colour
 /// slots) colour variables.
 fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
     let t = Tokens::get(ui.ctx());
     let slot = p.slot;
-    let link = link_of(app, doc, &p.ids, slot);
+    let link = match &p.colors {
+        Some(targets) => colors_link(doc, &p.ids, targets),
+        None => link_of(app, doc, &p.ids, slot),
+    };
     let applied = link.clone().flatten().map(|id| Key::of_local(doc, &id));
     let grid = slot.has_grid() && app.ui.style_grid;
     // The title is the popover's; this row keeps the view toggle, detach and create.
@@ -539,7 +618,8 @@ fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut 
         r
     };
     let create_tip = if slot == StyleSlot::Text { tr("Create style from the selected text") } else { tr("Create style") };
-    if menu_icon(ui, slot_rect(), Icon::Plus, create_tip, false).clicked() {
+    let can_create = p.colors.as_ref().is_none_or(|targets| selection_colors::create_refusal(doc, targets).is_none());
+    if can_create && menu_icon(ui, slot_rect(), Icon::Plus, create_tip, false).clicked() {
         out.act = Some(Act::Create);
     }
     if link != Some(None) && menu_icon(ui, slot_rect(), Icon::Detach, tr("Detach style"), false).clicked() {
@@ -560,16 +640,34 @@ fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut 
     ui.add_space(4.0);
     let q = p.query.trim().to_lowercase();
     let libs = crate::variable_ui::libraries(app, doc);
-    let mut sources: Vec<(Option<&PublishedLibrary>, Vec<&Style>)> = vec![(None, offered(doc, None, slot, &q))];
-    for l in &libs {
+    if !libs.is_empty() {
+        source_menu(ui, &libs, &mut p.source);
+        ui.add_space(4.0);
+    }
+    if let Source::Library(id) = &p.source
+        && !libs.iter().any(|l| l.manifest.id == *id)
+    {
+        p.source = Source::All;
+    }
+    let mut sources: Vec<(Option<&PublishedLibrary>, Vec<&Style>)> = Vec::new();
+    if p.source.shows(None) {
+        sources.push((None, offered(doc, None, slot, &q)));
+    }
+    for l in libs.iter().filter(|l| p.source.shows(Some(l))) {
         let list = offered(doc, Some(l), slot, &q);
         if !list.is_empty() {
             sources.push((Some(l.as_ref()), list));
         }
     }
-    let colors = if slot.paints() {
+    // A Selection colors row takes a colour variable only where every paint is solid.
+    let solid =
+        p.colors.as_ref().is_none_or(|targets| targets.iter().all(|t| t.paint(doc).is_some_and(|pt| matches!(pt.kind, PaintKind::Solid { .. }))));
+    let colors = if slot.paints() && solid {
         // Variables scoped to every selected layer's fill (or stroke), as the Design panel's pickers offer.
-        let scopes: Vec<_> = p.ids.iter().filter_map(|id| figcraft_engine::cmd::variables::field_scope(doc, *id, slot.key())).collect();
+        let scopes: Vec<_> = match &p.colors {
+            Some(targets) => selection_colors::scopes(doc, targets),
+            None => p.ids.iter().filter_map(|id| figcraft_engine::cmd::variables::field_scope(doc, *id, slot.key())).collect(),
+        };
         crate::variable_ui::groups(doc, &libs, |_, v| {
             v.kind == VariableType::Color && (q.is_empty() || v.name.to_lowercase().contains(&q)) && scopes.iter().all(|s| v.in_scope(s))
         })
@@ -1163,6 +1261,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let mut close = closed;
     let ids = p.ids.clone();
     let slot = p.slot;
+    let colors = p.colors.clone();
     // The canvas shows the text style under the pointer on the selected text.
     if slot == StyleSlot::Text
         && !close
@@ -1174,20 +1273,38 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
     match out.act {
         Some(Act::Apply(key)) => {
-            let (cmd, params) = key.apply(&ids, slot);
+            let (cmd, params) = match &colors {
+                Some(targets) => key.apply_to_colors(targets),
+                None => key.apply(&ids, slot),
+            };
             app.run(cmd, params);
             close = true;
         }
         Some(Act::Bind(pick)) => {
-            crate::variable_ui::bind(app, &ids, slot.key(), &pick);
+            match &colors {
+                Some(targets) => {
+                    let mut q = json!({"targets": targets, "variable": pick.id});
+                    if let Some(lib) = &pick.library {
+                        q["library"] = json!(lib);
+                    }
+                    app.run("selection.bindColorVariable", q);
+                }
+                None => crate::variable_ui::bind(app, &ids, slot.key(), &pick),
+            }
             close = true;
         }
         Some(Act::Detach) => {
-            app.run("style.detach", json!({"ids": ids, "which": slot.key()}));
+            match &colors {
+                Some(targets) => app.run("selection.detachColor", json!({"targets": targets})),
+                None => app.run("style.detach", json!({"ids": ids, "which": slot.key()})),
+            };
         }
         Some(Act::Create) => {
             let name = next_name(&doc, slot.default_name());
-            let made = app.run("style.create", json!({"type": slot.create_type(), "name": name, "from": ids.first()}));
+            let made = match &colors {
+                Some(targets) => app.run("selection.createColorStyle", json!({"targets": targets, "name": name})),
+                None => app.run("style.create", json!({"type": slot.create_type(), "name": name, "from": ids.first()})),
+            };
             if let Some(id) = made.as_ref().and_then(|v| v["id"].as_str()) {
                 p.query.clear();
                 p.edit = Some(Editing { id: id.to_string(), name, description: String::new(), focus: true });
@@ -1246,7 +1363,7 @@ fn edit_local(app: &mut FigApp, ui: &Ui, slot: StyleSlot, id: &str) {
     let edit = app.session.doc().ok().and_then(|d| d.style(id).map(editing));
     crate::colorpicker::close(app);
     app.ui.style_picker_popover = None;
-    app.ui.style_picker = Some(Picker { slot, ids: app.session.selection(), y, query: String::new(), edit });
+    app.ui.style_picker = Some(Picker { slot, ids: app.session.selection(), y, query: String::new(), edit, source: Source::All, colors: None });
 }
 
 /// `style.move` for the shown style `from` dropped at shown position `to` (`shown` in display
