@@ -1,6 +1,6 @@
 use base64::Engine as _;
 
-use super::css::{Tokens, css_decls};
+use super::css::{Tokens, css_decls_for_markup};
 use super::{CodeLang, Ctx, Document, LayoutMode, Node, NodeId, NodeKind, Param, Sizing, indent, num, with_v_if};
 
 // ------------------------------------------------------------------ HTML and React markup
@@ -92,16 +92,17 @@ fn attr_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace(['\n', '\r'], " ")
 }
 
-/// A vector as a self-contained SVG asset. CSS owns the node's placement and opacity, so the
-/// embedded geometry is node-local and fully opaque. No filesystem export or URL escaping is
-/// needed, and nested vectors work exactly like top-level ones.
-fn vector_data_uri(doc: &mut Document, n: &Node) -> Option<String> {
+/// A vector as a self-contained SVG asset and its local painted bounds. CSS owns the node's
+/// placement and opacity, so the embedded geometry is node-local and fully opaque. No filesystem
+/// export or URL escaping is needed, and nested vectors work exactly like top-level ones.
+fn vector_data_uri(doc: &mut Document, n: &Node) -> Option<(String, figcraft_geom::Rect)> {
     let node = doc.get_mut(n.id).ok()?;
     node.parent = None;
     node.transform = figcraft_geom::Affine::IDENTITY;
     node.opacity = 1.0;
+    let bounds = figcraft_render::export_bounds(doc, n.id)?;
     let svg = figcraft_svg::export_svg(doc, &[n.id], &Default::default())?;
-    Some(format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(svg)))
+    Some((format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(svg)), bounds))
 }
 
 /// Text as JSX children: HTML escapes, braces as expressions, line breaks as `<br />`.
@@ -194,6 +195,18 @@ fn placement_decls(n: &Node, parent: Option<&Node>, root: bool, in_flow: bool) -
         }
     }
     decls
+}
+
+/// Extra declarations around an embedded vector image. The inner SVG can be larger than the
+/// node box, so the wrapper must establish positioning in flex flow and leave overflow visible.
+fn vector_wrapper_decls(n: &Node, in_flow: bool, own: &mut String) {
+    if !matches!(n.kind, NodeKind::Vector { .. }) {
+        return;
+    }
+    own.push_str("overflow: visible;\n");
+    if in_flow {
+        own.push_str("position: relative;\n");
+    }
 }
 
 impl<'c, 'a> Markup<'c, 'a> {
@@ -312,6 +325,30 @@ impl<'c, 'a> Markup<'c, 'a> {
         }
     }
 
+    /// A node-sized wrapper and its inner SVG image. The inner rule uses the exported bounds,
+    /// so strokes and effects keep their size and can overflow the wrapper without clipping.
+    fn vector_element(&mut self, n: &Node, depth: usize, path: &str, class: &str, attr: &str, pad: &str, attrs: &str) {
+        let root_doc = self.ctx.doc;
+        let asset = vector_data_uri(self.asset_doc.get_or_insert_with(|| root_doc.clone()), n);
+        let bounds = asset.as_ref().map(|(_, b)| *b).unwrap_or_else(|| n.local_rect());
+        let asset_class = class_name(&format!("{class} asset"), "asset", &mut self.used);
+        let asset_decls = format!(
+            "display: block;\nposition: absolute;\nleft: {}px;\ntop: {}px;\nwidth: {}px;\nheight: {}px;\nmax-width: none;\n",
+            num(bounds.x0),
+            num(bounds.y0),
+            num(bounds.width()),
+            num(bounds.height())
+        );
+        self.rule(&format!("{path}/$svg"), &asset_class, asset_decls);
+        // Leptos attributes are Rust string literals; the other targets use HTML escaping.
+        let lang = self.lang;
+        let quote = |value: &str| if lang == CodeLang::Leptos { format!("{value:?}") } else { format!("\"{}\"", attr_escape(value)) };
+        let src = asset.map(|(uri, _)| format!(" src={}", quote(&uri))).unwrap_or_default();
+        let alt = quote(&n.name);
+        let inner = self.pad(depth + 1);
+        self.markup.push_str(&format!("{pad}<div {attr}=\"{class}\"{attrs}>\n{inner}<img {attr}=\"{asset_class}\"{src} alt={alt} />\n{pad}</div>\n"));
+    }
+
     fn element(&mut self, n: &Node, parent: Option<&Node>, depth: usize, path: &str) {
         let doc = self.ctx.doc;
         let root = n.id == self.ctx.root;
@@ -341,7 +378,7 @@ impl<'c, 'a> Markup<'c, 'a> {
         }
         let hugs = n.layout.is_some() || matches!(n.kind, NodeKind::Text(_));
         let hug = (hugs && n.child_layout.sizing_h == Sizing::Hug, hugs && n.child_layout.sizing_v == Sizing::Hug);
-        let mut own = css_decls(doc, n, &mut self.tokens, hug);
+        let mut own = css_decls_for_markup(doc, n, &mut self.tokens, hug);
         let page = self.ctx.doc.node(self.ctx.root).map_or(f64::INFINITY, |r| r.width);
         if self.fluid && (n.layout.is_some() || matches!(n.kind, NodeKind::Text(_)) || (!root && n.width >= page * self.fluid_leaves)) {
             // Full width, or sized by the flex row (`flex: 1`): no cap needed.
@@ -350,6 +387,7 @@ impl<'c, 'a> Markup<'c, 'a> {
         if n.layout.is_none() && !n.children.is_empty() && !root && in_flow {
             own.push_str("position: relative;\n");
         }
+        vector_wrapper_decls(n, in_flow, &mut own);
         decls.push_str(&own);
         self.rule(path, &class, decls);
         // The root's variant attributes, and a Vue `v-if` guard, ride on the open tag.
@@ -361,16 +399,7 @@ impl<'c, 'a> Markup<'c, 'a> {
         }
         let open = |tag: &str| format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>");
         match &n.kind {
-            NodeKind::Vector { .. } => {
-                // Leptos attributes are Rust string literals; the other targets use HTML escaping.
-                let quote = |value: &str| if self.lang == CodeLang::Leptos { format!("{value:?}") } else { format!("\"{}\"", attr_escape(value)) };
-                let root_doc = self.ctx.doc;
-                let src = vector_data_uri(self.asset_doc.get_or_insert_with(|| root_doc.clone()), n)
-                    .map(|uri| format!(" src={}", quote(&uri)))
-                    .unwrap_or_default();
-                let alt = quote(&n.name);
-                self.markup.push_str(&format!("{pad}<img {attr}=\"{class}\"{src} alt={alt}{attrs} />\n"));
-            }
+            NodeKind::Vector { .. } => self.vector_element(n, depth, path, &class, attr, &pad, &attrs),
             NodeKind::Text(t) => {
                 let body = self.text_body(n, t);
                 self.markup.push_str(&format!("{}{body}</p>\n", open("p")));

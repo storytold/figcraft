@@ -597,7 +597,8 @@ mod tests {
         s.doc_mut().unwrap().get_mut(check).unwrap().fills = vec![Paint::solid(Color::WHITE)];
         let doc = s.doc().unwrap();
         let html = code_for(doc, icon, CodeLang::Html);
-        assert!(html.contains("<img class=\"check\" src=\"data:image/svg+xml;base64,"), "{html}");
+        assert!(html.contains("<div class=\"check\">"), "node wrapper: {html}");
+        assert!(html.contains("<img class=\"check-asset\" src=\"data:image/svg+xml;base64,"), "{html}");
         assert!(html.contains("alt=\"check\""), "{html}");
         assert!(!html.contains("border: 2px solid"), "{html}");
         assert!(!html.contains("background:"), "the vector's fill belongs to its SVG, not its box: {html}");
@@ -642,6 +643,58 @@ mod tests {
         assert!(!html.contains("src=\"check#dark.svg\""), "{html}");
         let leptos = code_for(s.doc().unwrap(), icon, CodeLang::Leptos);
         assert!(leptos.contains("alt=\"icon\\\\q\""), "{leptos}");
+    }
+
+    #[test]
+    fn vector_asset_keeps_stroke_overflow_inside_a_node_sized_wrapper() {
+        let mut s = Session::new();
+        let badge = id_of(
+            &s.execute(
+                "vector.create",
+                &json!({"path": "M0 0 H24 V24 H0 Z", "name": "badge", "props": {"fill": "none", "stroke": "#1F3A68", "strokeWeight": 2}}),
+            )
+            .unwrap()["id"],
+        )
+        .unwrap();
+        s.doc_mut().unwrap().get_mut(badge).unwrap().stroke.miter_limit = 1.0;
+        let html = code_for(s.doc().unwrap(), badge, CodeLang::Html);
+        assert!(html.contains("<div class=\"badge\">"), "node-sized wrapper: {html}");
+        assert!(html.contains("<img class=\"badge-asset\""), "inner asset: {html}");
+        assert!(html.contains("overflow: visible;"), "stroke is not clipped: {html}");
+        assert!(html.contains("left: -2px;") && html.contains("top: -2px;"), "asset offset: {html}");
+        assert!(html.contains("width: 28px;") && html.contains("height: 28px;"), "asset keeps its bounds: {html}");
+        assert!(html.contains("max-width: none;"), "the wrapper cannot shrink the asset: {html}");
+        let svg = embedded_svgs(&html);
+        assert_eq!(svg.len(), 1, "{html}");
+        assert!(svg[0].contains("width=\"28\" height=\"28\""), "{}", svg[0]);
+        let tailwind = code_for(s.doc().unwrap(), badge, CodeLang::Tailwind);
+        assert!(tailwind.contains("overflow-visible") && tailwind.contains("max-w-none"), "{tailwind}");
+        assert!(tailwind.contains("w-7") && tailwind.contains("h-7"), "28px on the spacing scale: {tailwind}");
+    }
+
+    #[test]
+    fn vector_markup_does_not_duplicate_svg_effects() {
+        let mut s = Session::new();
+        let vector = id_of(
+            &s.execute("vector.create", &json!({"path": "M0 0 H24 V24 H0 Z", "name": "effect icon", "props": {"fill": "#FFFFFF"}})).unwrap()["id"],
+        )
+        .unwrap();
+        s.doc_mut().unwrap().get_mut(vector).unwrap().effects = vec![
+            figcraft_doc::Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(8.0)), visible: true },
+            figcraft_doc::Effect { kind: EffectKind::DropShadow(Shadow { radius: 4.0, offset: (3.0, 4.0), ..Default::default() }), visible: true },
+        ];
+        let html = code_for(s.doc().unwrap(), vector, CodeLang::Html);
+        assert!(!html.contains("filter: blur(") && !html.contains("box-shadow:"), "the SVG owns these effects: {html}");
+        let svg = embedded_svgs(&html);
+        assert_eq!(svg.len(), 1, "{html}");
+        assert!(svg[0].contains("feGaussianBlur") && svg[0].contains("feOffset"), "{}", svg[0]);
+        let standalone = code_for(s.doc().unwrap(), vector, CodeLang::Css);
+        assert!(standalone.contains("filter: blur(4px)") && standalone.contains("box-shadow:"), "standalone CSS is unchanged: {standalone}");
+
+        let rectangle = id_of(&s.execute("shape.rectangle", &json!({"name": "ordinary", "width": 24, "height": 24})).unwrap()["id"]).unwrap();
+        s.doc_mut().unwrap().get_mut(rectangle).unwrap().effects = s.doc().unwrap().node(vector).unwrap().effects.clone();
+        let ordinary = code_for(s.doc().unwrap(), rectangle, CodeLang::Html);
+        assert!(ordinary.contains("filter: blur(4px)") && ordinary.contains("box-shadow:"), "ordinary shapes keep CSS effects: {ordinary}");
     }
 
     #[test]
