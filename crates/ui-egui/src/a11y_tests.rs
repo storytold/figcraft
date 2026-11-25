@@ -137,8 +137,9 @@ fn tab_walks_the_properties_controls_then_leaves_the_panel_in_the_framework_orde
         if region(&u) != Region::Properties {
             break;
         }
+        // Some stops carry no accessible name; only named ones must not repeat.
         let n = name(&u);
-        assert!(!seen.contains(&n), "Tab revisited {n} before leaving the panel: {seen:?}");
+        assert!(n.is_empty() || !seen.contains(&n), "Tab revisited {n} before leaving the panel: {seen:?}");
         seen.push(n);
     }
     assert_ne!(region(&u), Region::Properties, "Tab after the last Properties control leaves the panel");
