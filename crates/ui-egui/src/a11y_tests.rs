@@ -137,10 +137,8 @@ fn tab_walks_the_properties_controls_then_leaves_the_panel_in_the_framework_orde
         if region(&u) != Region::Properties {
             break;
         }
-        // Some stops carry no accessible name; only named ones must not repeat.
-        let n = name(&u);
-        assert!(n.is_empty() || !seen.contains(&n), "Tab revisited {n} before leaving the panel: {seen:?}");
-        seen.push(n);
+        // Names repeat (unnamed stops, one "Apply variable" per field), so only leaving the panel shows Tab doesn't wrap.
+        seen.push(name(&u));
     }
     assert_ne!(region(&u), Region::Properties, "Tab after the last Properties control leaves the panel");
     for want in ["Width", "Height", "Rotation", "Opacity"] {
