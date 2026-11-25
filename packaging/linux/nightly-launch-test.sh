@@ -55,10 +55,14 @@ check "$tar" "$(printf 'CONFIG=\nDATA=\n<--launch-profile>\n<nightly-v1>\n<--pro
 for flag in --version -V; do
   check "$tar" "$(printf 'CONFIG=\nDATA=\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n<%s>\n<--version>\n' "$tar_profile")" "$flag"
 done
-# The template has no pass-through: a Launcher command line is wrapped like any other argument, and
-# its own profile root is the one used. Nothing the caller wrote is dropped.
-check "$tar" "$(printf 'CONFIG=\nDATA=\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n<%s>\n<-->\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n<%s>\n<-->\n<chosen.figcraft>\n' \
-  "$tar_profile" "$work/launcher profile")" --launch-profile nightly-v1 --profile-root "$work/launcher profile" -- chosen.figcraft
+# The ArtCraft Launcher starts the entry point with its own profile pair; the template hands that
+# line to the GUI unchanged and keeps no second pair of its own.
+check "$tar" "$(printf 'CONFIG=\nDATA=\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n<%s>\n<-->\n<chosen.figcraft>\n' \
+  "$work/launcher profile")" --launch-profile nightly-v1 --profile-root "$work/launcher profile" -- chosen.figcraft
+# Anything else is wrapped in the template's own root, including a profile line that does not open
+# the arguments.
+check "$tar" "$(printf 'CONFIG=\nDATA=\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n<%s>\n<-->\n<--profile-root>\n<%s>\n<-->\n' \
+  "$tar_profile" "$work/launcher profile")" --profile-root "$work/launcher profile" --
 [[ ! -e "$tar_profile" ]] || { echo "a version or launch created the tar profile" >&2; exit 1; }
 # XDG_DATA_HOME decides the root when it is set.
 XDG_DATA_HOME="$work/xdg data" check "$tar" "$(printf 'CONFIG=\nDATA=%s\n<--launch-profile>\n<nightly-v1>\n<--profile-root>\n<%s>\n<-->\n<%s>\n' \

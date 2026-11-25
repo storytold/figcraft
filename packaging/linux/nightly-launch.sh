@@ -9,6 +9,8 @@ readonly target
 profile_root="${XDG_DATA_HOME:-$HOME/.local/share}/ai.storyteller.figcraft.nightly"
 readonly profile_root
 case "${1-}" in
+  # The ArtCraft Launcher passes its own profile and per-install root; the app validates the pair.
+  --launch-profile) exec "$target" "$@" ;;
   --version | -V) exec "$target" --launch-profile nightly-v1 --profile-root "$profile_root" --version ;;
 esac
 exec "$target" --launch-profile nightly-v1 --profile-root "$profile_root" -- "$@"
