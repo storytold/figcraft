@@ -34,9 +34,9 @@ jobs:
       checks: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@88148a57ef09ef407d73c0f385e04cc7f4c2720a
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@fc7124a1defa96813aee060031dc8b4d2afa3652
     with:
-      tooling-revision: 88148a57ef09ef407d73c0f385e04cc7f4c2720a
+      tooling-revision: fc7124a1defa96813aee060031dc8b4d2afa3652
       app-name: figcraft
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_run_attempt: ${{ inputs.producer_run_attempt }}
