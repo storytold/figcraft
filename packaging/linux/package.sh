@@ -86,11 +86,11 @@ for bin in "${BINS[@]}"; do
 done
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 if [[ "$IS_NIGHTLY" = 1 ]]; then
-  # The nightly entry point is the shared launcher (packaging/linux/nightly-launch.sh): every
-  # format starts the GUI on the Launcher's nightly-v1 profile, so nothing reads or writes the
+  # The nightly entry point is the distro launcher (packaging/linux/nightly-package-launch.sh):
+  # every format starts the GUI on the Launcher's nightly-v1 profile, so nothing reads or writes the
   # stable app's user state. The deb/rpm wrapper and the AppImage entry below specialise its path.
   awk -v real='"$(dirname "$0")/figcraft"' '{ gsub(/@REAL_BIN@/, real); print }' \
-    "$HERE/nightly-launch.sh" >"$STAGE/usr/bin/figcraft-nightly"
+    "$HERE/nightly-package-launch.sh" >"$STAGE/usr/bin/figcraft-nightly"
   chmod 755 "$STAGE/usr/bin/figcraft-nightly"
   # The entry starts the launcher, names the Nightly and registers no file types (a Nightly never
   # takes a document association from the stable app). `#` delimits, so \(...\|...\) is alternation.
@@ -174,10 +174,10 @@ if has deb || has rpm; then
     rm -rf "$NFPM_STAGE"
     cp -R "$STAGE" "$NFPM_STAGE"
     install -Dm755 "$NFPM_STAGE/usr/bin/figcraft" "$NFPM_STAGE/usr/lib/figcraft-nightly/figcraft"
-    # The shared launcher (packaging/linux/nightly-launch.sh) starts the GUI on the Launcher's
-    # nightly-v1 profile, so the package never reads or writes the stable app's user state.
+    # The distro launcher (packaging/linux/nightly-package-launch.sh) starts the GUI on the
+    # Launcher's nightly-v1 profile, so the package never reads or writes the stable app's user state.
     awk -v real='/usr/lib/figcraft-nightly/figcraft' '{ gsub(/@REAL_BIN@/, real); print }' \
-      "$HERE/nightly-launch.sh" >"$NFPM_STAGE/usr/bin/$NFPM_BIN"
+      "$HERE/nightly-package-launch.sh" >"$NFPM_STAGE/usr/bin/$NFPM_BIN"
     chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_BIN"
     rm -f "$NFPM_STAGE/usr/bin/figcraft"
     if [[ "$HAS_CLI" = 1 ]]; then
