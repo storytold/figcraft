@@ -216,12 +216,9 @@ pub fn canvas(nav: &mut Nav, resp: &Response, describe: impl FnOnce() -> String)
     });
 }
 
-/// While the canvas has the keyboard, Escape is a shortcut there and a press elsewhere takes it away.
+/// While the canvas has the keyboard, Escape is a shortcut there.
 fn canvas_keys(ctx: &Context, canvas: Id) {
-    ctx.memory_mut(|m| {
-        m.set_focus_lock_filter(canvas, egui::EventFilter { escape: true, ..Default::default() });
-        m.set_focus_surrender(canvas, egui::SurrenderFocusOn::Presses);
-    });
+    ctx.memory_mut(|m| m.set_focus_lock_filter(canvas, egui::EventFilter { escape: true, ..Default::default() }));
 }
 
 /// An open popup drawn by the app itself (egui `Area` `area`), opened from `opener`: a keyboard
@@ -530,7 +527,7 @@ pub fn end(app: &mut FigApp, ctx: &Context) {
 }
 
 /// The canvas asks for the keyboard when its file opened or came to the front, and while nothing has
-/// it in a mode that needs Tab (a click on a panel or the toolbar leaves it nowhere). It waits for a
+/// it in a mode that needs Tab. It waits for a
 /// dialog, menu or popup to close, and leaves the keyboard with a text field and with a floating
 /// window's control.
 fn focus_canvas(app: &mut FigApp, ctx: &Context) {
