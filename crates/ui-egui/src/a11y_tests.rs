@@ -42,6 +42,12 @@ fn click(u: &mut Ui, at: Pos2) {
     u.frame(vec![]);
 }
 
+/// The middle of the control with the keyboard.
+fn focused_at(u: &Ui) -> Pos2 {
+    let id = u.ctx.memory(|m| m.focused()).unwrap();
+    u.ctx.viewport(|v| v.prev_pass.widgets.get(id).map(|w| w.rect.center())).unwrap()
+}
+
 fn nothing_focused(u: &mut Ui) {
     u.ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap_or(egui::Id::NULL)));
     u.frame(vec![]);
@@ -336,6 +342,38 @@ fn a_pointer_press_ends_keyboard_mode() {
     u.button(p, false);
     assert!(!u.app.ui.nav.keyboard);
     assert_eq!(region(&u), Region::Canvas);
+}
+
+#[test]
+fn tab_after_a_click_turns_keyboard_mode_on_and_a_click_into_a_field_leaves_it_off() {
+    let (mut u, ..) = setup();
+    f6(&mut u, true);
+    f6(&mut u, true);
+    assert_eq!(name(&u), "Move");
+    let at = focused_at(&u);
+    click(&mut u, at);
+    assert!(!u.app.ui.nav.keyboard);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert!(u.app.ui.nav.keyboard, "Tab from a toolbar button");
+    while region(&u) != Region::Properties {
+        f6(&mut u, false);
+    }
+    for _ in 0..100 {
+        if name(&u) == "Width" {
+            break;
+        }
+        press(&mut u, Key::Tab, Modifiers::NONE);
+    }
+    assert_eq!(name(&u), "Width");
+    let at = focused_at(&u);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("64".into())]);
+    assert!(u.ctx.text_edit_focused(), "the click opened the field's editor");
+    assert!(!u.app.ui.nav.keyboard, "the app moved the keyboard into the editor, not a key");
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(name(&u), "Height");
+    assert!(u.app.ui.nav.keyboard, "Tab from the field");
 }
 
 #[test]

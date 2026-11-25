@@ -130,6 +130,9 @@ pub struct Nav {
     shown: Option<u64>,
     /// A file opened or came to the front, and its canvas has yet to ask for the keyboard.
     wants_canvas: bool,
+    /// What had the keyboard as the last frame ended; the outer none is a last frame with no
+    /// regions (the home screen, the presenter).
+    focus_at_end: Option<Option<Id>>,
 }
 
 impl Nav {
@@ -333,6 +336,7 @@ fn keys(app: &mut FigApp, ctx: &Context) {
         }
     }
     let focused = ctx.memory(|m| m.focused());
+    let at_end = app.ui.nav.focus_at_end.take();
     let widget = focused.and_then(|id| last_widget(ctx, id));
     let on_background = widget.is_none_or(|w| w.layer_id == LayerId::background());
     // The control with the keyboard decides the region (a click into a field, a Tab in a panel);
@@ -346,6 +350,9 @@ fn keys(app: &mut FigApp, ctx: &Context) {
     if blocked(app) {
         app.ui.nav.pending = None;
         return;
+    }
+    if widget.is_some() && on_background && press.is_none() {
+        tabbed(&mut app.ui.nav, ctx, at_end, focused);
     }
     // F6 / Shift+F6 (and the commands they run).
     if let Some((id, key, m)) = binding_pressed(ctx, &[NEXT_REGION, PREVIOUS_REGION]) {
@@ -447,6 +454,22 @@ fn keys(app: &mut FigApp, ctx: &Context) {
     }
 }
 
+/// Tab from one control to another turns keyboard mode on. The framework takes the key out of egui's
+/// input and moves the focus before the frame, while the app and a press move it as a frame draws:
+/// only Tab leaves the focus on another control than the last frame ended with. A closing dialog or
+/// menu, in a layer of its own, gives the focus back between frames too.
+fn tabbed(nav: &mut Nav, ctx: &Context, at_end: Option<Option<Id>>, focused: Option<Id>) {
+    let (Some(before), Some(id)) = (at_end, focused) else { return };
+    let from_region = before.is_none_or(|b| last_widget(ctx, b).is_some_and(|w| w.layer_id == LayerId::background()));
+    if before == focused || !from_region || nav.last.canvas == focused {
+        return;
+    }
+    nav.keyboard = true;
+    if nav.region == Region::Properties {
+        nav.scroll_to = Some(id);
+    }
+}
+
 /// The first of the commands `ids` a key pressed this frame is bound to (canvas keys), with the key.
 fn binding_pressed(ctx: &Context, ids: &[&str]) -> Option<(&'static str, Key, Modifiers)> {
     ctx.input(|i| {
@@ -521,6 +544,7 @@ pub fn end(app: &mut FigApp, ctx: &Context) {
         }
         ctx.request_repaint();
     }
+    nav.focus_at_end = Some(ctx.memory(|m| m.focused()));
     if nav.keyboard {
         ring(ctx);
     }
