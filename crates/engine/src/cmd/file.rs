@@ -47,41 +47,6 @@ pub use version::MAX_AUTOSAVES;
 pub(crate) use version::{add_version, keep_in_history, read_version, unique_id};
 use version::{autosave, restore_version, save_version, version_index, version_json, version_list};
 
-/// The file base a layer exports to, shared by filesystem export and generated asset references.
-/// Preserves case and ordinary spaces, strips leading/trailing dots and whitespace, and caps at
-/// 100 characters and 200 bytes so a number and extension still fit common filesystems.
-pub fn export_file_stem(name: &str) -> String {
-    let s = safe_file_name(name);
-    let s = s.trim_matches(|c: char| c == '.' || c.is_whitespace());
-    let cap = |s: &str| s.char_indices().take(100).take_while(|(i, c)| i + c.len_utf8() <= 200).map(|(_, c)| c).collect::<String>();
-    // Truncation can expose a device name; its escape must still fit the limits.
-    let s = crate::file_access::escape_device_names(&cap(s));
-    if s.is_empty() { "layer".into() } else { cap(&s) }
-}
-
-/// Case-insensitively unique export file bases, using the exporter's `" 2"`, `" 3"` suffixes.
-#[derive(Default)]
-pub struct ExportNames {
-    used: std::collections::BTreeSet<String>,
-    next_suffix: std::collections::HashMap<String, usize>,
-}
-
-impl ExportNames {
-    /// Resolve the next layer name exactly as the filesystem exporter does.
-    pub fn push(&mut self, layer_name: &str) -> String {
-        let base = export_file_stem(layer_name);
-        let next = self.next_suffix.entry(base.to_lowercase()).or_insert(1);
-        loop {
-            let k = *next;
-            *next += 1;
-            let candidate = if k == 1 { base.clone() } else { format!("{base} {k}") };
-            if self.used.insert(candidate.to_lowercase()) {
-                return candidate;
-            }
-        }
-    }
-}
-
 /// A new file of `kind` in a tab of its own.
 fn new_file(s: &mut Session, p: &Value, kind: FileKind) -> Result<Value> {
     let name = string(p, "name").unwrap_or_else(|| if kind == FileKind::Board { "Untitled board" } else { "Untitled" }.into());
