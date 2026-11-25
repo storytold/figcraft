@@ -5,7 +5,7 @@
 //! canvas where shortcuts work again, and a pointer press ends keyboard mode.
 
 use egui::accesskit::{Node, Role, Toggled};
-use egui::{Event, Key, Modifiers};
+use egui::{Event, Key, Modifiers, Pos2, pos2};
 use figcraft_doc::NodeId;
 use figcraft_engine::{Session, ToolId};
 use serde_json::json;
@@ -34,6 +34,18 @@ fn name(u: &Ui) -> String {
 
 fn region(u: &Ui) -> Region {
     u.app.ui.nav.region
+}
+
+fn click(u: &mut Ui, at: Pos2) {
+    u.button(at, true);
+    u.button(at, false);
+    u.frame(vec![]);
+}
+
+fn nothing_focused(u: &mut Ui) {
+    u.ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap_or(egui::Id::NULL)));
+    u.frame(vec![]);
+    assert!(u.ctx.memory(|m| m.focused()).is_none());
 }
 
 /// Two rectangles, "Rect A" and "Rect B" (listed above A: it's on top), A selected.
@@ -219,11 +231,58 @@ fn escape_returns_to_the_canvas_where_shortcuts_and_tab_work_again() {
 #[test]
 fn a_bare_tab_with_nothing_focused_selects_no_layer_and_moves_focus_into_the_window() {
     let (mut u, a, _) = setup();
-    assert!(u.ctx.memory(|m| m.focused()).is_none());
+    nothing_focused(&mut u);
     press(&mut u, Key::Tab, Modifiers::NONE);
     u.frame(vec![]);
     assert_eq!(u.app.session.selection(), vec![a], "the selection is unchanged");
     assert!(u.ctx.memory(|m| m.focused()).is_some(), "Tab focuses a stop in the window");
+}
+
+#[test]
+fn tab_after_a_click_on_the_canvas_selects_the_next_layer_also_after_escape() {
+    let (mut u, a, b) = setup();
+    nothing_focused(&mut u);
+    let at = u.app.to_screen(20.0, 15.0);
+    click(&mut u, at);
+    assert_eq!((name(&u), u.app.session.selection()), ("Canvas".to_string(), vec![a]));
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!((name(&u), u.app.session.selection()), ("Canvas".to_string(), vec![b]));
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(u.app.session.selection().is_empty());
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!((name(&u), u.app.session.selection().len()), ("Canvas".to_string(), 1));
+}
+
+#[test]
+fn a_click_on_a_panel_leaves_tab_to_pick_select() {
+    let (mut u, a, b) = setup();
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(a));
+    // Empty space below the layer rows.
+    let at = pos2(u.app.canvas.rect.min.x - 100.0, 850.0);
+    click(&mut u, at);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!((name(&u), u.app.picked()), ("Canvas".to_string(), Some(b)));
+}
+
+#[test]
+fn an_opened_file_gives_its_canvas_the_keyboard_once_a_dialog_has_closed() {
+    let (mut u, ..) = setup();
+    assert_eq!(name(&u), "Canvas");
+    nothing_focused(&mut u);
+    u.app.ui.about = true;
+    u.app.run("file.new", json!({}));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_ne!(name(&u), "Canvas", "About is open");
+    u.app.ui.about = false;
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(name(&u), "Canvas");
 }
 
 #[test]

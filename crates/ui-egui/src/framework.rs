@@ -6,9 +6,9 @@
 //! The runtime takes Escape, Tab and the clipboard events for the whole window unless one of FigCraft's own egui
 //! widgets has the keyboard. [`return_window_escape`] puts the window's Escape back into egui's input at the start of
 //! each window's frame, so FigCraft's dialogs, menus, tools and shortcuts read it from egui as they read every other
-//! key. The canvas is declared to the runtime with [`host_canvas`], which keeps Tab, the edit chords, the clipboard
-//! events and FigCraft's Alt+digit panel keys in egui's input for its shortcuts while nothing has the keyboard; a
-//! canvas that holds egui's focus (keyboard navigation) keeps Escape too, as one of FigCraft's own widgets does.
+//! key. The canvas is declared to the runtime with [`host_canvas`], which keeps the edit chords, the clipboard
+//! events and FigCraft's Alt+digit panel keys in egui's input for its shortcuts while nothing has the keyboard; the
+//! focused canvas keeps Tab and Escape too.
 
 use std::sync::{Arc, OnceLock};
 
@@ -140,9 +140,8 @@ impl FigApp {
 
 /// Declares the canvas `id`, drawn in this pass, as its window's document canvas. With nothing focused it is the
 /// window's key target: the edit chords, the clipboard events and the Alt+digit panel keys stay in egui's input for
-/// FigCraft's shortcuts, as do the arrows, Enter and the page keys. With `keeps_tab` Tab stays there too, for the
-/// canvas and FigCraft's region moves; without it, a Tab from nothing focused is egui's own focus move, which the
-/// runtime cancels for a Tab the canvas keeps.
+/// FigCraft's shortcuts, as do the arrows, Enter and the page keys; a Tab moves the focus into the window. The focused
+/// canvas has the same keys and Escape, and with `keeps_tab` Tab and Shift+Tab; without it they move the focus on.
 pub(crate) fn host_canvas(ctx: &egui::Context, id: egui::Id, keeps_tab: bool) {
     let keys = KeyUse::CANVAS.with_edits(EditSet::ALL).with_claims(alt_digit_claims());
     let keys = if keeps_tab { keys.with_keep(KeepKeys::Tab) } else { keys };

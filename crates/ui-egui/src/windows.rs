@@ -488,7 +488,7 @@ fn unsaved_question(ctx: &Context, names: &[String]) -> Option<CloseAnswer> {
             }
         });
         // Save is the default: Enter answers it when no button has the keyboard.
-        if answer.is_none() && ui.memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if answer.is_none() && !crate::a11y::field_focused(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             answer = Some(CloseAnswer::Save);
         }
     });

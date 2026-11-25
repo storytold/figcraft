@@ -178,22 +178,10 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     if egui::Popup::is_any_open(ctx) {
         return;
     }
-    let u = &mut app.ui;
-    let open = u.color_profile.is_some()
-        || u.menu_input.is_some()
-        || u.find.is_some()
-        || u.batch_rename.is_some()
-        || u.import_report.is_some()
-        || u.missing_fonts.is_some()
-        || u.confirm_close
-        || matches!(u.close_tab, Some(crate::windows::TabClose::Ask(_)))
-        || u.export_preview
-        || u.shortcuts_panel
-        || u.preferences
-        || u.about;
-    if !open || !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if !open(&app.ui) || !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         return;
     }
+    let u = &mut app.ui;
     if u.menu_input.take().is_some()
         || u.color_profile.take().is_some()
         || u.find.take().is_some()
@@ -212,6 +200,22 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
             return;
         }
     }
+}
+
+/// Whether one of the dialogs Escape closes ([`keys`]) is open.
+pub(crate) fn open(u: &crate::UiState) -> bool {
+    u.color_profile.is_some()
+        || u.menu_input.is_some()
+        || u.find.is_some()
+        || u.batch_rename.is_some()
+        || u.import_report.is_some()
+        || u.missing_fonts.is_some()
+        || u.confirm_close
+        || matches!(u.close_tab, Some(crate::windows::TabClose::Ask(_)))
+        || u.export_preview
+        || u.shortcuts_panel
+        || u.preferences
+        || u.about
 }
 
 /// Draw the app's dialogs and cards: pending opens/imports/missing fonts, About,
