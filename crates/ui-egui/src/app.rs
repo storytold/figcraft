@@ -174,6 +174,7 @@ impl FigApp {
         windows::begin(self, &ctx);
         let (files, prefs) = (self.session.docs.len(), self.session.prefs.clone());
         self.frame(ui);
+        windows::quit_key(&ctx);
         windows::settle(self, &ctx, files);
         if self.session.prefs != prefs {
             // This window too: a preference set during the frame (the interface size, the theme)

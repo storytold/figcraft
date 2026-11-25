@@ -16,7 +16,7 @@ use craft_host::target::ShellInfo;
 use craft_host::{AppInfo, Host};
 use craft_keymap::{Chord, Mods, Overrides};
 use craft_ui::fonts::{I18nScripts, SystemFonts, UiFonts};
-use craft_ui::runtime::commands::{CommandInput, CommandSet as _, NavCommand};
+use craft_ui::runtime::commands::{CommandInput, CommandSet as _, NavCommand, QuitCommand};
 use craft_ui::runtime::env::{RootEnv, Scale};
 use craft_ui::runtime::focus::{EditSet, KeepKeys, KeyUse};
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
@@ -81,7 +81,9 @@ pub(crate) fn host() -> Arc<Host> {
 }
 
 /// F6 and Shift+F6 are FigCraft's own region moves (`view.nextRegion`, `view.previousRegion`), so the framework's pane
-/// moves are unbound. Overrides are keyed by command id, which the command set gives.
+/// moves are unbound. So is the framework's Quit, which asks the main window to close: FigCraft's Ctrl+Q closes the
+/// window it is pressed in ([`crate::windows::quit_key`]). Overrides are keyed by command id, which the command set
+/// gives.
 fn command_overrides() -> Arc<Overrides> {
     static OVERRIDES: OnceLock<Arc<Overrides>> = OnceLock::new();
     OVERRIDES
@@ -89,6 +91,7 @@ fn command_overrides() -> Arc<Overrides> {
             let mut overrides = Overrides::new();
             overrides.insert(NavCommand::NextPane.id(), Vec::new());
             overrides.insert(NavCommand::PreviousPane.id(), Vec::new());
+            overrides.insert(QuitCommand::Quit.id(), Vec::new());
             Arc::new(overrides)
         })
         .clone()

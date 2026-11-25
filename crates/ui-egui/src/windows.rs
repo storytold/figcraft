@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 
 use craft_ui::shell::embed::CloseDecision;
-use egui::{Context, Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportId};
+use egui::{Context, Key, KeyboardShortcut, Modifiers, Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportId};
 use figcraft_engine::{DocState, Session};
 use serde_json::{Value, json};
 
@@ -377,9 +377,19 @@ pub fn list(app: &FigApp) -> Value {
     )
 }
 
-/// Another window drawing now was asked to close (its close button, the system's): its files
-/// close with it, after asking when one has unsaved changes. The main window's close goes through
-/// the runtime's close path ([`close_decision`]).
+/// Ctrl+Q asks the window it is pressed in to close, as its close button does: only that window's
+/// files are asked about and close. Last in the window's frame, so its widgets and shortcuts read
+/// the key first. (On macOS Cmd+Q is the app menu's Quit, which asks the main window to close.)
+pub(crate) fn quit_key(ctx: &Context) {
+    const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
+    if ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
+        ctx.send_viewport_cmd(ViewportCommand::Close);
+    }
+}
+
+/// Another window drawing now was asked to close (its close button, Ctrl+Q, the system's): its
+/// files close with it, after asking when one has unsaved changes. The main window's close goes
+/// through the runtime's close path ([`close_decision`]).
 pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
     if app.ui.quit || !ctx.input(|i| i.viewport().close_requested()) {
         return;
@@ -844,6 +854,7 @@ fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
         app.viewport_setup(&ctx);
         app.frame(ui)
     });
+    quit_key(&ctx);
     app.end_input_frame(&ctx);
     adopt(app, &e);
     settle(app, &ctx, files_before);
