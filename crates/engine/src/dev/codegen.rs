@@ -577,6 +577,17 @@ mod tests {
         assert!(!css.contains("gradient"), "{css}");
     }
 
+    fn embedded_svgs(code: &str) -> Vec<String> {
+        use base64::Engine as _;
+        code.split("data:image/svg+xml;base64,")
+            .skip(1)
+            .map(|rest| {
+                let b64 = rest.split('"').next().unwrap();
+                String::from_utf8(base64::engine::general_purpose::STANDARD.decode(b64).unwrap()).unwrap()
+            })
+            .collect()
+    }
+
     #[test]
     fn vector_code_uses_its_svg_asset_not_a_box_border() {
         let mut s = Session::new();
@@ -586,12 +597,16 @@ mod tests {
         s.doc_mut().unwrap().get_mut(check).unwrap().fills = vec![Paint::solid(Color::WHITE)];
         let doc = s.doc().unwrap();
         let html = code_for(doc, icon, CodeLang::Html);
-        assert!(html.contains("<img class=\"check\" src=\"check.svg\" alt=\"check\" />"), "{html}");
+        assert!(html.contains("<img class=\"check\" src=\"data:image/svg+xml;base64,"), "{html}");
+        assert!(html.contains("alt=\"check\""), "{html}");
         assert!(!html.contains("border: 2px solid"), "{html}");
         assert!(!html.contains("background:"), "the vector's fill belongs to its SVG, not its box: {html}");
+        let opaque = embedded_svgs(&html);
+        assert_eq!(opaque.len(), 1, "{html}");
+        assert!(opaque[0].contains("<path") && opaque[0].contains("#1F3A68"), "{:?}", opaque[0]);
         for lang in [CodeLang::React, CodeLang::Vue, CodeLang::Leptos, CodeLang::Tailwind] {
             let code = code_for(doc, icon, lang);
-            assert!(code.contains("<img") && code.contains("src=\"check.svg\""), "{}: {code}", lang.id());
+            assert!(code.contains("<img") && code.contains("src=\"data:image/svg+xml;base64,"), "{}: {code}", lang.id());
             assert!(!code.contains("border: 2px solid") && !code.contains("border-[2px]"), "{}: {code}", lang.id());
         }
         let css = code_for(doc, icon, CodeLang::Css);
@@ -602,22 +617,29 @@ mod tests {
         let ark = code_for(doc, icon, CodeLang::ArkUi);
         assert!(!ark.contains(".border({"), "{ark}");
 
+        // CSS owns the node's rotation and opacity, so the embedded asset must not bake them in.
+        s.doc_mut().unwrap().get_mut(check).unwrap().opacity = 0.5;
+        s.doc_mut().unwrap().get_mut(check).unwrap().transform = figcraft_geom::Affine::rotate(30f64.to_radians());
+        let transformed = code_for(s.doc().unwrap(), icon, CodeLang::Html);
+        assert!(transformed.contains("opacity: 0.5;"), "{transformed}");
+        assert!(transformed.contains("transform: rotate("), "{transformed}");
+        assert_eq!(embedded_svgs(&transformed), opaque, "the asset stays node-local and opaque: {transformed}");
+
         let rectangle =
             id_of(&s.execute("shape.rectangle", &json!({"parent": icon, "props": {"stroke": "#1F3A68", "strokeWeight": 2}})).unwrap()["id"]).unwrap();
         assert!(code_for(s.doc().unwrap(), rectangle, CodeLang::Css).contains("border: 2px solid"), "box strokes remain");
     }
 
     #[test]
-    fn vector_asset_names_match_export_and_leptos_literals() {
+    fn vector_assets_are_self_contained_and_leptos_literals_escape() {
         let mut s = Session::new();
         let icon = id_of(&s.execute("frame.create", &json!({"name": "Icons", "width": 24, "height": 24})).unwrap()["id"]).unwrap();
-        for name in ["Check Icon", "Check Icon", r"icon\q"] {
+        for name in ["Check Icon", "Check Icon", r"icon\q", "check#dark"] {
             s.execute("vector.create", &json!({"path": "M4 12 L10 18 L20 6", "parent": icon, "name": name, "props": {"fill": "none"}})).unwrap();
         }
         let html = code_for(s.doc().unwrap(), icon, CodeLang::Html);
-        assert!(html.contains("src=\"Check Icon.svg\""), "{html}");
-        assert!(html.contains("src=\"Check Icon 2.svg\""), "{html}");
-        assert!(!html.contains("check-icon.svg"), "{html}");
+        assert_eq!(embedded_svgs(&html).len(), 4, "nested vectors need no separate filesystem export: {html}");
+        assert!(!html.contains("src=\"check#dark.svg\""), "{html}");
         let leptos = code_for(s.doc().unwrap(), icon, CodeLang::Leptos);
         assert!(leptos.contains("alt=\"icon\\\\q\""), "{leptos}");
     }

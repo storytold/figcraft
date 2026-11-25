@@ -1,3 +1,5 @@
+use base64::Engine as _;
+
 use super::css::{Tokens, css_decls};
 use super::{CodeLang, Ctx, Document, LayoutMode, Node, NodeId, NodeKind, Param, Sizing, indent, num, with_v_if};
 
@@ -90,6 +92,18 @@ fn attr_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace(['\n', '\r'], " ")
 }
 
+/// A vector as a self-contained SVG asset. CSS owns the node's placement and opacity, so the
+/// embedded geometry is node-local and fully opaque. No filesystem export or URL escaping is
+/// needed, and nested vectors work exactly like top-level ones.
+fn vector_data_uri(doc: &mut Document, n: &Node) -> Option<String> {
+    let node = doc.get_mut(n.id).ok()?;
+    node.parent = None;
+    node.transform = figcraft_geom::Affine::IDENTITY;
+    node.opacity = 1.0;
+    let svg = figcraft_svg::export_svg(doc, &[n.id], &Default::default())?;
+    Some(format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(svg)))
+}
+
 /// Text as JSX children: HTML escapes, braces as expressions, line breaks as `<br />`.
 fn jsx_text(s: &str) -> String {
     let mut out = String::new();
@@ -152,8 +166,8 @@ pub(crate) struct Markup<'c, 'a> {
     /// With `fluid`, other layers at least this share of the root's width are fluid too (a
     /// divider, a banner image); smaller ones (icons) keep their size. Default: none.
     pub fluid_leaves: f64,
-    /// SVG asset names, resolved by the same policy as the filesystem exporter.
-    asset_names: crate::cmd::file::ExportNames,
+    /// Lazily cloned once for node-local SVG assets, not once per vector.
+    asset_doc: Option<Document>,
 }
 
 /// How `n` sits in its parent: in the flex flow, or placed at its position.
@@ -199,7 +213,7 @@ impl<'c, 'a> Markup<'c, 'a> {
             inline: false,
             fluid: false,
             fluid_leaves: f64::INFINITY,
-            asset_names: Default::default(),
+            asset_doc: None,
         }
     }
 
@@ -348,13 +362,14 @@ impl<'c, 'a> Markup<'c, 'a> {
         let open = |tag: &str| format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>");
         match &n.kind {
             NodeKind::Vector { .. } => {
-                // The exported SVG carries the path and its stroke; the class only places it.
-                let src = self.asset_names.push(&n.name);
                 // Leptos attributes are Rust string literals; the other targets use HTML escaping.
                 let quote = |value: &str| if self.lang == CodeLang::Leptos { format!("{value:?}") } else { format!("\"{}\"", attr_escape(value)) };
-                let src = quote(&format!("{src}.svg"));
+                let root_doc = self.ctx.doc;
+                let src = vector_data_uri(self.asset_doc.get_or_insert_with(|| root_doc.clone()), n)
+                    .map(|uri| format!(" src={}", quote(&uri)))
+                    .unwrap_or_default();
                 let alt = quote(&n.name);
-                self.markup.push_str(&format!("{pad}<img {attr}=\"{class}\" src={src} alt={alt}{attrs} />\n"));
+                self.markup.push_str(&format!("{pad}<img {attr}=\"{class}\"{src} alt={alt}{attrs} />\n"));
             }
             NodeKind::Text(t) => {
                 let body = self.text_body(n, t);
