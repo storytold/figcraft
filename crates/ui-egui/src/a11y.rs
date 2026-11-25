@@ -597,8 +597,7 @@ fn focus(app: &mut FigApp, ctx: &Context, id: Id) {
     ctx.request_repaint();
 }
 
-/// The toolbar's arrows: the next or previous control in the region,
-/// wrapping. Going back from a field being edited skips the field it is part of.
+/// The toolbar's arrows: the next or previous control in the region, wrapping.
 fn step_within(app: &mut FigApp, ctx: &Context, region: Region, step: i32) {
     let list = focusables(ctx, &app.ui.nav, region);
     let n = list.len() as i32;
@@ -614,17 +613,9 @@ fn step_within(app: &mut FigApp, ctx: &Context, region: Region, step: i32) {
         }
         return;
     };
-    let here = list.get(cur).map(|w| w.1.center());
-    let mut i = cur as i32;
-    for _ in 0..n {
-        i = (i + step.signum()).rem_euclid(n);
-        let Some((id, rect)) = list.get(i as usize) else { break };
-        // The control a focused field editor sits in.
-        if here.is_some_and(|c| rect.contains(c)) && i as usize != cur {
-            continue;
-        }
+    let next = (cur as i32 + step.signum()).rem_euclid(n);
+    if let Some((id, _)) = list.get(next as usize) {
         focus(app, ctx, *id);
-        return;
     }
 }
 

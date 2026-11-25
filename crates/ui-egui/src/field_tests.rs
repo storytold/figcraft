@@ -554,6 +554,14 @@ fn arithmetic_commits_tab_moves_on_and_escape_restores() {
     // With the keyboard on a field and nothing typed, the arrows step it.
     key(&mut u, Key::ArrowUp, Modifiers::NONE);
     assert_eq!(geom(&u, a).0, 78.0);
+    // An editor opened from the keyboard is the same one Tab stop in both directions.
+    for (first, mods) in [("X", Modifiers::NONE), ("Y", Modifiers::SHIFT)] {
+        assert_eq!(focused_name(&u.ctx), first);
+        key(&mut u, Key::Enter, Modifiers::NONE);
+        assert!(u.ctx.text_edit_focused(), "Enter opens the editor of {first}");
+        key(&mut u, Key::Tab, mods);
+        assert_eq!(focused_name(&u.ctx), if first == "X" { "Y" } else { "X" }, "one Tab from the editor of {first}");
+    }
 }
 
 /// Answers a Save as dialog with `path`, once, and counts the dialogs asked for.
