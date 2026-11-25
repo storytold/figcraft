@@ -4,7 +4,7 @@
 # NFPM_ARCH and FIGCRAFT_MAINTAINER.
 #
 #   nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/release/
-name: figcraft
+name: ${NFPM_NAME}
 arch: ${NFPM_ARCH}
 platform: linux
 version: ${VERSION}
@@ -70,12 +70,15 @@ overrides:
       - xdg-desktop-portal
 
 contents:
-  - src: ${STAGE}/usr/bin/figcraft
-    dst: /usr/bin/figcraft
+  - src: ${STAGE}/usr/bin/${NFPM_BIN}
+    dst: /usr/bin/${NFPM_BIN}
     file_info: { mode: 0755 }
-  - src: ${STAGE}/usr/bin/figcraft-cli #cli
-    dst: /usr/bin/figcraft-cli #cli
+  - src: ${STAGE}/usr/bin/${NFPM_CLI} #cli
+    dst: /usr/bin/${NFPM_CLI} #cli
     file_info: { mode: 0755 } #cli
+  - src: ${STAGE}/usr/lib/
+    dst: /usr/lib/
+    type: tree
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree

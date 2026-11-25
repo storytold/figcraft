@@ -147,7 +147,15 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
         ui.vertical(|ui| {
             let (wordmark, _) = ui.allocate_exact_size(vec2(130.0, 23.0), Sense::hover());
             crate::theme::paint_wordmark(ui.painter(), egui::pos2(wordmark.min.x, wordmark.center().y), 18.0, t);
-            ui.label(RichText::new(trf("Version {version}", &[("version", &VERSION)])).color(t.text_secondary));
+            let version = crate::channel::version();
+            ui.label(RichText::new(trf("Version {version}", &[("version", &version)])).color(t.text_secondary));
+            // Which channel this is, and where to report a problem with it: a Nightly is not the
+            // stable app, and its reports need the commit it was built from.
+            if crate::channel::is_nightly() {
+                let build = crate::channel::describe();
+                ui.label(RichText::new(build).color(t.text_secondary).font(regular(11.0)));
+                ui.hyperlink_to("Report a problem", "https://github.com/storytold/figcraft/issues/new/choose");
+            }
         });
     });
     ui.add_space(12.0);
