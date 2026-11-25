@@ -29,7 +29,8 @@ same repository in `validate` and every signing job (its concurrency group is
 `craft-release-ref-signer-photocraft`). A FigCraft dispatch therefore builds and signs nothing until
 `storytold/craft-common-actions` admits `storytold/figcraft`. No dispatch can produce a release before
 that port, and both callers' `uses`, `tooling-revision` and the policy pins must move to the same
-reviewed revision together.
+reviewed revision together. The port is craft-common-actions #363 ("run the shared nightly pipeline
+for any reviewed registry app"); until it merges these callers are inert.
 
 **First runs.** The first runs are manual dispatches in this order: `nightly.yml` on `main` (only a
 listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `release` with that

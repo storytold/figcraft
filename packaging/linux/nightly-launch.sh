@@ -19,6 +19,10 @@ case "${1:-}" in
 esac
 config_base="${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}"
 data_base="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
+# The bases in effect before the override below: the GUI's profile fence still refuses the stable
+# FigCraft folders under them (profile_root.rs reads FIGCRAFT_STABLE_<key>).
+export FIGCRAFT_STABLE_XDG_CONFIG_HOME="$config_base"
+export FIGCRAFT_STABLE_XDG_DATA_HOME="$data_base"
 # Belt and braces for anything that still asks the process environment for a folder.
 export XDG_CONFIG_HOME="$config_base/figcraft-nightly"
 export XDG_DATA_HOME="$data_base/figcraft-nightly"

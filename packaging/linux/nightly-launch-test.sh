@@ -72,4 +72,16 @@ for launcher in "$work/bin/figcraft" "$work/app/figcraft-nightly"; do
   [[ ! -e "$profile" ]] || { echo "${launcher#"$work"/}: a version or Launcher launch created the profile" >&2; exit 1; }
 done
 
+# The wrapper hands the GUI the XDG bases it overrode, so the stable folders under them stay fenced.
+stable_recorder="$work/bin/stable-bases"
+cat >"$stable_recorder" <<'RECORDER'
+#!/bin/sh
+printf 'STABLE_CONFIG=%s\nSTABLE_DATA=%s\n' "${FIGCRAFT_STABLE_XDG_CONFIG_HOME:-}" "${FIGCRAFT_STABLE_XDG_DATA_HOME:-}"
+RECORDER
+chmod 755 "$stable_recorder"
+install_launcher "$work/bin/stable-launch" "\"$stable_recorder\""
+check "$work/bin/stable-launch" "$(printf 'STABLE_CONFIG=%s\nSTABLE_DATA=%s\n' "$HOME/.config" "$HOME/.local/share")"
+XDG_CONFIG_HOME="$work/xdg config" XDG_DATA_HOME="$work/xdg data" \
+  check "$work/bin/stable-launch" "$(printf 'STABLE_CONFIG=%s\nSTABLE_DATA=%s\n' "$work/xdg config" "$work/xdg data")"
+
 echo "PASS: the nightly launcher starts the nightly-v1 profile in every form and passes a supplied one through"

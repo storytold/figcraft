@@ -8,6 +8,8 @@ use std::path::{Component, Path, PathBuf};
 const PORTABLE_MARKER: &str = "portable";
 /// The Nightly's own Flatpak id: its sandbox is its own, so it is not the stable app's instance.
 const NIGHTLY_FLATPAK_ID: &str = "ai.storyteller.figcraft.nightly";
+/// The Linux wrapper's record of an XDG base it overrode (`FIGCRAFT_STABLE_XDG_CONFIG_HOME`, ...).
+const STABLE_XDG_KEY_PREFIX: &str = "FIGCRAFT_STABLE_";
 /// What a portable copy holds beside its marker.
 const PORTABLE_EXES: [&str; 3] = ["figcraft.exe", "figcraft", "FigCraft.app"];
 
@@ -120,13 +122,22 @@ fn forbidden_roots(platform: Platform, env: &impl Fn(&str) -> Option<OsString>, 
         Platform::Linux => {
             // The settings folder is `<platform config>/FigCraft`; the other XDG folders hold no
             // FigCraft state today, but a copy that starts writing there must not become readable.
+            // The Linux wrapper (`packaging/linux/nightly-launch.sh`) points XDG_CONFIG_HOME and
+            // XDG_DATA_HOME at per-channel folders and passes the bases in effect before that
+            // override as STABLE_XDG_KEY_PREFIX + key, so the stable folders under them stay fenced.
             let mut roots = Vec::new();
             for (key, fallback) in
                 [("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"), ("XDG_CACHE_HOME", ".cache"), ("XDG_STATE_HOME", ".local/state")]
             {
-                let base = xdg_base(env, key, fallback)?;
-                roots.push(base.join("FigCraft"));
-                roots.push(base.join("figcraft"));
+                let mut bases = vec![xdg_base(env, key, fallback)?];
+                let stable_key = format!("{STABLE_XDG_KEY_PREFIX}{key}");
+                if let Some(value) = env(&stable_key).filter(|v| !v.is_empty()) {
+                    bases.push(absolute(PathBuf::from(value), &stable_key)?);
+                }
+                for base in bases {
+                    roots.push(base.join("FigCraft"));
+                    roots.push(base.join("figcraft"));
+                }
             }
             roots.extend(["/usr/bin/figcraft", "/usr/local/bin/figcraft", "/opt/figcraft"].map(PathBuf::from));
             // The stable Flatpak keeps its data in its own per-app folder.
@@ -190,12 +201,25 @@ fn is_portable_layout(path: &Path) -> bool {
 }
 
 /// The app's exclusive write probe: the nightly profile must be writable without touching any
-/// stable folder, and a failed probe never falls back to the stable settings folder.
+/// stable folder, and a failed probe never falls back to the stable settings folder. Each attempt
+/// uses a fresh name, so a probe left by a killed run (or a concurrent one) never blocks a writable
+/// profile, and only the entry this attempt created is removed.
 pub fn ensure_writable(dir: &Path) -> std::io::Result<()> {
-    let probe = dir.join("nightly-write-probe");
-    let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe)?;
-    drop(file);
-    std::fs::remove_file(probe)
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    for _ in 0..16 {
+        let probe = dir.join(format!("nightly-write-probe-{}-{nanos}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+            Ok(file) => {
+                drop(file);
+                return std::fs::remove_file(probe);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "no fresh name for the nightly write probe"))
 }
 
 /// The writable hook is injected so filesystem boundary tests exercise the real policy without
@@ -538,6 +562,40 @@ mod tests {
         // Beside a FigCraft executable, the same marker makes it a portable copy.
         std::fs::write(unrelated.join("figcraft.exe"), b"portable copy, never run").unwrap();
         assert!(fixture.check(Platform::Windows, &unrelated.join("nightly")).unwrap_err().contains("portable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_wrapper_override_keeps_the_stable_xdg_folders_fenced() {
+        let mut fixture = Fixture::new();
+        // What the wrapper exports with XDG_CONFIG_HOME and XDG_DATA_HOME unset.
+        let (config_base, data_base) = (fixture.home().join(".config"), fixture.home().join(".local/share"));
+        for (key, base) in [("XDG_CONFIG_HOME", &config_base), ("XDG_DATA_HOME", &data_base)] {
+            fixture.env.insert(key.into(), base.join("figcraft-nightly").into_os_string());
+            fixture.env.insert(format!("{STABLE_XDG_KEY_PREFIX}{key}"), base.clone().into_os_string());
+        }
+        let stable = config_base.join("FigCraft");
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::write(stable.join("state.json"), b"stable settings").unwrap();
+        let profile = data_base.join("figcraft-nightly/profile");
+        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&stable, &profile).unwrap();
+        assert!(fixture.check(Platform::Linux, &profile).unwrap_err().contains("overlap"));
+        assert_eq!(std::fs::read_dir(&stable).unwrap().count(), 1, "nothing is written into the stable folder");
+        std::fs::remove_file(&profile).unwrap();
+        assert_eq!(fixture.check(Platform::Linux, &profile).unwrap(), profile, "a normal Nightly profile stays valid");
+    }
+
+    #[test]
+    fn a_leftover_write_probe_does_not_block_a_writable_profile() {
+        let fixture = Fixture::new();
+        let dir = fixture.home().join("nightly");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("nightly-write-probe"), b"left by a killed run").unwrap();
+        ensure_writable(&dir).unwrap();
+        ensure_writable(&dir).unwrap();
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names, ["nightly-write-probe"], "only this attempt's own probe is removed");
     }
 
     #[test]

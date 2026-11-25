@@ -80,8 +80,12 @@ struct App {
     /// The Nightly session record this window owns: finished on the controlled exit, where macOS
     /// ends the process and `run_native` never returns.
     nightly: crate::nightly_session::Shared,
-    /// Set once this window posted the interrupted-session notice.
+    /// Set once this window drew the interrupted-session notice in a frame.
     nightly_notice: Arc<std::sync::atomic::AtomicBool>,
+    /// The interrupted-session notice is queued but no frame has drawn it yet. Until one does, the
+    /// earlier session's record stays for the next start to report (a renderer failure before the
+    /// first frame must not acknowledge it).
+    nightly_notice_pending: bool,
 }
 
 impl eframe::App for App {
@@ -140,6 +144,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         services::parented(frame, || with_app(|fig| figcraft_ui_egui::windows::guard(fig, &ctx, |fig| fig.ui(ui))));
+        // This frame drew the queued interrupted-session notice: the interruption is now reported.
+        if self.nightly_notice_pending {
+            self.nightly_notice_pending = false;
+            self.nightly_notice.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     fn on_exit(&mut self) {
@@ -435,8 +444,9 @@ fn main() -> eframe::Result {
             "FigCraft Nightly could not record its session health in its private profile. You can still edit, but detecting an abnormal exit is unavailable."
         };
         with_app(|fig| fig.toast(message));
-        nightly_notice.store(previous_unclean, std::sync::atomic::Ordering::Relaxed);
     }
+    // Acknowledged only when a frame draws the notice (`App::ui`), never by queueing it here.
+    let nightly_notice_pending = previous_unclean;
     let nightly_record: nightly_session::Shared = Arc::new(Mutex::new(nightly_record));
     let exit_record = nightly_record.clone();
     let exit_notice = nightly_notice.clone();
@@ -470,6 +480,7 @@ fn main() -> eframe::Result {
                 recovery,
                 nightly: exit_record,
                 nightly_notice: exit_notice,
+                nightly_notice_pending,
                 // The custom title bar's undecorated window must stay borderless, or its caption
                 // and border offset the content and the pointer on some Windows systems (#1343).
                 window_frame: window_frame::WindowFrame::new(custom_titlebar),
