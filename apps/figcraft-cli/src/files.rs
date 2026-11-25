@@ -5,6 +5,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use figcraft_doc::{Document, ExportFormat, ExportSetting, NodeId, NodeKind, PrintSettings, VdCompat};
+use figcraft_engine::cmd::file::ExportNames;
+#[cfg(test)]
+use figcraft_engine::cmd::file::export_file_stem as sanitize;
 use figcraft_engine::{BatchScope, BatchStep, Session};
 use serde_json::{Value, json};
 
@@ -236,18 +239,6 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// The file name a layer exports to: the app's rule ([`figcraft_engine::cmd::file::safe_file_name`],
-/// so `/` becomes `_` too), without leading or trailing spaces and dots, at most 100 characters
-/// and 200 bytes (file systems allow 255, and a number and the extension still fit).
-fn sanitize(name: &str) -> String {
-    let s = figcraft_engine::cmd::file::safe_file_name(name);
-    let s = s.trim_matches(|c: char| c == '.' || c.is_whitespace());
-    let cap = |s: &str| s.char_indices().take(100).take_while(|(i, c)| i + c.len_utf8() <= 200).map(|(_, c)| c).collect::<String>();
-    // Truncation can expose a device name; its escape must still fit the limits.
-    let s = figcraft_engine::file_access::escape_device_names(&cap(s));
-    if s.is_empty() { "layer".into() } else { cap(&s) }
-}
-
 /// What `export` exports and how.
 pub struct Target {
     pub format: Option<String>,
@@ -313,20 +304,9 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
     if ids.is_empty() {
         return Err(CliError::Failed("the page is empty: nothing to export".into()));
     }
-    let mut used = std::collections::BTreeSet::new();
-    let mut next_suffix: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut names = ExportNames::default();
     for id in ids {
-        let base = sanitize(doc.node(id).map(|n| n.name.as_str()).unwrap_or("layer"));
-        let base_lower = base.to_lowercase();
-        let next = next_suffix.entry(base_lower).or_insert(1);
-        let name = loop {
-            let k = *next;
-            *next += 1;
-            let candidate = if k == 1 { base.clone() } else { format!("{base} {k}") };
-            if used.insert(candidate.to_lowercase()) {
-                break candidate;
-            }
-        };
+        let name = names.push(doc.node(id).map(|n| n.name.as_str()).unwrap_or("layer"));
         let path = Path::new(out).join(format!("{name}.{}", fmt.ext())).to_string_lossy().into_owned();
         write(&path, &bytes_of(&[id])?)?;
         println!("{path}");

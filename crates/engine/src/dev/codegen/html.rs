@@ -152,6 +152,8 @@ pub(crate) struct Markup<'c, 'a> {
     /// With `fluid`, other layers at least this share of the root's width are fluid too (a
     /// divider, a banner image); smaller ones (icons) keep their size. Default: none.
     pub fluid_leaves: f64,
+    /// SVG asset names, resolved by the same policy as the filesystem exporter.
+    asset_names: crate::cmd::file::ExportNames,
 }
 
 /// How `n` sits in its parent: in the flex flow, or placed at its position.
@@ -197,6 +199,7 @@ impl<'c, 'a> Markup<'c, 'a> {
             inline: false,
             fluid: false,
             fluid_leaves: f64::INFINITY,
+            asset_names: Default::default(),
         }
     }
 
@@ -346,8 +349,12 @@ impl<'c, 'a> Markup<'c, 'a> {
         match &n.kind {
             NodeKind::Vector { .. } => {
                 // The exported SVG carries the path and its stroke; the class only places it.
-                let alt = attr_escape(&n.name);
-                self.markup.push_str(&format!("{pad}<img {attr}=\"{class}\" src=\"{class}.svg\" alt=\"{alt}\"{attrs} />\n"));
+                let src = self.asset_names.push(&n.name);
+                // Leptos attributes are Rust string literals; the other targets use HTML escaping.
+                let quote = |value: &str| if self.lang == CodeLang::Leptos { format!("{value:?}") } else { format!("\"{}\"", attr_escape(value)) };
+                let src = quote(&format!("{src}.svg"));
+                let alt = quote(&n.name);
+                self.markup.push_str(&format!("{pad}<img {attr}=\"{class}\" src={src} alt={alt}{attrs} />\n"));
             }
             NodeKind::Text(t) => {
                 let body = self.text_body(n, t);

@@ -582,11 +582,13 @@ mod tests {
         let mut s = Session::new();
         let icon =
             id_of(&s.execute("frame.create", &json!({"name": "icon", "width": 24, "height": 24, "props": {"fill": "none"}})).unwrap()["id"]).unwrap();
-        s.execute("vector.create", &json!({"path": "M4 12 L10 18 L20 6", "parent": icon, "name": "check", "props": {"fill": "none", "stroke": "#1F3A68", "strokeWeight": 2}})).unwrap();
+        let check = id_of(&s.execute("vector.create", &json!({"path": "M4 12 L10 18 L20 6", "parent": icon, "name": "check", "props": {"fill": "none", "stroke": "#1F3A68", "strokeWeight": 2}})).unwrap()["id"]).unwrap();
+        s.doc_mut().unwrap().get_mut(check).unwrap().fills = vec![Paint::solid(Color::WHITE)];
         let doc = s.doc().unwrap();
         let html = code_for(doc, icon, CodeLang::Html);
         assert!(html.contains("<img class=\"check\" src=\"check.svg\" alt=\"check\" />"), "{html}");
         assert!(!html.contains("border: 2px solid"), "{html}");
+        assert!(!html.contains("background:"), "the vector's fill belongs to its SVG, not its box: {html}");
         for lang in [CodeLang::React, CodeLang::Vue, CodeLang::Leptos, CodeLang::Tailwind] {
             let code = code_for(doc, icon, lang);
             assert!(code.contains("<img") && code.contains("src=\"check.svg\""), "{}: {code}", lang.id());
@@ -603,6 +605,21 @@ mod tests {
         let rectangle =
             id_of(&s.execute("shape.rectangle", &json!({"parent": icon, "props": {"stroke": "#1F3A68", "strokeWeight": 2}})).unwrap()["id"]).unwrap();
         assert!(code_for(s.doc().unwrap(), rectangle, CodeLang::Css).contains("border: 2px solid"), "box strokes remain");
+    }
+
+    #[test]
+    fn vector_asset_names_match_export_and_leptos_literals() {
+        let mut s = Session::new();
+        let icon = id_of(&s.execute("frame.create", &json!({"name": "Icons", "width": 24, "height": 24})).unwrap()["id"]).unwrap();
+        for name in ["Check Icon", "Check Icon", r"icon\q"] {
+            s.execute("vector.create", &json!({"path": "M4 12 L10 18 L20 6", "parent": icon, "name": name, "props": {"fill": "none"}})).unwrap();
+        }
+        let html = code_for(s.doc().unwrap(), icon, CodeLang::Html);
+        assert!(html.contains("src=\"Check Icon.svg\""), "{html}");
+        assert!(html.contains("src=\"Check Icon 2.svg\""), "{html}");
+        assert!(!html.contains("check-icon.svg"), "{html}");
+        let leptos = code_for(s.doc().unwrap(), icon, CodeLang::Leptos);
+        assert!(leptos.contains("alt=\"icon\\\\q\""), "{leptos}");
     }
 
     #[test]

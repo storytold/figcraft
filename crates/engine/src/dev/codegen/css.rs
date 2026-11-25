@@ -188,7 +188,12 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
         // One `background` with every visible fill as a layer, top first (a document's fills run
         // bottom to top, as the renderer paints them). CSS allows a plain colour only as the last
         // layer, so a solid above another fill becomes a one-colour gradient.
-        let visible: Vec<(usize, &figcraft_color::Paint)> = n.fills.iter().enumerate().filter(|(_, p)| p.visible).collect();
+        let visible: Vec<(usize, &figcraft_color::Paint)> = if matches!(n.kind, NodeKind::Vector { .. }) {
+            // The SVG carries the path's fills; an image's box must not get a rectangular one.
+            Vec::new()
+        } else {
+            n.fills.iter().enumerate().filter(|(_, p)| p.visible).collect()
+        };
         let layers: Vec<String> = visible
             .iter()
             .enumerate()
