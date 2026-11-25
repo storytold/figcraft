@@ -21,6 +21,7 @@ use craft_ui::runtime::env::{RootEnv, Scale};
 use craft_ui::runtime::focus::{EditSet, KeepKeys, KeyUse};
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
 use craft_ui::runtime::keys::{Intent, with_window_intents};
+use craft_ui::runtime::overlay::{self, OpenFilter};
 use craft_ui::shell::embed;
 use craft_window::system::WindowSystem;
 use figcraft_engine::keymap::{KEYS, Platform};
@@ -153,8 +154,12 @@ pub(crate) fn host_canvas(ctx: &egui::Context, id: egui::Id, keeps_tab: bool) {
 
 /// Puts the window's Escape (an Escape while none of FigCraft's widgets and no framework component has the keyboard,
 /// which the runtime routes to the window as its cancel) back into egui's input as a key press, first in the window's
-/// frame, so FigCraft's dialogs, menus, tools and shortcuts read it from egui as they read every other key.
+/// frame, so FigCraft's dialogs, menus, tools and shortcuts read it from egui as they read every other key. While a
+/// modal framework dialog is open the Escape is the dialog's, which reads it when it runs, after FigCraft's UI.
 pub(crate) fn return_window_escape(ctx: &egui::Context) {
+    if overlay::any_open(ctx, OpenFilter::Modal) {
+        return;
+    }
     let mut taken = false;
     with_window_intents(ctx, false, |intents| {
         taken = intents.take(Intent::Cancel);

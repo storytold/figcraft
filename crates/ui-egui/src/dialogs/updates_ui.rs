@@ -170,6 +170,11 @@ pub(crate) fn show(app: &mut FigApp, ui: &mut egui::Ui) {
                 dialog.set_installing(installing);
                 dialog.set_message(message);
             }
+            // The outcome of the last update is a modeless notice: Escape closes it wherever the focus is, after FigCraft's
+            // own readers of the window's Escape. A modal result reads its Escape when the host runs.
+            if dialogs.is_open::<UpdateCheckDialog>() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                dialogs.cancel::<UpdateCheckDialog>(&ctx);
+            }
         }
         app.framework_dialogs.run(ui);
     }
@@ -203,7 +208,79 @@ pub(crate) fn show(app: &mut FigApp, ui: &mut egui::Ui) {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use std::sync::mpsc::channel;
+    use std::sync::{Arc, Mutex};
+
+    use craft_update::Paths;
+    use craft_update::updater::CheckSource;
+    use figcraft_engine::Session;
+    use serde_json::json;
+
     use super::*;
+    use crate::layers_drag_tests::Ui;
+
+    /// Escape closes the result of a requested check, which is modal, and the notice of the last update, which is not
+    /// and need not have the focus. The modal result's Escape is its own: the layers stay selected.
+    #[test]
+    fn escape_closes_the_update_dialogs() {
+        let dir = std::env::temp_dir().join(format!("figcraft-update-escape-{}", std::process::id()));
+        let paths = Paths::under(&dir);
+        std::fs::create_dir_all(&paths.data).unwrap();
+        std::fs::write(paths.data.join("self-update-done.txt"), "v0.2.0").unwrap();
+        // A check runs until `running` goes away at the end of the test.
+        let (running, wait) = channel::<()>();
+        let wait = Mutex::new(wait);
+        let source: CheckSource = Arc::new(move || {
+            if let Ok(wait) = wait.lock() {
+                let _ = wait.recv();
+            }
+            Ok(None)
+        });
+        let updater = || {
+            let updater = Updater::new(&crate::UPDATE_APP, "0.2.0").with_source(source.clone());
+            Some(updater.with_pins_path(dir.join("pins.json")).with_paths(paths.clone()))
+        };
+        let status = |u: &Ui| u.app.updates_rt.updater.as_ref().map(|updater| updater.status().clone());
+        let open = |u: &Ui| u.app.framework_dialogs.is_open::<UpdateCheckDialog>();
+        let frames = |u: &mut Ui| (0..4).for_each(|_| u.frame(vec![]));
+        let escape = |u: &mut Ui| {
+            let key =
+                |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+            u.frame(vec![key(true), key(false)]);
+            // The frames that read the dialog's answer.
+            u.frame(vec![]);
+            u.frame(vec![]);
+        };
+
+        let mut session = Session::new();
+        let layer = session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 40, "height": 30})).unwrap()["id"].clone();
+        session.execute("select.set", &json!({"ids": [layer]})).unwrap();
+        let mut u = Ui::new(session);
+        let selected = u.app.session.selection();
+        assert!(!selected.is_empty());
+
+        u.app.updates_rt.updater = updater();
+        check(&mut u.app);
+        frames(&mut u);
+        assert!(open(&u) && status(&u) == Some(Status::Checking));
+        escape(&mut u);
+        assert!(!open(&u), "Escape closes the check");
+        assert_eq!(status(&u), Some(Status::Idle));
+        assert_eq!(u.app.session.selection(), selected);
+
+        u.app.updates_rt.updater = updater();
+        u.app.set_startup_update_check(true);
+        frames(&mut u);
+        assert!(open(&u) && status(&u) == Some(Status::Updated("0.2.0".into())));
+        if let Some(focused) = u.ctx.memory(|m| m.focused()) {
+            u.ctx.memory_mut(|m| m.surrender_focus(focused));
+        }
+        escape(&mut u);
+        assert!(!open(&u), "Escape closes the notice");
+        assert_eq!(status(&u), Some(Status::Idle));
+        drop(running);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn result_window_shows_every_status_but_idle() {
