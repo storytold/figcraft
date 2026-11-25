@@ -373,6 +373,52 @@ class NightlyInstalledPolicy(unittest.TestCase):
                 self.assertIn(item["type"], sonar["issue_types"])
                 self.assertRegex(item["hash"], r"^[0-9a-f]{32}$")
 
+    def test_sonar_policy_keeps_the_shared_candidate_contract(self):
+        """The Sonar shape craft-common-actions' candidate contract() admits, refused here first.
+
+        An empty issue scope, an accepted condition outside the reviewed issue types, a metric in both
+        lists, a missing live gate condition or a widened security bound is refused at admission, so
+        this suite must catch it before a nightly run can. `debt` stays empty, so any unresolved
+        vulnerability on main is still refused; accepting the new-code rating only records the
+        reviewed A threshold instead of demanding a clean rating the live gate does not.
+        """
+        sonar = self.policy["candidate_policy"]["sonar"]
+        accepted = {"bugs": "BUG", "vulnerabilities": "VULNERABILITY", "code_smells": "CODE_SMELL",
+                    "security_rating": "VULNERABILITY", "new_security_rating": "VULNERABILITY"}
+        gate = {"new_reliability_rating", "new_security_rating", "new_maintainability_rating",
+                "new_coverage", "new_duplicated_lines_density", "new_security_hotspots_reviewed"}
+        self.assertTrue(sonar["issue_types"], "an empty issue scope is refused as unreviewed")
+        self.assertEqual(len(sonar["issue_types"]), len(set(sonar["issue_types"])))
+        metrics = {}
+        for field in ("accepted_conditions", "required_conditions"):
+            for condition in sonar[field]:
+                with self.subTest(field=field, metric=condition.get("metric")):
+                    expected = {"metric", "comparator", "error_threshold"}
+                    if field == "accepted_conditions":
+                        expected.add("maximum")
+                    self.assertEqual(set(condition), expected)
+                    self.assertNotIn(condition["metric"], metrics, "one condition per gate metric")
+                    metrics[condition["metric"]] = condition
+                    self.assertIn(condition["comparator"], ("GT", "LT"))
+                    self.assertRegex(condition["error_threshold"], r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+                    if field != "accepted_conditions":
+                        continue
+                    self.assertIn(condition["metric"], accepted, "an accepted metric outside the reviewed map")
+                    self.assertIn(accepted[condition["metric"]], sonar["issue_types"],
+                                  "an accepted failure must lie inside the reviewed issue scope")
+                    self.assertEqual(condition["comparator"], "GT")
+                    self.assertRegex(condition["maximum"], r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+                    maximum = float(condition["maximum"])
+                    if condition["metric"] in ("security_rating", "new_security_rating"):
+                        self.assertEqual(int(maximum), maximum, "the A..E bound is a whole rating")
+                        self.assertTrue(1 <= maximum <= 5, "the security bound stays A..E")
+                        self.assertEqual(condition["error_threshold"], "1", "the reviewed A threshold stays")
+                    else:
+                        self.assertLessEqual(maximum, len(sonar["debt"]), "accepted failures exceed the reviewed debt")
+        self.assertEqual({accepted[c["metric"]] for c in sonar["accepted_conditions"]}, set(sonar["issue_types"]),
+                         "accepted conditions and reviewed issue types must cover the same scope")
+        self.assertEqual(set(metrics), gate, "every live gate condition stays gated exactly once")
+
 
 SHARED = "storytold/craft-common-actions/.github/workflows/"
 # App workflows reviewed to call the shared stable release.yml. That callee must carry the
