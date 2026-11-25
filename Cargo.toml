@@ -13,10 +13,10 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/figcraft"
 
 [workspace.dependencies]
-craft-xml = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-svg = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b", default-features = false, features = ["tree"] }
-craft-vectordrawable = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-pdf = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
+craft-xml = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-svg = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", default-features = false, features = ["tree"] }
+craft-vectordrawable = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-pdf = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 # internal
 figcraft-geom = { path = "crates/geom" }
 figcraft-color = { path = "crates/color" }
@@ -39,44 +39,44 @@ figcraft-plugin = { path = "crates/plugin" }
 
 # Keep every craft-libs crate on one rev.
 # Which paths stored in a document may be followed (craft-libs).
-craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
+craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 # Who draws the window frame on Linux — the compositor or the app — so every Craft app shows the
 # same native titlebar per desktop (craft-libs). FigCraft reads the probe result and maps it to its
 # own `TitleBar`; the UI runtime takes its window system from here too.
-craft-window = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b", features = ["ui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", features = ["ui"] }
 # The suite's font store: exact lookup of a missing font in the pinned Google Fonts and Noto
 # indexes, and checksum-verified installs into the one folder every Craft app reads (craft-libs).
-craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
+craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 # The UI runtime FigCraft's egui UI is hosted by (`crates/ui-egui/src/framework.rs`) and the
 # framework dialogs on it (craft-libs): who the app is to those dialogs, the runtime's key
 # bindings, the theme mode and the interface direction.
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-host = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-theme = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-host = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-theme = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 # The macOS app menu whose Quit (⌘Q) asks the app before quitting, like the window's close button
 # (craft-libs; the menu it replaces quits straight through `terminate:` and loses unsaved work).
-craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
+craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 # Where the settings live: the suite's folder rules, portable mode included (craft-libs).
-craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
+craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 
 # Penpot export container only; JSON values cross this boundary, not shared model types.
-craft-penpot = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
+craft-penpot = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 
 # The design-file formats (craft-libs): the .fig container and its kiwi encoding, the mapping of
 # a .fig message onto the REST file JSON, and that JSON's shared helpers.
-craft-sketch = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-fig = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-figcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-figma-rest = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
-craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b", features = ["frames"] }
+craft-sketch = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-fig = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-figcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-figma-rest = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", features = ["frames"] }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
@@ -187,22 +187,22 @@ panic = "abort"
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
 [patch.crates-io]
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
 # craft-libs' vendored krilla 0.8.2: decoded PNGs are capped at 1 GiB and reserved fallibly, and a
 # panic while drawing unwinds without aborting.
-krilla = { git = "https://github.com/storytold/craft-libs", rev = "aa401985dd4658cdaa272fdccafdcd6e7f4dd60b" }
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
