@@ -556,6 +556,7 @@ fn quitting_twice_before_the_window_draws_closes_it_once() {
     frame(&ctx, &mut app, false);
     frame(&ctx, &mut app, false);
     assert!(app.session.docs.iter().any(|d| d.doc.name == "A" && d.is_dirty()), "A keeps its changes: {:?}", names(&app));
+    assert!(!app.session.docs.iter().any(|d| d.doc.name == "B"), "the clean main window's file B closed: {:?}", names(&app));
     assert!(!app.ui.quit, "the app didn't quit over A's unsaved changes");
 }
 
