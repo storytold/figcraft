@@ -1,0 +1,107 @@
+{
+  "schema": "craft-nightly-release-policy/v3",
+  "repository": "storytold/figcraft",
+  "repository_id": 1412112308,
+  "producer_workflow_id": null,
+  "producer_workflow_path": ".github/workflows/nightly.yml",
+  "producer_tooling_revision": "605d58766e8f536564da8fc81d3676ac86816dea",
+  "producer_workflow_ref": "storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@605d58766e8f536564da8fc81d3676ac86816dea",
+  "signer_workflow_path": ".github/workflows/nightly-sign.yml",
+  "signer_tooling_revision": "605d58766e8f536564da8fc81d3676ac86816dea",
+  "release_branch": "release",
+  "manual_actors": [
+    "bflatastic",
+    "dylanmtaylor",
+    "echelon",
+    "FredApps",
+    "skylartaylor"
+  ],
+  "max_age_seconds": 86400,
+  "candidate_policy": {
+    "schema": "craft-nightly-candidate-policy/v3",
+    "epoch": "figcraft-nightly-20261124-initial",
+    "repository": "storytold/figcraft",
+    "branch": "main",
+    "required_workflows": [
+      {
+        "workflow_id": 379864519,
+        "workflow_path": ".github/workflows/ci.yml",
+        "jobs": [
+          {
+            "name": "gate / gate (ubuntu-24.04)",
+            "app_id": 15368,
+            "applicability": "required"
+          }
+        ]
+      }
+    ],
+    "sonar": {
+      "organization": "storytold",
+      "project": "storytold_figcraft",
+      "app_id": 12526,
+      "check_name": "SonarCloud Code Analysis",
+      "details_url": "https://sonarcloud.io/dashboard?id=storytold_figcraft&branch=main",
+      "issue_types": [
+        "VULNERABILITY"
+      ],
+      "accepted_conditions": [
+        {
+          "metric": "new_security_rating",
+          "comparator": "GT",
+          "error_threshold": "1",
+          "maximum": "5"
+        }
+      ],
+      "required_conditions": [
+        {
+          "metric": "new_reliability_rating",
+          "comparator": "GT",
+          "error_threshold": "1"
+        },
+        {
+          "metric": "new_maintainability_rating",
+          "comparator": "GT",
+          "error_threshold": "1"
+        },
+        {
+          "metric": "new_coverage",
+          "comparator": "LT",
+          "error_threshold": "80"
+        },
+        {
+          "metric": "new_duplicated_lines_density",
+          "comparator": "GT",
+          "error_threshold": "3"
+        },
+        {
+          "metric": "new_security_hotspots_reviewed",
+          "comparator": "LT",
+          "error_threshold": "100"
+        }
+      ],
+      "debt": []
+    }
+  },
+  "max_artifact_bytes": 2147483648,
+  "automatic_signer_actors": [],
+  "platforms": {
+    "windows-x86_64": {
+      "unsigned_artifact_name": "nightly-unsigned-windows-x86_64",
+      "trust": {
+        "publisher_subject": "CN=Learning Machines Inc, O=Learning Machines Inc, L=Atlanta, S=Georgia, C=US"
+      }
+    },
+    "linux-x86_64": {
+      "unsigned_artifact_name": "nightly-unsigned-linux-x86_64",
+      "trust": {
+        "fingerprint": "2B76741B414AAD6CD33E631213A005C0B9D7C3ED"
+      }
+    },
+    "macos-aarch64": {
+      "unsigned_artifact_name": "nightly-unsigned-macos-aarch64",
+      "trust": {
+        "apple_team_id": "DJ6XS33FX8"
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+name: FigCraft release-ref nightly signer
+
+# Enabled for supervised manual dispatch on release. Main/release contents must match.
+# A reusable callee does not change context; this must be a real top-level release dispatch.
+on:
+  workflow_dispatch:
+    inputs:
+      producer_run_id:
+        description: Exact untrusted producer Actions run ID
+        required: true
+        type: string
+      producer_run_attempt:
+        description: Exact untrusted producer Actions run attempt
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: figcraft-nightly-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Actual context guards: official repository, manual dispatch, real release branch.
+    if: >-
+      github.repository == 'storytold/figcraft' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/release' && github.ref_type == 'branch'
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: write
+      id-token: write
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@605d58766e8f536564da8fc81d3676ac86816dea
+    with:
+      tooling-revision: 605d58766e8f536564da8fc81d3676ac86816dea
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_run_attempt: ${{ inputs.producer_run_attempt }}
+    # No secrets: inherit or raw platform values in this caller. Only the isolated native
+    # callee job may bind the existing release environment and export keys in its signing step.

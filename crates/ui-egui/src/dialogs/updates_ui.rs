@@ -10,8 +10,9 @@ use craft_update::updater::{Action, Status, Updater};
 use craft_update::{CheckResultDialog, CheckResultResponse};
 
 pub(crate) struct Runtime {
+    /// The updater; `None` for the Launcher-managed Nightly, which never updates itself.
     #[cfg(not(target_arch = "wasm32"))]
-    updater: Updater,
+    updater: Option<Updater>,
     /// The desktop app turns the check at start on; tests and the web build leave it off.
     #[cfg(not(target_arch = "wasm32"))]
     startup_check: bool,
@@ -32,7 +33,7 @@ impl Default for Runtime {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+            updater: Some(Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION"))),
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -58,16 +59,31 @@ impl FigApp {
     /// when it exits, before it ends the process; later calls do nothing.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn start_pending_update(&mut self) {
-        self.updates_rt.updater.start_pending_update();
+        if let Some(updater) = self.updates_rt.updater.as_mut() {
+            updater.start_pending_update();
+        }
+    }
+
+    /// Never check for or install an update: the Launcher owns the Nightly's version. The desktop
+    /// app calls this before the first frame of a Nightly build, so nothing here reads or writes
+    /// the update pins.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn disable_updates(&mut self) {
+        self.updates_rt.updater = None;
+        self.updates_rt.startup_check = false;
+        self.updates_rt.check_requested = false;
     }
 }
 
 pub(crate) fn check(app: &mut FigApp) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        app.updates_rt.check_requested = true;
-        if let Some(ctx) = &app.updates_rt.repaint {
-            ctx.request_repaint();
+        // A build without an updater has no check to run (the Nightly is updated by the Launcher).
+        if app.updates_rt.updater.is_some() {
+            app.updates_rt.check_requested = true;
+            if let Some(ctx) = &app.updates_rt.repaint {
+                ctx.request_repaint();
+            }
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -82,12 +98,15 @@ pub(crate) fn tick(app: &mut FigApp, ctx: &egui::Context) {
     {
         let rt = &mut app.updates_rt;
         rt.repaint = Some(ctx.clone());
-        if std::mem::take(&mut rt.check_requested) {
-            rt.updater.check_now(ctx);
-        } else if rt.startup_check {
-            rt.updater.check_at_start(ctx);
+        let check_requested = std::mem::take(&mut rt.check_requested);
+        let startup_check = rt.startup_check;
+        let Some(updater) = rt.updater.as_mut() else { return };
+        if check_requested {
+            updater.check_now(ctx);
+        } else if startup_check {
+            updater.check_at_start(ctx);
         }
-        rt.updater.tick(ctx);
+        updater.tick(ctx);
     }
     #[cfg(target_arch = "wasm32")]
     let _ = (app, ctx);
@@ -106,21 +125,28 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
     {
         // The updater asks to close only when no document has unsaved changes; the install starts when the app exits.
         let clean = !app.session.docs.iter().any(|d| d.is_dirty());
-        match app.updates_rt.updater.show_if(ctx, clean) {
-            Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
-            // The whole application, not just the window that drew the prompt: the root window's guarded close.
-            Action::Close => ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
-            Action::None => {}
-        }
-        let rt = &mut app.updates_rt;
-        if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
-            match CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).show(ctx, rt.updater.status()) {
-                CheckResultResponse::None => {}
-                CheckResultResponse::Close => rt.updater.dismiss_status(),
-                CheckResultResponse::CheckAgain => rt.check_requested = true,
-                // The next `show_if` asks the window to close once no document has unsaved changes.
-                CheckResultResponse::RestartToUpdate => rt.updater.restart_to_update(),
+        let mut check_again = false;
+        let mut restart_to_update = false;
+        if let Some(updater) = app.updates_rt.updater.as_mut() {
+            match updater.show_if(ctx, clean) {
+                Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+                // The whole application, not just the window that drew the prompt: the root window's guarded close.
+                Action::Close => ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
+                Action::None => {}
             }
+            if result_window_shows(updater.status(), updater.prompt_open()) {
+                match CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).show(ctx, updater.status()) {
+                    CheckResultResponse::None => {}
+                    CheckResultResponse::Close => updater.dismiss_status(),
+                    CheckResultResponse::CheckAgain => check_again = true,
+                    // The next `show_if` asks the window to close once no document has unsaved changes.
+                    CheckResultResponse::RestartToUpdate => restart_to_update = true,
+                }
+            }
+        }
+        app.updates_rt.check_requested |= check_again;
+        if restart_to_update && let Some(updater) = app.updates_rt.updater.as_mut() {
+            updater.restart_to_update();
         }
     }
 

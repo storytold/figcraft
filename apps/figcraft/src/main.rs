@@ -23,9 +23,17 @@ compile_error!("Windows GNU builds must set windows_slim_errors to keep UI Autom
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod args;
+// The build script includes the same file for the icon and version it embeds.
+#[cfg(test)]
+mod build_channel;
+mod build_flavor;
 mod control_server;
 mod gamepad;
 mod graphics;
+mod launch_profile;
+mod nightly_session;
+mod process_identity;
+mod profile_root;
 mod recovery;
 mod services;
 mod startup;
@@ -69,6 +77,15 @@ struct App {
     /// Documents and quit requests from Finder, the Dock and Open With.
     #[cfg(target_os = "macos")]
     apple_events: fmv_macos_events::Inbox,
+    /// The Nightly session record this window owns: finished on the controlled exit, where macOS
+    /// ends the process and `run_native` never returns.
+    nightly: crate::nightly_session::Shared,
+    /// Set once this window drew the interrupted-session notice in a frame.
+    nightly_notice: Arc<std::sync::atomic::AtomicBool>,
+    /// The interrupted-session notice is queued but no frame has drawn it yet. Until one does, the
+    /// earlier session's record stays for the next start to report (a renderer failure before the
+    /// first frame must not acknowledge it).
+    nightly_notice_pending: bool,
 }
 
 impl eframe::App for App {
@@ -127,6 +144,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         services::parented(frame, || with_app(|fig| figcraft_ui_egui::windows::guard(fig, &ctx, |fig| fig.ui(ui))));
+        // This frame drew the queued interrupted-session notice: the interruption is now reported.
+        if self.nightly_notice_pending {
+            self.nightly_notice_pending = false;
+            self.nightly_notice.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     fn on_exit(&mut self) {
@@ -138,6 +160,10 @@ impl eframe::App for App {
             // thread-local, and the process can end without dropping it.
             fig.start_pending_update();
         });
+        // The controlled exit: on macOS this is the only path that runs (Cmd+Q ends the process
+        // inside AppKit after `on_exit`), so the Nightly session record is finished here. The
+        // call after `run_native` is the no-op fallback for a start that created no window.
+        crate::nightly_session::finish_once(&self.nightly, self.nightly_notice.load(std::sync::atomic::Ordering::Relaxed));
         // Everything is kept: end before the windows' teardown, where AppKit's Touch Bar support
         // throws on the content view AccessKit restores (craft-libs#3, #781).
         #[cfg(target_os = "macos")]
@@ -145,15 +171,118 @@ impl eframe::App for App {
     }
 }
 
+/// The Windows taskbar identity of the Nightly: distinct from stable's, so both can be open.
+const NIGHTLY_WINDOW_ID: &str = "ai.storyteller.figcraft.nightly-v1";
+
+/// The window and Wayland/X11 app id: the Nightly's own, so its window is not the stable app's.
+fn window_app_id() -> &'static str {
+    if launch_profile::current().is_nightly() { NIGHTLY_WINDOW_ID } else { "ai.storyteller.figcraft" }
+}
+
+/// Whether a desktop session can show a dialog (a headless run has no one to ask).
+fn desktop_session() -> bool {
+    cfg!(windows)
+        || cfg!(target_os = "macos")
+        || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())))
+}
+
+fn initialize_nightly_identity() -> Result<(), String> {
+    process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, NIGHTLY_WINDOW_ID)
+}
+
+/// Say why a launch profile was refused: in a dialog for a Nightly started from the desktop (its
+/// release build has no console), and on standard error in every case. Always exits 2.
+fn report_launch_profile_error(error: &str) -> ! {
+    eprintln!("FigCraft launch profile: {error}");
+    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session()) {
+        if let Err(error) = initialize_nightly_identity() {
+            eprintln!("FigCraft launch profile: {error}");
+        } else {
+            let _ = rfd::MessageDialog::new()
+                .set_title("FigCraft Nightly")
+                .set_description(error)
+                .set_level(rfd::MessageLevel::Error)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+        }
+    }
+    std::process::exit(2)
+}
+
+/// Select the immutable launch profile before any startup service or side effect, and answer the
+/// version query first: `None` means the query did (there is nothing left to start).
+///
+/// Stable keeps its arguments and its directory policy untouched; only a Nightly build answers the
+/// Launcher's `--launch-profile nightly-v1 --profile-root <dir> --version` form.
+fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
+    let argv: Vec<_> = std::env::args_os().skip(1).collect();
+    let nightly_build = build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1;
+    if nightly_build && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv)) {
+        // Before root validation, logging, the update helper, fonts or any window: a runner reads
+        // this line and the process ends. Nothing else may be printed here.
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), "FigCraft {}", build_flavor::version(build_flavor::COMPILED, env!("FIGCRAFT_BUILT_VERSION")));
+        return None;
+    }
+    let early = launch_profile::parse(argv)
+        .and_then(|launch| {
+            build_flavor::require_profile(build_flavor::COMPILED, &launch.profile)?;
+            initialize_nightly_identity()?;
+            Ok(launch)
+        })
+        .and_then(|launch| {
+            launch_profile::prepare(launch, |root| {
+                launch_profile::validate_root(root, |key| std::env::var_os(key), std::env::current_exe().ok().as_deref())
+            })
+        })
+        .unwrap_or_else(|error| report_launch_profile_error(&error));
+    if let Err(error) = launch_profile::install(early.profile) {
+        report_launch_profile_error(&error);
+    }
+    if let Some(root) = launch_profile::current().root() {
+        // Everything that names or finds the app now names the Nightly, from the first frame on.
+        figcraft_ui_egui::channel::install_nightly(env!("FIGCRAFT_BUILT_VERSION"), option_env!("FIGCRAFT_BUILD_SHA"));
+        // The suite's font store is shared with the stable app: the Nightly installs and reads its
+        // fonts inside its own profile instead.
+        figcraft_engine::fonts::download::use_store_dir(root.join("Fonts"));
+    }
+    Some(early.args)
+}
+
 fn main() -> eframe::Result {
-    // Windows: the update helper is a copy of this program started with `--finish-update`.
+    // The launch profile comes before the logger, the update helper, fonts and saved state.
+    let Some(arguments) = prepare_launch() else { return Ok(()) };
+    let nightly = launch_profile::current().is_nightly();
+    // Windows: the update helper is a copy of this program started with `--finish-update`. The
+    // Nightly has none: the Launcher owns its version.
     #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&figcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if !nightly
+        && let Some(result) = craft_update::self_update::finish(&figcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>())
+    {
         std::process::exit(i32::from(result.is_err()));
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--version" || a == "-V") {
+    let args: Vec<String> = if nightly {
+        // The launcher hands these over after `--`, which `parse` takes as file names verbatim (that
+        // is what keeps a file called `--screenshot` a file). "Open with" and a drop onto the
+        // launcher pass `file://` URLs (`%U`), so decode those here as a plain argument would be;
+        // every other name stays exactly as given.
+        arguments
+            .iter()
+            .map(|a| {
+                let arg = a.to_string_lossy();
+                match args::file_url_path(&arg) {
+                    Some(path) => path,
+                    None => arg.into_owned(),
+                }
+            })
+            .collect()
+    } else {
+        std::env::args().skip(1).collect()
+    };
+    // A stable build answers `--version` anywhere, as it always did; the Nightly's forms were
+    // answered before any startup effect (`prepare_launch`).
+    if !nightly && args.iter().any(|a| a == "--version" || a == "-V") {
         println!(
             "FigCraft {}{}",
             env!("CARGO_PKG_VERSION"),
@@ -179,7 +308,9 @@ fn main() -> eframe::Result {
             std::process::exit(2);
         }
     };
-    let port = args.control.or_else(|| std::env::var("FIGCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok()));
+    // The control channel is the stable app's (agents, automation): a Nightly never opens one,
+    // and never inherits the environment variable that would.
+    let port = if nightly { None } else { args.control.or_else(|| std::env::var("FIGCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok())) };
     // System fonts: index them in the background, then wake the UI (an idle window draws no frames)
     // to lay text out again with them.
     let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
@@ -229,9 +360,12 @@ fn main() -> eframe::Result {
     // Plugins installed from a server's plugin directory live with the user's settings.
     session.plugins.install_dir = services::config_dir().map(|d| d.join("Plugins"));
     // Invite links open this app (Windows registers per user at run time; installed builds by
-    // default, never a build from source unless asked).
-    session.live.links = figcraft_collab_net::links::system();
-    session.invite_links_startup();
+    // default, never a build from source unless asked). Registering is the stable app's, so a
+    // Nightly links nothing and never touches the registration.
+    if !nightly {
+        session.live.links = figcraft_collab_net::links::system();
+        session.invite_links_startup();
+    }
     let first_run = svc.prefs.is_none() && args.join.is_none();
     if session.docs.is_empty() && opens_new_file(first_run, session.prefs.start_on_home, port.is_some()) {
         let _ = session.execute("file.new", &json!({}));
@@ -240,7 +374,12 @@ fn main() -> eframe::Result {
     // open (no frame then).
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
-    fig.set_startup_update_check(true);
+    if nightly {
+        // The Launcher keeps the Nightly on the version it installed.
+        fig.disable_updates();
+    } else {
+        fig.set_startup_update_check(true);
+    }
     fig.automation_roots = roots;
     fig.ui.home = false;
     // Files named on the command line are the user's too: their missing fonts are listed.
@@ -260,8 +399,8 @@ fn main() -> eframe::Result {
     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
     // and StartupWMClass (FreeBSD's package matches the binary's name instead).
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("FigCraft")
-        .with_app_id("ai.storyteller.figcraft")
+        .with_title(figcraft_ui_egui::channel::name())
+        .with_app_id(window_app_id())
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([800.0, 500.0])
         .with_drag_and_drop(true);
@@ -283,6 +422,34 @@ fn main() -> eframe::Result {
     // Counts the frames drawn, which tells a window that failed starting up from one that ran.
     let window = ctx_slot.clone();
     figcraft_ui_egui::windows::install(fig);
+    // Nightly session health: written before the window loop and finished on the controlled exit.
+    // A secondary window of the same profile records nothing (no document names or diagnostics).
+    let (nightly_record, health_warning) = match nightly_session::Session::begin_with_health(
+        launch_profile::current().root(),
+        env!("FIGCRAFT_BUILT_VERSION"),
+        option_env!("FIGCRAFT_BUILD_SHA").filter(|sha| !sha.is_empty()),
+    ) {
+        Ok(state) => state,
+        Err(error) => {
+            log::warn!("Nightly session health is unavailable: {error}");
+            (None, true)
+        }
+    };
+    let previous_unclean = nightly_record.as_ref().is_some_and(nightly_session::Session::previous_unclean);
+    let nightly_notice = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if previous_unclean || health_warning {
+        let message = if previous_unclean {
+            "The previous FigCraft Nightly session did not finish normally. You can report a problem from About. No diagnostics have been sent."
+        } else {
+            "FigCraft Nightly could not record its session health in its private profile. You can still edit, but detecting an abnormal exit is unavailable."
+        };
+        with_app(|fig| fig.toast(message));
+    }
+    // Acknowledged only when a frame draws the notice (`App::ui`), never by queueing it here.
+    let nightly_notice_pending = previous_unclean;
+    let nightly_record: nightly_session::Shared = Arc::new(Mutex::new(nightly_record));
+    let exit_record = nightly_record.clone();
+    let exit_notice = nightly_notice.clone();
     // Registered before the event loop starts, so it catches the Finder event that launched the app
     // as well as later ones. Lives until the event loop returns; the app creator only borrows it.
     #[cfg(target_os = "macos")]
@@ -290,7 +457,7 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
     let result = eframe::run_native(
-        "FigCraft",
+        figcraft_ui_egui::channel::name(),
         options,
         Box::new(|cc| {
             if let Some(state) = &cc.wgpu_render_state {
@@ -303,7 +470,7 @@ fn main() -> eframe::Result {
             // asks just as it does for the close button. Failure keeps winit's menu: the app
             // runs, but ⌘Q ends it without asking.
             #[cfg(target_os = "macos")]
-            if let Err(e) = craft_menu::mac::install_app_menu(&cc.egui_ctx, "FigCraft") {
+            if let Err(e) = craft_menu::mac::install_app_menu(&cc.egui_ctx, figcraft_ui_egui::channel::name()) {
                 log::warn!("app menu: kept winit's Quit, which ends the app without asking: {e}");
             }
             Ok(Box::new(App {
@@ -311,6 +478,9 @@ fn main() -> eframe::Result {
                 ctx_slot,
                 title: String::new(),
                 recovery,
+                nightly: exit_record,
+                nightly_notice: exit_notice,
+                nightly_notice_pending,
                 // The custom title bar's undecorated window must stay borderless, or its caption
                 // and border offset the content and the pointer on some Windows systems (#1343).
                 window_frame: window_frame::WindowFrame::new(custom_titlebar),
@@ -320,8 +490,14 @@ fn main() -> eframe::Result {
         }),
     );
     let frames = window.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map_or(0, egui::Context::cumulative_frame_nr);
+    // The fallback for a start that never reached `on_exit`; elsewhere the exit hook did it. It runs
+    // before the graphics handoff: on Unix the fallback `exec`s the restarted window from inside
+    // `graphics.finish`, so a record finished after it would never be written and the restarted
+    // window would report an unclean exit (and a Windows restart races the lease instead). A
+    // renderer handoff is a controlled completion (`nightly_session::complete`).
+    nightly_session::finish_once(&nightly_record, nightly_notice.load(std::sync::atomic::Ordering::Relaxed));
     // Start again on other graphics, or say why instead of quitting silently: release builds on
-    // Windows have no console.
+    // Windows have no console. A handoff start does not reach the window here.
     graphics.finish(result, frames, port.is_some())
 }
 

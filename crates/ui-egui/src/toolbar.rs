@@ -338,6 +338,8 @@ fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Toke
     ui.painter().circle_filled(hr.center(), 16.0, t.panel);
     ui.painter().text(hr.center(), Align2::CENTER_CENTER, "?", crate::theme::regular(15.0), t.text);
     crate::right::menu_popup(&hresp).show(|ui| {
+        // The Nightly has no update check: the Launcher keeps it on the version it installed.
+        let checks = !crate::channel::is_nightly();
         for (l, c) in [
             (tr("Getting started"), "help.gettingStarted"),
             (tr("Keyboard shortcuts"), "help.shortcuts"),
@@ -345,6 +347,9 @@ fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Toke
             (tr("Check for updates…"), "help.checkForUpdates"),
             (tr("About FigCraft"), "help.about"),
         ] {
+            if c == "help.checkForUpdates" && !checks {
+                continue;
+            }
             if crate::right::menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")) {
                 crate::menus::invoke(app, c);
                 ui.close();
