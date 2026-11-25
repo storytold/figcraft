@@ -20,8 +20,15 @@ $global:SigningFixtureCargoCalls = 0
 if (-not [IO.Path]::IsPathRooted($FixtureRoot)) { throw 'use an owned absolute FixtureRoot' }
 $root = Join-Path $FixtureRoot ('signing-policy-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root | Out-Null
-$version = '0.18.1-nightly.20261124.12345.1.gaaaaaaaaaaaa'
+# The fixture mocks Cargo, but nightly.ps1 checks the same source identity a packaging run does:
+# the version names this checkout's commit and the run's UTC date, and the tree is clean. Deriving
+# them here keeps the fixture reaching the mocked compiler instead of failing in source validation.
+$sha = "$(git -C $PSScriptRoot rev-parse HEAD)".Trim()
+$runDate = (Get-Date).ToUniversalTime().ToString('yyyyMMdd')
+$version = "0.18.1-nightly.$runDate.12345.1.g$($sha.Substring(0, 12))"
 $env:FIGCRAFT_VERSION = $version
+$env:FIGCRAFT_BUILD_SHA = $sha
+$env:FIGCRAFT_BUILD_DATE = "$($runDate.Substring(0, 4))-$($runDate.Substring(4, 2))-$($runDate.Substring(6, 2))"
 function Invoke-Build([switch] $BuildOnly) {
   $arguments = @{Arch='x64';Version=$version;Target='x86_64-pc-windows-msvc';TargetDir=$root;Dist=(Join-Path $root 'dist')}
   if ($BuildOnly) { $arguments.BuildOnly = $true }
