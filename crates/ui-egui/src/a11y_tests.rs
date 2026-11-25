@@ -127,26 +127,24 @@ fn f6_cycles_the_regions_and_lands_on_the_active_tool_and_the_selected_row() {
 }
 
 #[test]
-fn tab_moves_between_the_properties_controls_and_wraps_without_leaving_the_panel() {
+fn tab_walks_the_properties_controls_then_leaves_the_panel_in_the_framework_order() {
     let (mut u, a, _) = setup();
     f6(&mut u, false);
-    let first = name(&u);
-    let mut seen = vec![first.clone()];
+    assert_eq!(region(&u), Region::Properties);
+    let mut seen = vec![name(&u)];
     for _ in 0..200 {
         press(&mut u, Key::Tab, Modifiers::NONE);
-        assert_eq!(region(&u), Region::Properties);
-        if name(&u) == first {
+        if region(&u) != Region::Properties {
             break;
         }
-        seen.push(name(&u));
+        let n = name(&u);
+        assert!(!seen.contains(&n), "Tab revisited {n} before leaving the panel: {seen:?}");
+        seen.push(n);
     }
-    assert_eq!(name(&u), first, "Tab wraps round to the panel's first control");
+    assert_ne!(region(&u), Region::Properties, "Tab after the last Properties control leaves the panel");
     for want in ["Width", "Height", "Rotation", "Opacity"] {
         assert!(seen.iter().any(|n| n == want), "{want} not reached by Tab: {seen:?}");
     }
-    // Shift+Tab steps back.
-    press(&mut u, Key::Tab, Modifiers::SHIFT);
-    assert_eq!(Some(&name(&u)), seen.last());
     // Tab moved the keyboard, not the selection.
     assert_eq!(u.app.session.selection(), vec![a]);
 }
@@ -214,18 +212,19 @@ fn escape_returns_to_the_canvas_where_shortcuts_and_tab_work_again() {
     // Tab on the canvas selects the next layer and keeps the keyboard there.
     press(&mut u, Key::Tab, Modifiers::NONE);
     assert_eq!(u.app.session.selection(), vec![b]);
-    assert_eq!(name(&u), "Canvas");
+    assert_eq!((region(&u), name(&u)), (Region::Canvas, "Canvas".to_string()), "Tab on the focused canvas keeps focus there");
     press(&mut u, Key::R, Modifiers::NONE);
     assert_eq!(u.app.session.tool.tool, ToolId::Rectangle);
 }
 
 #[test]
-fn tab_on_the_canvas_selects_the_next_layer_without_keyboard_mode() {
-    let (mut u, _, b) = setup();
+fn a_bare_tab_with_nothing_focused_selects_no_layer_and_moves_focus_into_the_window() {
+    let (mut u, a, _) = setup();
+    assert!(u.ctx.memory(|m| m.focused()).is_none());
     press(&mut u, Key::Tab, Modifiers::NONE);
     u.frame(vec![]);
-    assert_eq!(u.app.session.selection(), vec![b]);
-    assert!(u.ctx.memory(|m| m.focused()).is_none(), "Tab doesn't wander into the tab bar");
+    assert_eq!(u.app.session.selection(), vec![a], "the selection is unchanged");
+    assert!(u.ctx.memory(|m| m.focused()).is_some(), "Tab focuses a stop in the window");
 }
 
 #[test]

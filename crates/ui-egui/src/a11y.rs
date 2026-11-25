@@ -2,9 +2,9 @@
 //! screen reader reads), and the keyboard navigation mode.
 //!
 //! Keyboard navigation: F6 / Shift+F6 move the keyboard between the regions of the window (the
-//! toolbar, the layers panel, the canvas and the properties panel); Tab / Shift+Tab move between
-//! the controls of a region (wrapping at its ends); Enter or Space activate the control; the
-//! arrows move along the toolbar and through the layer rows; a menu or flyout opened from the
+//! toolbar, the layers panel, the canvas and the properties panel); Tab / Shift+Tab follow the
+//! framework's one Tab order over every control the window draws, across regions; Enter or Space
+//! activate the control; the arrows move along the toolbar and through the layer rows; a menu or flyout opened from the
 //! keyboard takes it, and gives it back to its button when it closes; Escape goes back to the
 //! canvas, where every shortcut works as usual. A focus ring shows the control with the keyboard
 //! until the next pointer press.
@@ -289,7 +289,7 @@ pub fn keyboard(ctx: &Context) -> bool {
 // Frame hooks.
 
 /// Before the panels draw: pointer presses, the focused control's region, and the navigation
-/// keys (F6, Tab, arrows, Escape), which are taken out of the input when they move the keyboard.
+/// keys (F6, arrows, Escape), which are taken out of the input when they move the keyboard.
 pub fn begin(app: &mut FigApp, ctx: &Context, root_scope: Id) {
     app.ui.nav.last = std::mem::take(&mut app.ui.nav.next);
     // Before the keys: a panel edge derived from the root scope must already be excluded.
@@ -360,28 +360,6 @@ fn keys(app: &mut FigApp, ctx: &Context) {
             i.events.iter().any(|e| matches!(e, Event::Key { key, pressed: true, modifiers, .. } if *key == k && modifiers.matches_exact(m)))
         })
     };
-    // Tab moves between the region's controls (on the canvas it stays the select-next shortcut).
-    // A layer rename takes Tab itself (on to the next row's name).
-    let tab = if pressed(Key::Tab, Modifiers::NONE) {
-        Some(1)
-    } else if pressed(Key::Tab, Modifiers::SHIFT) {
-        Some(-1)
-    } else {
-        None
-    };
-    if let Some(step) = tab
-        && app.ui.rename.is_none()
-    {
-        ctx.memory_mut(|m| m.move_focus(FocusDirection::None));
-        if region != Region::Canvas {
-            ctx.input_mut(|i| {
-                i.consume_key(Modifiers::SHIFT, Key::Tab);
-                i.consume_key(Modifiers::NONE, Key::Tab);
-            });
-            app.ui.nav.keyboard = true;
-            step_within(app, ctx, region, step);
-        }
-    }
     // egui moves the focus with the arrows too; here they belong to fields (steps), the toolbar
     // and the layer rows.
     let arrows = [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown];
@@ -619,7 +597,7 @@ fn focus(app: &mut FigApp, ctx: &Context, id: Id) {
     ctx.request_repaint();
 }
 
-/// Tab / Shift+Tab (and the toolbar's arrows): the next or previous control in the region,
+/// The toolbar's arrows: the next or previous control in the region,
 /// wrapping. Going back from a field being edited skips the field it is part of.
 fn step_within(app: &mut FigApp, ctx: &Context, region: Region, step: i32) {
     let list = focusables(ctx, &app.ui.nav, region);
