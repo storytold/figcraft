@@ -85,6 +85,11 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>")
 }
 
+/// A layer name in a quoted markup attribute, with line breaks flattened.
+fn attr_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace(['\n', '\r'], " ")
+}
+
 /// Text as JSX children: HTML escapes, braces as expressions, line breaks as `<br />`.
 fn jsx_text(s: &str) -> String {
     let mut out = String::new();
@@ -339,6 +344,11 @@ impl<'c, 'a> Markup<'c, 'a> {
         }
         let open = |tag: &str| format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>");
         match &n.kind {
+            NodeKind::Vector { .. } => {
+                // The exported SVG carries the path and its stroke; the class only places it.
+                let alt = attr_escape(&n.name);
+                self.markup.push_str(&format!("{pad}<img {attr}=\"{class}\" src=\"{class}.svg\" alt=\"{alt}\"{attrs} />\n"));
+            }
             NodeKind::Text(t) => {
                 let body = self.text_body(n, t);
                 self.markup.push_str(&format!("{}{body}</p>\n", open("p")));

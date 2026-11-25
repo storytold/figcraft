@@ -384,6 +384,10 @@ fn stroke_color(n: &Node) -> Option<Color> {
 /// The CSS borders a solid stroke makes: one `border`, or with individual stroke sides a border
 /// on each side that has a weight.
 fn css_borders(doc: &Document, n: &Node, t: &mut Tokens) -> Vec<(String, String)> {
+    // A vector's stroke belongs to its path, not to a rectangle around its bounding box.
+    if matches!(n.kind, NodeKind::Vector { .. }) {
+        return Vec::new();
+    }
     let Some(c) = stroke_color(n) else { return Vec::new() };
     let Some(sides) = n.stroke.sides else {
         let weight = tok(doc, n, &["strokeWeight"], format!("{}px", num(n.stroke.weight)), t);
@@ -571,6 +575,34 @@ mod tests {
         let css = code_for(s.doc().unwrap(), f, CodeLang::Css);
         assert!(css.contains("background: #FFFFFF;\n"), "{css}");
         assert!(!css.contains("gradient"), "{css}");
+    }
+
+    #[test]
+    fn vector_code_uses_its_svg_asset_not_a_box_border() {
+        let mut s = Session::new();
+        let icon =
+            id_of(&s.execute("frame.create", &json!({"name": "icon", "width": 24, "height": 24, "props": {"fill": "none"}})).unwrap()["id"]).unwrap();
+        s.execute("vector.create", &json!({"path": "M4 12 L10 18 L20 6", "parent": icon, "name": "check", "props": {"fill": "none", "stroke": "#1F3A68", "strokeWeight": 2}})).unwrap();
+        let doc = s.doc().unwrap();
+        let html = code_for(doc, icon, CodeLang::Html);
+        assert!(html.contains("<img class=\"check\" src=\"check.svg\" alt=\"check\" />"), "{html}");
+        assert!(!html.contains("border: 2px solid"), "{html}");
+        for lang in [CodeLang::React, CodeLang::Vue, CodeLang::Leptos, CodeLang::Tailwind] {
+            let code = code_for(doc, icon, lang);
+            assert!(code.contains("<img") && code.contains("src=\"check.svg\""), "{}: {code}", lang.id());
+            assert!(!code.contains("border: 2px solid") && !code.contains("border-[2px]"), "{}: {code}", lang.id());
+        }
+        let css = code_for(doc, icon, CodeLang::Css);
+        assert!(!css.contains("border: 2px solid"), "{css}");
+        let swift = code_for(doc, icon, CodeLang::SwiftUi);
+        assert!(swift.contains("Image(\"check\")"), "{swift}");
+        assert!(!swift.contains(".overlay(RoundedRectangle"), "{swift}");
+        let ark = code_for(doc, icon, CodeLang::ArkUi);
+        assert!(!ark.contains(".border({"), "{ark}");
+
+        let rectangle =
+            id_of(&s.execute("shape.rectangle", &json!({"parent": icon, "props": {"stroke": "#1F3A68", "strokeWeight": 2}})).unwrap()["id"]).unwrap();
+        assert!(code_for(s.doc().unwrap(), rectangle, CodeLang::Css).contains("border: 2px solid"), "box strokes remain");
     }
 
     #[test]
