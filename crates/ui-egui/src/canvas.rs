@@ -17,6 +17,7 @@ use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 mod autopan;
 mod background;
 mod builder;
+mod drag_sprite;
 mod input;
 mod outline;
 mod overlays;
@@ -57,6 +58,8 @@ pub struct CanvasState {
     tex_of: Option<(u64, NodeId)>,
     /// The texture is a coarse preview (see [`crate::render_worker`]).
     pub tex_coarse: bool,
+    /// The texture leaves out layers ([`crate::render_worker::Done::skipped`]): it is not kept as the page's image.
+    tex_skipped: bool,
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
     /// Refined images of the files and pages shown before, newest first: switching back to one
@@ -67,6 +70,10 @@ pub struct CanvasState {
     /// the texture doesn't reach, and the file and page it is of.
     surround: Option<(egui::TextureHandle, figcraft_render::View, (u64, NodeId))>,
     submitted: Option<JobKey>,
+    /// The dragged layers drawn from a texture of their own while the base render stays put
+    /// ([`drag_sprite`]), and the gesture (its start document, held weakly) that can't have one.
+    sprite: Option<drag_sprite::Sprite>,
+    sprite_declined: Option<std::sync::Weak<figcraft_doc::Document>>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
     /// What the last canvas render had to do (shown by `ui.inspect`).
@@ -100,6 +107,39 @@ pub struct CanvasState {
     wheel_is_mouse: bool,
 }
 
+#[cfg(test)]
+impl CanvasState {
+    /// The layers the last submitted canvas job leaves out.
+    pub(crate) fn submitted_skip(&self) -> Option<&[NodeId]> {
+        self.submitted.as_ref().map(|k| k.skip.as_slice())
+    }
+
+    /// The file and page the texture shows.
+    pub(crate) fn tex_of(&self) -> Option<(u64, NodeId)> {
+        self.tex_of
+    }
+
+    /// A page or tab switch to `shown`, as the canvas does on a frame.
+    pub(crate) fn switch_to(&mut self, shown: (u64, NodeId)) {
+        self.switch_texture(Some(shown), |_| true);
+    }
+
+    /// Whether an image of `of` is kept for a switch back to it.
+    pub(crate) fn keeps(&self, of: (u64, NodeId)) -> bool {
+        self.kept.iter().any(|k| k.of == of)
+    }
+
+    /// Whether the canvas holds a texture.
+    pub(crate) fn has_texture(&self) -> bool {
+        self.texture.is_some()
+    }
+
+    /// Where the drag sprite shows on screen (at one pixel per point), if there is one.
+    pub(crate) fn sprite_rect(&self, app: &FigApp) -> Option<Rect> {
+        drag_sprite::screen_rect(app, 1.0)
+    }
+}
+
 impl Default for CanvasState {
     fn default() -> Self {
         Self {
@@ -108,10 +148,13 @@ impl Default for CanvasState {
             tex_view: None,
             tex_of: None,
             tex_coarse: false,
+            tex_skipped: false,
             tex_seq: 0,
             kept: Vec::new(),
             surround: None,
             submitted: None,
+            sprite: None,
+            sprite_declined: None,
             want_view: None,
             render_work: None,
             preview_latency_ms: None,
@@ -153,10 +196,12 @@ impl CanvasState {
         if shown.is_some() && self.tex_of != shown {
             let back = self.kept.iter().position(|k| Some(k.of) == shown).map(|i| self.kept.remove(i));
             let (texture, view, of) = (self.texture.take(), self.tex_view.take(), self.tex_of.take());
-            if let (Some(texture), Some(view), Some(of), false) = (texture, view, of, self.tex_coarse) {
+            // An image without the dragged layers isn't the page's complete one: not kept.
+            if let (Some(texture), Some(view), Some(of), false, false) = (texture, view, of, self.tex_coarse, self.tex_skipped) {
                 self.kept.insert(0, Kept { texture, view, of, seq: self.tex_seq });
             }
             self.tex_coarse = false;
+            self.tex_skipped = false;
             if let Some(k) = back {
                 (self.texture, self.tex_view, self.tex_of, self.tex_seq) = (Some(k.texture), Some(k.view), Some(k.of), k.seq);
             }
@@ -321,7 +366,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         })
         .unwrap_or(t.canvas);
     let dots = crate::board_bar::dots(app, bg, &t);
-    request_render(app, worker, ppp, max_texture_side, dots);
+    request_render(app, worker, &ctx, ppp, max_texture_side, dots);
+    drag_sprite::drop_orphan(&mut app.canvas);
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
@@ -344,6 +390,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
             Some(t) => t.set(done.image, filter),
             None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", done.image, filter)),
         }
+        let done_at = done.at;
         let latency = Some(done.at.elapsed().as_secs_f64() * 1000.0);
         if done.coarse {
             app.canvas.preview_latency_ms = latency;
@@ -353,7 +400,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_view = Some(done.view);
         app.canvas.tex_of = Some((done.uid, done.page));
         app.canvas.tex_coarse = done.coarse;
+        app.canvas.tex_skipped = done.skipped;
         app.canvas.tex_seq = done.seq;
+        drag_sprite::arrived(&mut app.canvas, done_at, done.coarse);
     }
     if let Some(around) = worker.surround()
         && shown == Some((around.uid, around.page))
@@ -395,6 +444,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     if let Some((texture, image_rect)) = image {
         painter.image(texture, image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
+    drag_sprite::draw(app, &painter, ppp);
     crate::dev_mode::refresh_measurements(app);
     app.session.tool.labels = overlays(app, &painter, &t);
     crate::frame_labels::rename_field(app, ui);
