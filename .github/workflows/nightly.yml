@@ -22,13 +22,13 @@ jobs:
       actions: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@605d58766e8f536564da8fc81d3676ac86816dea
+    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@be00e5ccd18b68e950c8a08532f2230e7c3d0cba
     with:
-      tooling-revision: 605d58766e8f536564da8fc81d3676ac86816dea
+      tooling-revision: be00e5ccd18b68e950c8a08532f2230e7c3d0cba
       app-name: figcraft
       manual-actors: '["bflatastic","dylanmtaylor","echelon","FredApps","skylartaylor"]'
       craft-fonts-ref: 37827adc41fd165f9a9234ac40f94dbad353aa69
       # One producer run builds every listed platform for one all-or-nothing release. The pin is the
-      # craft-common-actions main commit that merged #339 (bounded lineage compares), on top of the
-      # Linux/macOS signer (#342).
+      # craft-common-actions main commit that merged the exact-analysis admission (#371, after #370,
+      # #369 and #364).
       platforms: '["windows-x86_64","linux-x86_64","macos-aarch64"]'
