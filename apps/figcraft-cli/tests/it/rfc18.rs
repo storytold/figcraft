@@ -193,3 +193,30 @@ fn a_file_name_that_is_not_valid_unicode_is_a_usage_error() {
     assert_eq!((got.code, got.out.as_str()), (2, ""));
     assert!(got.err.starts_with("error: "), "{}", got.err);
 }
+
+#[test]
+fn perf_prints_its_tables_on_stdout_and_its_progress_on_stderr() {
+    let got = invoke(["perf", "--no-system-fonts", "--layers", "10", "--instances", "5"]);
+    assert_eq!(got.code, 0, "{}", got.err);
+    assert!(got.out.starts_with("figcraft perf ("), "{}", got.out);
+    assert!(got.out.contains("| operation") && got.out.contains("10 layers") && got.out.contains("5 inst."), "{}", got.out);
+    assert!(got.err.contains("measuring 10 layers") && got.err.contains("measuring components with 5 instances"), "{}", got.err);
+    // `--instances 0` leaves the components table out.
+    let got = invoke(["perf", "--no-system-fonts", "--layers", "10", "--instances", "0"]);
+    assert_eq!(got.code, 0, "{}", got.err);
+    assert!(!got.out.contains("inst."), "{}", got.out);
+}
+
+#[test]
+fn a_server_key_flag_and_an_unreachable_app_fail_with_exit_1_and_a_message() {
+    let dir = workdir("publish");
+    let missing = dir.join("no-such-plugin");
+    let got = invoke(["plugin", "publish", missing.to_str().unwrap(), "--server", "ws://127.0.0.1:1/", "--key", "secret-key"]);
+    assert_eq!(got.code, 1, "{}", got.err);
+    assert!(got.err.starts_with("error: "), "{}", got.err);
+    assert!(!got.err.contains("secret-key") && got.out.is_empty(), "{} {}", got.err, got.out);
+    let got = invoke(["mcp", "--attach", "127.0.0.1:1"]);
+    assert_eq!(got.code, 1, "{}", got.err);
+    assert!(got.err.contains("can't reach the FigCraft app at 127.0.0.1:1"), "{}", got.err);
+    let _ = std::fs::remove_dir_all(dir);
+}
