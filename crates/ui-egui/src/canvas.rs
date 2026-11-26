@@ -252,6 +252,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let ctx = ui.ctx().clone();
     let ppp = ctx.pixels_per_point();
     let resp = ui.interact(rect, ui.scope_id().with("canvas"), Sense::click_and_drag());
+    // Tab is the focused canvas's (next layer, pick select) only while FigCraft's regions run; over
+    // a dialog, the palette or the presenter it moves the focus.
+    crate::framework::host_canvas(&ctx, resp.id, !crate::a11y::blocked(app));
+    // A press on the canvas takes the keyboard from panel fields; Tab is then its own. Real presses
+    // only: egui makes clicks of Enter and Space on a focused widget.
+    if resp.hovered() && ctx.input(|i| i.pointer.primary_pressed() || i.pointer.secondary_pressed()) {
+        resp.request_focus();
+    }
     let key_box = app.ui.key_box;
     crate::a11y::canvas(&mut app.ui.nav, &resp, || key_box.map_or_else(|| describe(&app.session), describe_box));
     if let Ok(ds) = app.session.ds_mut() {

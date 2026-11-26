@@ -19,8 +19,10 @@ pub mod bidi;
 pub mod canvas;
 pub mod channel;
 pub mod cjk;
+mod combo_menu;
 pub mod control;
 pub mod dialogs;
+pub mod framework;
 pub mod home;
 pub mod i18n;
 pub mod icons;
@@ -877,6 +879,10 @@ pub struct FigApp {
     pub(crate) ime: egui::ime_context::ImeContextTracker,
     /// The check for a newer release and its prompt (desktop; [`updates_ui`]).
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// The framework dialogs (the update dialogs), run once per frame after the main window's UI.
+    pub framework_dialogs: craft_ui::dialog::DialogHost,
+    /// Who FigCraft is to the framework's dialogs ([`framework::host`]).
+    pub(crate) framework_host: std::sync::Arc<craft_host::Host>,
     /// Test-only count of the one IME observation each viewport pass makes.
     #[cfg(test)]
     pub(crate) ime_observations: u32,

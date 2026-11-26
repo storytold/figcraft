@@ -106,9 +106,6 @@ impl eframe::App for App {
             figcraft_ui_egui::windows::guard(fig, ctx, |fig| fig.background_tick(ctx));
             #[cfg(target_os = "macos")]
             apple_events::poll(&self.apple_events, fig, ctx);
-            // Closing the window asks about unsaved changes (and keeps the app running while other
-            // windows are open).
-            figcraft_ui_egui::windows::on_close_request(fig, ctx);
             fig.title()
         });
         // Window title follows the document.
@@ -128,21 +125,28 @@ impl eframe::App for App {
         {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
+        // Last: closing the main window asks about unsaved changes (and keeps the app running
+        // while other windows are open), through the runtime's close path.
+        with_app(|fig| fig.close_path(ctx));
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // winit gives an undecorated window its caption back when it changes the window's flags
         // (maximize, restore, ...): take it off again before the frame is laid out (#1343).
         self.window_frame.run();
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
-        if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
+        if let Some(events) = with_app(|fig| {
+            fig.before_input(ctx);
+            figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)
+        }) {
             raw_input.events.extend(events);
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        figcraft_ui_egui::framework::before_ui(&ctx, &*frame);
         services::parented(frame, || with_app(|fig| figcraft_ui_egui::windows::guard(fig, &ctx, |fig| fig.ui(ui))));
         // This frame drew the queued interrupted-session notice: the interruption is now reported.
         if self.nightly_notice_pending {
@@ -460,6 +464,8 @@ fn main() -> eframe::Result {
         figcraft_ui_egui::channel::name(),
         options,
         Box::new(|cc| {
+            // The UI runtime FigCraft's egui UI is hosted by, before the first pass.
+            figcraft_ui_egui::framework::install(&cc.egui_ctx)?;
             if let Some(state) = &cc.wgpu_render_state {
                 graphics.opened(&state.adapter.get_info());
             }

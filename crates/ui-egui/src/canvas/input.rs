@@ -345,12 +345,6 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         app.canvas.dragging = true;
         app.ui.context_menu = None;
         app.ui.tool_flyout = None;
-        // Clicking the canvas takes focus from panel fields.
-        ctx.memory_mut(|m| {
-            if let Some(f) = m.focused() {
-                m.surrender_focus(f);
-            }
-        });
         Some(PointerKind::Down)
     } else if app.canvas.dragging && primary_released {
         app.canvas.dragging = false;

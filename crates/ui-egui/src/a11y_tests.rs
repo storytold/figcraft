@@ -5,7 +5,7 @@
 //! canvas where shortcuts work again, and a pointer press ends keyboard mode.
 
 use egui::accesskit::{Node, Role, Toggled};
-use egui::{Event, Key, Modifiers};
+use egui::{Event, Key, Modifiers, Pos2, pos2};
 use figcraft_doc::NodeId;
 use figcraft_engine::{Session, ToolId};
 use serde_json::json;
@@ -34,6 +34,24 @@ fn name(u: &Ui) -> String {
 
 fn region(u: &Ui) -> Region {
     u.app.ui.nav.region
+}
+
+fn click(u: &mut Ui, at: Pos2) {
+    u.button(at, true);
+    u.button(at, false);
+    u.frame(vec![]);
+}
+
+/// The middle of the control with the keyboard.
+fn focused_at(u: &Ui) -> Pos2 {
+    let id = u.ctx.memory(|m| m.focused()).unwrap();
+    u.ctx.viewport(|v| v.prev_pass.widgets.get(id).map(|w| w.rect.center())).unwrap()
+}
+
+fn nothing_focused(u: &mut Ui) {
+    u.ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap_or(egui::Id::NULL)));
+    u.frame(vec![]);
+    assert!(u.ctx.memory(|m| m.focused()).is_none());
 }
 
 /// Two rectangles, "Rect A" and "Rect B" (listed above A: it's on top), A selected.
@@ -127,26 +145,23 @@ fn f6_cycles_the_regions_and_lands_on_the_active_tool_and_the_selected_row() {
 }
 
 #[test]
-fn tab_moves_between_the_properties_controls_and_wraps_without_leaving_the_panel() {
+fn tab_walks_the_properties_controls_then_leaves_the_panel_in_the_framework_order() {
     let (mut u, a, _) = setup();
     f6(&mut u, false);
-    let first = name(&u);
-    let mut seen = vec![first.clone()];
+    assert_eq!(region(&u), Region::Properties);
+    let mut seen = vec![name(&u)];
     for _ in 0..200 {
         press(&mut u, Key::Tab, Modifiers::NONE);
-        assert_eq!(region(&u), Region::Properties);
-        if name(&u) == first {
+        if region(&u) != Region::Properties {
             break;
         }
+        // Names repeat (unnamed stops, one "Apply variable" per field), so only leaving the panel shows Tab doesn't wrap.
         seen.push(name(&u));
     }
-    assert_eq!(name(&u), first, "Tab wraps round to the panel's first control");
+    assert_ne!(region(&u), Region::Properties, "Tab after the last Properties control leaves the panel");
     for want in ["Width", "Height", "Rotation", "Opacity"] {
         assert!(seen.iter().any(|n| n == want), "{want} not reached by Tab: {seen:?}");
     }
-    // Shift+Tab steps back.
-    press(&mut u, Key::Tab, Modifiers::SHIFT);
-    assert_eq!(Some(&name(&u)), seen.last());
     // Tab moved the keyboard, not the selection.
     assert_eq!(u.app.session.selection(), vec![a]);
 }
@@ -214,18 +229,66 @@ fn escape_returns_to_the_canvas_where_shortcuts_and_tab_work_again() {
     // Tab on the canvas selects the next layer and keeps the keyboard there.
     press(&mut u, Key::Tab, Modifiers::NONE);
     assert_eq!(u.app.session.selection(), vec![b]);
-    assert_eq!(name(&u), "Canvas");
+    assert_eq!((region(&u), name(&u)), (Region::Canvas, "Canvas".to_string()), "Tab on the focused canvas keeps focus there");
     press(&mut u, Key::R, Modifiers::NONE);
     assert_eq!(u.app.session.tool.tool, ToolId::Rectangle);
 }
 
 #[test]
-fn tab_on_the_canvas_selects_the_next_layer_without_keyboard_mode() {
-    let (mut u, _, b) = setup();
+fn a_bare_tab_with_nothing_focused_selects_no_layer_and_moves_focus_into_the_window() {
+    let (mut u, a, _) = setup();
+    nothing_focused(&mut u);
     press(&mut u, Key::Tab, Modifiers::NONE);
     u.frame(vec![]);
-    assert_eq!(u.app.session.selection(), vec![b]);
-    assert!(u.ctx.memory(|m| m.focused()).is_none(), "Tab doesn't wander into the tab bar");
+    assert_eq!(u.app.session.selection(), vec![a], "the selection is unchanged");
+    assert!(u.ctx.memory(|m| m.focused()).is_some(), "Tab focuses a stop in the window");
+}
+
+#[test]
+fn tab_after_a_click_on_the_canvas_selects_the_next_layer_also_after_escape() {
+    let (mut u, a, b) = setup();
+    nothing_focused(&mut u);
+    let at = u.app.to_screen(20.0, 15.0);
+    click(&mut u, at);
+    assert_eq!((name(&u), u.app.session.selection()), ("Canvas".to_string(), vec![a]));
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!((name(&u), u.app.session.selection()), ("Canvas".to_string(), vec![b]));
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(u.app.session.selection().is_empty());
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!((name(&u), u.app.session.selection().len()), ("Canvas".to_string(), 1));
+}
+
+#[test]
+fn a_click_on_a_panel_leaves_tab_to_pick_select() {
+    let (mut u, a, b) = setup();
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(a));
+    // Empty space below the layer rows.
+    let at = pos2(u.app.canvas.rect.min.x - 100.0, 850.0);
+    click(&mut u, at);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!((name(&u), u.app.picked()), ("Canvas".to_string(), Some(b)));
+}
+
+#[test]
+fn an_opened_file_gives_its_canvas_the_keyboard_once_a_dialog_has_closed() {
+    let (mut u, ..) = setup();
+    assert_eq!(name(&u), "Canvas");
+    nothing_focused(&mut u);
+    u.app.ui.about = true;
+    u.app.run("file.new", json!({}));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_ne!(name(&u), "Canvas", "About is open");
+    u.app.ui.about = false;
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(name(&u), "Canvas");
 }
 
 #[test]
@@ -279,6 +342,38 @@ fn a_pointer_press_ends_keyboard_mode() {
     u.button(p, false);
     assert!(!u.app.ui.nav.keyboard);
     assert_eq!(region(&u), Region::Canvas);
+}
+
+#[test]
+fn tab_after_a_click_turns_keyboard_mode_on_and_a_click_into_a_field_leaves_it_off() {
+    let (mut u, ..) = setup();
+    f6(&mut u, true);
+    f6(&mut u, true);
+    assert_eq!(name(&u), "Move");
+    let at = focused_at(&u);
+    click(&mut u, at);
+    assert!(!u.app.ui.nav.keyboard);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert!(u.app.ui.nav.keyboard, "Tab from a toolbar button");
+    while region(&u) != Region::Properties {
+        f6(&mut u, false);
+    }
+    for _ in 0..100 {
+        if name(&u) == "Width" {
+            break;
+        }
+        press(&mut u, Key::Tab, Modifiers::NONE);
+    }
+    assert_eq!(name(&u), "Width");
+    let at = focused_at(&u);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("64".into())]);
+    assert!(u.ctx.text_edit_focused(), "the click opened the field's editor");
+    assert!(!u.app.ui.nav.keyboard, "the app moved the keyboard into the editor, not a key");
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(name(&u), "Height");
+    assert!(u.app.ui.nav.keyboard, "Tab from the field");
 }
 
 #[test]
