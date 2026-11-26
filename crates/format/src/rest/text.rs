@@ -95,7 +95,8 @@ fn paragraph(s: &Value, td: &mut TextData) {
     if text(s, "leadingTrim") == Some("CAP_HEIGHT") {
         td.leading_trim = figcraft_doc::LeadingTrim::CapHeight;
     }
-    if let Some(flags) = s.get("openTypeFlags").and_then(Value::as_object) {
+    // `opentypeFlags` as the reference tool's API writes it; `openTypeFlags` as earlier files had it.
+    if let Some(flags) = s.get("opentypeFlags").or_else(|| s.get("openTypeFlags")).and_then(Value::as_object) {
         for (tag, on) in flags.iter().take(64) {
             if figcraft_doc::valid_feature_tag(&tag.to_ascii_lowercase()) {
                 td.features.insert(tag.to_ascii_lowercase(), on.as_f64().is_some_and(|x| x != 0.0) || on.as_bool() == Some(true));

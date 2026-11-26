@@ -345,6 +345,8 @@ mod fig_font_names_tests;
 #[cfg(test)]
 mod fig_import_tests;
 #[cfg(test)]
+mod fig_optical_size_tests;
+#[cfg(test)]
 mod fill_none_tests;
 #[cfg(test)]
 mod finite_geometry_tests;
@@ -648,6 +650,10 @@ mod variables_editor_tests;
 mod variables_import_shapes_tests;
 #[cfg(test)]
 mod variables_io_tests;
+#[cfg(test)]
+mod variant_binding_import_tests;
+#[cfg(test)]
+mod variant_mode_switch_tests;
 #[cfg(test)]
 mod variant_shared_props_tests;
 #[cfg(test)]

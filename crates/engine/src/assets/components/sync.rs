@@ -300,13 +300,14 @@ fn remeasure_text(doc: &mut Document, remeasure: Vec<NodeId>) {
     }
 }
 
-/// The component's property defaults with the instance's values for the ones it has.
+/// The component's property defaults with the instance's values, also for a property the
+/// component doesn't list that a layer inside reads: an imported kit's text can read a property
+/// the variant set lists under another id, which the instance sets (the reference tool goes by
+/// the property a layer reads, not by the list).
 fn effective_props(comp: &Node, root_props: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
     let mut eff_props = default_props(comp);
     for (k, v) in root_props {
-        if eff_props.contains_key(k) {
-            eff_props.insert(k.clone(), v.clone());
-        }
+        eff_props.insert(k.clone(), v.clone());
     }
     eff_props
 }
