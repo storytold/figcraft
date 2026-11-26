@@ -113,6 +113,7 @@ impl Session {
         }
         if self.tool.busy() {
             self.tool.gesture = Gesture::None;
+            self.tool.highlighter_preview = None;
             self.tool.overlay = Overlay::default();
             return self.cancel_interaction();
         }

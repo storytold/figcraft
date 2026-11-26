@@ -70,6 +70,8 @@ pub struct Job {
     pub dots: Option<figcraft_render::Dots>,
     /// The document's [`figcraft_engine::DocState::uid`]: images of other files are never shown.
     pub uid: u64,
+    /// A transient render belongs to this highlighter gesture, never to the page's stable image.
+    pub highlighter_generation: Option<u64>,
     /// A coarse preview may come first when the zoom changes (not in pixel preview, whose pixels
     /// are the point).
     pub zoom_preview: bool,
@@ -87,6 +89,7 @@ pub struct Done {
     /// What it is an image of ([`Job::uid`], [`Job::page`]).
     pub uid: u64,
     pub page: NodeId,
+    pub highlighter_generation: Option<u64>,
     /// A coarse preview, refined by a later image unless a newer request replaced it.
     pub coarse: bool,
     /// [`Job::at`].
@@ -145,7 +148,7 @@ fn done(job: &Job, view: View, pix: &Pixmap, work: Work, ms: f64, coarse: bool) 
     if job.proof {
         mark_outside_srgb(&mut image, pix, job.doc.color_profile);
     }
-    Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0 }
+    Done { image, view, ms, work, uid: job.uid, page: job.page, highlighter_generation: job.highlighter_generation, coarse, at: job.at, seq: 0 }
 }
 
 /// The coarse image around the view is this many views wide and tall, centred on it.
@@ -257,6 +260,7 @@ struct Stepping {
 fn same_settings(a: &Job, b: &Job) -> bool {
     a.uid == b.uid
         && a.page == b.page
+        && a.highlighter_generation == b.highlighter_generation
         && a.view.scale.to_bits() == b.view.scale.to_bits()
         && (a.view.width, a.view.height) == (b.view.width, b.view.height)
         && a.outline == b.outline
@@ -616,7 +620,7 @@ impl Worker {
                 {
                     break;
                 }
-                if refined_job {
+                if refined_job && job.highlighter_generation.is_none() {
                     // Asked before the send (and before this request counts as done), so `in_flight`
                     // holds until the surround thread is done with it. Without that thread (it failed
                     // to start) the page colour shows past the edge.

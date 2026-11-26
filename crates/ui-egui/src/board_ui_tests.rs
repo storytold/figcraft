@@ -297,6 +297,81 @@ fn a_selected_connector_shows_its_ends_as_handles() {
     }
 }
 
+fn drag_board_ink(u: &mut Ui) -> (Pos2, Pos2, egui::FullOutput) {
+    let zoom = u.app.session.ds().unwrap().view.zoom;
+    let start = u.app.to_screen(10.0 / zoom, 20.0 / zoom);
+    u.button(start, true);
+    for i in 1..=5 {
+        let point = u.app.to_screen((10.0 + 14.0 * f64::from(i)) / zoom, (20.0 + 8.0 * f64::from(i % 2)) / zoom);
+        u.frame(vec![Event::PointerMoved(point)]);
+    }
+    let end = u.app.to_screen(94.0 / zoom, 20.0 / zoom);
+    let frame = u.frame_output(vec![Event::PointerMoved(end)]);
+    (start, end, frame)
+}
+
+#[test]
+fn board_marker_preview_keeps_the_stroke_width_when_zoomed_out() {
+    let mut u = board();
+    u.app.session.ds_mut().unwrap().view.zoom = 0.1;
+    u.app.run("tool.marker", json!({"color": "#3067A9"}));
+    u.frame(vec![]);
+    let (start, end, frame) = drag_board_ink(&mut u);
+    let preview = flat(&frame.shapes)
+        .into_iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Path(path)
+                if !path.closed
+                    && path.points.len() >= 3
+                    && path.points.first().is_some_and(|p| p.distance(start) < 0.5)
+                    && path.points.last().is_some_and(|p| p.distance(end) < 0.5) =>
+            {
+                Some(path.stroke)
+            }
+            _ => None,
+        })
+        .expect("the stroke preview connects the sampled points");
+    u.button(end, false);
+    let ds = u.app.session.ds().unwrap();
+    let ink = ds.doc.nodes().find(|node| node.board == Some(BoardItem::Ink)).expect("a completed ink stroke");
+    let width = (ink.stroke.weight * ds.view.zoom) as f32;
+    assert!((preview.width - width).abs() < 0.01, "preview width {} at this zoom, committed width {width}", preview.width);
+    let expected = crate::theme::doc_c32(&u.ctx, ink.strokes[0].solid_color().unwrap());
+    assert_eq!(preview.color, egui::epaint::ColorMode::Solid(expected));
+}
+
+#[test]
+fn board_highlighter_preview_multiplies_with_the_same_backdrop_as_the_committed_stroke() {
+    for background in ["#72C694", "#000000"] {
+        let mut u = board();
+        u.app.session.ds_mut().unwrap().view.zoom = 1.0;
+        u.app.run("page.setBackground", json!({"color": background}));
+        u.app.run("tool.highlighter", json!({"color": "#3067A9"}));
+        u.frame(vec![]);
+        let scale = f64::from(u.ctx.pixels_per_point()) * u.app.session.ds().unwrap().view.zoom;
+        let view = figcraft_render::View { origin: (0.0, 0.0), scale, width: 128, height: 64 };
+        let opts = figcraft_render::Options { background: figcraft_color::Color::from_hex(background), ..Default::default() };
+        let render = |u: &Ui| {
+            let ds = u.app.session.ds().unwrap();
+            figcraft_render::render_view(&u.app.canvas_document(ds).0, ds.page, &view, &opts).unwrap().data().to_vec()
+        };
+        let original = render(&u);
+        let undo = u.app.session.undo_labels(10);
+        let (_, end, _) = drag_board_ink(&mut u);
+        let preview = render(&u);
+        assert!(!u.app.session.doc().unwrap().nodes().any(|node| node.board == Some(BoardItem::Ink)));
+        assert_eq!(u.app.session.undo_labels(10), undo, "preview does not add undo entries");
+        u.button(end, false);
+        let committed = render(&u);
+        assert!(preview == committed, "preview and final ink should blend identically over {background}");
+        assert_eq!(committed == original, background == "#000000", "Multiply should preserve black and darken colour");
+        let (_, end, _) = drag_board_ink(&mut u);
+        u.app.session.escape().unwrap();
+        u.button(end, false);
+        assert!(render(&u) == committed, "Escape discards the second preview");
+    }
+}
+
 #[test]
 fn the_board_grid_follows_its_settings() {
     let mut u = board();

@@ -86,6 +86,7 @@ pub(super) fn job(doc: &Arc<Document>, page: NodeId, uid: u64, view: View) -> Jo
         proof: false,
         dots: None,
         uid,
+        highlighter_generation: None,
         zoom_preview: true,
         at: Instant::now(),
     }
@@ -374,6 +375,60 @@ fn drain(w: &mut Worker) -> Vec<(u64, bool)> {
     }
     got.extend(w.poll().map(|d| (d.seq, d.coarse)));
     got
+}
+
+#[test]
+fn a_highlighter_render_delivered_after_escape_cannot_enter_the_page_cache() {
+    use figcraft_engine::tools::{PointerEvent, PointerKind};
+
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    let mut app = crate::FigApp::new(s, Box::new(crate::NoServices));
+    app.canvas.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 64.0));
+    let ds = app.session.ds().unwrap();
+    let shown = Some((ds.uid, ds.page));
+    let ctx = egui::Context::default();
+    let mut worker = Worker::new(ctx.clone());
+    let queued = |w: &mut Worker| {
+        let start = std::time::Instant::now();
+        while w.in_flight() {
+            assert!(start.elapsed() < Duration::from_secs(10), "the render never finished");
+            std::thread::yield_now();
+        }
+        w.poll().expect("a finished render in the queue")
+    };
+    let submit = |app: &mut crate::FigApp, w: &mut Worker| super::request_render(app, w, 1.0, 256, None);
+    submit(&mut app, &mut worker);
+    let clean = queued(&mut worker);
+    let clean_seq = clean.seq;
+    super::accept_render(&mut app, &ctx, clean, shown);
+    let _ = worker.surround();
+
+    app.session.execute("tool.highlighter", &json!({})).unwrap();
+    app.session.pointer(&PointerEvent::at(PointerKind::Down, 10.0, 20.0, 1.0)).unwrap();
+    app.session.pointer(&PointerEvent::at(PointerKind::Move, 30.0, 20.0, 1.0)).unwrap();
+    submit(&mut app, &mut worker);
+    let active_preview = queued(&mut worker);
+    let generation = active_preview.highlighter_generation.expect("the stroke's generation");
+    super::accept_render(&mut app, &ctx, active_preview, shown);
+    assert_eq!(app.canvas.shown_highlighter().map(|p| p.generation), Some(generation));
+    assert_eq!(app.canvas.tex_seq, clean_seq, "the page's stable image stays separate during the stroke");
+
+    app.session.pointer(&PointerEvent::at(PointerKind::Move, 60.0, 20.0, 1.0)).unwrap();
+    submit(&mut app, &mut worker);
+    let late = queued(&mut worker);
+    assert_eq!(late.highlighter_generation, Some(generation));
+    assert!(worker.surround().is_none(), "a transient request does not enter the surround cache");
+    app.session.escape().unwrap();
+    submit(&mut app, &mut worker);
+    app.canvas.switch_texture(shown, |_| true);
+    super::accept_render(&mut app, &ctx, late, shown);
+    assert!(app.canvas.shown_highlighter().is_none(), "Escape also drops any preview already on screen");
+    assert_eq!(app.canvas.tex_seq, clean_seq, "the late preview must never replace the clean image");
+    let (uid, page) = shown.unwrap();
+    app.canvas.switch_texture(Some((uid, NodeId(page.0 + 1))), |_| true);
+    app.canvas.switch_texture(shown, |_| true);
+    assert_eq!(app.canvas.tex_seq, clean_seq, "the page cache must return the clean image");
 }
 
 #[test]

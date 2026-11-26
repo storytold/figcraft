@@ -313,17 +313,7 @@ impl Session {
         if points.len() < 2 {
             return Ok(());
         }
-        // Smooth: fit a curve through the samples, kept from shooting past them where the stroke
-        // turns back or runs nearly straight (#1741).
-        let mut poly = figcraft_geom::BezPath::new();
-        for (k, p) in points.iter().enumerate() {
-            if k == 0 {
-                poly.move_to(*p);
-            } else {
-                poly.line_to(*p);
-            }
-        }
-        let fitted = figcraft_geom::simplify_path(&poly, 0.75);
+        let fitted = fitted_ink_path(points);
         let d = fitted.to_svg();
         if matches!(self.tool.tool, ToolId::Marker | ToolId::Highlighter) {
             return self.ink_finish(&d);
@@ -360,4 +350,17 @@ impl Session {
         let parent = frame_at(doc, page, p, &[]).unwrap_or(page);
         Ok(super::handles::pencil_color(doc, parent))
     }
+}
+
+/// Fit a curve through the samples without overshooting when a stroke turns back or nearly
+/// follows a straight line (#1741).
+pub(super) fn fitted_ink_path(points: &[Point]) -> figcraft_geom::BezPath {
+    let mut poly = figcraft_geom::BezPath::new();
+    if let Some((first, rest)) = points.split_first() {
+        poly.move_to(*first);
+        for point in rest {
+            poly.line_to(*point);
+        }
+    }
+    figcraft_geom::simplify_path(&poly, 0.75)
 }

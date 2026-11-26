@@ -587,10 +587,21 @@ pub struct PenPath {
     pub undone: Vec<(Point, Vec2, Vec2)>,
 }
 
+/// A stroke composited by the canvas renderer while the real document stays unchanged.
+#[derive(Clone, Debug)]
+pub(crate) struct HighlighterPreview {
+    pub uid: u64,
+    pub page: NodeId,
+    pub source: std::sync::Arc<Document>,
+    pub doc: std::sync::Arc<Document>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ToolState {
     pub tool: ToolId,
     pub(crate) gesture: Gesture,
+    pub(crate) highlighter_generation: u64,
+    pub(crate) highlighter_preview: Option<HighlighterPreview>,
     pub overlay: Overlay,
     pub pen: Option<PenPath>,
     /// Tool to return to after a temporary tool (space → hand).

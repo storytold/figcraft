@@ -239,6 +239,7 @@ fn a_finished_background_render_wakes_the_ui() {
         proof: false,
         dots: None,
         uid: 0,
+        highlighter_generation: None,
         zoom_preview: false,
         at: web_time::Instant::now(),
     });

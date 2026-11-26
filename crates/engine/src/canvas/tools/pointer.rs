@@ -89,6 +89,7 @@ impl Session {
         }
         self.tool.tool = t;
         self.tool.gesture = Gesture::None;
+        self.tool.highlighter_preview = None;
         self.tool.pick_only = false;
         // The tool's cursor shows before the pointer moves.
         self.tool.overlay =
@@ -119,6 +120,7 @@ impl Session {
     /// as Escape does; the UI calls it when Dev Mode starts, where nothing may move.
     pub fn drop_gesture(&mut self) -> Result<()> {
         self.tool.gesture = Gesture::None;
+        self.tool.highlighter_preview = None;
         self.cancel_interaction()
     }
 

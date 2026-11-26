@@ -119,6 +119,14 @@ pub struct BoardTool {
     pub highlighter: Color,
 }
 
+impl BoardTool {
+    /// A board ink tool's current colour, stroke width and opacity.
+    pub fn ink_style(&self, highlighter: bool) -> (Color, f64, f32) {
+        let (weight, opacity) = if highlighter { HIGHLIGHTER } else { MARKER };
+        (if highlighter { self.highlighter } else { self.marker }, weight, opacity)
+    }
+}
+
 impl Default for BoardTool {
     fn default() -> Self {
         let first = BOARD_COLORS.first().map_or(Color::WHITE, |c| c.1);

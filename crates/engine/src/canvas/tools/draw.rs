@@ -240,6 +240,7 @@ impl Session {
             Gesture::Pencil { mut points, mut pressure } => {
                 self.tool.overlay.pen.clear();
                 self.tool.overlay.pen_color = None;
+                self.tool.highlighter_preview = None;
                 // The stroke ends where the button came up, even without a move to get there.
                 pencil_add(&mut points, &mut pressure, ev);
                 self.pencil_finish(&points, &pressure)?;

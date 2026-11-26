@@ -16,6 +16,7 @@ pub(super) struct JobKey {
     fonts: u64,
     proof: bool,
     dots: Option<figcraft_render::Dots>,
+    pub(super) highlighter_generation: Option<u64>,
 }
 
 /// Whether a finished render goes on screen: an image of the file and page shown (`shown`), and
@@ -26,15 +27,20 @@ pub(crate) fn shows(c: &CanvasState, done: &Done, shown: Option<(u64, NodeId)>) 
     if shown != Some((done.uid, done.page)) {
         return false;
     }
-    let refined = !c.tex_coarse && c.tex_of == shown;
-    if done.coarse && refined && done.seq <= c.tex_seq {
+    let (refined, view, seq) = if let Some(generation) = done.highlighter_generation {
+        if c.requested_highlighter() != Some(generation) {
+            return false;
+        }
+        let current = c.shown_highlighter().filter(|p| Some(p.of) == shown);
+        (current.is_some_and(|p| !p.coarse), current.map(|p| &p.view), current.map_or(0, |p| p.seq))
+    } else {
+        (!c.tex_coarse && c.tex_of == shown, c.tex_view.as_ref(), c.tex_seq)
+    };
+    if done.coarse && refined && done.seq <= seq {
         return false;
     }
-    let refined_here = refined
-        && c.tex_view
-            .as_ref()
-            .zip(c.want_view.as_ref())
-            .is_some_and(|(have, want)| have.scale.to_bits() == want.scale.to_bits() && covers(have, want));
+    let refined_here =
+        refined && view.zip(c.want_view.as_ref()).is_some_and(|(have, want)| have.scale.to_bits() == want.scale.to_bits() && covers(have, want));
     !(done.coarse && refined_here)
 }
 
@@ -59,8 +65,8 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
     } else {
         (ds.view.zoom * f64::from(ppp), (rect.width() * ppp).ceil().max(1.0) as u32, (rect.height() * ppp).ceil().max(1.0) as u32)
     };
-    // The edited text is drawn live (an IME composition included); the caret is an overlay.
-    let doc = app.preedit_view().map(|p| p.doc.clone()).unwrap_or_else(|| ds.doc.clone());
+    // Live text and highlighter previews must blend with the rest of the canvas.
+    let (doc, highlighter_generation) = app.canvas_document(ds);
     let outlined = if ds.view.outlines_selection { ds.selection.clone() } else { vec![] };
     let proof = ds.view.proof_srgb && !doc.color_profile.is_srgb();
     let outline_extras = figcraft_render::Outline { hidden: ds.view.outline_hidden, bounds: ds.view.outline_bounds, light: false };
@@ -86,6 +92,7 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         fonts: figcraft_text::layout_generation(),
         proof,
         dots,
+        highlighter_generation,
     };
     if let Some(previous) = &app.canvas.submitted {
         let previous_origin = (previous.origin.0 as f64 / 1000.0, previous.origin.1 as f64 / 1000.0);
@@ -110,6 +117,7 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         proof,
         dots,
         uid: ds.uid,
+        highlighter_generation,
         zoom_preview: ds.view.pixel_preview_scale().is_none(),
         at: web_time::Instant::now(),
     };

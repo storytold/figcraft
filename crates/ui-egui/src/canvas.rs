@@ -59,6 +59,8 @@ pub struct CanvasState {
     pub tex_coarse: bool,
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
+    /// The drawn highlighter is separate from the stable texture and the page cache.
+    highlighter: Option<HighlighterTexture>,
     /// Refined images of the files and pages shown before, newest first: switching back to one
     /// shows its image at once while it renders again, instead of a blank canvas (and, where
     /// renders are slow, a coarse preview).
@@ -109,6 +111,7 @@ impl Default for CanvasState {
             tex_of: None,
             tex_coarse: false,
             tex_seq: 0,
+            highlighter: None,
             kept: Vec::new(),
             surround: None,
             submitted: None,
@@ -144,12 +147,44 @@ struct Kept {
     seq: u64,
 }
 
+struct HighlighterTexture {
+    texture: egui::TextureHandle,
+    view: figcraft_render::View,
+    of: (u64, NodeId),
+    generation: u64,
+    coarse: bool,
+    seq: u64,
+}
+
 impl CanvasState {
+    fn requested_highlighter(&self) -> Option<u64> {
+        self.submitted.as_ref().and_then(|job| job.highlighter_generation)
+    }
+
+    fn shown_highlighter(&self) -> Option<&HighlighterTexture> {
+        self.highlighter.as_ref().filter(|preview| Some(preview.generation) == self.requested_highlighter())
+    }
+
+    fn shown_texture(&self, shown: Option<(u64, NodeId)>) -> Option<(&egui::TextureHandle, &figcraft_render::View)> {
+        let shown = shown?;
+        if let Some(preview) = self.shown_highlighter().filter(|preview| preview.of == shown) {
+            return Some((&preview.texture, &preview.view));
+        }
+        (self.tex_of == Some(shown)).then(|| self.texture.as_ref().zip(self.tex_view.as_ref())).flatten()
+    }
+
+    pub(crate) fn shown_coarse(&self) -> bool {
+        self.shown_highlighter().map_or(self.tex_coarse, |preview| preview.coarse)
+    }
+
     /// When the file or page shown is no longer the one the texture is of, set the texture aside
     /// (if refined) and bring back the image kept for `shown`, if any. Images of files that are no
     /// longer open (`open` says which are) are dropped every frame, not only on a switch: a
     /// background tab can close while the file shown stays the same.
     fn switch_texture(&mut self, shown: Option<(u64, NodeId)>, open: impl Fn(u64) -> bool) {
+        if self.highlighter.as_ref().is_some_and(|preview| Some(preview.generation) != self.requested_highlighter() || Some(preview.of) != shown) {
+            self.highlighter = None;
+        }
         if shown.is_some() && self.tex_of != shown {
             let back = self.kept.iter().position(|k| Some(k.of) == shown).map(|i| self.kept.remove(i));
             let (texture, view, of) = (self.texture.take(), self.tex_view.take(), self.tex_of.take());
@@ -206,6 +241,16 @@ impl FigApp {
         let p = self.canvas.preedit.as_ref()?;
         let (doc, pe, caret) = self.preedit_key()?;
         (Arc::ptr_eq(&p.key.0, &doc) && p.key.1 == pe && p.key.2 == caret).then_some(p)
+    }
+
+    pub(crate) fn canvas_document(&self, ds: &figcraft_engine::DocState) -> (Arc<Document>, Option<u64>) {
+        if let Some(preedit) = self.preedit_view() {
+            (preedit.doc.clone(), None)
+        } else if let Some((doc, generation)) = self.session.highlighter_preview_doc() {
+            (doc, Some(generation))
+        } else {
+            (ds.doc.clone(), None)
+        }
     }
 }
 
@@ -327,35 +372,11 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
     let docs = &app.session.docs;
     app.canvas.switch_texture(shown, |uid| docs.iter().any(|d| d.uid == uid));
-    if let Some(done) = worker.poll()
-        && shows(&app.canvas, &done, shown)
-    {
-        if !done.coarse {
-            app.canvas.render_work = Some(done.work);
-            app.ui.render_ms = done.ms;
-        }
-        // A pixel preview render is magnified with hard pixel edges.
-        let filter = if app.session.ds().ok().and_then(|d| d.view.pixel_preview_scale()) == Some(done.view.scale) {
-            egui::TextureOptions::NEAREST
-        } else {
-            egui::TextureOptions::LINEAR
-        };
-        match &mut app.canvas.texture {
-            Some(t) => t.set(done.image, filter),
-            None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", done.image, filter)),
-        }
-        let latency = Some(done.at.elapsed().as_secs_f64() * 1000.0);
-        if done.coarse {
-            app.canvas.preview_latency_ms = latency;
-        } else {
-            app.canvas.refine_latency_ms = latency;
-        }
-        app.canvas.tex_view = Some(done.view);
-        app.canvas.tex_of = Some((done.uid, done.page));
-        app.canvas.tex_coarse = done.coarse;
-        app.canvas.tex_seq = done.seq;
+    if let Some(done) = worker.poll() {
+        accept_render(app, &ctx, done, shown);
     }
     if let Some(around) = worker.surround()
+        && around.highlighter_generation.is_none()
         && shown == Some((around.uid, around.page))
     {
         let of = (around.uid, around.page);
@@ -372,7 +393,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     }
     let painter = ui.painter_at(rect);
     crate::theme::set_canvas_page(&ctx, bg);
-    let image = if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
+    let image = if let Some((tex, v)) = app.canvas.shown_texture(shown) {
         // Re-project the last render onto the current view.
         let tl = app.to_screen(v.origin.0, v.origin.1);
         let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
@@ -435,6 +456,49 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         shown.show(&ctx, at);
         app.canvas.cursor = Some(shown);
     }
+}
+
+fn accept_render(app: &mut FigApp, ctx: &egui::Context, done: Done, shown: Option<(u64, NodeId)>) {
+    if !shows(&app.canvas, &done, shown) {
+        return;
+    }
+    if !done.coarse {
+        app.canvas.render_work = Some(done.work);
+        app.ui.render_ms = done.ms;
+    }
+    // A pixel preview render is magnified with hard pixel edges.
+    let filter = if app.session.ds().ok().and_then(|d| d.view.pixel_preview_scale()) == Some(done.view.scale) {
+        egui::TextureOptions::NEAREST
+    } else {
+        egui::TextureOptions::LINEAR
+    };
+    let latency = Some(done.at.elapsed().as_secs_f64() * 1000.0);
+    if done.coarse {
+        app.canvas.preview_latency_ms = latency;
+    } else {
+        app.canvas.refine_latency_ms = latency;
+    }
+    if let Some(generation) = done.highlighter_generation {
+        let texture = match app.canvas.highlighter.take() {
+            Some(p) if p.generation == generation => {
+                let mut texture = p.texture;
+                texture.set(done.image, filter);
+                texture
+            }
+            _ => ctx.load_texture("figcraft-highlighter-preview", done.image, filter),
+        };
+        app.canvas.highlighter =
+            Some(HighlighterTexture { texture, view: done.view, of: (done.uid, done.page), generation, coarse: done.coarse, seq: done.seq });
+        return;
+    }
+    match &mut app.canvas.texture {
+        Some(t) => t.set(done.image, filter),
+        None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", done.image, filter)),
+    }
+    app.canvas.tex_view = Some(done.view);
+    app.canvas.tex_of = Some((done.uid, done.page));
+    app.canvas.tex_coarse = done.coarse;
+    app.canvas.tex_seq = done.seq;
 }
 
 /// The image's screen rect; align native-density renders to device pixels to avoid linear filtering
