@@ -13,9 +13,11 @@ gh api repos/storytold/figcraft/actions/workflows/nightly.yml --jq .id
 The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `fc7124a1defa96813aee060031dc8b4d2afa3652`, the craft-common-actions
-main commit that merged [#370](https://github.com/storytold/craft-common-actions/pull/370) (the
-Windows and macOS nightly registry rows for the 14 apps) after
+Shared tooling is pinned to `be00e5ccd18b68e950c8a08532f2230e7c3d0cba`, the craft-common-actions
+main commit that merged [#371](https://github.com/storytold/craft-common-actions/pull/371) (the
+candidate is admitted on the built commit's own Sonar analysis, not main's latest) after
+[#370](https://github.com/storytold/craft-common-actions/pull/370) (the Windows and macOS nightly
+registry rows for the 14 apps) and
 [#369](https://github.com/storytold/craft-common-actions/pull/369) (shared helper checkouts kept out
 of the app's clean-source check, and macOS on `macos-15`), following
 [#364](https://github.com/storytold/craft-common-actions/pull/364) (the signer may run on the
@@ -71,7 +73,7 @@ there is no separate Linux or macOS caller job and the signer caller has no plat
 |---|---|---|
 | `repository_id` | `1412112308` | `gh api repos/storytold/figcraft --jq .id` |
 | `producer_workflow_id` | `429731005` | `gh api repos/storytold/figcraft/actions/workflows/nightly.yml` (path `.github/workflows/nightly.yml`, state `active`) |
-| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `fc7124a1…` (craft-common-actions Windows/macOS registry rows, #370 after #369, following #364) | The callers' pin |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `be00e5cc…` (craft-common-actions exact-analysis admission, #371 after #370 and #369, following #364) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members; equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist |
 | `platforms` | three rows | Storytold stable signing identities (`windows-x86_64`, `linux-x86_64`, `macos-aarch64`) |
