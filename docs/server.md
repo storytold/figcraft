@@ -254,8 +254,9 @@ which other files use without anyone copying the library file around.
   layers use each of the library's styles and variables. **Show usage** in the library file
   (`library.usage`) lists the files and the instances and detaches of each component, the
   insertions and detachments of the past 30 days, 90 days or year, and, by its Type choice, the
-  layers and files using each style and variable. Layers inside instances count for their
-  component. Files are
+  layers and files using each style and variable with their insertions and detachments. Applying
+  a style or variable, or copying or duplicating content that uses it, inserts it, and the Detach
+  button detaches it. Layers inside instances count for their component. Files are
   told apart by their names; a file's report changes only when its usage does. The server counts
   what a file's totals grow past their highest in the week it hears of it, keeps a year of weeks,
   and counts an undo and a redo once. A server from before these counts refuses the reports

@@ -184,8 +184,19 @@ pub(super) fn nudge(s: &mut Session, p: &Value) -> Result<Value> {
     // Children in an auto layout flow move one place instead (see `al_keys`).
     for i in &ids {
         if crate::al_keys::flowing_parent(doc, *i).is_none() && (dx, dy) != (0.0, 0.0) {
+            // The step is along the canvas axes; the layer's transform is in its parent's space.
+            let (lx, ly) = match doc.node(*i).and_then(|n| n.parent) {
+                Some(par) => {
+                    let inv = doc.world_transform(par).inverse();
+                    let o = inv * figcraft_geom::Point::new(0.0, 0.0);
+                    let q = inv * figcraft_geom::Point::new(dx, dy);
+                    let (lx, ly) = (q.x - o.x, q.y - o.y);
+                    if lx.is_finite() && ly.is_finite() { (lx, ly) } else { (dx, dy) }
+                }
+                None => (dx, dy),
+            };
             let n = doc.get_mut(*i)?;
-            n.transform = Affine::translate((dx, dy)) * n.transform;
+            n.transform = Affine::translate((lx, ly)) * n.transform;
             changed = true;
         }
     }

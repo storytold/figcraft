@@ -572,6 +572,42 @@ fn outline_stroke_outlines_every_selected_layer() {
 }
 
 #[test]
+fn outline_stroke_outlines_a_text_without_a_stroke() {
+    // Fixed (#2405): a fill-only text was left as it was; its glyphs become a vector filled as the text was.
+    let mut s = Session::new();
+    let t = create(&mut s, "text.create", json!({"text": "OPEN", "x": 10, "y": 20}));
+    ex(&mut s, "style.create", json!({"type": "paint", "name": "Ink", "value": ["#112233"]}));
+    ex(&mut s, "style.apply", json!({"ids": [t], "style": "Ink"}));
+    let before = node(&s, t);
+    let page = s.page().unwrap();
+    let out = ex(&mut s, "vector.outlineStroke", json!({"ids": [t]}));
+    let ids: Vec<NodeId> = out["ids"].as_array().unwrap().iter().filter_map(id_of).collect();
+    // Without a font nothing lays out, so there is nothing to outline.
+    if !figcraft_text::layout_node(&before).is_some_and(|(l, _)| !l.glyphs.is_empty()) {
+        assert!(ids.is_empty() && matches!(node(&s, t).kind, NodeKind::Text(_)), "no glyphs: the text stays: {out}");
+        return;
+    }
+    assert_eq!(ids.len(), 1, "one outline: {out}");
+    let v = node(&s, ids[0]);
+    assert!(matches!(v.kind, NodeKind::Vector { .. }), "the glyphs become a vector");
+    assert_eq!((&v.fills, v.styles.fill), (&before.fills, before.styles.fill), "filled as the text was, colour style too");
+    assert_eq!(s.doc().unwrap().node(page).unwrap().children, ids, "the outline stands in for the text");
+    assert_eq!(s.selection(), ids, "the outline is selected");
+    s.undo().unwrap();
+    assert!(matches!(node(&s, t).kind, NodeKind::Text(_)), "undo brings the text back");
+}
+
+#[test]
+fn outline_stroke_leaves_an_empty_text_as_it_is() {
+    // An empty text has no glyphs to outline: it stays, and nothing else changes.
+    let mut s = Session::new();
+    let t = create(&mut s, "text.create", json!({"text": "", "x": 10, "y": 20}));
+    let out = ex(&mut s, "vector.outlineStroke", json!({"ids": [t]}));
+    assert_eq!(out["ids"], json!([]), "nothing outlined: {out}");
+    assert!(matches!(node(&s, t).kind, NodeKind::Text(_)), "the text stays");
+}
+
+#[test]
 fn node_set_non_numeric_miter_smoothing_paragraph_is_an_error() {
     let mut s = Session::new();
     let r = create(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 50}));

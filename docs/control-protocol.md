@@ -195,6 +195,9 @@ layout (including grid `columnTracks` / `rowTracks`), sizing, `minWidth` / `maxW
 children), `gridCell` (a grid auto layout child's column, row and spans), clip, text properties,
 component/instance links, overrides, `slot` (a slot layer's property name), boundVariables, interactions, exports,
 `devStatus` (handoff status), `devChanged` (changed since it was marked ready for dev),
+`textAlignVertical`, `textCase`, `paragraphSpacing`, `paragraphIndent`, `features` (OpenType
+toggles), `startCap` and `endCap` (when not none), `variableModes` (a frame's collection → mode),
+`propertyReferences` (which component property controls a field), `exposedInstance`,
 `annotations` (Developer Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
 links to code: `[{language, importPath, name, template}]`), `devResources` (links for developers,
 its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Developer Mode measurements

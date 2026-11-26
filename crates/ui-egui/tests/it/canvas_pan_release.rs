@@ -17,7 +17,7 @@ impl Frames {
     fn new() -> Self {
         let mut session = Session::new();
         session.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 300, "height": 200})).unwrap();
-        let mut f = Frames { ctx: egui::Context::default(), app: FigApp::new(session, Box::new(NoServices)), time: 0.0 };
+        let mut f = Frames { ctx: figcraft_ui_egui::framework::headless_context(), app: FigApp::new(session, Box::new(NoServices)), time: 0.0 };
         for _ in 0..3 {
             f.frame(vec![]);
         }
@@ -28,6 +28,7 @@ impl Frames {
         self.time += 1.0 / 60.0;
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
+        self.app.before_input(&self.ctx);
         let mut output = self.ctx.run_ui(input, |ui| self.app.ui(ui));
         output.textures_delta.clear();
     }

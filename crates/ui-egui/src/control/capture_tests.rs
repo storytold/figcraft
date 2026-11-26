@@ -34,6 +34,7 @@ fn settle_to_issue(u: &mut Ui, n: usize) {
 fn resized_frame(u: &mut Ui, size: egui::Vec2) -> egui::FullOutput {
     let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
     let app = &mut u.app;
+    app.before_input(&u.ctx);
     let mut out = u.ctx.run_ui(input, |ui| app.ui(ui));
     out.textures_delta.clear();
     out
@@ -592,6 +593,7 @@ fn a_discarded_pass_does_not_acknowledge_or_lose_an_injected_batch() {
     let app = &mut u.app;
     let ctx = u.ctx.clone();
     let mut passes = 0;
+    app.before_input(&ctx);
     let mut out = ctx.run_ui(input, |ui| {
         passes += 1;
         app.ui(ui);
@@ -638,6 +640,7 @@ fn injected_text_lands_once_across_a_discarded_sizing_pass() {
     let app = &mut u.app;
     let ctx = u.ctx.clone();
     let mut passes = 0;
+    app.before_input(&ctx);
     let mut out = ctx.run_ui(input, |ui| {
         passes += 1;
         app.ui(ui);
