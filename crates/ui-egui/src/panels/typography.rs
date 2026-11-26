@@ -429,4 +429,32 @@ mod variable_tests {
         let t = p.app.session.doc().unwrap().node(p.text).unwrap().kind.text().unwrap().clone();
         assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1)), (WrapStyle::Balance, WrapStyle::Balance));
     }
+
+    #[test]
+    fn details_position_sets_superscript_subscript_or_neither() {
+        // #2338: Type settings ▸ Details ▸ Position, for the selected layer.
+        let mut p = settings_panel();
+        // The tab is a clickable label: its text is the node's value.
+        let tab = p.nodes.iter().find(|n| n.value() == Some("Details") || n.label() == Some("Details")).expect("the Details tab");
+        let r = tab.bounds().expect("bounds");
+        p.click(Pos2::new(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32));
+        p.frame(vec![]);
+        let on = |p: &Panel| {
+            let toggled = |l: &str| p.nodes.iter().find(|n| n.label() == Some(l)).and_then(|n| n.toggled());
+            ["None", "Superscript", "Subscript"].into_iter().filter(|l| toggled(l) == Some(egui::accesskit::Toggled::True)).collect::<Vec<_>>()
+        };
+        let feats = |p: &Panel| {
+            let t = p.app.session.doc().unwrap().node(p.text).unwrap().kind.text().unwrap().features.clone();
+            (t.get("sups").copied(), t.get("subs").copied())
+        };
+        assert_eq!(on(&p), ["None"]);
+        for (label, want) in [("Superscript", (Some(true), None)), ("Subscript", (None, Some(true))), ("None", (None, None))] {
+            let at = node_center(&p, label);
+            p.click(at);
+            p.frame(vec![]);
+            assert_eq!(feats(&p), want, "{label}");
+            assert_eq!(on(&p), [label]);
+        }
+        assert!(p.app.ui.last_error.is_none(), "{:?}", p.app.ui.last_error);
+    }
 }

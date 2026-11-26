@@ -100,6 +100,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "set_properties",
     "inspect_document",
     "get_node",
+    "design_context",
     "select",
     "export",
     "screenshot",
@@ -122,6 +123,7 @@ const DOCUMENT_TOOLS: &[&str] = &[
     "set_properties",
     "inspect_document",
     "get_node",
+    "design_context",
     "select",
     "export",
     "screenshot",
@@ -249,6 +251,22 @@ fn tools() -> Vec<Value> {
                     ),
                 }),
                 &["id"],
+            ),
+            true,
+        ),
+        tool(
+            "design_context",
+            "Design context",
+            "Everything needed to build a design, in one read: the selection (or `ids`, or `scope`) as a tree where each layer separates `explicit` values the designer set, `derived` ones layout worked out and `unsupported` ones CSS can't say directly, plus the variables, styles, components, fonts and assets it uses and what the design leaves `missing`. Implement connected instances with their `code`, never by rebuilding their layers. Large trees come back with `truncated`: ask again for the parts you need.",
+            obj(
+                json!({
+                    "ids": ids_schema("Layers (default the selection)"),
+                    "scope": {"type": "string", "enum": ["selection", "page", "document"], "description": "What to read without ids (default the selection, or the page when nothing is selected)"},
+                    "depth": int("How deep the tree goes (default 32)"),
+                    "maxNodes": int("Most layers in the tree (default 2000)"),
+                    "maxBytes": int("The largest message your client reads (default 8 MiB): fewer layers come back to fit")
+                }),
+                &[],
             ),
             true,
         ),
@@ -419,6 +437,25 @@ fn exec(b: &mut dyn Backend, cmd: &str, params: Value) -> Result<Value, String> 
     b.call("engine.execute", json!({"command": cmd, "params": params}))
 }
 
+/// `inspect.designContext`, with fewer layers until the result fits what the client can read.
+fn design_context(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let (_, budget) = budget(a)?;
+    let mut params = a.clone();
+    params.remove("maxBytes");
+    params.remove("document");
+    loop {
+        let value = exec(b, "inspect.designContext", Value::Object(params.clone()))?;
+        if wire_size(&value) <= budget {
+            return Ok(ToolResult::json(&value));
+        }
+        let layers = value.get("target").and_then(|t| t.get("layers")).and_then(Value::as_u64).unwrap_or(0);
+        if layers <= 1 {
+            return Err(format!("one layer's context is larger than {budget} bytes: call get_node with `fields` instead"));
+        }
+        params.insert("maxNodes".into(), json!(layers / 2));
+    }
+}
+
 fn wait_for_changes(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
     b.call("events.poll", Value::Object(a.clone())).map(|v| ToolResult::json(&v))
 }
@@ -564,6 +601,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "set_properties" => set_properties(b, &a),
         "inspect_document" => inspect_document(b, &a),
         "get_node" => get_node(b, &a),
+        "design_context" => design_context(b, &a),
         "select" => select(b, &a),
         "export" => export(b, &a),
         "screenshot" => screenshot(b, &a),

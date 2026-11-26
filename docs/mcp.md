@@ -205,8 +205,12 @@ Or in a project's `.mcp.json`:
   before the keys that tune it, so `{"layout": {"mode": "vertical"}, "gap": 8}` keeps the gap;
   auto layout keys beside a `layout` of `null` or `"none"` are refused. More auto layout props:
   - `sizingH` / `sizingV`: `fixed`, `hug` (auto layout frames and text) or `fill` (children in an
-    auto layout flow). A child can't fill an axis its parent hugs: setting `fill` turns the parent
-    `fixed` on that axis, and a parent set to `hug` turns the children that filled it `fixed`. A
+    auto layout flow). A child can't fill the axis its parent hugs along the flow: setting `fill`
+    turns the parent `fixed` on that axis (the session notice reads "Width set to Fixed for <name>"),
+    and a parent set to `hug` turns the children that filled it `fixed`. Across the flow the parent keeps
+    hugging and the child takes the line's cross size (the largest sibling that doesn't fill, its min
+    counted, padding outside); the parent turns `fixed` ("Height set to Fixed for <name>") only when no
+    such sibling is left, and `fill` across a wrapping row that hugs that axis is refused. A
     layer moved out of auto layout (or whose frame loses it) keeps its size as `fixed`. Fill
     children share the space like CSS flexbox, within their min/max.
   - `minWidth` / `maxWidth` / `minHeight` / `maxHeight` (px, `null` removes) bound Hug, Fill and
@@ -404,6 +408,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
+| `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
 | `select {ids}` | Replace the selection (`[]` deselects). |
 | `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (PNG: `sRGB` chunk, or ICC and `cICP` for Display P3; JPG: ICC profile; WebP: ICC profile for Display P3, none for sRGB) (SVG, XML and RGB PDF output are always sRGB; PDF with `cmyk` is DeviceCMYK). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
@@ -414,6 +419,41 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `type_text {text, id?}` | Type into the text being edited, or replace the contents of text layer `id`. |
 | `inspect_ui {}` | Tool, view and status (and panels, timings and the app's `windows` when attached). |
 | `wait_for_changes {after?, timeoutMs?, topics?, limit?}` | Wait for new comment events in the attached app; returns pending events at once, else waits up to `timeoutMs` (default 20 s, max 25 s). Pass the returned `cursor` back to keep watching. Headless returns immediately. |
+
+### Design context
+
+`design_context` (the command `inspect.designContext`) reads the selection, or `ids`, or `scope`
+(`selection`, `page`, `document`; with nothing selected, the page). The result is one JSON object:
+
+| Key | What it holds |
+|---|---|
+| `version` | The format's version; fields can be added without changing it |
+| `document` | `name`, `page`, `colorProfile` |
+| `target` | `source` (`selection`, `ids`, `page`, `document`), `ids`, `layers` in the tree |
+| `nodes` | The tree, below |
+| `variables` | By id: `name`, `collection`, `type`, `codeSyntax`, and `modes` with each `mode`'s stored `value` and `resolved` value. The tree's layers and shared styles bind them, or another one reads them as an alias or in a colour calculation |
+| `styles` | By id: the shared styles the tree uses |
+| `components` | By id: `name`, `type`, `properties` with variants, `codeLinks` |
+| `fonts` | `family`, `styles`, and whether it's `installed` |
+| `assets` | What `inspect.assets` lists, for the layers in the tree |
+| `missing` | `{what, why}`: what the design doesn't specify. Always says that the file stores no breakpoints |
+| `truncated` | When `depth` or `maxNodes` cut the tree, or `maxBytes` made the tool ask for fewer layers: `layersLeftOut`, `assetsLeftOut`, `depth`, `maxNodes`; and `variables` when aliases went deeper than the 10,000 variables followed |
+
+Each layer in `nodes` has `id`, `name`, `type` and:
+
+- `explicit`: what the designer set, with the keys of `get_node`.
+- `derived`: what the file worked out: `absoluteBounds`, `rotation`, `gridCell`, a position in an auto
+  layout flow, and a size that Hug, Fill or auto-sizing text decides.
+- `tokens`: bound variables by field, and shared styles as `style.fill`, `style.text[0..5]` and so on,
+  with the `name` of each. `explicit` holds the value they resolved to.
+- `unsupported`: `{property, why}` for what has no direct CSS equivalent. The value stays in `explicit`.
+- `code`: for a component or instance connected to code, per language, `{language, importPath, name,
+  code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
+  says what it holds, and `get_node` reads it.
+- `children`, or `childCount` where the tree stops.
+
+Values are the file's own. Nothing is converted to CSS or guessed. Hidden layers are in the tree, with
+`visible: false` in `explicit`.
 
 ### Compact layer trees
 
@@ -495,7 +535,7 @@ Returns `{fitted: [{id, fontSize, lines, fits, orphan}]}`. Use case: a carousel 
 
 A board is a file of its own kind for thinking together: `file.newBoard {name?}` opens one (its
 page is light; `inspect_document` says `kind: "board"`). Board objects are ordinary layers with a
-`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode, …}`; a connector may say
+`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode|codeBlock, …}`; a connector may say
 `branch: true`), so the usual
 commands move, resize, recolour, copy, delete and undo them. On a design file the board commands
 refuse; on a board `proto.*`, `dev.*`, `view.prototype` and `view.devMode` refuse. Each of these is
@@ -509,6 +549,8 @@ one undo step and returns the ids it made:
   same colour beside the selected (or edited) one; with `edit: true` the app goes on typing in it
   (`Shift+Cmd/Ctrl+Enter` in the app does both). On a shape it does what `board.addConnected` does:
   the next shape, joined to it by a connector (`{id, text, connector}`).
+  On a code block it makes the next code block 128 units beside it (`side`, default right), as wide and
+  in the same language, not joined (`{id, text, language}`).
 - `board.addConnected {id?, side?: right|below|left|above, edit?}` → `{id, text, connector}`: the
   next sticky or shape of the same kind, size and colour on that side of the selected (or edited)
   one, 80 units away, joined to it by a connector the way the Connector tool makes one; one undo
@@ -529,6 +571,17 @@ one undo step and returns the ids it made:
   of the map that the given (or selected, or edited) one belongs to: a child below its other
   children, or a sibling right after it (the first node has none); the map lays itself out again.
   One undo step. With `edit: true` the app goes on typing in it.
+- `board.codeBlock {x?, y?, language?, text?, width?, parent?, edit?}` → `{id, text, language}`: a code
+  block (`codeBlock` with its `language`): a dark panel holding monospace text (Liberation Mono 16 on a
+  24 line where it is embedded or installed). `language` is `bash cpp css go graphql html javascript json
+  kotlin plainText python ruby rust sql swift typescript` (default `typescript`); `width` is 210 to 100000
+  (default 576); `x`/`y` are its top-left corner, by default the view's centre less half the width and less 64 (half the
+  smallest height, 128), so a block of more lines reaches further down. Its height is its lines: 32 + 24 a visual line,
+  never under four lines, so only its width can be changed (a set or dragged height is not kept). In its
+  text Tab types two spaces, Enter keeps the line's indent, and lists, links and styled ranges do not stick.
+  One undo step.
+- `board.setLanguage {id?, ids?, language}` → `{ids}`: the language of the given (or selected, or edited)
+  code blocks, by id or name (`cpp` or `C++`).
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
   wrapping text: `rectangle roundedRectangle ellipse diamond triangle triangleDown parallelogramRight parallelogramLeft trapezoid pentagon hexagon octagon star plus arrowLeft arrowRight chevron speechBubble database document predefinedProcess manualInput internalStorage`.
 - `board.connector {from, to, fromSide?, toSide?, fromAt?, toAt?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
@@ -1024,7 +1077,7 @@ most when it can't be reached).
   `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
   team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
   so opening a file that names another one contacts nothing (#1097).
-- `library.usage {library?, days?}` → `{id, name, assetsKnown, styles [{id, name, type, layers, files}], variables [{id, name, collection, layers, files}], instances, detached, detachesKnown, days,
+- `library.usage {library?, days?}` → `{id, name, assetsKnown, assetActionsKnown, styles [{id, name, type, layers, files, insertions, detachments}], variables [{id, name, collection, layers, files, insertions, detachments}], instances, detached, detachesKnown, days,
   insertions, detachments, actionsKnown, weeks: [{week, insertions, detachments}], files: [{name,
   updated, instances, detached}], components: [{id, name, instances, files, detached, insertions,
   detachments}]}`: what the files using it reported (each fetch reports the asking document's name
@@ -1202,8 +1255,8 @@ layer; text on one `<textPath>` as text on a path, with its start offset and anc
 image fills, and SVG images imported in place. CSS, `<use>`/`<symbol>`, units
 and `viewBox`/`preserveAspectRatio` are resolved. The result's `warnings` list what was left out
 (filters that aren't shadows or blurs, rotated repeating patterns, a clip path's own clip path).
-Linked files are never read, only data URIs; documents nested more than 512 elements deep are
-refused.
+Linked files are never read, only data URIs; documents nested more than 256 elements deep
+(references followed) are refused.
 
 ### Importing `.fig` files
 

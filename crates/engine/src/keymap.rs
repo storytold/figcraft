@@ -386,7 +386,7 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Prototype, "Presenting: cycle the size options", "Z", "Z"),
     (Prototype, "Presenting: comments", "C or ⇧C", "C or Shift+C"),
     (Prototype, "Presenting: full screen", "F", "F"),
-    (View, "Next or previous control in the focused region", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
+    (View, "Next or previous control", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
     (View, "Move along the toolbar or the layer rows", "← → ↑ ↓", "← → ↑ ↓"),
     (View, "Back to the canvas from a focused region", "Esc", "Esc"),
 ];

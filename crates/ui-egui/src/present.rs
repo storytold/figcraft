@@ -292,6 +292,9 @@ pub struct Presenter {
     anim_tex: Option<egui::TextureHandle>,
     temp: Option<Temp>,
     textures: HashMap<NodeId, FrameTex>,
+    /// The part of the presented frame in view, drawn at device scale over the (capped) whole-frame
+    /// texture; `bounds` is the page area it covers.
+    detail: Option<(NodeId, FrameTex)>,
     /// Small current-screen preview in the full-window bar, cached until its content changes.
     bar_thumb: Option<(NodeId, usize, egui::TextureHandle)>,
     arrived: f64,
@@ -330,6 +333,9 @@ pub struct Presenter {
     pan: Option<(f64, f64)>,
     /// How far the view can pan, and the zoom it shows at (from the last layout).
     pan_range: (f64, f64),
+    /// Without a device, the part of the presented frame the window shows (page units) when the
+    /// frame is bigger: the window is then its screen (from the last layout).
+    window: Option<(f64, f64)>,
     zoom: f64,
     /// Scrolling that carries on after the input let go.
     fling: Option<Fling>,
@@ -375,6 +381,7 @@ impl Presenter {
             anim_tex: None,
             temp: None,
             textures: HashMap::new(),
+            detail: None,
             bar_thumb: None,
             arrived: -1.0,
             delays_fired: HashSet::new(),
@@ -394,6 +401,7 @@ impl Presenter {
             view: PresentView::default(),
             pan: None,
             pan_range: (0.0, 0.0),
+            window: None,
             zoom: 1.0,
             fling: None,
             wheel: None,

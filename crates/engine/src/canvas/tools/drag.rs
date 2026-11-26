@@ -4,8 +4,8 @@ use super::handles::{
 };
 use super::{
     Affine, ArcHandle, ArcHint, Cursor, Document, Gesture, Guide, Handle, ImageScaleMode, LayoutMode, NodeId, NodeKind, PaintKind, Point,
-    PointerEvent, Rect, ResizeStart, Result, ScaleHint, Session, Sizing, Targets, TextAutoResize, ToolId, Vec2, move_world, roots, select_target,
-    textedit, within_slop,
+    PointerEvent, Rect, ResizeStart, Result, ScaleHint, Session, Sizing, Targets, TextAutoResize, ToolId, Vec2, move_world, pencil_add, roots,
+    select_target, textedit, within_slop,
 };
 
 impl Session {
@@ -92,8 +92,14 @@ impl Session {
         // inside, the frame or canvas behind it, or a layer stacked below the selected layer the
         // press is in) drags the selection. In a gap between selected layers, what's there is hit.
         let in_own_box = |s: NodeId| selection_box(&doc, &[s]).is_some_and(|q| in_quad(&q, ev.p()));
+        // A press on a layer inside a selected one (a child of a selected frame) drags the
+        // selection too, and a click selects that layer; Cmd/Ctrl keeps the deep pick.
+        let in_selected = |t: NodeId| sel.iter().any(|s| *s != t && doc.is_ancestor(*s, t));
         let behind_sel = |t: Option<NodeId>| {
-            t.is_none_or(|t| sel.iter().any(|s| *s != t && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s)))))
+            t.is_none_or(|t| {
+                (!ev.cmd && in_selected(t))
+                    || sel.iter().any(|s| *s != t && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s))))
+            })
         };
         // What the press hit (a label or a painted layer): a click that doesn't become a drag
         // selects just it. A press that reaches nothing above the selection uses the selection as
@@ -116,8 +122,12 @@ impl Session {
                 let without_target = || sel.iter().copied().filter(|x| *x != target).collect::<Vec<_>>();
                 // A release without a drag narrows the selection to the layer the press hit. A
                 // selected frame's name label sits outside the selection bounds, so it counts too.
-                let keep = clicked
-                    .filter(|c| (label.is_some() || in_sel_box) && !ev.cmd && (sel.contains(c) || sel.iter().any(|s| doc.is_ancestor(*s, *c))));
+                // A layer inside a selected one counts as well: the press drags the selection, and
+                // a click selects that layer.
+                let keep = clicked.filter(|c| {
+                    !ev.cmd
+                        && (((label.is_some() || in_sel_box) && (sel.contains(c) || sel.iter().any(|s| doc.is_ancestor(*s, *c)))) || in_selected(*c))
+                });
                 let new_sel = if keep.is_some() {
                     sel.clone()
                 } else if ev.shift && deselect.is_none() {
@@ -135,7 +145,7 @@ impl Session {
                 if !edits {
                     if deselect.is_some() {
                         self.set_selection(without_target());
-                    } else if let Some(k) = keep.filter(|_| sel.len() > 1) {
+                    } else if let Some(k) = keep.filter(|k| sel.as_slice() != [*k]) {
                         self.set_selection(vec![k]);
                     }
                     return Ok(());
@@ -434,10 +444,7 @@ impl Session {
             }
             Gesture::Pencil { points, pressure } => {
                 let (mut pts, mut pressure) = (points.clone(), pressure.clone());
-                if pts.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
-                    pts.push(ev.p());
-                    pressure.push(ev.pressure);
-                }
+                pencil_add(&mut pts, &mut pressure, ev);
                 self.tool.overlay.pen = pts.iter().map(|p| [p.x, p.y]).collect();
                 self.tool.gesture = Gesture::Pencil { points: pts, pressure };
                 if let Ok(ds) = self.ds_mut() {

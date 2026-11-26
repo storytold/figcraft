@@ -101,7 +101,7 @@ impl Presenter {
         }
         let doc = self.doc.as_ref()?;
         let mut d = apply_scroll(doc, &self.scroll);
-        if let Some(vp) = viewport(doc, self.current) {
+        if let Some(vp) = self.screen(doc) {
             fit_viewport(&mut d, self.current, vp);
         }
         self.display = Some((self.rev, d.clone()));
