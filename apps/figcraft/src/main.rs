@@ -194,11 +194,20 @@ fn initialize_nightly_identity() -> Result<(), String> {
     process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, NIGHTLY_WINDOW_ID)
 }
 
-/// Say why a launch profile was refused: in a dialog for a Nightly started from the desktop (its
-/// release build has no console), and on standard error in every case. Always exits 2.
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hung in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26).
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
+/// Say why a launch profile was refused: in a dialog for a Nightly started from a Windows or
+/// X11/Wayland desktop (its release build has no console), and on standard error in every case (macOS
+/// included: a modal there before the event loop never appears). Always exits 2.
 fn report_launch_profile_error(error: &str) -> ! {
     eprintln!("FigCraft launch profile: {error}");
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session()) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session(), cfg!(target_os = "macos")) {
         if let Err(error) = initialize_nightly_identity() {
             eprintln!("FigCraft launch profile: {error}");
         } else {
@@ -616,5 +625,19 @@ mod start_tests {
         assert!(!opens_new_file(false, true, false), "Home when the preference asks");
         assert!(opens_new_file(false, true, true), "--control still starts with a document");
         assert!(!opens_new_file(true, false, false), "a first run shows the home screen");
+    }
+}
+
+#[cfg(test)]
+mod refusal_dialog_tests {
+    use super::refusal_dialog;
+    use crate::build_flavor::BuildFlavor;
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        assert!(refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }
