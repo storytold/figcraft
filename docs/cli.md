@@ -4,14 +4,13 @@ FigCraft without a window: inspect, export, convert and render documents, run co
 commands, serve MCP, publish plugins and code connect mappings, and measure performance. Build it with
 `cargo build --release -p figcraft-cli` (binary `target/release/figcraft-cli`).
 
-The CLI follows [RFC-0012](https://github.com/storytold/craft-contrib/blob/main/rfcs/0012-cli-conventions.md),
-the command-line conventions the Craft apps share, in how it parses its arguments (with clap). The
-rules it doesn't follow yet are listed below. `figcraft-cli --help` is the source of truth for
+Follows [RFC-0018](https://github.com/storytold/craft-contrib/blob/main/rfcs/0018-cli-conventions.md),
+the command-line conventions the Craft apps share. `figcraft-cli --help` is the source of truth for
 the flags; this page explains what they do.
 
 `figcraft-cli --help` (or `-h`, `help`, `help <subcommand>`) prints help on stdout and exits with
 0. So does `--help` or `-h` after a subcommand (`figcraft-cli mcp --help`), even after a mistake on
-the same line. `--version` (or `-V`) prints the version. Bad arguments are usage errors, caught
+the same line. `--version` (or `-V`, also after a subcommand) prints the version. Bad arguments are usage errors, caught
 before any work starts: an option the subcommand doesn't take, an option given twice (only the
 automation roots repeat), a missing or bad value (`--scale 0`, `--format bmp`, `--attach nope`)
 and `mcp --attach` with automation roots. They print `error: …` on stderr and exit with code 2.
@@ -22,14 +21,24 @@ takes the next option as its value. Put options before `--` to pass a filename b
 dash, for example `figcraft-cli info --json -- --drawing.figcraft`. Every argument after `--` is
 literal, including a filename named `--no-system-fonts`.
 
-Not yet as RFC-0012 asks:
+Exit codes: 0 for success, 1 for a failure, 2 for a usage error, and 128 plus the signal number
+when a signal ends the process. Output goes to stdout and diagnostics to stderr; a closed stdout
+(`figcraft-cli commands | head -1`) ends the run quietly instead of with a panic.
+
+Writing over the input is refused: `convert` and `run` with an output that is the input file
+(`--out` the same file as `--in`), and `export -o` or `render -o` naming the file they read, exit
+with 2 and say so, rather than replacing the document. Pass `--in-place` to `convert` or `run` to
+mean it. `--in-place` with a different output file is a usage error too. `connect publish`
+saves into the design file by design, as described below.
+
+Environment variables are declared on their flags, so `--help` shows them: `--no-system-fonts`
+reads `FIGCRAFT_NO_SYSTEM_FONTS` and `plugin publish --key` reads `FIGCRAFT_SERVER_KEY` (its value
+is never shown in help or in errors). A blank variable counts as unset. The flag wins over the
+variable. No destructive flag has an environment fallback.
+
+Still as before, and a known gap against the RFC:
 - Arguments that name files are read as text, so a file name that isn't valid Unicode is a usage
   error (exit 2) rather than reaching the command.
-- Failures are messages rather than error enums, and `main` isn't yet a `run(args, out, err)`
-  function the tests call in-process.
-- `FIGCRAFT_NO_SYSTEM_FONTS` and `FIGCRAFT_SERVER_KEY` are read where they're used, not declared
-  on a flag, so `--help` names them only in the flag descriptions.
-- Packages don't install the generated shell completions or man pages yet.
 - There are no ast-grep checks in CI yet.
 
 ## Generating shell completions and man pages
@@ -57,8 +66,11 @@ The directory contains completions for five shells:
 
 It also contains `figcraft-cli.1` and one man page per subcommand, including nested commands such
 as `figcraft-cli-plugin-publish.1`. For example, `man target/cli-docs/figcraft-cli-export.1` shows
-the export subcommand's options. Generating these files doesn't install them; package installation
-is still outstanding in [#1396](https://github.com/storytold/figcraft/issues/1396).
+the export subcommand's options. Generating these files doesn't install them: the Linux packages (tar, deb, rpm) put the man pages
+in `/usr/share/man/man1` and the Bash, Zsh and Fish completions in the shells' system directories
+(the deb also links the Zsh one into Debian's `vendor-completions`), and the FreeBSD package
+puts them under `/usr/local` (`man/man1`, `share/bash-completion`, `share/zsh/site-functions`,
+`share/fish/vendor_completions.d`). Nightly builds rename the CLI and ship neither.
 
 ## Fonts
 
@@ -288,11 +300,11 @@ live sessions (`collab.*`: without a key on a server open to the public, with `c
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories
 (`plugin.directory.*`); the one-shot `run` can't (no network link).
 
-### `plugin publish <folder> --server ws://host:port/[?key=KEY]`
+### `plugin publish <folder> --server ws://host:port/[?key=KEY] [--key KEY]`
 
 Publishes a plugin folder (`figcraft-plugin.json`, the module its `main` names, an optional `assets/`
 folder) to a `figcraft-server`'s plugin directory as a new version, and prints its name, version,
-size and SHA-256. The server's key comes from the address or, better, from the
+size and SHA-256. The server's key comes from the address, from `--key` or, better, from the
 `FIGCRAFT_SERVER_KEY` environment variable (it then stays out of the shell history and process
 lists); it is never printed. The bundle is checked before it is sent and again by the server. See
 [plugins.md](plugins.md#plugin-directories).
