@@ -300,7 +300,7 @@ fn create_form(app: &mut FigApp, ctx: &egui::Context, document: u64) {
         ui.add_space(6.0);
         let name = ui.add(egui::TextEdit::singleline(&mut form.name).hint_text(tr("Name")).desired_width(220.0));
         widgets::select_all_on_focus(ui, &name, &form.name);
-        if ui.memory(|m| m.focused().is_none()) {
+        if !crate::a11y::field_focused(ui.ctx()) {
             name.request_focus();
         }
         ui.add_space(10.0);

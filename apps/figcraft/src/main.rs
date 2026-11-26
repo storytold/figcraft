@@ -106,9 +106,6 @@ impl eframe::App for App {
             figcraft_ui_egui::windows::guard(fig, ctx, |fig| fig.background_tick(ctx));
             #[cfg(target_os = "macos")]
             apple_events::poll(&self.apple_events, fig, ctx);
-            // Closing the window asks about unsaved changes (and keeps the app running while other
-            // windows are open).
-            figcraft_ui_egui::windows::on_close_request(fig, ctx);
             fig.title()
         });
         // Window title follows the document.
@@ -128,21 +125,28 @@ impl eframe::App for App {
         {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
+        // Last: closing the main window asks about unsaved changes (and keeps the app running
+        // while other windows are open), through the runtime's close path.
+        with_app(|fig| fig.close_path(ctx));
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // winit gives an undecorated window its caption back when it changes the window's flags
         // (maximize, restore, ...): take it off again before the frame is laid out (#1343).
         self.window_frame.run();
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
-        if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
+        if let Some(events) = with_app(|fig| {
+            fig.before_input(ctx);
+            figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)
+        }) {
             raw_input.events.extend(events);
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        figcraft_ui_egui::framework::before_ui(&ctx, &*frame);
         services::parented(frame, || with_app(|fig| figcraft_ui_egui::windows::guard(fig, &ctx, |fig| fig.ui(ui))));
         // This frame drew the queued interrupted-session notice: the interruption is now reported.
         if self.nightly_notice_pending {
@@ -190,11 +194,20 @@ fn initialize_nightly_identity() -> Result<(), String> {
     process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, NIGHTLY_WINDOW_ID)
 }
 
-/// Say why a launch profile was refused: in a dialog for a Nightly started from the desktop (its
-/// release build has no console), and on standard error in every case. Always exits 2.
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hung in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26).
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
+/// Say why a launch profile was refused: in a dialog for a Nightly started from a Windows or
+/// X11/Wayland desktop (its release build has no console), and on standard error in every case (macOS
+/// included: a modal there before the event loop never appears). Always exits 2.
 fn report_launch_profile_error(error: &str) -> ! {
     eprintln!("FigCraft launch profile: {error}");
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session()) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session(), cfg!(target_os = "macos")) {
         if let Err(error) = initialize_nightly_identity() {
             eprintln!("FigCraft launch profile: {error}");
         } else {
@@ -460,6 +473,8 @@ fn main() -> eframe::Result {
         figcraft_ui_egui::channel::name(),
         options,
         Box::new(|cc| {
+            // The UI runtime FigCraft's egui UI is hosted by, before the first pass.
+            figcraft_ui_egui::framework::install(&cc.egui_ctx)?;
             if let Some(state) = &cc.wgpu_render_state {
                 graphics.opened(&state.adapter.get_info());
             }
@@ -610,5 +625,19 @@ mod start_tests {
         assert!(!opens_new_file(false, true, false), "Home when the preference asks");
         assert!(opens_new_file(false, true, true), "--control still starts with a document");
         assert!(!opens_new_file(true, false, false), "a first run shows the home screen");
+    }
+}
+
+#[cfg(test)]
+mod refusal_dialog_tests {
+    use super::refusal_dialog;
+    use crate::build_flavor::BuildFlavor;
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        assert!(refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }

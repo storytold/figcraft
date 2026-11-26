@@ -2,12 +2,13 @@
 //! screen reader reads), and the keyboard navigation mode.
 //!
 //! Keyboard navigation: F6 / Shift+F6 move the keyboard between the regions of the window (the
-//! toolbar, the layers panel, the canvas and the properties panel); Tab / Shift+Tab move between
-//! the controls of a region (wrapping at its ends); Enter or Space activate the control; the
-//! arrows move along the toolbar and through the layer rows; a menu or flyout opened from the
-//! keyboard takes it, and gives it back to its button when it closes; Escape goes back to the
-//! canvas, where every shortcut works as usual. A focus ring shows the control with the keyboard
-//! until the next pointer press.
+//! toolbar, the layers panel, the canvas and the properties panel); Tab / Shift+Tab follow the
+//! framework's one Tab order over every control the window draws, across regions; Enter or Space
+//! activate the control; the arrows move along the toolbar and through the layer rows; a menu or
+//! flyout opened from the keyboard takes it, and gives it back to its button when it closes; a press
+//! on the canvas, Escape, and a file that opens or comes to the front give the canvas the keyboard,
+//! where every shortcut works as usual (Tab selects the next layer). A focus ring shows the control
+//! with the keyboard until the next pointer press.
 //!
 //! The regions' controls come from what the last frame drew (egui keeps every widget's rectangle
 //! and sense), so panels don't register their controls. Widget names are only built while a screen
@@ -18,6 +19,7 @@
 //! context again (a nested call deadlocks; debug builds panic after 10 s): read what they need
 //! first, as everything here does (`a11y_tests` runs every path with the tree on).
 
+use craft_ui::runtime::overlay::{self, OpenFilter};
 use egui::accesskit::{self, Role, Toggled};
 use egui::{Context, CornerRadius, Event, FocusDirection, Id, Key, LayerId, Modifiers, Order, Pos2, Rect, Response, Stroke, StrokeKind, Ui};
 use figcraft_engine::keymap;
@@ -124,6 +126,13 @@ pub struct Nav {
     opener: Option<(Id, LayerId)>,
     /// A control the keyboard moved to: the properties panel scrolls it into view.
     scroll_to: Option<Id>,
+    /// The file the canvas last showed (its uid).
+    shown: Option<u64>,
+    /// A file opened or came to the front, and its canvas has yet to ask for the keyboard.
+    wants_canvas: bool,
+    /// What had the keyboard as the last frame ended; the outer none is a last frame with no
+    /// regions (the home screen, the presenter).
+    focus_at_end: Option<Option<Id>>,
 }
 
 impl Nav {
@@ -196,16 +205,23 @@ pub fn prefer(nav: &mut Nav, region: Region, id: Id) {
     *region.of_mut(&mut nav.next.preferred) = Some(id);
 }
 
-/// The canvas widget: F6 and Escape give it the keyboard (shortcuts keep working while it has it);
-/// screen readers read it as "Canvas" with `describe()` (what is selected) as its description.
+/// The canvas widget: a press on it, F6 and Escape give it the keyboard (shortcuts keep working
+/// while it has it); screen readers read it as "Canvas" with `describe()` (what is selected) as its
+/// description.
 pub fn canvas(nav: &mut Nav, resp: &Response, describe: impl FnOnce() -> String) {
     nav.next.canvas = Some(resp.id);
     area(nav, Region::Canvas, resp.rect);
     shared(&resp.ctx, |s| s.canvas = Some(resp.id));
+    canvas_keys(&resp.ctx, resp.id);
     node(resp, tr("Canvas"), |n| {
         n.set_role(Role::Group);
         n.set_description(describe());
     });
+}
+
+/// While the canvas has the keyboard, Escape is a shortcut there.
+fn canvas_keys(ctx: &Context, canvas: Id) {
+    ctx.memory_mut(|m| m.set_focus_lock_filter(canvas, egui::EventFilter { escape: true, ..Default::default() }));
 }
 
 /// An open popup drawn by the app itself (egui `Area` `area`), opened from `opener`: a keyboard
@@ -253,10 +269,10 @@ struct Shared {
     name: String,
 }
 
-/// Run `f` on the per-context temporary `Shared` accessibility state keyed by
-/// `figcraft_a11y`.
+/// Run `f` on the running window's temporary `Shared` accessibility state.
 fn shared<R>(ctx: &Context, f: impl FnOnce(&mut Shared) -> R) -> R {
-    ctx.data_mut(|d| f(d.get_temp_mut_or_default::<Shared>(Id::unique("figcraft_a11y"))))
+    let id = Id::unique(("figcraft_a11y", ctx.viewport_id()));
+    ctx.data_mut(|d| f(d.get_temp_mut_or_default::<Shared>(id)))
 }
 
 /// Whether a widget other than the canvas has the keyboard (a field, a focused button): the
@@ -289,7 +305,7 @@ pub fn keyboard(ctx: &Context) -> bool {
 // Frame hooks.
 
 /// Before the panels draw: pointer presses, the focused control's region, and the navigation
-/// keys (F6, Tab, arrows, Escape), which are taken out of the input when they move the keyboard.
+/// keys (F6, arrows, Escape), which are taken out of the input when they move the keyboard.
 pub fn begin(app: &mut FigApp, ctx: &Context, root_scope: Id) {
     app.ui.nav.last = std::mem::take(&mut app.ui.nav.next);
     // Before the keys: a panel edge derived from the root scope must already be excluded.
@@ -320,6 +336,7 @@ fn keys(app: &mut FigApp, ctx: &Context) {
         }
     }
     let focused = ctx.memory(|m| m.focused());
+    let at_end = app.ui.nav.focus_at_end.take();
     let widget = focused.and_then(|id| last_widget(ctx, id));
     let on_background = widget.is_none_or(|w| w.layer_id == LayerId::background());
     // The control with the keyboard decides the region (a click into a field, a Tab in a panel);
@@ -333,6 +350,9 @@ fn keys(app: &mut FigApp, ctx: &Context) {
     if blocked(app) {
         app.ui.nav.pending = None;
         return;
+    }
+    if widget.is_some() && on_background && press.is_none() {
+        tabbed(&mut app.ui.nav, ctx, at_end, focused);
     }
     // F6 / Shift+F6 (and the commands they run).
     if let Some((id, key, m)) = binding_pressed(ctx, &[NEXT_REGION, PREVIOUS_REGION]) {
@@ -360,28 +380,6 @@ fn keys(app: &mut FigApp, ctx: &Context) {
             i.events.iter().any(|e| matches!(e, Event::Key { key, pressed: true, modifiers, .. } if *key == k && modifiers.matches_exact(m)))
         })
     };
-    // Tab moves between the region's controls (on the canvas it stays the select-next shortcut).
-    // A layer rename takes Tab itself (on to the next row's name).
-    let tab = if pressed(Key::Tab, Modifiers::NONE) {
-        Some(1)
-    } else if pressed(Key::Tab, Modifiers::SHIFT) {
-        Some(-1)
-    } else {
-        None
-    };
-    if let Some(step) = tab
-        && app.ui.rename.is_none()
-    {
-        ctx.memory_mut(|m| m.move_focus(FocusDirection::None));
-        if region != Region::Canvas {
-            ctx.input_mut(|i| {
-                i.consume_key(Modifiers::SHIFT, Key::Tab);
-                i.consume_key(Modifiers::NONE, Key::Tab);
-            });
-            app.ui.nav.keyboard = true;
-            step_within(app, ctx, region, step);
-        }
-    }
     // egui moves the focus with the arrows too; here they belong to fields (steps), the toolbar
     // and the layer rows.
     let arrows = [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown];
@@ -446,13 +444,29 @@ fn keys(app: &mut FigApp, ctx: &Context) {
         }
         return;
     }
-    // In keyboard mode the canvas keeps the keyboard (Escape on it deselects and lets egui drop it).
+    // In keyboard mode the canvas keeps the keyboard.
     if app.ui.nav.keyboard
         && region == Region::Canvas
         && ctx.memory(|m| m.focused()).is_none()
         && let Some(c) = app.ui.nav.last.canvas
     {
         ctx.memory_mut(|m| m.request_focus(c));
+    }
+}
+
+/// Tab from one control to another turns keyboard mode on. The framework takes the key out of egui's
+/// input and moves the focus before the frame, while the app and a press move it as a frame draws:
+/// only Tab leaves the focus on another control than the last frame ended with. A closing dialog or
+/// menu, in a layer of its own, gives the focus back between frames too.
+fn tabbed(nav: &mut Nav, ctx: &Context, at_end: Option<Option<Id>>, focused: Option<Id>) {
+    let (Some(before), Some(id)) = (at_end, focused) else { return };
+    let from_region = before.is_none_or(|b| last_widget(ctx, b).is_some_and(|w| w.layer_id == LayerId::background()));
+    if before == focused || !from_region || nav.last.canvas == focused {
+        return;
+    }
+    nav.keyboard = true;
+    if nav.region == Region::Properties {
+        nav.scroll_to = Some(id);
     }
 }
 
@@ -518,6 +532,7 @@ pub fn end(app: &mut FigApp, ctx: &Context) {
     if !menus_open(app) {
         app.ui.nav.next.popup = None;
     }
+    focus_canvas(app, ctx);
     let nav = &mut app.ui.nav;
     if nav.refocus > 0 {
         nav.refocus -= 1;
@@ -529,13 +544,62 @@ pub fn end(app: &mut FigApp, ctx: &Context) {
         }
         ctx.request_repaint();
     }
+    nav.focus_at_end = Some(ctx.memory(|m| m.focused()));
     if nav.keyboard {
         ring(ctx);
     }
 }
 
+/// The canvas asks for the keyboard when its file opened or came to the front, and while nothing has
+/// it in a mode that needs Tab. It waits for a
+/// dialog, menu or popup to close, and leaves the keyboard with a text field and with a floating
+/// window's control.
+fn focus_canvas(app: &mut FigApp, ctx: &Context) {
+    let Some(canvas) = app.ui.nav.next.canvas else { return };
+    let Ok(uid) = app.session.ds().map(|d| d.uid) else { return };
+    let nav = &mut app.ui.nav;
+    if nav.last.canvas.is_none() || nav.shown != Some(uid) {
+        nav.shown = Some(uid);
+        nav.wants_canvas = true;
+    }
+    let focused = ctx.memory(|m| m.focused());
+    let needed = nav.wants_canvas || (focused.is_none() && tab_mode(app));
+    if !needed || overlay_open(app, ctx) {
+        return;
+    }
+    let layer = focused.map(|id| ctx.viewport(|v| v.this_pass.widgets.get(id).map(|w| w.layer_id)));
+    // A field that takes the keyboard as it opens is drawn in the next pass.
+    if layer == Some(None) {
+        ctx.request_repaint();
+        return;
+    }
+    app.ui.nav.wants_canvas = false;
+    if !ctx.text_edit_focused() && layer.flatten().is_none_or(|l| l == LayerId::background()) {
+        ctx.memory_mut(|m| m.request_focus(canvas));
+        canvas_keys(ctx, canvas);
+        ctx.request_repaint();
+    }
+}
+
+/// A mode on the canvas in which Tab has work: the keyboard selection box, pick select, text editing.
+fn tab_mode(app: &FigApp) -> bool {
+    app.ui.key_box.is_some() || app.ui.pick.is_some() || app.session.ds().is_ok_and(|d| d.text_edit.is_some())
+}
+
+/// A dialog, the palette, the presenter, a menu or a popup is open, or a closing menu is about to
+/// give the keyboard back to its button.
+fn overlay_open(app: &FigApp, ctx: &Context) -> bool {
+    blocked(app)
+        || menus_open(app)
+        || app.ui.nav.opener.is_some()
+        || crate::dialogs::open(&app.ui)
+        || egui::Popup::is_any_open(ctx)
+        || ctx.memory(|m| m.top_modal_layer().is_some())
+        || overlay::any_open(ctx, OpenFilter::Modal)
+}
+
 /// Dialogs, the palette, the presenter and the home screen have no regions.
-fn blocked(app: &FigApp) -> bool {
+pub(crate) fn blocked(app: &FigApp) -> bool {
     let u = &app.ui;
     u.palette.is_some()
         || u.about
@@ -619,8 +683,7 @@ fn focus(app: &mut FigApp, ctx: &Context, id: Id) {
     ctx.request_repaint();
 }
 
-/// Tab / Shift+Tab (and the toolbar's arrows): the next or previous control in the region,
-/// wrapping. Going back from a field being edited skips the field it is part of.
+/// The toolbar's arrows: the next or previous control in the region, wrapping.
 fn step_within(app: &mut FigApp, ctx: &Context, region: Region, step: i32) {
     let list = focusables(ctx, &app.ui.nav, region);
     let n = list.len() as i32;
@@ -636,17 +699,9 @@ fn step_within(app: &mut FigApp, ctx: &Context, region: Region, step: i32) {
         }
         return;
     };
-    let here = list.get(cur).map(|w| w.1.center());
-    let mut i = cur as i32;
-    for _ in 0..n {
-        i = (i + step.signum()).rem_euclid(n);
-        let Some((id, rect)) = list.get(i as usize) else { break };
-        // The control a focused field editor sits in.
-        if here.is_some_and(|c| rect.contains(c)) && i as usize != cur {
-            continue;
-        }
+    let next = (cur as i32 + step.signum()).rem_euclid(n);
+    if let Some((id, _)) = list.get(next as usize) {
         focus(app, ctx, *id);
-        return;
     }
 }
 
