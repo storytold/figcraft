@@ -5,12 +5,13 @@
 //! branch tab's edits and its own version history go into its branch ([`sync`]) and are saved with
 //! the main file. Merging adds a version to the main file's history; the branch keeps its own.
 //!
-//! In a live session a branch stays with the person who made it (others don't see it), and
-//! merging it is one edit of the session document, which syncs to everyone like any other. The
-//! session server takes new layers only in the sender's own id space, so a branch made in the
-//! session makes its ids in yours, far above the ids the main file makes there ([`WINDOW`]).
-//! Merging a branch made outside the session is refused when it adds layers, styles, variables or
-//! comments (their ids are in another space).
+//! In a live session whose server supports shared branches, branches sync across everyone in the
+//! session (creation, edits, updates from main, merge and archive) so any editor can open, edit,
+//! review and merge a peer's branch. On older servers without shared branches a branch stays with
+//! the person who made it. Merging is one edit of the session document, which syncs to everyone
+//! like any other. Each editor allocates new branch ids in their own client space, far above the
+//! ids the main file makes there ([`WINDOW`]). Merging a branch made outside the session is refused
+//! when it adds layers, styles, variables or comments (their ids are in another space).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -35,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "branch.create",
             "Create branch",
-            "{name?}  a copy of the file to work on separately, opened in a new tab; it remembers the file as it is now (its base); in a live session it stays yours → {id, name, index (its tab)}",
+            "{name?}  a copy of the file to work on separately, opened in a new tab; it remembers the file as it is now (its base); in a live session it syncs to peers when the server supports shared branches → {id, name, index (its tab)}",
             false,
             create
         ),

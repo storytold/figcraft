@@ -292,3 +292,52 @@ pub fn read_log(bytes: &[u8]) -> Result<LogRead, String> {
     }
     Ok(LogRead { generation, entries, damaged })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use figcraft_collab::message;
+
+    use super::*;
+
+    #[derive(serde::Serialize)]
+    struct LegacySessionStateV1 {
+        session: u64,
+        snapshot: Vec<figcraft_collab::Change>,
+        seq: u64,
+        next_client: u32,
+        issued: BTreeMap<u32, figcraft_collab::Processed>,
+        deleted: BTreeSet<figcraft_collab::NodeId>,
+        removed: BTreeSet<figcraft_collab::Entry>,
+        log: Vec<figcraft_collab::Accepted>,
+    }
+
+    #[test]
+    fn decode_snapshot_reads_pre_branch_v1_snapshots() {
+        let v1 = LegacySessionStateV1 {
+            session: 42,
+            snapshot: Vec::new(),
+            seq: 7,
+            next_client: 3,
+            issued: BTreeMap::new(),
+            deleted: BTreeSet::new(),
+            removed: BTreeSet::new(),
+            log: Vec::new(),
+        };
+        let mut out = Vec::with_capacity(SNAP_HEADER);
+        out.extend_from_slice(SNAP_MAGIC);
+        out.push(FORMAT);
+        out.extend_from_slice(&9u64.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        let mut out = message::encode_into(&v1, out).unwrap();
+        let sum = crc(&out[SNAP_HEADER..]);
+        out[SNAP_HEADER - 4..SNAP_HEADER].copy_from_slice(&sum.to_le_bytes());
+        let (generation, state) = decode_snapshot(&out).unwrap();
+        assert_eq!(generation, 9);
+        assert_eq!(state.session, 42);
+        assert_eq!(state.seq, 7);
+        assert_eq!(state.next_client, 3);
+        assert!(state.branches.is_empty());
+    }
+}

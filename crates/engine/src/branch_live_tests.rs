@@ -306,3 +306,28 @@ fn shared_branch_update_from_main_and_archive_sync_to_peers() {
     ok(room.s(1), "branch.open", json!({"id": a}));
     assert_eq!(room.s(1).doc().unwrap().node(f).unwrap().name, "Updated Main");
 }
+
+#[test]
+fn remote_merge_closes_peers_open_branch_tab_and_switches_to_main() {
+    let mut room = Room::new(base(), 2, 29);
+    room.settle();
+    let main1 = room.s(1).active;
+    let tabs_before = room.s(1).docs.len();
+    let (_, r) = frame_and_rect(room.server.document());
+    let id = ok(room.s(0), "branch.create", json!({"name": "Card Polish"}))["id"].as_str().unwrap().to_string();
+    ok(room.s(0), "node.set", json!({"id": r, "props": {"name": "Polished"}}));
+    room.settle();
+    // Person 1 opens Person 0's branch tab so it is their active tab.
+    ok(room.s(1), "branch.open", json!({"id": id}));
+    assert_eq!(room.s(1).docs.len(), tabs_before + 1);
+    assert_ne!(room.s(1).active, main1);
+    // Person 0 merges the branch into main.
+    assert_eq!(ok(room.s(0), "branch.merge", json!({"id": id}))["merged"], true);
+    room.settle();
+    // Person 1's open branch tab closed and switched back to main with the merged change.
+    assert_eq!(room.s(1).docs.len(), tabs_before);
+    assert_eq!(room.s(1).active, main1);
+    assert_eq!(room.s(1).doc().unwrap().node(r).unwrap().name, "Polished");
+    assert!(room.s(1).message.as_deref().is_some_and(|m| m.contains("merged branch")));
+    room.check();
+}

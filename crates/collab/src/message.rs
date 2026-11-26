@@ -861,7 +861,7 @@ pub struct SharedBranch {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BranchReq {
-    Create { id: String, name: String, time: u64, client: u32, base_seq: u64, base_diff: Vec<Change>, head_diff: Vec<Change> },
+    Create { id: String, name: String, time: u64, base_seq: u64, base_diff: Vec<Change>, head_diff: Vec<Change> },
     Edit { id: String, changes: Vec<Change> },
     UpdateFromMain { id: String, base_changes: Vec<Change>, head_changes: Vec<Change> },
     SetState { id: String, status: BranchStatus },

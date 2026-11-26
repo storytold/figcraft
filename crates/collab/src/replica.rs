@@ -321,7 +321,7 @@ impl Replica {
     }
 
     /// The checks a server makes on what a batch touched.
-    fn check(&self, touched: &BTreeSet<NodeId>) -> Result<(), Error> {
+    pub(crate) fn check(&self, touched: &BTreeSet<NodeId>) -> Result<(), Error> {
         if self.doc.pages.is_empty() {
             return Err(Error::Invalid("a file needs at least one page".into()));
         }

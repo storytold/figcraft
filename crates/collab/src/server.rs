@@ -236,7 +236,9 @@ impl Server {
         }
         for wb in state.branches.into_iter().take(MAX_SHARED_BRANCHES) {
             if let Ok(b) = branch_from_wire(&server.state, wb) {
-                server.next_client = server.next_client.max(b.client.saturating_add(1));
+                if b.client < u32::MAX {
+                    server.next_client = server.next_client.max(b.client.saturating_add(1));
+                }
                 server.branches.push(b);
             }
         }
@@ -300,7 +302,9 @@ impl Server {
             Journal::BranchCreate(wb) => {
                 if !self.branches.iter().any(|b| b.id == wb.id) && self.branches.len() < MAX_SHARED_BRANCHES {
                     let b = branch_from_wire(&self.state, wb)?;
-                    self.next_client = self.next_client.max(b.client.saturating_add(1));
+                    if b.client < u32::MAX {
+                        self.next_client = self.next_client.max(b.client.saturating_add(1));
+                    }
                     self.branches.push(b);
                 }
                 Ok(())
@@ -793,8 +797,8 @@ impl Server {
             return Vec::new();
         }
         match req {
-            BranchReq::Create { id, name, time, client, base_seq, base_diff, head_diff } => {
-                self.branch_create(from, NewBranch { id, name, time, client, base_seq, base_diff, head_diff })
+            BranchReq::Create { id, name, time, base_seq, base_diff, head_diff } => {
+                self.branch_create(from, NewBranch { id, name, time, base_seq, base_diff, head_diff })
             }
             BranchReq::Edit { id, changes } => self.branch_edit(from, &id, &changes),
             BranchReq::UpdateFromMain { id, base_changes, head_changes } => self.branch_update_from_main(from, &id, &base_changes, &head_changes),
@@ -802,13 +806,74 @@ impl Server {
         }
     }
 
+    fn branch_node_ids_ok(&self, from: u32, changes: &[Change], existing: &[&Document]) -> bool {
+        changes.iter().all(|c| match c {
+            Change::Create { id, .. } => {
+                id.0 >> 32 == u64::from(from)
+                    || self.state.document().contains(*id)
+                    || self.deleted.contains(id)
+                    || existing.iter().any(|d| d.contains(*id))
+            }
+            _ => true,
+        })
+    }
+
+    fn branch_entries_ok(&self, from: u32, before: &Document, changes: &[Change], after: &Document, existing: &[&Document]) -> bool {
+        let mut touched: BTreeSet<Entry> = BTreeSet::new();
+        let mut listed: BTreeMap<Family, (BTreeSet<Entry>, BTreeSet<Entry>)> = BTreeMap::new();
+        for c in changes {
+            match c {
+                Change::Put { entry, .. } | Change::Remove { entry } if entry.id_space().is_some() => {
+                    touched.insert(entry.clone());
+                }
+                Change::SetDoc { prop, .. } => {
+                    if let Some(Ok(family)) = prop.list() {
+                        let (b, a) = (docprops::entries(before, family), docprops::entries(after, family));
+                        touched.extend(b.iter().chain(&a).cloned());
+                        listed.entry(family).or_insert_with(|| (b.into_iter().collect(), a.into_iter().collect()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for entry in touched {
+            let (was, now) = match entry.family().and_then(|f| listed.get(&f)) {
+                Some((b, a)) => (b.contains(&entry), a.contains(&entry)),
+                None => (docprops::has(before, &entry), docprops::has(after, &entry)),
+            };
+            if !was
+                && now
+                && !self.removed.contains(&entry)
+                && !existing.iter().any(|d| docprops::has(d, &entry))
+                && entry.id_space().is_some_and(|s| s != from && (self.issued.contains_key(&s) || s >= NO_SESSION_SPACE))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn apply_branch(&self, replica: &Replica, changes: &[Change]) -> Option<Replica> {
+        for c in changes {
+            if matches!(c, Change::Put { entry: Entry::Image(_), .. }) {
+                let mut probe = replica.clone();
+                probe.apply(std::slice::from_ref(c), Mode::Strict).ok()?;
+            }
+        }
+        let mut next = replica.clone();
+        let applied = next.apply(changes, Mode::Lenient).ok()?;
+        next.check(&applied.touched).ok()?;
+        (next.document().node_count() <= self.limits.max_nodes).then_some(next)
+    }
+
     fn branch_create(&mut self, from: u32, req: NewBranch) -> Vec<Outgoing> {
-        let NewBranch { id, name, time, client, base_seq, base_diff, head_diff } = req;
+        let NewBranch { id, name, time, base_seq, base_diff, head_diff } = req;
         if !valid_branch_id(&id)
             || self.branches.len() >= MAX_SHARED_BRANCHES
             || self.branches.iter().any(|b| b.id == id)
             || base_diff.len() > self.limits.max_changes
             || head_diff.len() > self.limits.max_changes
+            || !self.branch_node_ids_ok(from, &base_diff, &[])
         {
             return Vec::new();
         }
@@ -816,12 +881,14 @@ impl Server {
         if name.is_empty() {
             return Vec::new();
         }
-        let mut base = self.state.clone();
-        if base.apply(&base_diff, Mode::Lenient).is_err() || base.document().node_count() > self.limits.max_nodes {
+        let Some(base) = self.apply_branch(&self.state, &base_diff) else { return Vec::new() };
+        if !self.branch_entries_ok(from, self.state.document(), &base_diff, base.document(), &[])
+            || !self.branch_node_ids_ok(from, &head_diff, &[base.document()])
+        {
             return Vec::new();
         }
-        let mut head = base.clone();
-        if head.apply(&head_diff, Mode::Lenient).is_err() || head.document().node_count() > self.limits.max_nodes {
+        let Some(head) = self.apply_branch(&base, &head_diff) else { return Vec::new() };
+        if !self.branch_entries_ok(from, base.document(), &head_diff, head.document(), &[self.state.document()]) {
             return Vec::new();
         }
         let Ok(wire_base) = diff(&self.state, base.document()) else { return Vec::new() };
@@ -830,13 +897,13 @@ impl Server {
             id: id.clone(),
             name: name.clone(),
             time,
-            client,
+            client: from,
             status: BranchStatus::Active,
             rev: 0,
             base_diff: wire_base.changes,
             head_diff: wire_head.changes,
         };
-        self.branches.push(BranchData { id, name, time, client, status: BranchStatus::Active, rev: 0, base, head });
+        self.branches.push(BranchData { id, name, time, client: from, status: BranchStatus::Active, rev: 0, base, head });
         self.note(Journal::BranchCreate(wb.clone()));
         let skip = (base_seq == self.seq).then_some(from);
         self.broadcast_branch(skip, BranchEvent::Created { author: from, branch: wb })
@@ -850,17 +917,11 @@ impl Server {
             return Vec::new();
         };
         let branch = &self.branches[bi];
-        for c in changes {
-            if let Change::Create { id: nid, .. } = c
-                && !branch.head.document().contains(*nid)
-                && !branch.base.document().contains(*nid)
-                && nid.0 >> 32 != u64::from(from)
-            {
-                return Vec::new();
-            }
+        if !self.branch_node_ids_ok(from, changes, &[branch.head.document(), branch.base.document()]) {
+            return Vec::new();
         }
-        let mut next = branch.head.clone();
-        if next.apply(changes, Mode::Lenient).is_err() || next.document().node_count() > self.limits.max_nodes {
+        let Some(next) = self.apply_branch(&branch.head, changes) else { return Vec::new() };
+        if !self.branch_entries_ok(from, branch.head.document(), changes, next.document(), &[self.state.document(), branch.base.document()]) {
             return Vec::new();
         }
         let Ok(applied) = diff(&branch.head, next.document()) else { return Vec::new() };
@@ -884,12 +945,21 @@ impl Server {
             return Vec::new();
         };
         let branch = &self.branches[bi];
-        let mut next_base = branch.base.clone();
-        let mut next_head = branch.head.clone();
-        if next_base.apply(base_changes, Mode::Lenient).is_err()
-            || next_head.apply(head_changes, Mode::Lenient).is_err()
-            || next_base.document().node_count() > self.limits.max_nodes
-            || next_head.document().node_count() > self.limits.max_nodes
+        if !self.branch_node_ids_ok(from, base_changes, &[branch.base.document(), branch.head.document()])
+            || !self.branch_node_ids_ok(from, head_changes, &[branch.base.document(), branch.head.document()])
+        {
+            return Vec::new();
+        }
+        let Some(next_base) = self.apply_branch(&branch.base, base_changes) else { return Vec::new() };
+        let Some(next_head) = self.apply_branch(&branch.head, head_changes) else { return Vec::new() };
+        if !self.branch_entries_ok(from, branch.base.document(), base_changes, next_base.document(), &[self.state.document(), branch.head.document()])
+            || !self.branch_entries_ok(
+                from,
+                branch.head.document(),
+                head_changes,
+                next_head.document(),
+                &[self.state.document(), branch.base.document(), next_base.document()],
+            )
         {
             return Vec::new();
         }
@@ -927,7 +997,6 @@ struct NewBranch {
     id: String,
     name: String,
     time: u64,
-    client: u32,
     base_seq: u64,
     base_diff: Vec<Change>,
     head_diff: Vec<Change>,

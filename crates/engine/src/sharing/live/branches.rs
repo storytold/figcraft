@@ -63,7 +63,6 @@ impl Session {
             id: branch.id.clone(),
             name: branch.name.clone(),
             time: branch.time,
-            client: branch.client,
             base_seq,
             base_diff: base_diff.changes,
             head_diff: head_diff.changes,
@@ -197,6 +196,18 @@ impl Session {
                 {
                     b.state = state;
                     name = Some(b.name.clone());
+                }
+                if state != BranchState::Active {
+                    if let Some(live) = self.live.sessions.get_mut(&session_id) {
+                        live.branch_replicas.remove(&id);
+                    }
+                    if author != me {
+                        let was_active = branches::tab_of(self, main_uid, &id) == Some(self.active);
+                        branches::close_tabs(self, main_uid, Some(&id));
+                        if was_active && let Some(mi) = self.docs.iter().position(|d| d.uid == main_uid) {
+                            self.active = mi;
+                        }
+                    }
                 }
                 if author != me
                     && let Some(name) = name
