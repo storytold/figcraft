@@ -110,7 +110,6 @@ fn preferences_language_menu_stays_aligned_to_dropdown() {
     for mirrored in [false, true] {
         let mut app = FigApp::new(Session::new(), Box::new(NoServices));
         app.ui.preferences = true;
-        app.ui.mirrored = mirrored;
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         let mut t = 0.0;
@@ -124,6 +123,12 @@ fn preferences_language_menu_stays_aligned_to_dropdown() {
         for _ in 0..3 {
             frame(&mut app, vec![]);
         }
+        // Set after viewport_setup's first-frame language init so it is not overwritten.
+        app.ui.mirrored = mirrored;
+        for _ in 0..2 {
+            frame(&mut app, vec![]);
+        }
+        assert_eq!(ctx.global_style().right_to_left, mirrored);
         let out = frame(&mut app, vec![]);
         let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
         let combo =
