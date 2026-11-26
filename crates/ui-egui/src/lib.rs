@@ -137,6 +137,8 @@ mod guide_snap_tests;
 #[cfg(test)]
 mod header_icon_size_tests;
 #[cfg(test)]
+mod hex_field_target_tests;
+#[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
@@ -457,6 +459,9 @@ pub struct UiState {
     pub right_width: f32,
     /// The right sidebar as drawn this frame, after fitting the window.
     pub right_panel_rect: Option<egui::Rect>,
+    /// The layers the Design panel showed, and the pass it did, while one of its fields had the
+    /// keyboard (see `design_selection`).
+    pub field_selection: Option<(u64, Vec<figcraft_doc::NodeId>)>,
     pub right_tab: RightTab,
     /// The tab of the previous frame, to see the right panel change mode.
     pub last_right_tab: RightTab,
@@ -683,6 +688,7 @@ impl Default for UiState {
             left_width: PANEL_DEFAULT,
             right_width: PANEL_DEFAULT,
             right_panel_rect: None,
+            field_selection: None,
             right_tab: RightTab::Design,
             last_right_tab: RightTab::Design,
             left_tab: LeftTab::File,

@@ -189,6 +189,28 @@ fn pan_view(app: &mut FigApp, ctx: &egui::Context, pos: Pos2, mods: &egui::Modif
     }
 }
 
+/// A press on the canvas takes the keyboard from a panel field before the panels draw, so the
+/// field commits to the layers it was edited for. Drawn after the panels, the press would first
+/// select another layer, and the field would commit to that one (or into the move the press
+/// starts, which an unmoved release puts back).
+pub(crate) fn release_fields_for_press(ctx: &egui::Context) {
+    let Some(canvas) = crate::a11y::canvas_id(ctx).and_then(|id| ctx.read_response(id)) else { return };
+    let press = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+            _ => None,
+        })
+    });
+    let on_canvas = press.is_some_and(|p| canvas.rect.contains(p) && ctx.layer_id_at(p) == Some(canvas.layer_id));
+    if on_canvas && crate::a11y::field_focused(ctx) {
+        ctx.memory_mut(|m| {
+            if let Some(f) = m.focused() {
+                m.surrender_focus(f);
+            }
+        });
+    }
+}
+
 /// The pointer and keys on the canvas. False when something on it with a cursor of its own has
 /// the pointer (a comment pin, a ruler guide, a gradient or padding handle): the tool's cursor
 /// then doesn't show.

@@ -18,6 +18,7 @@ mod autopan;
 mod background;
 mod builder;
 mod input;
+pub(crate) use input::release_fields_for_press;
 mod outline;
 mod overlays;
 mod render;
