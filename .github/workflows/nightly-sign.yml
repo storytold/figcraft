@@ -41,5 +41,5 @@ jobs:
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_run_attempt: ${{ inputs.producer_run_attempt }}
     # No secrets: inherit or raw platform values in this caller. Only the isolated native
-    # callee job may bind the existing release environment (which trusts release and
-    # nightly-signer) and export keys in its signing step.
+    # callee job may bind the release environment and export its keys; that environment must
+    # admit nightly-signer alongside release before the first dispatch.

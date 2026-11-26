@@ -31,7 +31,8 @@ branch, so nightly signer files never need a stable release sync. The policy's `
 names it, the signer's guard requires it and its caller passes `app-name`. The branch only
 fast-forwards to reviewed main commits, through the nightly-signer settings script's `advance` (no
 queued signer run, a trust-closure scan, then the full diff of `.github/` and `packaging/`), and the
-existing `release` environment trusts it alongside `release`. Its trust closure is all of `.github/`
+existing `release` environment must admit `nightly-signer` alongside `release` before the first
+dispatch (a repository settings change, not a workflow one). Its trust closure is all of `.github/`
 and `packaging/`, including `packaging/env.sh`, which `import-cert.sh` sources with the Apple keys.
 On that branch only the pinned `nightly-sign.yml` caller may reach an environment: no app workflow
 binds one, nothing else calls `nightly-release.yml`, and the only caller of the shared stable

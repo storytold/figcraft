@@ -548,14 +548,15 @@ def workflow_entries(source):
             entries.append((number, key, _workflow_value(value),
                             is_block or ((value == "" or not is_block) and continues(index, indent))))
         if "{" in bare and bare != "{}":
-            flow = re.fullmatch(r"\{([^{}\[\]]*)\}", FLOW_QUOTED.sub("''", value.strip()))
+            masked = re.fullmatch(r"\{([^{}\[\]]*)\}", FLOW_QUOTED.sub("''", value.strip()))
+            flow = re.fullmatch(r"\{([^{}\[\]]*)\}", value.strip())
             if any(set(scalar[1:-1]) & set("#{}[],") for scalar in FLOW_QUOTED.findall(value)):
                 refused.append(f"line {number}: flow mapping quoted scalar with # or flow punctuation")
-            elif flow is None:
-                refused.append(f"line {number}: nested or multi-line flow mapping")
-            elif not re.fullmatch(r"\{([^{}\[\]]*)\}", value.strip()):
+            elif masked is None or flow is None:
                 refused.append(f"line {number}: nested or multi-line flow mapping")
             else:
+                # The masked text only proves the shape: a quoted key ("uses", 'environment') keeps
+                # its identity, so the entries are read from the original mapping text, never ''.
                 for item in flow.group(1).split(","):
                     entry = WORKFLOW_KEY.match(item.strip())
                     key = _workflow_key(entry.group(1)) if entry else None
@@ -652,6 +653,9 @@ class NightlySignerBranchTrustClosure(unittest.TestCase):
             "a bracket inside a quoted flow scalar": {**tree, "extra.yml": 'jobs:\n  x: {name: "[a]", runs-on: ubuntu-latest}\n'},
             "an unterminated quote": {**tree, "extra.yml": 'jobs:\n  x:\n    name: "a\n      b"\n    runs-on: ubuntu-latest\n'},
             "environment in any flow mapping": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    with: {environment: release}\n"},
+            "a double-quoted environment key in a flow mapping": {**tree, "extra.yml": 'jobs:\n  x:\n    runs-on: ubuntu-latest\n    with: {"environment": release}\n'},
+            "a single-quoted environment key in a flow mapping": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    with: {'environment': release}\n"},
+            "a double-quoted uses key in a flow mapping": {**tree, "extra.yml": 'jobs:\n  x: {"uses": ' + SHARED + "nightly-release.yml@" + "a" * 40 + "}\n"},
             "uses in any flow mapping": {**tree, "extra.yml": "jobs:\n  x:\n    steps:\n      - {uses: actions/checkout@v4}\n"},
             "another caller of the signer": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
             "a mutable signer pin": {**tree, "nightly-sign.yml": re.sub(r"nightly-release\.yml@[0-9a-f]{40}", "nightly-release.yml@main", tree["nightly-sign.yml"])},
@@ -661,6 +665,14 @@ class NightlySignerBranchTrustClosure(unittest.TestCase):
         for label, workflows in bad.items():
             with self.subTest(case=label):
                 self.assertTrue(trust_closure_problems(workflows))
+
+    def test_quoted_keys_in_a_flow_mapping_are_read_not_masked(self):
+        entries, refused = workflow_entries('jobs:\n  x: {runs-on: ubuntu-latest, "name": build}\n')
+        self.assertEqual(refused, [])
+        self.assertIn((2, "name", "build", False), entries, "a quoted key keeps its identity")
+        self.assertIn((2, "runs-on", "ubuntu-latest", False), entries)
+        _, refused = workflow_entries("jobs:\n  x: {runs-on: ubuntu-latest, 'environment': release}\n")
+        self.assertEqual(refused, ["line 2: environment in a flow mapping (must be block style)"])
 
     def test_signer_dispatch_guard_and_policy_name_the_same_branch(self):
         sign = (ROOT / ".github/workflows/nightly-sign.yml").read_text()
