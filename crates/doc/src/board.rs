@@ -10,7 +10,7 @@ use figcraft_geom::kurbo::{Ellipse, RoundedRect};
 use figcraft_geom::{BezPath, Point, Rect, Shape, Vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::NodeId;
+use crate::{CodeLanguage, NodeId};
 
 /// What a file is for: designing screens, or a board to think together on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -65,6 +65,12 @@ pub enum BoardItem {
     /// A mind map's node: a frame hugging its text, with no outline. What it hangs from is the
     /// branch (a connector with `branch`) arriving at it.
     MindNode,
+    /// A code block: a dark panel holding one monospace text (its first text layer), as wide as
+    /// it was made and as tall as its lines. `language` picks the highlighting.
+    CodeBlock {
+        #[serde(default)]
+        language: CodeLanguage,
+    },
 }
 
 impl BoardItem {
@@ -79,12 +85,16 @@ impl BoardItem {
                 | BoardItem::Stamp { .. }
                 | BoardItem::Table
                 | BoardItem::MindNode
+                | BoardItem::CodeBlock { .. }
         )
     }
 
     /// Objects whose first text layer is their text (a double-click or Enter edits it).
     pub fn has_text(&self) -> bool {
-        matches!(self, BoardItem::Sticky { .. } | BoardItem::Shape { .. } | BoardItem::Label { .. } | BoardItem::MindNode)
+        matches!(
+            self,
+            BoardItem::Sticky { .. } | BoardItem::Shape { .. } | BoardItem::Label { .. } | BoardItem::MindNode | BoardItem::CodeBlock { .. }
+        )
     }
 
     /// Who made it (stickies and stamps; empty when unknown).
@@ -127,6 +137,7 @@ impl BoardItem {
             BoardItem::Ink => "ink",
             BoardItem::Table => "table",
             BoardItem::MindNode => "mindNode",
+            BoardItem::CodeBlock { .. } => "codeBlock",
         }
     }
 }

@@ -17,9 +17,12 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod a11y;
 pub mod bidi;
 pub mod canvas;
+pub mod channel;
 pub mod cjk;
+mod combo_menu;
 pub mod control;
 pub mod dialogs;
+pub mod framework;
 pub mod home;
 pub mod i18n;
 pub mod icons;
@@ -58,6 +61,8 @@ mod bool_menu_icon_tests;
 #[cfg(test)]
 mod branch_ui_tests;
 #[cfg(test)]
+mod canvas_autopan_tests;
+#[cfg(test)]
 mod canvas_double_click_tests;
 #[cfg(test)]
 mod canvas_drag_tests;
@@ -75,6 +80,8 @@ mod colorpicker_eyedropper_tests;
 mod colorpicker_selection_tests;
 #[cfg(test)]
 mod comments_tests;
+#[cfg(test)]
+mod component_header_tests;
 #[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
@@ -290,6 +297,8 @@ mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
 #[cfg(test)]
+mod usage_summary_tests;
+#[cfg(test)]
 mod variable_picker_tests;
 #[cfg(test)]
 mod variables_export_ui_tests;
@@ -299,6 +308,8 @@ mod variables_rename_tests;
 mod variables_select_tests;
 #[cfg(test)]
 mod variables_window_resize_tests;
+#[cfg(test)]
+mod variant_own_value_tests;
 #[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]
@@ -868,6 +879,10 @@ pub struct FigApp {
     pub(crate) ime: egui::ime_context::ImeContextTracker,
     /// The check for a newer release and its prompt (desktop; [`updates_ui`]).
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// The framework dialogs (the update dialogs), run once per frame after the main window's UI.
+    pub framework_dialogs: craft_ui::dialog::DialogHost,
+    /// Who FigCraft is to the framework's dialogs ([`framework::host`]).
+    pub(crate) framework_host: std::sync::Arc<craft_host::Host>,
     /// Test-only count of the one IME observation each viewport pass makes.
     #[cfg(test)]
     pub(crate) ime_observations: u32,

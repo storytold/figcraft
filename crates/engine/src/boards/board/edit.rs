@@ -91,7 +91,7 @@ pub(super) fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
                 crate::cmd::lists::take_character_fills(n);
                 n.fills = vec![Paint::solid(line_shade(color))];
             }
-            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table => continue,
+            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table | BoardItem::CodeBlock { .. } => continue,
         }
         changed.push(id);
     }

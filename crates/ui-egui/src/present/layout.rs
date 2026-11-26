@@ -1,6 +1,6 @@
 use super::scroll::{clamp_scroll, page_settings};
 use super::{
-    Device, DeviceColor, Document, NodeId, OverlayState, Point, Pos2, PresentScale, PresentView, Presenter, Rect, Scroller, Vec2,
+    Device, DeviceColor, Document, NodeId, OverlayState, Point, Pos2, PresentScale, PresentView, Presenter, Rect, ScrollPosition, Scroller, Vec2,
     anchored_overlay_rect, pos2, vec2,
 };
 
@@ -111,16 +111,21 @@ pub(super) fn layout(p: &mut Presenter, area: Rect, chrome: Chrome) -> Option<La
     let fills = settings.responsive && device.is_none();
     let whole_area = (f64::from(area.width().round()), f64::from(area.height().round()));
     p.respond_to(settings.responsive.then(|| device.map_or(whole_area, |d| (d.width, d.height))));
-    let disp = p.display()?;
-    let fb = disp.world_bounds(p.current)?;
+    // The frame at its own size (the display copy is sized to its screen), and whether it has
+    // layers that keep to its screen as it scrolls.
+    let base = p.doc.as_ref()?;
+    let frame = base.world_bounds(p.current)?;
+    let pins = base
+        .node(p.current)
+        .is_some_and(|n| n.children.iter().any(|c| base.node(*c).is_some_and(|c| c.visible && c.scroll_position != ScrollPosition::Scrolls)));
     let view = if chrome.pane { PresentView::default() } else { p.view };
     // Custom sizes are just a screen: no body.
     let body = device.filter(|d| view.device_frame && !d.colors.is_empty());
     let pad = if !fills && matches!(view.scale, PresentScale::Fit | PresentScale::Actual) { chrome.pad } else { 0.0 };
     let avail = area.shrink(pad);
-    let (sw, sh) = device.map_or((fb.width(), fb.height()), |d| (d.width, d.height));
-    // The screen at `scale`, the body's outsets around it and the whole size.
-    let outer = |scale: f64| {
+    let (sw, sh) = device.map_or((frame.width(), frame.height()), |d| (d.width, d.height));
+    // The screen of `(sw, sh)` at `scale`, the body's outsets around it and the whole size.
+    let outer = |(sw, sh): (f64, f64), scale: f64| {
         let size = vec2((sw * scale) as f32, (sh * scale) as f32);
         let (x, top, bottom) = body.map_or((0.0, 0.0, 0.0), |d| body_outset(d.name, size, landscape));
         (size, x, top, vec2(size.x + 2.0 * x, size.y + top + bottom))
@@ -138,11 +143,22 @@ pub(super) fn layout(p: &mut Presenter, area: Rect, chrome: Chrome) -> Option<La
     let mut scale = if fills { 1.0 } else { factor(vec2(sw as f32, sh as f32)) };
     // The body doesn't scale exactly with the screen (its edges have a minimum): size it once more.
     if body.is_some() {
-        scale *= factor(outer(scale).3);
+        scale *= factor(outer((sw, sh), scale).3);
     }
     let max = if view.scale == PresentScale::Fit { 1.0 } else { 16.0 };
     let scale = if scale.is_finite() { scale.clamp(0.01, max) } else { 0.01 };
-    let (size, x, top, whole) = outer(scale);
+    // Without a device, a frame with fixed or sticky layers takes the window as its screen: what
+    // doesn't fit scrolls in the frame, as on a device, so those layers keep to the window (#2430).
+    // Other frames pan as one picture, drawn once.
+    let fit = |len: f64, room: f32| if len * scale - f64::from(room) > 0.5 { f64::from(room) / scale } else { len };
+    let window = (device.is_none() && pins).then(|| (fit(sw, avail.width()), fit(sh, avail.height()))).filter(|w| *w != (sw, sh));
+    if p.window != window {
+        p.window = window;
+        p.rev += 1;
+    }
+    let disp = p.display()?;
+    let fb = disp.world_bounds(p.current)?;
+    let (size, x, top, whole) = outer(window.unwrap_or((sw, sh)), scale);
     p.zoom = scale;
     // What's bigger than the window pans: starting centred across and at the top.
     let over = |d: f32| if d > 0.5 { d } else { 0.0 };
