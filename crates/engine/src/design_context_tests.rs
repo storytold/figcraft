@@ -433,3 +433,19 @@ fn code_links_keep_their_value_names_and_carry_source_and_notes() {
     assert_eq!((code["source"].as_str(), code["notes"].as_str()), (Some("src/button.tsx"), Some("Use for main actions")), "{code}");
     assert!(code["code"].as_str().unwrap().contains("xl"), "{code}");
 }
+
+#[test]
+fn stated_screen_sizes_come_with_the_context() {
+    let mut s = session();
+    let f = node(&mut s, json!({"type": "frame", "name": "Home", "width": 1440, "height": 900}));
+    let unmarked = context(&mut s, json!({"ids": [f]}));
+    assert_eq!(unmarked["responsive"]["explicit"], false, "{unmarked}");
+    let says = |v: &Value| v["missing"].as_array().unwrap().iter().any(|m| m["what"] == "responsive behaviour");
+    assert!(says(&unmarked), "nothing stated: the gap is named");
+    s.execute("responsive.set", &json!({"ids": [f], "viewport": "desktop"})).unwrap();
+    s.execute("responsive.rule", &json!({"id": f, "text": "Sidebar becomes a drawer below 768 px"})).unwrap();
+    let marked = context(&mut s, json!({"ids": [f]}));
+    assert_eq!(marked["responsive"]["explicit"], true, "{marked}");
+    assert_eq!(marked["responsive"]["rules"][0]["text"], "Sidebar becomes a drawer below 768 px");
+    assert!(!says(&marked), "{marked}");
+}

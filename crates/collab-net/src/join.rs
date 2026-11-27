@@ -333,7 +333,7 @@ pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mu
             }
             inbox.push(Event::Sync(m));
         }
-        ServerMsg::Reject { .. } => inbox.push(Event::Sync(m)),
+        ServerMsg::Reject { .. } | ServerMsg::Branches(_) | ServerMsg::Branch(_) => inbox.push(Event::Sync(m)),
         // Checked again by the engine (the host is as untrusted as any peer).
         ServerMsg::Signal { client_id, signal } => inbox.push(Event::Signal(client_id, signal)),
         ServerMsg::Hosting(info) => inbox.push(Event::Hosting(*info)),
