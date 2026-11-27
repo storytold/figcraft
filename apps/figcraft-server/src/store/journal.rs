@@ -57,6 +57,7 @@ impl Store {
         let mut issues = Vec::new();
         let mut fresh_log = true;
         let mut kept = 0;
+        let mut branch_dirty = false;
         let log_path = dir.join(LOG);
         // A log that's there but can't be read (an IO error, or over a lowered cap) may hold
         // confirmed edits: the file isn't opened, and the log is left as it is for another try.
@@ -78,12 +79,14 @@ impl Store {
             Ok(log) if log.generation == generation => {
                 fresh_log = false;
                 for entry in log.entries {
+                    let is_branch = super::is_branch_journal(&entry);
                     if let Err(e) = server.replay(entry) {
                         issues.push(format!("file {file}: its log stops making sense after {kept} entries ({e}); the rest was dropped"));
                         fresh_log = true;
                         break;
                     }
                     kept += 1;
+                    branch_dirty |= is_branch;
                 }
                 if let Some(why) = log.damaged {
                     issues.push(format!("file {file}: its log ended with {why}; that part was dropped"));
@@ -128,7 +131,7 @@ impl Store {
             (false, Ok(f)) => {
                 let bytes = f.metadata().map_or(LOG_HEADER as u64, |m| m.len());
                 // Replayed entries make it worth compacting once everyone has left.
-                Log { generation, file: f, pending: Vec::new(), entries: kept, bytes, dirty: kept > 0 }
+                Log { generation, file: f, pending: Vec::new(), entries: kept, bytes, dirty: kept > 0, branch_dirty }
             }
             // A new snapshot and log of the next generation, so appends start clean.
             _ => {
@@ -173,7 +176,7 @@ impl Store {
                 log::warn!("file {file}: couldn't update {META}: {err}");
             }
         }
-        Ok(Log { generation, file: f, pending: Vec::new(), entries: 0, bytes: LOG_HEADER as u64, dirty: false })
+        Ok(Log { generation, file: f, pending: Vec::new(), entries: 0, bytes: LOG_HEADER as u64, dirty: false, branch_dirty: false })
     }
 
     /// Compactions so far.

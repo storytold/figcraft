@@ -480,7 +480,7 @@ pub fn open_context_menu(app: &mut FigApp, pos: Pos2, deep: bool) {
         let (doc, page, sel, zoom) = (ds.doc.clone(), ds.page, ds.selection.clone(), ds.view.zoom.max(1e-6));
         // A frame's name label is the frame, as on a press, even where it sits over a section.
         let label = figcraft_engine::tools::label_at(&doc, page, &app.session.tool.labels, p);
-        let hit = app.session.hit(&doc, page, p, 2.0 / zoom);
+        let hit = app.session.hit_pick(&doc, page, p, 2.0 / zoom, deep);
         let target = label.or_else(|| hit.map(|leaf| figcraft_doc::geometry::select_target(&doc, leaf, &sel, deep)));
         if let Some(target) = target
             && !sel.contains(&target)
