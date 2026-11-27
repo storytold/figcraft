@@ -1,4 +1,4 @@
-//! macOS open-documents and quit Apple events (#289).
+//! macOS open-documents, open-link and quit Apple events (#289, #960).
 //!
 //! Finder double-clicks, Open With, drops on the Dock icon and `open -a FigCraft file.figcraft`
 //! don't pass paths on the command line: LaunchServices sends the running (or just-launched) app a
@@ -8,10 +8,16 @@
 //! workspace forbids. The `fmv-macos-events` crate (also used by GridCraft, EffectCraft and
 //! PhotoCraft) wraps exactly that, an `NSAppleEventManager` handler registered before Finder's
 //! launch event that leaves winit's delegate alone, behind a safe main-thread API.
+//!
+//! A followed `figcraft://` link doesn't reach the command line on macOS either: LaunchServices
+//! sends a GetURL ('GURL') Apple event, at launch and to the app already running. The crate hands
+//! it over as [`Event::Url`], and the link goes where a link on the command line goes.
 
 use std::path::PathBuf;
 
 use figcraft_ui_egui::FigApp;
+
+use crate::args::is_invite;
 use fmv_macos_events::{Event, Inbox, Registration};
 use serde_json::json;
 
@@ -42,7 +48,10 @@ pub fn poll(inbox: &Inbox, fig: &mut FigApp, ctx: &egui::Context) {
     for e in inbox.drain() {
         match e {
             Event::Open(paths) => open_documents(fig, paths),
+            Event::Url(url) => open_link(fig, &url),
             Event::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            // Events a later version of the crate adds.
+            _ => {}
         }
     }
 }
@@ -53,5 +62,14 @@ pub fn open_documents(fig: &mut FigApp, paths: Vec<PathBuf>) {
         if fig.run_user("file.open", json!({"path": p.to_string_lossy()})).is_some() {
             fig.ui.home = false;
         }
+    }
+}
+
+/// A link the system handed over: an invite link opens the Join dialog with it, as a link on the
+/// command line does (the person confirms the join). Links of other schemes are ignored, since
+/// the bundle declares only `figcraft:`.
+pub fn open_link(fig: &mut FigApp, url: &str) {
+    if is_invite(url.trim()) {
+        figcraft_ui_egui::live::open_invite(fig, url);
     }
 }
