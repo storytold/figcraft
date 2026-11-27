@@ -611,6 +611,12 @@ pub(crate) const MAX_REACH: f64 = 1e12;
 /// result (drop shadows from the blurred layer, a backdrop blurred with it), so the largest of
 /// those reaches comes on top. Each reach counts up to [`MAX_REACH`], so the sum stays finite.
 pub fn effect_margin(n: &Node) -> f64 {
+    margin_of(n, true)
+}
+
+/// [`effect_margin`], with or without what drop shadows reach (`drops`): shadows cast from the
+/// layer's outline ([`shadow::outline_caster`]) read none of its pixels.
+fn margin_of(n: &Node, drops: bool) -> f64 {
     let visible = || n.effects.iter().filter(|e| e.visible);
     let finite = |m: f64| if m.is_finite() { m.clamp(0.0, MAX_REACH) } else { 0.0 };
     let layer: f64 = visible()
@@ -624,7 +630,9 @@ pub fn effect_margin(n: &Node) -> f64 {
     let others = visible()
         .map(|e| match &e.kind {
             EffectKind::BackgroundBlur { .. } | EffectKind::Glass(_) => e.backdrop_radius() * 2.0,
-            EffectKind::DropShadow(s) => s.radius * 2.0 + s.spread.abs() * figcraft_doc::SPREAD_MITER_LIMIT + s.offset.0.abs() + s.offset.1.abs(),
+            EffectKind::DropShadow(s) if drops => {
+                s.radius * 2.0 + s.spread.abs() * figcraft_doc::SPREAD_MITER_LIMIT + s.offset.0.abs() + s.offset.1.abs()
+            }
             // Inner shadows cast from around a layer's pixels (groups, image fills with alpha; any
             // image counts here): a layer cut off at the view would cast one from the cut.
             EffectKind::InnerShadow(s)
@@ -772,6 +780,16 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     // Isolated layer covering the node's paint bounds, clipped to the visible area + margin. Its
     // origin can be negative (inside the margin); the size counts from there, or a layer starting
     // above or left of the pixmap came out short by the margin (a band missing at its far edge).
+    // Drop shadows cast from the layer's outline need none of its pixels: the layer then ends
+    // where the pixmap does (plus what its other effects read), however far the shadows reach.
+    let cast_outline = if ctx.lod || backdrop::has_effects(n) { None } else { shadow::outline_caster(ctx.doc, n) };
+    let view = match &cast_outline {
+        Some(_) => {
+            let m = (margin_of(n, false) * ctx.scale).min(MAX_EFFECT_MARGIN_PX);
+            Rect::new(0.0, 0.0, f64::from(pw), f64::from(ph)).inflate(m, m)
+        }
+        None => view,
+    };
     let vis = dev.intersect(view);
     let (x0, y0) = (vis.x0.floor(), vis.y0.floor());
     let (w, h) = (vis.x1.ceil() - x0, vis.y1.ceil() - y0);
@@ -843,7 +861,16 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         layer_effects(ctx, &mut layer, n, id, lxf);
     }
     // Drop shadows go under the layer, in effect-list order.
-    {
+    if let Some(outlines) = &cast_outline {
+        let cover = shadow::hiding_cover(ctx.doc, n);
+        for e in n.effects.iter().filter(|e| e.visible) {
+            if let EffectKind::DropShadow(s) = &e.kind
+                && let Some((sh, at)) = shadow::outline_drop_shadow(outlines, cover.as_deref().unwrap_or(outlines), s, xf, ctx.scale, (pw, ph))
+            {
+                composite(pix, at, &sh, op, s.blend);
+            }
+        }
+    } else {
         // Kept apart, the backdrop isn't in the layer yet: the shadows are cast from the content
         // with the layer effects it will get (a copy only when it gets some).
         let layer_fx =
@@ -1299,4 +1326,23 @@ pub(crate) fn clip_covers(n: &Node, xf: Affine, size: (u32, u32)) -> bool {
     let inv = xf.inverse();
     let (pw, ph) = (f64::from(size.0), f64::from(size.1));
     [(0.0, 0.0), (pw, 0.0), (pw, ph), (0.0, ph)].into_iter().all(|p| inside(inv * figcraft_geom::Point::new(p.0, p.1)))
+}
+
+/// Whether point `p` (local) lies in the box of `n`, its rounded corners cut off. Errs towards
+/// `false`: smoothed corners count as cut off square.
+pub(crate) fn in_box(n: &Node, p: figcraft_geom::Point) -> bool {
+    let (w, h) = (n.width, n.height);
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h) {
+        return false;
+    }
+    let max_r = w.min(h) / 2.0;
+    let smooth = if n.corners.smoothing > 0.0 || !n.corners.smoothing.is_finite() { 1.0 } else { 0.0 };
+    // Top-left, top-right, bottom-right, bottom-left: the corner and its radius.
+    let r = n.corners.radii.map(|r| if r.is_finite() { r.clamp(0.0, max_r) } else { max_r });
+    [(0.0, 0.0, r[0]), (w, 0.0, r[1]), (w, h, r[2]), (0.0, h, r[3])].iter().all(|(cx, cy, r)| {
+        let (dx, dy) = ((p.x - cx).abs(), (p.y - cy).abs());
+        let zone = r * (1.0 + smooth);
+        // Outside the corner's square, or (a round corner) within its arc.
+        dx >= zone || dy >= zone || (smooth == 0.0 && (r - dx).powi(2) + (r - dy).powi(2) <= r * r)
+    })
 }
