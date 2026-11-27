@@ -291,6 +291,91 @@ fn random_drops_and_reconnects_converge() {
     assert!(snapshots > 0, "no reconnect needed a snapshot");
 }
 
+/// A session saved by a build with larger review limits restores with them clamped. Its saved
+/// batches still hold the value past the limits, so a resuming client catches up with the
+/// snapshot: replaying the log would hand it a change this build refuses.
+#[test]
+fn a_restored_session_with_clamped_settings_catches_up_by_snapshot() {
+    use crate::change::{Change, DocProp, Json};
+    use figcraft_doc::{DesignReview, MAX_RADII};
+
+    let mut s = Server::new(base(), "tok", Limits::default());
+    let mut a = join(&mut s);
+    // `b` joined but misses the review batch: it resumes from the log, which is where the old
+    // build's over-limit value still sits.
+    let mut b = join(&mut s);
+    let m = edit(&mut a, |d| d.design_review.grid = 8.0).unwrap();
+    let out = s.receive(a.id(), m);
+    deliver(&mut a, &out);
+    b.disconnect();
+    let mut state = s.state().unwrap();
+    assert_eq!(state.log.len(), 1, "the review batch is in the log");
+
+    // An older build wrote more radii than this one keeps, in the snapshot and in the batch.
+    let wide = DesignReview { grid: 8.0, radii: (0..MAX_RADII + 8).map(|i| i as f64).collect(), ..Default::default() };
+    let value = Json::of(&wide).unwrap();
+    for c in state.snapshot.iter_mut().chain(state.log.iter_mut().flat_map(|a| a.changes.iter_mut())) {
+        if let Change::SetDoc { prop: DocProp::DesignReview, value: v } = c {
+            *v = value.clone();
+        }
+    }
+
+    let mut restored = Server::restore(state, "tok", Limits::default()).unwrap();
+    assert_eq!(restored.document().design_review.radii.len(), MAX_RADII, "the snapshot keeps what fits");
+    let ClientMsg::Hello(h) = b.reconnect(hello()) else { panic!() };
+    let (id, out) = restored.join(h).unwrap();
+    assert_eq!(id, b.id(), "a reconnecting client keeps its id");
+    assert!(
+        matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })),
+        "a clamped session hands out the snapshot, not a batch past the limits: {out:?}"
+    );
+    deliver(&mut b, &out);
+    assert_eq!(b.seq(), restored.seq());
+    assert_eq!(b.document().design_review.radii.len(), MAX_RADII, "the client takes what the session has");
+    // The client that already had the batch catches up with the same snapshot, so both sides
+    // agree on the clamped value.
+    let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!() };
+    let (_, out) = restored.join(h).unwrap();
+    deliver(&mut a, &out);
+    assert_eq!(a.document(), b.document());
+}
+
+/// The same fixture inside the limits keeps resuming from the log: the snapshot catch-up above is
+/// for settings this build had to change, not for review settings as such.
+#[test]
+fn a_restored_session_within_the_limits_resumes_from_the_log() {
+    use crate::change::{Change, DocProp, Json};
+    use figcraft_doc::DesignReview;
+
+    let mut s = Server::new(base(), "tok", Limits::default());
+    let mut a = join(&mut s);
+    let mut b = join(&mut s);
+    let m = edit(&mut a, |d| d.design_review.grid = 8.0).unwrap();
+    let out = s.receive(a.id(), m);
+    deliver(&mut a, &out);
+    b.disconnect();
+    let mut state = s.state().unwrap();
+    let narrow = DesignReview { grid: 8.0, radii: (0..20).map(|i| i as f64).collect(), ..Default::default() };
+    let value = Json::of(&narrow).unwrap();
+    for c in state.snapshot.iter_mut().chain(state.log.iter_mut().flat_map(|a| a.changes.iter_mut())) {
+        if let Change::SetDoc { prop: DocProp::DesignReview, value: v } = c {
+            *v = value.clone();
+        }
+    }
+
+    let mut restored = Server::restore(state, "tok", Limits::default()).unwrap();
+    assert_eq!(restored.document().design_review.radii.len(), 20, "the snapshot needs no clamping");
+    let ClientMsg::Hello(h) = b.reconnect(hello()) else { panic!() };
+    let (_, out) = restored.join(h).unwrap();
+    assert!(
+        matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Delta(_), .. })),
+        "a session that needed no clamping resumes from its log: {out:?}"
+    );
+    deliver(&mut b, &out);
+    assert_eq!(b.seq(), restored.seq());
+    assert_eq!(b.document().design_review.radii.len(), 20);
+}
+
 #[test]
 fn resume_needs_the_issued_secret() {
     let mut s = Server::new(base(), "tok", Limits { max_peers: 2, ..Limits::default() });

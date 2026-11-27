@@ -393,9 +393,47 @@ pub fn raster_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
 }
 
 /// The page-space rectangle a node exports: a clipping frame's box (plus its own effects), else
-/// everything it paints.
+/// everything it paints. Each layer counts the fill and stroke outlines it draws (see
+/// [`drawn_bounds`]), so a stroke inside its frame leaves the export the frame's size; the
+/// renderer's own bounds ([`Document::world_render_bounds`]) only bound how far a stroke can reach.
 pub fn export_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
-    doc.world_render_bounds(id)
+    doc.world_render_bounds_with(id, &|n, world| drawn_bounds(doc, n, world).unwrap_or_else(|| n.own_paint_bounds(world)))
+}
+
+/// The page area `n` paints itself under `world` (its children aside), measured on the outlines
+/// it draws: its fill's and its stroke's (joins, caps and alignment as drawn), grown by its
+/// effects. A dashed stroke counts as a solid one too, so where the dashes fall doesn't change the
+/// size, and as its dashes, whose square ends can stand out past it round a curve. `None` where
+/// those outlines don't cover what it paints: text (glyphs and their
+/// strokes), a layer without an outline of its own, and drop shadows whose spread grows the
+/// outline (see [`figcraft_doc::Node::outline_spreads`]).
+fn drawn_bounds(doc: &Document, n: &figcraft_doc::Node, world: Affine) -> Option<Rect> {
+    if matches!(n.kind, NodeKind::Text(_)) || n.outline_spreads().next().is_some() {
+        return None;
+    }
+    let shape = match n.kind {
+        NodeKind::BooleanOp { .. } => node_outline(doc, n).map(|(p, _)| p),
+        _ => figcraft_doc::geometry::shape_path(n),
+    };
+    let stroke = stroke_fill(doc, n).map(|(p, _)| p);
+    let solid = (!n.stroke.dashes.is_empty())
+        .then(|| {
+            let mut undashed = n.clone();
+            undashed.stroke.dashes.clear();
+            stroke_fill(doc, &undashed).map(|(p, _)| p)
+        })
+        .flatten();
+    let placed = |p: &figcraft_geom::BezPath| {
+        use figcraft_geom::kurbo::Shape;
+        let mut p = p.clone();
+        p.apply_affine(world);
+        (!p.elements().is_empty()).then(|| p.bounding_box())
+    };
+    let drawn = [shape.as_ref().and_then(placed), stroke.as_deref().and_then(placed), solid.as_deref().and_then(placed)]
+        .into_iter()
+        .flatten()
+        .reduce(|a, b| a.union(b))?;
+    Some(n.grow_by_effects(drawn))
 }
 
 /// Rasterise one node at `scale` (export). Transparent background.
@@ -637,6 +675,8 @@ mod boolean_radius_tests;
 #[cfg(test)]
 mod bounds_memo_tests;
 #[cfg(test)]
+mod clip_cover_tests;
+#[cfg(test)]
 mod dots_tests;
 #[cfg(test)]
 mod effect_order_tests;
@@ -671,6 +711,8 @@ mod magnified_image_tests;
 #[cfg(test)]
 mod mask_bounds_tests;
 #[cfg(test)]
+mod outline_shadow_tests;
+#[cfg(test)]
 mod paint_behaviour_tests;
 #[cfg(test)]
 mod pan_bench_tests;
@@ -685,12 +727,18 @@ mod retained_tests;
 #[cfg(test)]
 mod rtl_list_tests;
 #[cfg(test)]
+mod shadow_silhouette_tests;
+#[cfg(test)]
 mod solo_tests;
 #[cfg(test)]
 mod spread_tests;
+#[cfg(test)]
+mod stroke_fringe_tests;
 #[cfg(test)]
 mod stroke_reach_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod width_tests;
+#[cfg(test)]
+mod zoom_bench_tests;

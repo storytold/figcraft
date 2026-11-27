@@ -206,6 +206,7 @@ pub(super) fn inspect(app: &mut FigApp, ui: &mut Ui) {
     }
     crate::dev_mode::status(app, ui, &doc, &sel);
     crate::dev_mode::annotations_section(app, ui, &doc, first);
+    crate::dev_mode::responsive_section(app, ui, &doc, first);
     crate::dev_mode::dev_resources_section(app, ui, &doc, first);
     crate::dev_mode::measurements_section(app, ui, &doc, &sel);
     use figcraft_engine::devinspect::ColorFormat;

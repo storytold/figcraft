@@ -371,7 +371,9 @@ pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
             }
         }
     }
-    ctx.set_fonts(fonts);
+    // Through the runtime's font loader: it records what framework text reads of the definitions
+    // (the semibold family FigCraft defines above), and a pass that installs them is laid out again.
+    craft_ui::fonts::load(ctx, fonts);
 }
 
 /// The glyphs macOS shortcuts are written with ([`figcraft_engine::keymap::display`]).

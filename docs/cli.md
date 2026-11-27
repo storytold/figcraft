@@ -4,14 +4,13 @@ FigCraft without a window: inspect, export, convert and render documents, run co
 commands, serve MCP, publish plugins and code connect mappings, and measure performance. Build it with
 `cargo build --release -p figcraft-cli` (binary `target/release/figcraft-cli`).
 
-The CLI follows [RFC-0012](https://github.com/storytold/craft-contrib/blob/main/rfcs/0012-cli-conventions.md),
-the command-line conventions the Craft apps share, in how it parses its arguments (with clap). The
-rules it doesn't follow yet are listed below. `figcraft-cli --help` is the source of truth for
+Follows [RFC-0018](https://github.com/storytold/craft-contrib/blob/main/rfcs/0018-cli-conventions.md),
+the command-line conventions the Craft apps share. `figcraft-cli --help` is the source of truth for
 the flags; this page explains what they do.
 
 `figcraft-cli --help` (or `-h`, `help`, `help <subcommand>`) prints help on stdout and exits with
 0. So does `--help` or `-h` after a subcommand (`figcraft-cli mcp --help`), even after a mistake on
-the same line. `--version` (or `-V`) prints the version. Bad arguments are usage errors, caught
+the same line. `--version` (or `-V`, also after a subcommand) prints the version. Bad arguments are usage errors, caught
 before any work starts: an option the subcommand doesn't take, an option given twice (only the
 automation roots repeat), a missing or bad value (`--scale 0`, `--format bmp`, `--attach nope`)
 and `mcp --attach` with automation roots. They print `error: …` on stderr and exit with code 2.
@@ -22,14 +21,24 @@ takes the next option as its value. Put options before `--` to pass a filename b
 dash, for example `figcraft-cli info --json -- --drawing.figcraft`. Every argument after `--` is
 literal, including a filename named `--no-system-fonts`.
 
-Not yet as RFC-0012 asks:
+Exit codes: 0 for success, 1 for a failure, 2 for a usage error, and 128 plus the signal number
+when a signal ends the process. Output goes to stdout and diagnostics to stderr; a closed stdout
+(`figcraft-cli commands | head -1`) ends the run quietly instead of with a panic.
+
+Writing over the input is refused: `convert` and `run` with an output that is the input file
+(`--out` the same file as `--in`), and `export -o` or `render -o` naming the file they read, exit
+with 2 and say so, rather than replacing the document. Pass `--in-place` to `convert` or `run` to
+mean it. `--in-place` with a different output file is a usage error too. `connect publish`
+saves into the design file by design, as described below.
+
+Environment variables are declared on their flags, so `--help` shows them: `--no-system-fonts`
+reads `FIGCRAFT_NO_SYSTEM_FONTS` and `plugin publish --key` reads `FIGCRAFT_SERVER_KEY` (its value
+is never shown in help or in errors). A blank variable counts as unset. The flag wins over the
+variable. No destructive flag has an environment fallback.
+
+Still as before, and a known gap against the RFC:
 - Arguments that name files are read as text, so a file name that isn't valid Unicode is a usage
   error (exit 2) rather than reaching the command.
-- Failures are messages rather than error enums, and `main` isn't yet a `run(args, out, err)`
-  function the tests call in-process.
-- `FIGCRAFT_NO_SYSTEM_FONTS` and `FIGCRAFT_SERVER_KEY` are read where they're used, not declared
-  on a flag, so `--help` names them only in the flag descriptions.
-- Packages don't install the generated shell completions or man pages yet.
 - There are no ast-grep checks in CI yet.
 
 ## Generating shell completions and man pages
@@ -57,8 +66,11 @@ The directory contains completions for five shells:
 
 It also contains `figcraft-cli.1` and one man page per subcommand, including nested commands such
 as `figcraft-cli-plugin-publish.1`. For example, `man target/cli-docs/figcraft-cli-export.1` shows
-the export subcommand's options. Generating these files doesn't install them; package installation
-is still outstanding in [#1396](https://github.com/storytold/figcraft/issues/1396).
+the export subcommand's options. Generating these files doesn't install them: the Linux packages (tar, deb, rpm) put the man pages
+in `/usr/share/man/man1` and the Bash, Zsh and Fish completions in the shells' system directories
+(the deb also links the Zsh one into Debian's `vendor-completions`), and the FreeBSD package
+puts them under `/usr/local` (`man/man1`, `share/bash-completion`, `share/zsh/site-functions`,
+`share/fish/vendor_completions.d`). Nightly builds rename the CLI and ship neither.
 
 ## Fonts
 
@@ -114,14 +126,18 @@ page 1 "Screens": 380 nodes, 4 top-level
 
 ### `export <file> -o <out> [--format png|jpg|svg|webp|pdf|xml|fig|penpot] [--scale N] [--page NAME] [--node ID|NAME] [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk] [--vd-compat bestEffort|exact|ignore]`
 
-- `<out>` is a directory: one file per top-level frame of the page (default the first page), named
+- `<out>` is a directory: one file per top-level frame of the selected page, named
   after the frame (`Home.png`, `Settings.png`…); with no frames, one file per top-level layer.
   The name is kept as it is, except for the characters file systems refuse (`/ \ : * ? " < > |`
   and control characters), which become `_`, and leading or trailing spaces and dots, which are
   dropped. Reserved Windows device names such as `CON` get a leading `_`.
-  A name is cut at 100 characters. The app's export replaces the same characters (there a
-  `/` makes a folder). Two layers with the same name get `Name 2`, `Name 3`…
+  Names are limited to 100 characters and 200 UTF-8 bytes. The app's export replaces the same
+  characters (there a `/` makes a folder). Two layers with the same name get `Name 2`, `Name 3`…
+  With `--node`, the CLI writes one file named after the selected layer, including a nested layer.
 - `<out>` has an image extension: one file with the given `--node`, or the whole page composited.
+- `--page` defaults to the first non-divider page: empty pages whose names start with `-` are
+  skipped. If all pages are dividers, the first is used. `--page NAME` can select one explicitly.
+  The `.fig` and `.penpot` formats export the whole document and ignore `--page`.
 - `--node` takes a layer id (`12` or `0:12`) or a layer name.
 - `--format fig` (or an `<out>` ending in `.fig`) writes the whole file as `.fig`, experimental:
   written from public format notes, including variables with their modes and bindings and shared
@@ -159,6 +175,10 @@ page 1 "Screens": 380 nodes, 4 top-level
   `K = 1 − max(R, G, B)`, `C = (1 − R − K) / (1 − K)` (M and Y alike): DeviceCMYK without an
   output intent (no CMYK profile ships with FigCraft), so proof against your printer's profile.
 
+For `--node`, a layer ID can refer to any page. For a layer name, the CLI looks for a
+case-sensitive exact match on the chosen page, then an exact match elsewhere in the document.
+If neither exists, it uses the first case-insensitive substring match on the chosen page.
+
 ```sh
 figcraft-cli export app.figcraft -o exports/ --scale 2
 figcraft-cli export app.figcraft -o hero.svg --node "Hero"
@@ -169,17 +189,20 @@ figcraft-cli export app.figcraft -o handoff.fig
 
 ### `convert <in> <out>`
 
-By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.sketch` (Sketch 48 or newer, best effort), `.svg` (an editable frame: groups,
+By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.sketch` (Sketch 48 or newer, best effort),
+`.penpot` (Penpot 2.x archive, best effort), `.svg` (an editable frame: groups,
 shapes, text, gradients, masks and effects; `info` lists what it left out as `note:` lines), `.png/.jpg/.webp/.gif/.tif/.bmp`
 (an image layer). Outputs: `.figcraft`, `.json` (FigCraft JSON, pretty-printed), `.svg`,
 `.png/.jpg/.webp` (the current page rendered at 1x with its background), `.pdf` (the current page's
 frames, one page each), `.fig` (the whole file, experimental, as `export --format fig`), `.penpot`
 (the whole file as a Penpot 2.x archive, as `export --format penpot`).
 
+When converting from a `.penpot` file, import warnings are printed to stderr as `note:` lines.
+
 ### `render <file> -o <out.png> [--scale N] [--page NAME]`
 
-The whole page (default the first) with its background, as png, jpg or webp. Large pages are scaled
-down to fit 16384 px.
+The whole page with its background, as png, jpg or webp. `--page` defaults to the first non-divider
+page, as for `export`. Large pages are scaled down to fit 16384 px.
 
 ### `run <script.json|script.jsonl> [--in <file>] [--out <file>]`
 
@@ -189,8 +212,8 @@ Runs commands in a headless session (a new document, or `--in`), printing one JS
 {"command":"frame.create","ok":true,"result":{"id":2},"step":0}
 ```
 
-The whole script is **one undo step**, and it is **all-or-nothing**, exactly like running the same
-commands through `command.batch` (the MCP tool `batch`, the control channel, plugins). A step key
+The script groups document edits into **one undo step**, like running the same commands through
+`command.batch` (the MCP tool `batch`, the control channel, and plugins). A step key
 other than `command`, `params` and `as`, or a parameter the command's doc (`figcraft-cli commands`)
 doesn't list, fails the script with an error naming it (`ids` and `id` are always taken). A step named
 with `"as"` can be used by later steps: `{"$ref": "name"}` in a step's params is the `id` in that
@@ -211,12 +234,12 @@ The result lines are printed once the script is through, so none of them reports
 took back.
 
 To keep going past a failed command, make a step a `command.batch` with `"onError": "continue"`
-([MCP server](mcp.md) has the rules). The script itself stays all-or-nothing: if a
-later top-level step fails, that batch's edits are rolled back with everything else.
+([MCP server](mcp.md) has the rules). If a later top-level step fails, FigCraft rolls back that
+batch's document edits along with the script's other document edits.
 
-A failing step prints one line with `"ok": false`, the error and `"rolledBack": true`, writes
-nothing (`--out` is not saved, and the session's documents go back to how the script found them),
-and exits with code 1:
+If a top-level step fails during execution, the CLI prints one JSON line with `"ok": false`, the
+error and `"rolledBack": true`, skips the final `--out` save, and exits with code 1. Files written
+by earlier steps, such as a `file.saveAs` step with a path, remain on disk.
 
 ```text
 {"step":1,"command":"node.set","ok":false,"error":"no such node 99999","rolledBack":true}
@@ -288,11 +311,11 @@ live sessions (`collab.*`: without a key on a server open to the public, with `c
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories
 (`plugin.directory.*`); the one-shot `run` can't (no network link).
 
-### `plugin publish <folder> --server ws://host:port/[?key=KEY]`
+### `plugin publish <folder> --server ws://host:port/[?key=KEY] [--key KEY]`
 
 Publishes a plugin folder (`figcraft-plugin.json`, the module its `main` names, an optional `assets/`
 folder) to a `figcraft-server`'s plugin directory as a new version, and prints its name, version,
-size and SHA-256. The server's key comes from the address or, better, from the
+size and SHA-256. The server's key comes from the address, from `--key` or, better, from the
 `FIGCRAFT_SERVER_KEY` environment variable (it then stays out of the shell history and process
 lists); it is never printed. The bundle is checked before it is sent and again by the server. See
 [plugins.md](plugins.md#plugin-directories).

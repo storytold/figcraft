@@ -271,3 +271,53 @@ fn fuzzed_frames_dont_hurt_the_server() {
     assert!(same(a.doc().unwrap(), b.doc().unwrap()));
     server.stop();
 }
+
+#[test]
+fn shared_branches_sync_and_survive_a_server_restart() {
+    let dir = TempDir::new("branches");
+    let mut cfg = config(dir.path());
+    let mut server = crate::start(&cfg).unwrap();
+    let addr = server.addr();
+    let mut a = session("Ada");
+    let base_rect = id_of(&a.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 80, "height": 80})).unwrap());
+    let p = publish(&mut a, dir.path(), addr);
+    let mut b = join(&p.edit, "Bo");
+    pump(&mut [&mut a, &mut b], "both live with shared branches", |s| {
+        live(s[0]) && live(s[1]) && s[0].live().shared_branches && s[1].live().shared_branches
+    });
+    let b_main = b.active;
+    // Bo creates a branch, adds a new shape and renames the existing one.
+    let branch_id = b.execute("branch.create", &json!({"name": "New Card"})).unwrap()["id"].as_str().unwrap().to_string();
+    let card = id_of(&b.execute("shape.rectangle", &json!({"x": 120, "y": 20, "width": 100, "height": 60})).unwrap());
+    b.execute("node.set", &json!({"ids": [base_rect.0], "props": {"name": "Base From Branch"}})).unwrap();
+    pump(&mut [&mut a, &mut b], "Ada receives Bo's branch and edits", |s| {
+        s[0].docs[0]
+            .branches
+            .iter()
+            .any(|br| br.id == branch_id && br.head.contains(card) && br.head.node(base_rect).is_some_and(|n| n.name == "Base From Branch"))
+    });
+    assert!(!a.doc().unwrap().contains(card), "main stays clean until merged");
+    // Switch Bo back to main before checking reconnect status on main.
+    b.execute("doc.switch", &json!({"index": b_main})).unwrap();
+    // Restart the server: the branch and its edits must survive on disk.
+    server.stop();
+    pump(&mut [&mut a, &mut b], "reconnecting", |s| s.iter().all(|x| matches!(x.live().status, Status::Reconnecting { .. })));
+    cfg.listen = addr.to_string();
+    let mut server = start_again(&cfg);
+    pump(&mut [&mut a, &mut b], "back after restart", |s| s.iter().all(|x| live(x) && x.live().shared_branches));
+    // A brand-new participant Cy joins after the restart and gets the branch too.
+    let mut c = join(&p.edit, "Cy");
+    pump(&mut [&mut a, &mut b, &mut c], "Cy receives branch after restart", |s| {
+        live(s[2]) && s[2].ds().is_ok_and(|d| d.branches.iter().any(|br| br.id == branch_id && br.head.contains(card)))
+    });
+    // Ada reviews and merges Bo's branch into main.
+    assert_eq!(a.execute("branch.merge", &json!({"id": branch_id})).unwrap()["merged"], true);
+    pump(&mut [&mut a, &mut b, &mut c], "everyone converges after merge", |s| {
+        s.iter().all(|x| x.doc().unwrap().contains(card))
+            && s[1].ds().is_ok_and(|d| d.branches.iter().any(|br| br.id == branch_id && br.state == figcraft_engine::branches::BranchState::Merged))
+            && s[2].ds().is_ok_and(|d| d.branches.iter().any(|br| br.id == branch_id && br.state == figcraft_engine::branches::BranchState::Merged))
+    });
+    assert_eq!(c.doc().unwrap().node(base_rect).unwrap().name, "Base From Branch");
+    assert!(same(a.doc().unwrap(), b.doc().unwrap()) && same(a.doc().unwrap(), c.doc().unwrap()));
+    server.stop();
+}

@@ -101,10 +101,10 @@ fn body_outset(device: &str, size: Vec2, landscape: bool) -> (f32, f32, f32) {
 }
 
 /// Place the presented frame in `area`: on its device's screen (the whole device sized by the
-/// view's scale option), else the frame itself. Fit and 100% keep the chrome's padding from the
-/// edges; Fit never goes above 100%. What doesn't fit the window pans (`Presenter::pan`). The
-/// preview pane always fits. A responsive prototype's frame is first resized to the device's
-/// screen, or without a device to the whole area (shown at 100%).
+/// view's scale option), else the frame itself. Only Fit keeps the chrome's padding from the
+/// edges, and never goes above 100%; 100% takes the whole area. What doesn't fit the window pans
+/// (`Presenter::pan`). The preview pane always fits. A responsive prototype's frame is first
+/// resized to the device's screen, or without a device to the whole area (shown at 100%).
 pub(super) fn layout(p: &mut Presenter, area: Rect, chrome: Chrome) -> Option<Layout> {
     let settings = page_settings(p.doc.as_ref()?, p.current);
     let (device, landscape) = (settings.device(), settings.landscape());
@@ -121,7 +121,7 @@ pub(super) fn layout(p: &mut Presenter, area: Rect, chrome: Chrome) -> Option<La
     let view = if chrome.pane { PresentView::default() } else { p.view };
     // Custom sizes are just a screen: no body.
     let body = device.filter(|d| view.device_frame && !d.colors.is_empty());
-    let pad = if !fills && matches!(view.scale, PresentScale::Fit | PresentScale::Actual) { chrome.pad } else { 0.0 };
+    let pad = if !fills && view.scale == PresentScale::Fit { chrome.pad } else { 0.0 };
     let avail = area.shrink(pad);
     let (sw, sh) = device.map_or((frame.width(), frame.height()), |d| (d.width, d.height));
     // The screen of `(sw, sh)` at `scale`, the body's outsets around it and the whole size.

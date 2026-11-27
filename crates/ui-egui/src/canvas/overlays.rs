@@ -124,7 +124,10 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     }
     // Selection.
     let editing = ds.text_edit.clone();
-    if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() {
+    // While the colour picker is being used on the selection, hide its frame and handles so the
+    // colour being picked shows on the layer itself (a text's coloured selection would hide it
+    // too).
+    if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() && !app.picker_hides_selection(painter.ctx()) {
         size_label = selection_overlay(app, painter, ds, &doc, &sel, zoom);
     }
     if app.session.tool.tool == ToolId::ShapeBuilder
@@ -171,22 +174,27 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     labels
 }
 
+/// The pixel grid's lines: one screen pixel wide, a light grey at a fifth of its strength, so
+/// they darken white and lighten a dark canvas or fill alike. Measured in Figma (2026-11-24):
+/// 242 on white and 78 on a grey of 50, which this grey gives.
+pub(crate) const PIXEL_GRID: Color32 = Color32::from_rgba_unmultiplied_const(190, 190, 190, 51);
+
 /// Pixel grid at high zoom.
 fn pixel_grid(app: &FigApp, painter: &egui::Painter) {
     let r = app.canvas.rect;
     let p0 = app.to_page(r.min);
     let p1 = app.to_page(r.max);
-    let col = Color32::from_black_alpha(18);
+    let line = stroke(PIXEL_GRID, 1.0 / painter.pixels_per_point());
     let mut x = p0.x.floor();
     while x <= p1.x {
-        let s = app.to_screen(x, 0.0).x;
-        painter.line_segment([pos2(s, r.min.y), pos2(s, r.max.y)], stroke(col, 1.0));
+        let s = painter.round_to_pixel_center(app.to_screen(x, 0.0).x);
+        painter.line_segment([pos2(s, r.min.y), pos2(s, r.max.y)], line);
         x += 1.0;
     }
     let mut y = p0.y.floor();
     while y <= p1.y {
-        let s = app.to_screen(0.0, y).y;
-        painter.line_segment([pos2(r.min.x, s), pos2(r.max.x, s)], stroke(col, 1.0));
+        let s = painter.round_to_pixel_center(app.to_screen(0.0, y).y);
+        painter.line_segment([pos2(r.min.x, s), pos2(r.max.x, s)], line);
         y += 1.0;
     }
 }
@@ -268,12 +276,16 @@ fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Do
     let preedit = app.preedit_view();
     let edoc: &Document = preedit.map(|p| &*p.doc).unwrap_or(doc);
     let Some(text) = TextOnScreen::of(edoc, te.id) else { return };
+    // While the colour picker is being used on this text, its frame and coloured selection hide
+    // too: the selection colour tinted the very characters whose colour is being chosen. The
+    // caret stays.
+    let picking = app.picker_hides_selection(painter.ctx());
     let layout = &text.layout;
-    if let Some(q) = node_quad(app, edoc, te.id) {
+    if !picking && let Some(q) = node_quad(app, edoc, te.id) {
         quad(painter, q, stroke(accent(painter), 1.0));
     }
     let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
-    if a != b && preedit.is_none() {
+    if a != b && preedit.is_none() && !picking {
         for q in text.selection(app, a, b) {
             painter.add(Shape::convex_polygon(q.to_vec(), accent(painter).gamma_multiply(0.3), Stroke::NONE));
         }
@@ -492,9 +504,9 @@ fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
         let pts: Vec<Pos2> = ov.pen.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
         if app.session.tool.tool == ToolId::Pencil {
             // The stroke it will make, in its colour and weight (at least a point when zoomed out):
-            // white over a dark page or frame, as the stroke will be (#1741).
-            let (default, weight) = figcraft_engine::tools::PENCIL_STROKE;
-            let color = ov.pen_color.unwrap_or(default);
+            // white over a dark page or frame, as the stroke will be (#1741), or the ink chosen (#2395).
+            let weight = app.session.tool.pencil_ink.weight;
+            let color = ov.pen_color.unwrap_or(figcraft_engine::tools::PENCIL_STROKE.0);
             painter.add(Shape::line(pts, stroke(doc_c32(painter.ctx(), color), ((weight * zoom) as f32).max(1.0))));
         } else {
             for [x0, y0, x1, y1] in &ov.pen_handles {

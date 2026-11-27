@@ -466,14 +466,26 @@ fn board_commands_survive_junk() {
         json!({"id": 99_999, "end": 7, "target": [1], "style": "wavy"}),
         json!({"id": 99_999, "relation": 7, "children": "x", "text": [1], "x": "NaN", "y": 1e308}),
         json!({"id": 99_999, "language": 7, "text": [1], "width": "wide", "x": "NaN", "y": 1e308, "side": 3}),
+        json!({"tool": "sticky", "color": "auto", "weight": -1e308}),
     ];
     let ids: Vec<&str> = crate::cmd::all_commands()
         .iter()
         .map(|c| c.id)
         .filter(|i| {
             i.starts_with("board.")
-                || ["tool.sticky", "tool.shape", "tool.connector", "tool.marker", "tool.highlighter", "tool.eraser", "tool.stamp", "file.newBoard"]
-                    .contains(i)
+                || [
+                    "tool.sticky",
+                    "tool.shape",
+                    "tool.connector",
+                    "tool.marker",
+                    "tool.highlighter",
+                    "tool.eraser",
+                    "tool.ink",
+                    "tool.stamp",
+                    "tool.mindMap",
+                    "file.newBoard",
+                ]
+                .contains(i)
         })
         .collect();
     assert!(ids.len() >= 17, "{ids:?}");

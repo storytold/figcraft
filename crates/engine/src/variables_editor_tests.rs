@@ -200,3 +200,56 @@ fn stored_variable_ids_keep_collection_edits_on_the_resolved_collection() {
     assert!(s.execute("variable.removeMode", &json!({"collection": "Extended", "mode": "Dark"})).is_err());
     assert_eq!(s.doc().unwrap(), &before);
 }
+
+/// The names of collection `c`'s variables in their stored order.
+fn names_in(s: &Session, c: &str) -> Vec<String> {
+    let vars = &s.doc().unwrap().variables;
+    let cid = vars.collection(c).unwrap().id.clone();
+    vars.variables.iter().filter(|v| v.collection == cid).map(|v| v.name.clone()).collect()
+}
+
+#[test]
+fn moving_variables_reorders_their_collection_only_and_undoes() {
+    let mut s = Session::new();
+    tokens(&mut s);
+    ex(&mut s, "variable.createCollection", json!({"name": "Other"}));
+    ex(&mut s, "variable.create", json!({"collection": "Other", "name": "gap", "type": "number", "value": 4}));
+    ex(&mut s, "variable.create", json!({"collection": "Tokens", "name": "space/lg", "type": "number", "value": 24}));
+    let before = names_in(&s, "Tokens");
+    ex(&mut s, "variable.move", json!({"variables": ["space/lg", "brand"], "before": "space/sm"}));
+    let after = names_in(&s, "Tokens");
+    let at = |list: &[String], n: &str| list.iter().position(|x| x == n).unwrap();
+    // The moved ones come first, keeping their own order; the rest keep theirs.
+    assert!(at(&after, "brand") < at(&after, "space/lg") && at(&after, "space/lg") < at(&after, "space/sm"));
+    assert!(at(&after, "space/sm") < at(&after, "space/md"));
+    assert_eq!(names_in(&s, "Other"), ["gap"]);
+    // Without `before` they go last; a variable of another collection is refused.
+    ex(&mut s, "variable.move", json!({"variables": ["space/sm"]}));
+    assert_eq!(names_in(&s, "Tokens").last().map(String::as_str), Some("space/sm"));
+    assert!(s.execute("variable.move", &json!({"variables": ["brand"], "before": "gap"})).is_err());
+    assert!(s.execute("variable.move", &json!({"variables": ["brand", "gap"]})).is_err());
+    ex(&mut s, "edit.undo", json!({}));
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(names_in(&s, "Tokens"), before);
+}
+
+#[test]
+fn sorting_orders_numbers_by_value_within_the_group_asked() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Palette"}));
+    for n in ["indigo/500", "indigo/50", "zinc", "indigo/950", "indigo/100", "amber"] {
+        ex(&mut s, "variable.create", json!({"collection": "Palette", "name": n, "type": "color", "value": "#336699"}));
+    }
+    ex(&mut s, "variable.sort", json!({"collection": "Palette", "group": "indigo"}));
+    let names = names_in(&s, "Palette");
+    let shades: Vec<&str> = names.iter().map(String::as_str).filter(|n| n.starts_with("indigo/")).collect();
+    assert_eq!(shades, ["indigo/50", "indigo/100", "indigo/500", "indigo/950"]);
+    // Variables outside the group stay where they were.
+    assert_eq!(names.iter().position(|n| n == "zinc"), Some(2));
+    ex(&mut s, "variable.sort", json!({"collection": "Palette", "descending": true}));
+    let names = names_in(&s, "Palette");
+    assert_eq!(names.first().map(String::as_str), Some("zinc"));
+    assert_eq!(names.last().map(String::as_str), Some("amber"));
+    assert!(names.iter().position(|n| n == "indigo/950") < names.iter().position(|n| n == "indigo/50"));
+    assert!(s.execute("variable.sort", &json!({"collection": "Palette", "group": "teal"})).is_err());
+}

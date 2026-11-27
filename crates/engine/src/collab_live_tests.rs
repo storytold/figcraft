@@ -44,7 +44,11 @@ fn welcome_of(out: &[Outgoing], id: u32) -> ServerMsg {
 
 impl Room {
     pub(crate) fn new(doc: Document, n: usize, seed: u64) -> Room {
-        let mut room = Room { server: Server::new(doc, "t", Limits::default()), people: Vec::new(), rng: Rng::new(seed) };
+        Self::new_with_limits(doc, n, seed, Limits::default())
+    }
+
+    pub(crate) fn new_with_limits(doc: Document, n: usize, seed: u64, limits: Limits) -> Room {
+        let mut room = Room { server: Server::new(doc, "t", limits), people: Vec::new(), rng: Rng::new(seed) };
         for _ in 0..n {
             let mut s = Session::new();
             let script = Arc::new(Mutex::new(Script::default()));
@@ -73,7 +77,10 @@ impl Room {
                 Outgoing::All(m) => (m, (0..self.people.len()).collect()),
                 Outgoing::Others(id, m) => (m, (0..self.people.len()).filter(|i| self.people[*i].id != id).collect()),
             };
-            if !matches!(msg, ServerMsg::Changes(_) | ServerMsg::Reject { .. } | ServerMsg::Welcome { .. }) {
+            if !matches!(
+                msg,
+                ServerMsg::Changes(_) | ServerMsg::Reject { .. } | ServerMsg::Welcome { .. } | ServerMsg::Branches(_) | ServerMsg::Branch(_)
+            ) {
                 continue;
             }
             let to: Vec<usize> = to.into_iter().filter(|i| self.people[*i].online).collect();
@@ -127,7 +134,7 @@ impl Room {
     }
 
     /// Person `i`'s connection drops: what is in flight is lost; the link says it's reconnecting.
-    fn disconnect(&mut self, i: usize) {
+    pub(crate) fn disconnect(&mut self, i: usize) {
         let p = &mut self.people[i];
         p.up.clear();
         p.down.clear();
@@ -139,10 +146,11 @@ impl Room {
     }
 
     /// Person `i` is back: the link says hello with the client's id and last sequence number.
-    fn reconnect(&mut self, i: usize) {
+    pub(crate) fn reconnect(&mut self, i: usize) {
         let p = &mut self.people[i];
         let ClientMsg::Hello(mut h) = Client::hello("f", "t", "Person", "") else { panic!("not a hello") };
-        h.resume = p.s.live().client().map(Client::resume);
+        let main_uid = p.s.docs[crate::branches::file_tab(&p.s)].uid;
+        h.resume = p.s.live_of(main_uid).client().map(Client::resume);
         let (id, out) = self.server.join(h).unwrap();
         assert_eq!(id, p.id, "the same client");
         p.online = true;

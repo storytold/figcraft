@@ -44,6 +44,18 @@ pub fn find_category<'a>(list: &'a [AnnotationCategory], key: &str) -> Option<&'
     list.iter().find(|c| c.id == key).or_else(|| list.iter().find(|c| c.name.eq_ignore_ascii_case(key)))
 }
 
+/// A colour no category in `list` has, if there is one.
+pub(crate) fn unused_color(list: &[AnnotationCategory]) -> figcraft_color::Color {
+    let used = |c: &figcraft_color::Color| list.iter().any(|x| x.color.to_hex() == c.to_hex());
+    let fallback = AnnotationCategory::COLORS.get(list.len() % AnnotationCategory::COLORS.len()).copied().unwrap_or(figcraft_color::Color::BLACK);
+    AnnotationCategory::COLORS.iter().find(|c| !used(c)).copied().unwrap_or(fallback)
+}
+
+/// An id no category in `list` has.
+pub(crate) fn free_category_id(list: &[AnnotationCategory]) -> String {
+    (1..=MAX_CATEGORIES + 1).map(|k| format!("custom-{k}")).find(|i| !list.iter().any(|c| c.id == *i)).unwrap_or_default()
+}
+
 fn category_json(c: &AnnotationCategory) -> Value {
     json!({"id": c.id, "name": c.name, "color": c.color.to_css_hex()})
 }
@@ -188,7 +200,7 @@ fn parse_properties(cmd: &str, p: &Value) -> crate::Result<Option<Vec<String>>> 
 }
 
 /// `label` from params, trimmed of trailing whitespace and capped.
-fn parse_label(cmd: &str, p: &Value) -> crate::Result<Option<String>> {
+pub(crate) fn parse_label(cmd: &str, p: &Value) -> crate::Result<Option<String>> {
     match get(p, "label").or_else(|| get(p, "text")) {
         None => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.trim_end().chars().take(MAX_LABEL).collect())),
@@ -381,18 +393,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Err(bad(cmd, format!("a file has at most {MAX_CATEGORIES} categories")));
             }
             let name = category_name(cmd, &list, None, p)?.ok_or_else(|| bad(cmd, "`name` required"))?;
-            let color = match category_color(cmd, p)? {
-                Some(c) => c,
-                None => {
-                    let used = |c: &figcraft_color::Color| list.iter().any(|x| x.color.to_hex() == c.to_hex());
-                    let fallback = AnnotationCategory::COLORS
-                        .get(list.len() % AnnotationCategory::COLORS.len())
-                        .copied()
-                        .unwrap_or(figcraft_color::Color::BLACK);
-                    AnnotationCategory::COLORS.iter().find(|c| !used(c)).copied().unwrap_or(fallback)
-                }
-            };
-            let id = (1..=MAX_CATEGORIES + 1).map(|k| format!("custom-{k}")).find(|i| !list.iter().any(|c| c.id == *i)).unwrap_or_default();
+            let color = category_color(cmd, p)?.unwrap_or_else(|| unused_color(&list));
+            let id = free_category_id(&list);
             list.push(AnnotationCategory { id: id.clone(), name, color });
             s.doc_mut()?.annotation_categories = Some(list);
             Ok(json!({"id": id}))
