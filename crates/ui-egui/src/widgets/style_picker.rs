@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use crate::FigApp;
 use crate::a11y::Tip;
 use crate::colorpicker::PickerTarget;
-use crate::i18n::{tr, trf};
+use crate::i18n::{tr, trf, trn};
 use crate::icons::{self, Icon};
 use crate::popover::{Hold, Open, Popover, Surface};
 use crate::theme::{Tokens, regular, semibold};
@@ -233,17 +233,27 @@ pub fn text_link(app: &FigApp, doc: &Document, ids: &[NodeId]) -> Option<Option<
 }
 
 /// The applied style's name (click opens the picker) with a detach button; for text, "Mixed"
-/// when the chars link to different styles (or some to none).
+/// when the chars link to different styles (or some to none), and a count of what the chars set
+/// on top of their style with a button resetting them to it.
 pub fn chip(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId], slot: StyleSlot) {
     let t = Tokens::get(ui.ctx());
-    let (name, mixed) = match link_of(app, doc, ids, slot) {
-        Some(Some(id)) => (doc.style(&id).map_or_else(|| tr("Missing style").to_string(), |st| st.name.clone()), false),
-        None if slot == StyleSlot::Text => (tr("Mixed").to_string(), true),
+    let (name, mixed, linked) = match link_of(app, doc, ids, slot) {
+        Some(Some(id)) => (doc.style(&id).map_or_else(|| tr("Missing style").to_string(), |st| st.name.clone()), false, Some(id)),
+        None if slot == StyleSlot::Text => (tr("Mixed").to_string(), true, None),
         _ => return,
+    };
+    // The targeted chars' local changes on top of their text style.
+    let changes = match (&linked, ids.first()) {
+        (Some(_), Some(first)) if slot == StyleSlot::Text => {
+            let range = figcraft_engine::textedit::selected_range(&app.session);
+            figcraft_engine::style_vars::text_style_changes(doc, *first, &crate::typography::target_styles(doc, ids, range)).len()
+        }
+        _ => 0,
     };
     let mut open_it = false;
     crate::right::row(ui, 32.0, |ui| {
-        let w = (ui.available_width() - 32.0).max(40.0);
+        let buttons = if changes > 0 { 56.0 } else { 32.0 };
+        let w = (ui.available_width() - buttons).max(40.0);
         let (r, resp) = ui.allocate_exact_size(vec2(w, widgets::FIELD_H), Sense::click());
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
@@ -251,9 +261,27 @@ pub fn chip(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId], slot:
         let icon = if slot == StyleSlot::Text { Icon::Text } else { Icon::Styles };
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(14.0, 14.0)), icon, t.icon_secondary);
         let col = if mixed { t.text_secondary } else { t.text };
-        crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 26.0, r.center().y), &name, regular(11.0), col, r.width() - 32.0);
-        let tip = if mixed { tr("The selection uses several text styles: click to apply one") } else { tr("Change style") };
+        let mark_w = if changes > 0 { 24.0 } else { 0.0 };
+        let shown = crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 26.0, r.center().y), &name, regular(11.0), col, r.width() - 32.0 - mark_w);
+        if changes > 0 {
+            ui.painter().text(pos2(shown.max.x + 6.0, r.center().y), Align2::LEFT_CENTER, format!("+{changes}"), regular(11.0), t.text_secondary);
+        }
+        let tip = if mixed {
+            tr("The selection uses several text styles: click to apply one").to_string()
+        } else if changes > 0 {
+            trn("Change style ({n} local changes)", changes, &[])
+        } else {
+            tr("Change style").to_string()
+        };
         open_it = resp.on_hover_text(tip).clicked();
+        if changes > 0
+            && let Some(id) = &linked
+            && icons::button(ui, Icon::Reset, 24.0, false, tr("Reset to style")).clicked()
+        {
+            // Applying the style again drops what the chars set on top of it (the selected chars
+            // while text is edited).
+            app.run("style.apply", json!({"ids": ids, "style": id}));
+        }
         let detach = if mixed { tr("Detach styles") } else { tr("Detach style") };
         if icons::button(ui, Icon::Detach, 24.0, false, detach).clicked() {
             app.run("style.detach", json!({"ids": ids, "which": slot.key()}));

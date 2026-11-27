@@ -1258,17 +1258,11 @@ impl Document {
     }
 
     /// Text layers linked to a text style whose chars carry no link (files from before per-char
-    /// links, importers that link layers): the chars showing the style link to it, and the layer
-    /// stays linked only if they all do.
+    /// links, importers that link layers): every char links to it, what it sets unlike the style
+    /// kept as a local change; a layer whose style is gone unlinks.
     pub fn link_layer_text_styles(&mut self) {
-        let defs: BTreeMap<String, TextStyle> = self
-            .styles
-            .iter()
-            .filter_map(|s| match &s.kind {
-                StyleKind::Text { style, .. } => Some((s.id.clone(), style.clone())),
-                _ => None,
-            })
-            .collect();
+        let texts: std::collections::BTreeSet<String> =
+            self.styles.iter().filter(|s| matches!(s.kind, StyleKind::Text { .. })).map(|s| s.id.clone()).collect();
         let legacy = |n: &Node| match &n.kind {
             NodeKind::Text(t) => n.styles.text.is_some() && t.spans().iter().all(|(_, _, s)| s.style_id.is_none()),
             _ => false,
@@ -1279,12 +1273,8 @@ impl Document {
             let n = Arc::make_mut(n);
             let sid = n.styles.text.clone().unwrap_or_default();
             if let NodeKind::Text(t) = &mut n.kind {
-                if let Some(def) = defs.get(&sid) {
-                    t.each_style(|s| {
-                        if s.shows_text_style(def) {
-                            s.style_id = Some(sid.clone());
-                        }
-                    });
+                if texts.contains(&sid) {
+                    t.each_style(|s| s.style_id = Some(sid.clone()));
                 }
                 n.styles.text = t.text_style_link().flatten().map(str::to_string);
             }

@@ -206,9 +206,9 @@ fn deleting_a_used_style_keeps_the_values() {
 #[test]
 fn editing_a_styled_property_detaches_that_style_only() {
     // Docs silent on direct edits (the panel shows the style until it's detached); pinned: a value
-    // of the layer's own is no longer the style's, so that link goes (text styles already unlink
-    // the chars edited) and later style edits don't overwrite it. Other links and unrelated edits
-    // keep the link.
+    // of the layer's own is no longer the style's, so that link goes and later style edits don't
+    // overwrite it. A text style keeps its link, the edit a local change on top of it (#2435).
+    // Other links and unrelated edits keep the link.
     let mut s = Session::new();
     let rows = styled(&mut s);
     let r = rows[0].0;
@@ -227,7 +227,8 @@ fn editing_a_styled_property_detaches_that_style_only() {
     for (kind, props) in edits {
         let (layer, st, _) = rows.iter().find(|x| x.2 == kind).unwrap().clone();
         run(&mut s, "node.set", json!({"id": layer, "props": props}));
-        assert_eq!(link(&s, layer, kind), None, "{kind}: the edited property's link goes");
+        let kept = (kind == "text").then_some(st.as_str());
+        assert_eq!(link(&s, layer, kind).as_deref(), kept, "{kind}: the edited property's link goes (a text style's stays)");
         let after = shown(&s, layer, kind);
         let value = if kind == "text" {
             json!({"fontSize": 9})
@@ -253,7 +254,8 @@ fn editing_a_styled_property_detaches_that_style_only() {
 fn a_style_link_wins_over_values_in_the_same_call() {
     // Docs silent on one call setting both (a linked layer shows its style's values; editing one
     // detaches it); pinned: the link wins whatever the keys are called, on node.create and
-    // node.set, and a deviation set in a later call unlinks as before.
+    // node.set, and a deviation set in a later call unlinks as before (a text style stays linked,
+    // the deviation a local change on top of it, #2435).
     let mut s = Session::new();
     let rows = styled(&mut s);
     let pairs: [(&str, &str, Value); 12] = [
@@ -282,7 +284,8 @@ fn a_style_link_wins_over_values_in_the_same_call() {
             assert_eq!(shown(&s, layer, kind), shown(&s, source, kind), "{how} `{key}` + `{link_key}`: the style's values");
         }
         run(&mut s, "node.set", json!({"id": set, "props": {key: value}}));
-        assert_eq!(link(&s, set, kind), None, "`{key}` in a later call unlinks");
+        let kept = (kind == "text").then_some(st.as_str());
+        assert_eq!(link(&s, set, kind).as_deref(), kept, "`{key}` in a later call unlinks (a text style stays linked)");
         assert_ne!(shown(&s, set, kind), shown(&s, source, kind), "`{key}` in a later call applies");
     }
 }

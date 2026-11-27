@@ -58,7 +58,7 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     if doc.styles != before.styles {
         let changed_styles: Vec<String> = doc.styles.iter().filter(|s| !before.styles.contains(s)).map(|s| s.id.clone()).collect();
         for sid in changed_styles {
-            cmd::styles::propagate_style(doc, &sid);
+            cmd::styles::propagate_style(doc, &sid, before.style(&sid));
         }
     }
     touched.extend(doc.take_dirty());

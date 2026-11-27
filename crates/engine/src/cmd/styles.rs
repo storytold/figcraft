@@ -522,6 +522,7 @@ fn bind_style(s: &mut Session, p: &Value) -> Result<Value> {
         None => None,
     };
     let Some(style) = doc.styles.get_mut(idx) else { return Err(bad(cmd, "no such style")) };
+    let old = style.clone();
     let want = crate::style_vars::field_type(&style.kind, &field).ok_or_else(|| bad(cmd, format!("the style has no field `{field}` to bind")))?;
     let key = crate::style_vars::canonical(&field);
     match var {
@@ -550,7 +551,7 @@ fn bind_style(s: &mut Session, p: &Value) -> Result<Value> {
     // The style takes its default-mode value, and each layer using it its own.
     let sid = style.id.clone();
     crate::style_vars::settle(doc);
-    propagate_style(doc, &sid);
+    propagate_style(doc, &sid, Some(&old));
     ok()
 }
 
@@ -579,6 +580,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let name = string(p, "name").map(|n| style_name(cmd, &n)).transpose()?;
     let Some(style) = doc.styles.get_mut(idx) else { return Err(bad(cmd, "no such style")) };
+    let old = style.clone();
     if let Some(n) = name {
         style.name = n;
     }
@@ -590,7 +592,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         crate::style_vars::prune(style);
     }
     let sid = style.id.clone();
-    propagate_style(doc, &sid);
+    propagate_style(doc, &sid, Some(&old));
     ok()
 }
 
@@ -709,8 +711,9 @@ fn rename_folder(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
-/// Re-apply style `sid` to every node (and text chars) linked to it.
-pub fn propagate_style(doc: &mut Document, sid: &str) {
+/// Re-apply style `sid` to every node (and text chars) linked to it. `old` is the style as it
+/// was: text chars keep what they set unlike it (their local changes) and take the rest.
+pub fn propagate_style(doc: &mut Document, sid: &str, old: Option<&Style>) {
     let text_def = match doc.style(sid).map(|s| &s.kind) {
         Some(StyleKind::Text { style, paragraph }) => Some((style.clone(), paragraph.clone())),
         _ => None,
@@ -720,14 +723,16 @@ pub fn propagate_style(doc: &mut Document, sid: &str) {
         let Some(n) = doc.node(i) else { continue };
         if let Some((def, paragraph)) = &text_def {
             if n.kind.text().is_some_and(|t| t.links_text_style(sid)) {
-                let def = match doc.style(sid).map(|st| crate::style_vars::kind_for(doc, st, i).into_owned()) {
-                    Some(StyleKind::Text { style, .. }) => style,
-                    _ => def.clone(),
+                let text_of = |st: &Style| match crate::style_vars::kind_for(doc, st, i).into_owned() {
+                    StyleKind::Text { style, .. } => Some(style),
+                    _ => None,
                 };
+                let def = doc.style(sid).and_then(text_of).unwrap_or_else(|| def.clone());
+                let was = old.and_then(text_of);
                 if let Ok(n) = doc.get_mut(i)
                     && let NodeKind::Text(t) = &mut n.kind
                 {
-                    t.update_text_style(sid, &def);
+                    t.update_text_style(sid, was.as_ref(), &def);
                     t.update_paragraph_style(sid, paragraph);
                 }
             }
@@ -742,8 +747,9 @@ pub fn propagate_style(doc: &mut Document, sid: &str) {
     }
 }
 
-/// Text style links follow edits (on `ids`): chars that no longer show their style's values (or
-/// whose style is gone) unlink, and a layer's link is the style all its chars share.
+/// Text style links follow edits (on `ids`): chars whose style is gone unlink (chars edited keep
+/// their link, the edit a local change on top of the style), and a layer's link is the style all
+/// its chars share.
 pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
     let linked = |n: &Node| match &n.kind {
         NodeKind::Text(t) => n.styles.text.is_some() || t.style.style_id.is_some() || t.runs.iter().any(|r| r.style.style_id.is_some()),
@@ -753,14 +759,6 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
     if ids.is_empty() {
         return;
     }
-    let defs: BTreeMap<String, TextStyle> = doc
-        .styles
-        .iter()
-        .filter_map(|s| match &s.kind {
-            StyleKind::Text { style, .. } => Some((s.id.clone(), style.clone())),
-            _ => None,
-        })
-        .collect();
     // What each text style sets at the paragraph level (#1829); no variable binds those.
     let paras: BTreeMap<&str, &ParagraphStyle> = doc
         .styles
@@ -770,30 +768,21 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
             _ => None,
         })
         .collect();
-    let varying: Vec<&Style> = doc.styles.iter().filter(|s| !s.bound.is_empty() && matches!(s.kind, StyleKind::Text { .. })).collect();
     let mut updates: Vec<(NodeId, Option<StyleId>, TextData)> = Vec::new();
     for id in ids {
         let Some(n) = doc.node(id) else { continue };
         let NodeKind::Text(t) = &n.kind else { continue };
-        // Styles with bound fields read as this layer sees them.
-        let mut defs = std::borrow::Cow::Borrowed(&defs);
-        for st in &varying {
-            if let StyleKind::Text { style, .. } = crate::style_vars::kind_for(doc, st, id).into_owned() {
-                defs.to_mut().insert(st.id.clone(), style);
-            }
-        }
         let mut t2 = t.clone();
-        // A layer linked as a whole whose chars carry no link yet (imported): they link now.
+        // A layer linked as a whole whose chars carry no link yet (imported): they link now, what
+        // they set unlike the style kept as local changes.
         if let Some(sid) = &n.styles.text
             && t2.text_style_link() == Some(None)
-            && let Some(def) = defs.get(sid)
-            && t2.spans().iter().all(|(_, _, s)| s.shows_text_style(def))
             && paras.get(sid.as_str()).is_some_and(|ps| t2.shows_paragraph_style(ps))
         {
             let len = t2.char_count();
             t2.restyle(0, len, |s| s.style_id = Some(sid.clone()));
         }
-        t2.check_text_styles(|sid| defs.get(sid));
+        t2.check_text_styles(|sid| paras.contains_key(sid));
         // Chars whose paragraphs left their style's list, and every char of a layer whose
         // paragraph spacing, indent or features were edited, unlink too (#1829).
         let gone: Vec<(usize, usize)> = t2

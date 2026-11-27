@@ -53,12 +53,14 @@ pub fn set_variable(doc: &mut Document, node: NodeId, variable: &str, value: &Va
         None => literal(kind, value),
     };
     let Some(v) = v else { return false };
+    // What layers showed before, so text chars keep their local changes on top of their styles.
+    let before = doc.clone();
     let Some(slot) = doc.variables.variables.iter_mut().find(|x| x.id == id) else { return false };
     for val in slot.values.values_mut() {
         *val = v.clone();
     }
     apply_bindings(doc);
-    crate::style_vars::refresh(doc, None, None);
+    crate::style_vars::follow_variables(doc, &before);
     true
 }
 
@@ -86,13 +88,14 @@ pub fn set_mode_by_id(doc: &mut Document, frame: NodeId, collection: &str, mode:
         .map(|p| p.children.iter().copied().filter(|t| doc.node(*t).is_some_and(|n| n.var_modes.contains_key(&cid))).collect())
         .unwrap_or_default();
     targets.push(page);
+    let before = doc.clone();
     for id in targets {
         if let Some(n) = doc.node_mut(id) {
             n.var_modes.insert(cid.clone(), mode.clone());
         }
     }
     apply_bindings(doc);
-    crate::style_vars::refresh(doc, None, None);
+    crate::style_vars::follow_variables(doc, &before);
     true
 }
 

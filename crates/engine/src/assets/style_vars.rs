@@ -155,6 +155,19 @@ pub fn kind_for<'a>(doc: &Document, st: &'a Style, id: NodeId) -> Cow<'a, StyleK
     if st.bound.is_empty() { Cow::Borrowed(&st.kind) } else { Cow::Owned(resolved(&doc.variables, st, &doc.modes_for(id))) }
 }
 
+/// What chars `styles` of layer `id` set unlike the text styles they link to, as the layer sees
+/// them: their local changes on top of the styles, by field name.
+pub fn text_style_changes<'a>(doc: &Document, id: NodeId, styles: impl IntoIterator<Item = &'a TextStyle>) -> BTreeSet<&'static str> {
+    let mut out = BTreeSet::new();
+    for s in styles {
+        let Some(st) = s.style_id.as_deref().and_then(|sid| doc.style(sid)) else { continue };
+        if let StyleKind::Text { style, .. } = kind_for(doc, st, id).as_ref() {
+            out.extend(s.text_style_changes(style));
+        }
+    }
+    out
+}
+
 /// Each style with bindings stores its value resolved in the default modes (what pickers, exports
 /// and other software show for it).
 pub fn settle(doc: &mut Document) {
@@ -175,14 +188,27 @@ pub fn settle(doc: &mut Document) {
 /// A document just read from a file: styles with bindings hold their default-mode values and the
 /// layers using them show their own modes' (files give a styled layer the style's stored value).
 pub fn after_load(doc: &mut Document) {
-    settle(doc);
+    // Layers first, while the styles still hold the stored values their chars were written with.
     refresh(doc, None, None);
+    settle(doc);
 }
 
 /// The layers `only` (every layer when `None`) that use styles with bindings show them resolved in
 /// their own modes (only what changed, so unchanged layers stay shared). What an edit since
 /// `before` changed on a layer is left as edited: that unlinks it from the style instead.
 pub fn refresh(doc: &mut Document, before: Option<&Document>, only: Option<&BTreeSet<NodeId>>) {
+    refresh_in(doc, before, before, only);
+}
+
+/// [`refresh`] after variable values or modes changed with no edit to leave alone (a prototype
+/// action): `shown` is the document as layers showed it, whose text chars keep their local changes.
+pub fn follow_variables(doc: &mut Document, shown: &Document) {
+    refresh_in(doc, None, Some(shown), None);
+}
+
+/// [`refresh`], what an edit since `before` changed left as edited, and text chars following
+/// their styles from how they showed them in `shown` (their stored values when `None`).
+fn refresh_in(doc: &mut Document, before: Option<&Document>, shown: Option<&Document>, only: Option<&BTreeSet<NodeId>>) {
     let bound: BTreeSet<&str> = doc.styles.iter().filter(|s| !s.bound.is_empty()).map(|s| s.id.as_str()).collect();
     if bound.is_empty() {
         return;
@@ -226,7 +252,14 @@ pub fn refresh(doc: &mut Document, before: Option<&Document>, only: Option<&BTre
         {
             for st in doc.styles.iter().filter(|s| !s.bound.is_empty()) {
                 if let StyleKind::Text { style, .. } = kind_for(doc, st, id).as_ref() {
-                    t.update_text_style(&st.id, style);
+                    // What the layer showed (else the stored value): what its chars set unlike
+                    // that stays theirs.
+                    let was = shown.and_then(|b| Some(kind_for(b, b.style(&st.id)?, id)));
+                    let old = match was.as_deref().unwrap_or(&st.kind) {
+                        StyleKind::Text { style, .. } => Some(style),
+                        _ => None,
+                    };
+                    t.update_text_style(&st.id, old, style);
                 }
             }
         }

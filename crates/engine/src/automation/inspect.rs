@@ -111,6 +111,7 @@ pub const NODE_KEYS: &[&str] = &[
     "textDecorationThickness",
     "textDirection",
     "textPath",
+    "textStyleChanges",
     "textStyleRanges",
     "type",
     "variableModes",
@@ -205,7 +206,14 @@ fn node_json_in(doc: &Document, id: NodeId, depth: usize, options: &InspectOptio
         insert_prop(o, options, "pluginData", || json!(n.plugin_data));
     }
     match &n.kind {
-        NodeKind::Text(t) => text_props(t, o, options),
+        NodeKind::Text(t) => {
+            text_props(t, o, options);
+            // What linked chars set unlike their text styles (their local changes), by field.
+            let changes = crate::style_vars::text_style_changes(doc, n.id, t.spans().into_iter().map(|(_, _, s)| s));
+            if !changes.is_empty() {
+                insert_prop(o, options, "textStyleChanges", || json!(changes));
+            }
+        }
         _ => kind_props(doc, n, o, options),
     }
     if !n.children.is_empty() {

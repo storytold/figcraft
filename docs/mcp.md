@@ -340,7 +340,9 @@ Or in a project's `.mcp.json`:
   style links chars `start`..`end` (while text is edited, the selected chars; else whole layers), and
   `style.detach {which: "text", start?, end?}` unlinks them (values stay). A layer's `styles.text` is
   the style all its chars share (none when they differ); `get_node` lists the linked chars as
-  `textStyleRanges` (`[start, end, style id]`).
+  `textStyleRanges` (`[start, end, style id]`). Editing linked chars keeps them linked: what they set
+  unlike their style is a local change (`textStyleChanges` on `get_node`: field names such as
+  `fontStyle`, `decoration`), a `style.update` moves the rest, and `style.apply` again resets them.
   A text style also carries paragraph spacing and indent, the list style, the wrap style and the
   OpenType features (`paragraph` beside `style` in `style.list`; a `value` takes `wrapStyle`):
   applying it sets them (on a range, the list and wrap style go to the paragraphs touched; the rest

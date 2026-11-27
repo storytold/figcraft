@@ -462,7 +462,7 @@ fn text_style_updates_merge_equal_runs() {
     t.link_text_style(2, 4, &def, "S");
     t.restyle(2, 4, |s| s.font_size = 24.0);
     assert_eq!(t.runs.len(), 2);
-    t.update_text_style("S", &TextStyle { font_size: 24.0, ..def.clone() });
+    t.update_text_style("S", Some(&def), &TextStyle { font_size: 24.0, ..def.clone() });
     let spans = t.spans();
     assert_eq!(spans.len(), 1);
     assert_eq!((spans[0].0, spans[0].1), (0, 4));

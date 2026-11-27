@@ -348,7 +348,8 @@ pub struct TextStyle {
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub variations: std::collections::BTreeMap<String, f64>,
     /// The text style (shared style id) these chars are linked to. A layer's chars can link to
-    /// different styles; editing what a style sets unlinks the chars edited.
+    /// different styles; what the chars set unlike their style are local changes on top of it
+    /// ([`TextStyle::text_style_changes`]), and the style still sets the rest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_id: Option<String>,
 }
@@ -399,6 +400,16 @@ impl Default for TextStyle {
     }
 }
 
+/// What a text style sets on chars, each with its command field name (fills and hyperlinks stay
+/// the chars' own): `$m!` runs over them.
+macro_rules! text_style_fields {
+    ($m:ident) => {
+        $m!(font_family "fontFamily", font_style "fontStyle", font_size "fontSize", line_height "lineHeight",
+            letter_spacing "letterSpacing", decoration "decoration", decoration_look "decorationLook", case "case",
+            variations "variations")
+    };
+}
+
 /// Axes a style name implies (weight, italic, slant): picking a named style clears their custom values.
 pub const STYLE_AXES: [&str; 3] = ["wght", "ital", "slnt"];
 
@@ -424,15 +435,27 @@ impl TextStyle {
 
     /// Whether these chars show what text style `def` sets.
     pub fn shows_text_style(&self, def: &TextStyle) -> bool {
-        self.font_family == def.font_family
-            && self.font_style == def.font_style
-            && self.font_size == def.font_size
-            && self.line_height == def.line_height
-            && self.letter_spacing == def.letter_spacing
-            && self.decoration == def.decoration
-            && self.decoration_look == def.decoration_look
-            && self.case == def.case
-            && self.variations == def.variations
+        self.text_style_changes(def).is_empty()
+    }
+
+    /// What these chars set unlike text style `def` (their local changes on top of it), by the
+    /// command field names.
+    pub fn text_style_changes(&self, def: &TextStyle) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        macro_rules! diff {
+            ($($f:ident $name:literal),*) => { $( if self.$f != def.$f { out.push($name); } )* };
+        }
+        text_style_fields!(diff);
+        out
+    }
+
+    /// Follow a text style's change from `old` to `new`: what these chars set unlike `old` (a
+    /// local change) stays, the rest takes `new`'s value.
+    pub fn follow_text_style(&mut self, old: &TextStyle, new: &TextStyle) {
+        macro_rules! follow {
+            ($($f:ident $name:literal),*) => { $( if self.$f == old.$f { self.$f.clone_from(&new.$f); } )* };
+        }
+        text_style_fields!(follow);
     }
 
     /// This style as a text style's definition (linked to nothing).
@@ -1100,11 +1123,15 @@ impl TextData {
         std::iter::once(&self.style).chain(self.runs.iter().map(|r| &r.style)).any(|s| s.style_id.as_deref() == Some(id))
     }
 
-    /// Follow text style `id`'s new definition wherever chars link to it.
-    pub fn update_text_style(&mut self, id: &str, def: &TextStyle) {
+    /// Follow text style `id`'s new definition `def` wherever chars link to it. Given the one it
+    /// replaces (`old`), the chars' local changes stay; without it they take all of `def`.
+    pub fn update_text_style(&mut self, id: &str, old: Option<&TextStyle>, def: &TextStyle) {
         self.each_style(|s| {
             if s.style_id.as_deref() == Some(id) {
-                s.take_text_style(def, id);
+                match old {
+                    Some(old) => s.follow_text_style(old, def),
+                    None => s.take_text_style(def, id),
+                }
             }
         });
     }
@@ -1114,10 +1141,11 @@ impl TextData {
         self.each_style(|s| s.style_id = s.style_id.as_deref().and_then(&f));
     }
 
-    /// Unlink chars whose style is gone (`def` gives None) or that no longer show it (edited since).
-    pub fn check_text_styles<'a>(&mut self, def: impl Fn(&str) -> Option<&'a TextStyle>) {
+    /// Unlink chars whose style is gone (`exists` says no); edited chars stay linked, their edits
+    /// local changes on top of the style.
+    pub fn check_text_styles(&mut self, exists: impl Fn(&str) -> bool) {
         self.each_style(|s| {
-            if s.style_id.as_deref().is_some_and(|id| !def(id).is_some_and(|d| s.shows_text_style(d))) {
+            if s.style_id.as_deref().is_some_and(|id| !exists(id)) {
                 s.style_id = None;
             }
         });

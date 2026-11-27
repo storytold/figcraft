@@ -268,6 +268,36 @@ fn text_of(s: &Session, n: NodeId) -> figcraft_doc::TextStyle {
 }
 
 #[test]
+fn a_bold_word_keeps_its_weight_as_a_bound_style_follows_modes() {
+    // #2435: a word bolded on a text whose style binds its size takes each mode's size and stays
+    // bold, in the editor, in a prototype and in a file read back.
+    let mut s = Session::new();
+    let (t1, _, body) = body_style(&mut s, None);
+    run(&mut s, "style.bind", json!({"style": body, "field": "fontSize", "variable": "size"}));
+    run(&mut s, "text.style", json!({"id": t1, "start": 0, "end": 2, "fontStyle": "Bold"}));
+    let shown = |doc: &figcraft_doc::Document| {
+        let t = doc.node(t1).unwrap().kind.text().unwrap();
+        let (a, b) = (t.style_at(0), t.style_at(4));
+        (a.font_size, a.font_style.clone(), b.font_size, b.font_style.clone(), a.style_id.clone())
+    };
+    let light = (16.0, "Bold".to_string(), 16.0, "Regular".to_string(), Some(body.clone()));
+    let dark = (20.0, "Bold".to_string(), 20.0, "Regular".to_string(), Some(body.clone()));
+    assert_eq!(shown(s.doc().unwrap()), light);
+    let frame = node(&s, t1).parent.unwrap();
+    run(&mut s, "variable.setMode", json!({"ids": [frame], "collection": "Theme", "mode": "Dark"}));
+    assert_eq!(shown(s.doc().unwrap()), dark);
+    // A prototype switching the mode back.
+    let mut doc = s.doc().unwrap().clone();
+    assert!(crate::proto_run::set_mode(&mut doc, frame, "Theme", "Light"));
+    assert_eq!(shown(&doc), light);
+    // Saved and read back.
+    let bytes = figcraft_format::save_bytes(s.doc().unwrap(), None).unwrap();
+    let (mut back, _) = figcraft_format::load_bytes(&bytes).unwrap();
+    crate::style_vars::after_load(&mut back);
+    assert_eq!(shown(&back), dark);
+}
+
+#[test]
 fn a_number_weight_picks_the_face_and_the_wght_axis() {
     let mut s = Session::new();
     let (t1, t2, body) = body_style(&mut s, None);

@@ -1,5 +1,5 @@
 //! Text styles on chars (the text style browser's commands): apply to layers, ranges or the
-//! selected chars being edited, edits unlink what they change, style edits follow the links,
+//! selected chars being edited, edits stay linked as local changes, style edits follow the links,
 //! detach, delete, create from selected chars, old files; live previews of styles and axis values.
 
 use figcraft_doc::{NodeId, StyleKind, TextData};
@@ -101,16 +101,16 @@ fn editing_text_applies_to_the_selected_chars() {
 }
 
 #[test]
-fn edits_unlink_and_style_edits_follow() {
+fn edits_stay_linked_and_style_edits_follow() {
     let mut s = new_session();
     let h = heading(&mut s);
     let a = text(&mut s, "One");
     let b = text(&mut s, "Two");
     s.execute("style.apply", &json!({"ids": [a, b], "style": h})).unwrap();
-    // Changing what the style sets detaches the layer (its values stay).
+    // Changing what the style sets keeps the link: the value is a local change on top of it.
     s.execute("node.set", &json!({"ids": [b], "props": {"fontSize": 50}})).unwrap();
-    assert_eq!(layer_link(&s, b), None);
-    assert!(links(&s, b).iter().all(Option::is_none));
+    assert_eq!(layer_link(&s, b).as_deref(), Some(h.as_str()));
+    assert!(links(&s, b).iter().all(|l| l.as_deref() == Some(h.as_str())));
     assert_eq!(layer_link(&s, a).as_deref(), Some(h.as_str()));
     // A colour isn't part of a text style: the link stays.
     s.execute("text.style", &json!({"id": a, "start": 0, "end": 1, "textFills": [{"type": "solid", "color": "#00ff00"}]})).unwrap();
@@ -123,13 +123,99 @@ fn edits_unlink_and_style_edits_follow() {
     def.font_size = 40.0;
     s.execute("style.update", &json!({"style": h, "value": serde_json::to_value(&def).unwrap()})).unwrap();
     assert_eq!(data(&s, a).style_at(2).font_size, 40.0);
-    assert_eq!(data(&s, b).style_at(0).font_size, 50.0);
+    assert_eq!(data(&s, b).style_at(0).font_size, 50.0, "the local change stays");
     assert_eq!(layer_link(&s, a).as_deref(), Some(h.as_str()), "following the style keeps the link");
     // Deleting the style unlinks every char.
     s.execute("style.delete", &json!({"style": h})).unwrap();
     assert!(links(&s, a).iter().all(Option::is_none));
     assert_eq!(layer_link(&s, a), None);
     assert_eq!(data(&s, a).style_at(0).font_size, 40.0, "values stay");
+}
+
+/// A text style "Type/Body" (Inter Regular 14).
+fn body(s: &mut Session) -> String {
+    let v = json!({"type": "text", "name": "Type/Body", "value": {"fontFamily": "Inter", "fontStyle": "Regular", "fontSize": 14}});
+    s.execute("style.create", &v).unwrap()["id"].as_str().unwrap().to_string()
+}
+
+/// What the layer's linked chars set unlike their text styles, as `node.get` lists it.
+fn changes(s: &mut Session, id: NodeId) -> Value {
+    s.execute("node.get", &json!({"id": id})).unwrap().get("textStyleChanges").cloned().unwrap_or(json!([]))
+}
+
+#[test]
+fn a_bold_word_stays_linked_and_follows_style_edits() {
+    // #2435: bolding and underlining some chars of a styled text keeps them on the style; a later
+    // style edit still reaches them, their own changes stay, and re-applying the style resets them.
+    let mut s = new_session();
+    let b = body(&mut s);
+    let t = text(&mut s, "Hello world");
+    s.execute("style.apply", &json!({"ids": [t], "style": b})).unwrap();
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 6})).unwrap();
+    s.execute("text.edit.caret", &json!({"index": 11, "extend": true})).unwrap();
+    s.execute("text.bold", &json!({})).unwrap();
+    s.execute("text.underline", &json!({})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert!(links(&s, t).iter().all(|l| l.as_deref() == Some(b.as_str())), "every char stays linked");
+    assert_eq!(layer_link(&s, t).as_deref(), Some(b.as_str()), "the layer shows the style, not Mixed");
+    assert_eq!(changes(&mut s, t), json!(["decoration", "fontStyle"]));
+    // The style's size and family change: every char takes them, the word stays bold and underlined.
+    let v = json!({"fontFamily": "Roboto", "fontStyle": "Regular", "fontSize": 20});
+    s.execute("style.update", &json!({"style": b, "value": v})).unwrap();
+    let d = data(&s, t);
+    for i in [0, 8] {
+        assert_eq!((d.style_at(i).font_size, d.style_at(i).font_family.as_str()), (20.0, "Roboto"), "char {i}");
+    }
+    assert_eq!((d.style_at(0).font_style.as_str(), d.style_at(0).decoration), ("Regular", figcraft_doc::TextDecoration::None));
+    assert_eq!((d.style_at(8).font_style.as_str(), d.style_at(8).decoration), ("Bold", figcraft_doc::TextDecoration::Underline));
+    assert!(links(&s, t).iter().all(|l| l.as_deref() == Some(b.as_str())), "following the style keeps the links");
+    // The style now sets what the word set itself: the word has nothing of its own left.
+    let v = json!({"fontFamily": "Roboto", "fontStyle": "Bold", "fontSize": 20, "decoration": "underline"});
+    s.execute("style.update", &json!({"style": b, "value": v})).unwrap();
+    assert_eq!(changes(&mut s, t), json!([]));
+    s.execute("edit.undo", &json!({})).unwrap();
+    // Applying the style again resets the word's changes.
+    s.execute("style.apply", &json!({"ids": [t], "style": b, "start": 6, "end": 11})).unwrap();
+    assert_eq!(changes(&mut s, t), json!([]));
+    assert_eq!(data(&s, t).style_at(8).font_style, "Regular");
+    assert!(data(&s, t).runs.is_empty(), "the reset word merges back");
+}
+
+#[test]
+fn a_file_linking_a_layer_keeps_its_chars_own_values_as_changes() {
+    let mut s = new_session();
+    let b = body(&mut s);
+    let t = text(&mut s, "Old");
+    s.execute("style.apply", &json!({"ids": [t], "style": b})).unwrap();
+    // A layer linked as a whole, one char bold of its own and no char link (an import, an old file).
+    let mut doc = s.doc().unwrap().clone();
+    if let figcraft_doc::NodeKind::Text(td) = &mut doc.get_mut(t).unwrap().kind {
+        td.unlink_text_style(0, 3);
+        td.restyle(0, 1, |st| st.set_font_style("Bold"));
+    }
+    let mut s2 = Session::with_document(doc);
+    assert!(links(&s2, t).iter().all(|l| l.as_deref() == Some(b.as_str())));
+    assert_eq!(layer_link(&s2, t).as_deref(), Some(b.as_str()));
+    assert_eq!(changes(&mut s2, t), json!(["fontStyle"]));
+}
+
+#[test]
+fn a_fig_file_keeps_a_bold_word_on_its_style() {
+    let mut s = new_session();
+    let b = body(&mut s);
+    let t = text(&mut s, "Hello world");
+    s.execute("style.apply", &json!({"ids": [t], "style": b})).unwrap();
+    s.execute("text.style", &json!({"id": t, "start": 6, "end": 11, "fontStyle": "Bold"})).unwrap();
+    // The layer is written linked to its style, the word's weight as its own value.
+    let (bytes, _) = figcraft_format::fig::export(s.doc().unwrap(), None).unwrap();
+    let (back, _) = figcraft_format::fig::import(&bytes, "x").unwrap();
+    let mut s2 = Session::with_document(back);
+    let doc = s2.doc().unwrap();
+    let n = doc.nodes().find(|n| n.kind.text().is_some_and(|t| t.characters == "Hello world")).unwrap();
+    let (id, td) = (n.id, n.kind.text().unwrap().clone());
+    assert_eq!(n.styles.text.as_deref().and_then(|sid| doc.style(sid)).map(|st| st.name.as_str()), Some("Type/Body"));
+    assert_eq!((td.style_at(0).font_style.as_str(), td.style_at(8).font_style.as_str()), ("Regular", "Bold"));
+    assert_eq!(changes(&mut s2, id), json!(["fontStyle"]));
 }
 
 #[test]
