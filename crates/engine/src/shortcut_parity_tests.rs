@@ -130,6 +130,7 @@ static ROWS: &[Row] = &[
     pin(Tools, "tool.eraser", &["E"], &[]),
     pin(Tools, "tool.stamp", &["W"], &[]),
     pin(Tools, "board.nextSticky", &["Shift+Cmd+Enter"], &[]),
+    pin(Tools, "board.mindMapAdd", &["Cmd+Enter"], &[]),
     // Vector edit mode
     doc(Selection, "Edit the selected shape's points", &["Enter"], &[], Bound("select.children"), "Enter on a shape edits it; on a frame or group it selects the children"),
     doc(Shape, "Vector edit: move", &["V"], &[], VectorTool(VTool::Move), ""),

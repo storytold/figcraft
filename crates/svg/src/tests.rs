@@ -286,8 +286,8 @@ fn unique_id_is_linear_for_repeated_names() {
         doc: &d,
         roots: &[],
         page: Affine::IDENTITY,
-        defs: String::new(),
-        body: String::new(),
+        defs: SvgWriter::fragment(),
+        body: SvgWriter::fragment(),
         next: 0,
         opts: &opts,
         mask: None,
@@ -461,5 +461,87 @@ fn shared_xml_escaping_keeps_markup_controls_and_attribute_whitespace() {
     assert_eq!(root.attr("label"), Some("A<&\"'\t\n\r🦊"));
     for c in ['\0', '\u{b}', '\u{fffe}', '\u{ffff}'] {
         assert!(!super::xml_char(c));
+    }
+}
+
+#[test]
+fn path_writer_preserves_compact_rounding_and_all_commands() {
+    let mut p = BezPath::new();
+    p.move_to((-0.0, -0.0004));
+    p.line_to((1.2345, -1.2345));
+    p.quad_to((2.0004, 2.0006), (3.0, 4.0));
+    p.curve_to((5.0, 6.0), (7.0, 8.0), (9.0, 10.0));
+    p.close_path();
+    p.move_to((11.0, 12.0));
+    let d = path_d(&p);
+    assert_eq!(d, "M0 0L1.235 -1.235Q2 2.001 3 4C5 6 7 8 9 10ZM11 12");
+    let parsed = BezPath::from_svg(&d).unwrap();
+    assert_eq!(path_d(&parsed), d);
+    assert_eq!(path_d(&BezPath::new()), "");
+}
+
+#[test]
+fn path_writer_preserves_nonfinite_coordinate_policy() {
+    let mut p = BezPath::new();
+    p.move_to((f64::NAN, f64::INFINITY));
+    p.line_to((f64::NEG_INFINITY, -0.000_49));
+    assert_eq!(path_d(&p), "M0 0L0 0");
+}
+
+#[test]
+fn shared_path_writer_matches_legacy_bytes_across_coordinate_boundaries() {
+    use figcraft_geom::kurbo::PathEl::*;
+    use std::fmt::Write as _;
+    // Frozen pre-cutover serializer: byte compatibility, including the legacy finite-overflow
+    // spelling, is separate from changing Fig's coordinate validity policy.
+    fn legacy(p: &BezPath) -> String {
+        let mut s = String::new();
+        for el in p.elements() {
+            match *el {
+                MoveTo(a) => {
+                    let _ = write!(s, "M{} {}", num(a.x), num(a.y));
+                }
+                LineTo(a) => {
+                    let _ = write!(s, "L{} {}", num(a.x), num(a.y));
+                }
+                QuadTo(a, b) => {
+                    let _ = write!(s, "Q{} {} {} {}", num(a.x), num(a.y), num(b.x), num(b.y));
+                }
+                CurveTo(a, b, c) => {
+                    let _ = write!(s, "C{} {} {} {} {} {}", num(a.x), num(a.y), num(b.x), num(b.y), num(c.x), num(c.y));
+                }
+                ClosePath => s.push('Z'),
+            }
+        }
+        s
+    }
+    let values = [
+        0.0,
+        -0.0,
+        0.00049,
+        -0.00049,
+        0.0005,
+        -0.0005,
+        1.2345,
+        -1.2345,
+        1e-30,
+        -1e20,
+        f64::MAX,
+        f64::MIN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    for a in values {
+        for b in values {
+            let mut p = BezPath::new();
+            p.move_to((a, b));
+            p.line_to((b, a));
+            p.quad_to((a, b), (b, a));
+            p.curve_to((b, a), (a, b), (b, a));
+            p.close_path();
+            p.move_to((b, a));
+            assert_eq!(path_d(&p), legacy(&p));
+        }
     }
 }
