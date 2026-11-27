@@ -481,11 +481,21 @@ pub fn connect_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId
             edit = Some(("name", v));
         }
     });
+    widgets::sublabels(ui, tr("Source file"), None);
+    row(ui, 32.0, |ui| {
+        let width = ui.available_width() - 2.0 * PAD;
+        if let Some(v) =
+            widgets::text_field(ui, Id::unique(("code_connect_source", owner, lang.id())), &link.source, width, "src/components/button.tsx")
+        {
+            edit = Some(("source", v));
+        }
+    });
     widgets::sublabels(ui, tr("Template"), None);
     if let Some(v) = widgets::multiline_field(ui, template_id(owner, lang), &link.template, "<Button size={size}>{label}</Button>", 3) {
         edit = Some(("template", v));
     }
     widgets::note(ui, tr("{property} is its value; {property ? \"a\" : \"b\"} picks a string. Other {…} stays as written."), t.text_secondary);
+    variant_values(app, ui, doc, owner, lang, &link);
     if let Some((key, value)) = edit {
         let mut params = params;
         params[key] = json!(value);
@@ -497,6 +507,44 @@ pub fn connect_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId
         }
     }
     ui.add_space(4.0);
+}
+
+/// The variant values of a connected component and what code calls them: a value left empty
+/// stays as the design names it.
+fn variant_values(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId, lang: CodeLang, link: &CodeLink) {
+    let properties = code_connect::variants(doc, owner);
+    if properties.is_empty() {
+        return;
+    }
+    let mut change: Option<(String, String, String)> = None;
+    widgets::sublabels(ui, tr("Variant value"), Some(tr("In code")));
+    let col = widgets::col_width(ui.available_width());
+    for (property, options) in &properties {
+        for option in options {
+            let current = link.values.get(property).and_then(|m| m.get(option)).map_or("", String::as_str);
+            row(ui, 32.0, |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.allocate_ui_with_layout(vec2(col, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_min_width(col);
+                    ui.add(egui::Label::new(format!("{property}: {option}")).truncate());
+                });
+                if let Some(v) = widgets::text_field(ui, Id::unique(("code_connect_value", owner, lang.id(), property, option)), current, col, option)
+                {
+                    change = Some((property.clone(), option.clone(), v));
+                }
+            });
+        }
+    }
+    let Some((property, option, value)) = change else { return };
+    let mut values = link.values.clone();
+    let mapped = values.entry(property).or_default();
+    if value.trim().is_empty() {
+        mapped.remove(&option);
+    } else {
+        mapped.insert(option, value.trim().to_string());
+    }
+    values.retain(|_, m| !m.is_empty());
+    app.run("codeConnect.set", json!({"id": owner, "language": lang.id(), "values": values}));
 }
 
 /// Screen sizes for a frame: which version of a design it is, and rules for other sizes. What's

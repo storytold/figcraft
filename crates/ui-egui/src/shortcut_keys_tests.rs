@@ -2,8 +2,8 @@
 //! headless: arrows pan with nothing selected, the keyboard box selection key and Cmd/Ctrl+arrows
 //! drawing it out, list indentation while editing text, symbols another keyboard layout types with
 //! Shift, the presentation keys (Space and N forward, C comments, F full screen), Alt+R for the
-//! rotation origin, Enter placing a shape with its tool chosen and Cmd/Ctrl+= and - zooming the
-//! canvas, not the interface.
+//! rotation origin, Enter placing a shape with its tool chosen, Cmd/Ctrl+= and - zooming the
+//! canvas, not the interface, and Shift+Cmd/Ctrl+' saying whether it snaps to the pixel grid.
 
 use egui::{Event, Key, Modifiers, ViewportCommand, ViewportId};
 use figcraft_doc::NodeId;
@@ -298,4 +298,17 @@ fn cmd_alt_arrows_rotate_a_degree_and_fifteen_with_shift() {
     press(&mut u, Key::ArrowDown, cmd() | Modifiers::ALT);
     assert!((rot(&u) - rot_before).abs() < 1e-6, "no turn while editing points");
     u.app.run("vector.edit.end", json!({}));
+}
+
+#[test]
+fn shift_cmd_quote_says_whether_snapping_to_the_pixel_grid_is_on() {
+    let mut u = Ui::new(Session::new());
+    let toast = |u: &Ui| u.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let snap = |u: &Ui| u.app.session.ds().unwrap().view.snap_pixel;
+    press(&mut u, Key::Quote, cmd() | Modifiers::SHIFT);
+    assert!(!snap(&u));
+    assert_eq!(toast(&u), "Snap to pixel grid off");
+    press(&mut u, Key::Quote, cmd() | Modifiers::SHIFT);
+    assert!(snap(&u));
+    assert_eq!(toast(&u), "Snap to pixel grid on");
 }

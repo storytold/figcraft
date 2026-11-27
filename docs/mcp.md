@@ -410,6 +410,8 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
 | `export_assets {ids?, dir?, dryRun?}` | Write the selection's images and vectors into `dir` as files named by their content: see [Asset handoff](#asset-handoff). |
+| `component_mappings {ids?, unmapped?, root?}` | Which code component each design component is: `import`, `name`, `source` (and `sourceFound` under `root`, default the server's folder), a ready `snippet`, `properties` with variants, and `values` that need translating. |
+| `sync_mappings {direction, path?}` | Apply a code repository's `figcraft.connect.json` to the open design (`import`) or write the design's mappings to it (`export`); `path` defaults to that file in the server's folder. |
 | `select {ids}` | Replace the selection (`[]` deselects). |
 | `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (PNG: `sRGB` chunk, or ICC and `cICP` for Display P3; JPG: ICC profile; WebP: ICC profile for Display P3, none for sRGB) (SVG, XML and RGB PDF output are always sRGB; PDF with `cmyk` is DeviceCMYK). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
@@ -450,7 +452,7 @@ Each layer in `nodes` has `id`, `name`, `type` and:
   with the `name` of each. `explicit` holds the value they resolved to.
 - `unsupported`: `{property, why}` for what has no direct CSS equivalent. The value stays in `explicit`.
 - `code`: for a component or instance connected to code, per language, `{language, importPath, name,
-  code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
+  source?, notes?, code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
   says what it holds, and `get_node` reads it.
 - `children`, or `childCount` where the tree stops.
 
@@ -1887,11 +1889,20 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   `@acme/ui` gives `import { Button } from "@acme/ui";` then `<Button variant="primary" icon="none">{"Buy
   now"}</Button>`. `codeConnect.remove {id?, language?}` (no language: all). `codeConnect.export
   {path?}` → `{text, links}` (or writes the file): `{version: 1, links: [{component, language,
-  importPath, name, template}]}`, sorted, meant to live in the code repository as
-  `figcraft.connect.json`; `codeConnect.import {json | path}` → `{linked, warnings}` links each
+  importPath, name, template, source?, values?, notes?}]}`, sorted, meant to live in the code
+  repository as `figcraft.connect.json` (writing a file that's there keeps its other top-level keys
+  and the links of components this design doesn't have, so several designs can share one file; a
+  file there that isn't a connect file it can read is left alone and the export refused); `codeConnect.import {json | path}` → `{linked, warnings}` links each
   entry to every component or set with that name (one undo step; at most 5,000 links and 4 MB;
-  templates up to 4,000 characters, names 100, import paths 300; invalid entries are skipped with a
-  warning). `get_node` lists a component's links as `codeLinks`. In the app, the Inspect tab's
+  templates up to 4,000 characters, names 100, import paths 300; invalid entries, a malformed `values`
+  among them, are skipped with a warning). A link can also say where the code component lives (`source`, a path inside the
+  repository), what a property's design values are called in code (`values`:
+  `{"Variant": {"Primary": "primary"}}`, so `{Variant}` renders `primary`; a value without an entry
+  keeps its design name; `{Variant ? "a" : "b"}` still reads the design's value) and `notes`, through `codeConnect.set`, the file and the Inspect tab.
+  `codeConnect.list {ids?, unmapped?, root?}` → `{components: [{id, name, type, mapped, properties,
+  links: [{language, importPath, import, name, template, snippet, source?, sourceFound?, values?,
+  notes?}]}], mapped, unmapped}` answers which code component each design component is; with `root`
+  it says whether each `source` exists there. `get_node` lists a component's links as `codeLinks`. In the app, the Inspect tab's
   Connect to code section edits them in the Code section's language, with a live preview and a
   Connected badge. An editor extension isn't needed: agents and editors read the same snippets
   through this server. Plugins whose manifest asks only for `read` also run from the Inspect tab,

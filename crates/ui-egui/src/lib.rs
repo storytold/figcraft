@@ -232,6 +232,8 @@ mod pen_mode_tests;
 #[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
+mod pixel_grid_tests;
+#[cfg(test)]
 mod plugin_panel_tests;
 #[cfg(test)]
 mod plugin_save_ui_tests;
