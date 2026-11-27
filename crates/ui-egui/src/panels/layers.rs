@@ -617,12 +617,22 @@ fn hides_children(n: &figcraft_doc::Node, dimmed: bool) -> bool {
     dimmed || !n.visible || n.hides_contents()
 }
 
+fn vertical_flow(n: &figcraft_doc::Node) -> bool {
+    n.layout.as_ref().is_some_and(|layout| layout.mode == figcraft_doc::LayoutMode::Vertical)
+}
+
+/// Follow a vertical flow from top to bottom; elsewhere start at the top of the stacking order.
+fn panel_children(n: &figcraft_doc::Node) -> impl Iterator<Item = &NodeId> {
+    let mut children = n.children.iter();
+    let forward = vertical_flow(n);
+    std::iter::from_fn(move || if forward { children.next() } else { children.next_back() })
+}
+
 fn collect(doc: &Document, id: NodeId, depth: usize, dimmed: bool, locked: bool, expanded: &BTreeSet<NodeId>, out: &mut Vec<Row>) {
     let Some(n) = doc.node(id) else { return };
     let dim_kids = !n.is_page() && hides_children(n, dimmed);
     let lock_kids = locked || n.locked;
-    // Layers panel lists top of the stack first.
-    for c in n.children.iter().rev() {
+    for c in panel_children(n) {
         let Some(cn) = doc.node(*c) else { continue };
         let has_kids = !cn.children.is_empty() || matches!(cn.kind, NodeKind::BooleanOp { .. });
         out.push(Row { id: *c, depth, has_kids, dimmed: dim_kids, locked_above: lock_kids });
@@ -632,10 +642,10 @@ fn collect(doc: &Document, id: NodeId, depth: usize, dimmed: bool, locked: bool,
     }
 }
 
-/// Layers whose name contains `q` (lowercase), top of the stack first, as a flat list.
+/// Layers whose name contains `q` (lowercase), in panel order as a flat list.
 fn matching(doc: &Document, id: NodeId, q: &str, out: &mut Vec<Row>) {
     let Some(n) = doc.node(id) else { return };
-    for c in n.children.iter().rev() {
+    for c in panel_children(n) {
         let Some(cn) = doc.node(*c) else { continue };
         let name = if cn.name.is_empty() { cn.kind.label() } else { cn.name.as_str() };
         if name.to_lowercase().contains(q) {
@@ -984,26 +994,29 @@ fn select_clicked(app: &mut FigApp, rows: &[Row], sel: &[NodeId], id: NodeId, m:
 
 /// Drops `moving` on `target` (`zone`: 0 into it, -1 above, 1 below), unless Dev Mode refuses
 /// (a drag started in the design can end after a switch to it).
-fn drop_layers(app: &mut FigApp, doc: &Document, moving: &[NodeId], target: NodeId, zone: i8) {
+fn drop_layers(app: &mut FigApp, doc: &Document, rows: &[Row], moving: &[NodeId], target: NodeId, zone: i8) {
     if crate::menus::dev_mode_refuses(app, "node.reparent") {
         return;
     }
-    let ids = moving.to_vec();
-    match zone {
-        0 => {
-            app.run("node.reparent", json!({"ids": ids, "parent": target}));
-        }
-        z => {
-            // Above in the list = higher z = after the target among siblings.
-            if let Some(parent) = doc.node(target).and_then(|n| n.parent) {
-                let idx = doc.index_in_parent(target).unwrap_or(0);
-                let gap = if z < 0 { idx + 1 } else { idx };
-                // `index` is the final position: the dragged layers below the gap leave it.
-                let below = doc.node(parent).map_or(0, |p| p.children.iter().take(gap).filter(|c| ids.contains(c)).count());
-                app.run("node.reparent", json!({"ids": ids, "parent": parent, "index": gap - below}));
-            }
-        }
+    let parent = if zone == 0 { Some(target) } else { doc.node(target).and_then(|n| n.parent) };
+    let Some(parent) = parent.and_then(|id| doc.node(id)) else { return };
+    let forward = vertical_flow(parent);
+    let mut pending: BTreeSet<_> = moving.iter().copied().collect();
+    let index = (zone != 0).then(|| {
+        let idx = doc.index_in_parent(target).unwrap_or(0);
+        // Above means before the target in a vertical flow, after it in a stack.
+        let gap = if (zone < 0) != forward { idx + 1 } else { idx };
+        // `index` is the final position: the dragged layers below the gap leave it.
+        let below = parent.children.iter().take(gap).filter(|c| pending.contains(c)).count();
+        gap - below
+    });
+    // Keep the displayed order of the moved rows. A selection can include a layer outside
+    // the current list (for example, under a collapsed row); include it after the listed rows.
+    let mut ids: Vec<_> = rows.iter().map(|row| row.id).chain(moving.iter().copied()).filter(|id| pending.remove(id)).collect();
+    if !forward {
+        ids.reverse();
     }
+    app.run("layers.reparent", json!({"ids": ids, "parent": parent.id, "index": index}));
 }
 
 /// The eye and padlock's span on a row (`rr`, the row inset 8 pt from each side) wider than the view:
@@ -1447,7 +1460,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             d.remove::<(NodeId, f64)>(Id::unique("layer_drag_hold"));
         });
         if let (Some(_), Some((target, zone))) = (dragging, drop) {
-            drop_layers(app, &doc, &moving, target, zone);
+            drop_layers(app, &doc, &rows, &moving, target, zone);
         }
     }
     if let Ok(ds) = app.session.ds_mut() {

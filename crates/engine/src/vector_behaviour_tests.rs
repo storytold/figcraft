@@ -701,6 +701,31 @@ fn deleting_points_vs_delete_and_heal() {
 }
 
 #[test]
+fn deleting_a_point_selects_the_next_one_on_its_path() {
+    let mut s = Session::new();
+    let id = id_of(&ex(&mut s, "vector.create", json!({"path": "M0 0 L100 0 L200 0 L300 0"}))["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    let selected = |s: &Session| editing(s).unwrap().vertices.iter().map(|v| page_pos(s, id, *v)).collect::<Vec<_>>();
+    let second = point_at(&s, id, (100.0, 0.0));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [second]}));
+    key(&mut s, "Delete", true);
+    assert_eq!(selected(&s), [Point::new(200.0, 0.0)], "the point after the deleted one");
+    key(&mut s, "Delete", true);
+    assert_eq!(selected(&s), [Point::new(300.0, 0.0)], "so Delete again walks along the path");
+    key(&mut s, "Delete", true);
+    assert_eq!(selected(&s), [Point::new(0.0, 0.0)], "past the path's end, the point before it");
+
+    let mut s = Session::new();
+    let id = square(&mut s, true);
+    let tr = point_at(&s, id, (100.0, 0.0));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [tr]}));
+    key(&mut s, "Delete", false);
+    let after = selected(&s);
+    assert_eq!(after.len(), 1, "one point selected after a plain Delete: {after:?}");
+    assert!([Point::new(100.0, 100.0), Point::new(0.0, 0.0)].contains(&after[0]), "a neighbour of the deleted corner: {after:?}");
+}
+
+#[test]
 fn handles_follow_their_mirroring() {
     // A smooth middle point at (100, 0) on an open path; one handle is dragged to (+30, 10).
     // (mode, the other handle afterwards, derivation)
