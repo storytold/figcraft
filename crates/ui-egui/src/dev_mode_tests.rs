@@ -279,14 +279,6 @@ fn a_typed_rule_stays_when_the_field_loses_focus() {
     assert_eq!(draft.as_deref(), Some("Cards stack"));
 }
 
-#[test]
-fn the_group_field_belongs_to_its_document() {
-    let (mut u, f, _) = setup();
-    let here = crate::dev_mode::group_field(&u.app, f);
-    u.run("file.new", json!({}));
-    assert_ne!(crate::dev_mode::group_field(&u.app, f), here, "another document's layer with the same id has its own field");
-}
-
 /// `n` frames with no input.
 fn idle(u: &mut crate::layers_drag_tests::Ui, n: usize) {
     for _ in 0..n {
@@ -301,6 +293,26 @@ fn marked_frame(u: &mut crate::layers_drag_tests::Ui, name: &str) -> NodeId {
     u.app.run("select.set", json!({"ids": [f]}));
     idle(u, 3);
     f
+}
+
+#[test]
+fn an_unfinished_group_edit_stays_with_its_document() {
+    let mut u = crate::layers_drag_tests::Ui::new(Session::new());
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    u.ctx.enable_accesskit();
+    let a = marked_frame(&mut u, "Home");
+    let field = tree(&mut u).into_iter().find(|n| n.label() == Some("Design it's a version of")).expect("the group field");
+    click(&mut u, centre(&field));
+    u.frame(vec![Event::Text("Alpha".into())]);
+    // Left unfinished: another document opens, with a layer of the same id.
+    u.app.run("file.new", json!({}));
+    let b = marked_frame(&mut u, "Pricing");
+    assert_eq!(a, b, "the same layer id in both documents");
+    let enter = |pressed| Event::Key { key: Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+    u.frame(vec![enter(true), enter(false)]);
+    idle(&mut u, 2);
+    let group = u.app.session.doc().unwrap().node(b).unwrap().plugin_data.get("figcraft.viewportGroup").cloned();
+    assert_ne!(group.as_deref(), Some("Alpha"), "the other document's edit didn't land here");
 }
 
 #[test]
