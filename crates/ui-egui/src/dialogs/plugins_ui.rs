@@ -606,9 +606,10 @@ fn form_window(app: &mut FigApp, ctx: &Context) {
 /// Parameters or panel controls in two columns (label, field); buttons in a row share one line,
 /// the first button filled. Returns what the user did to which control.
 fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Value>, t: &Tokens) -> Vec<Used> {
-    // In order: a tap's press and release share a frame, so a field that loses the keyboard
-    // commits in the same frame as the button that took it.
+    // A tap can commit a field and press a button in one frame. Apply the field change before
+    // delivering the button event, regardless of the controls' visual order.
     let mut used = Vec::new();
+    let mut button_hits = Vec::new();
     let mut first_button = true;
     egui::Grid::new(("plugin_controls", salt)).num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         for row in params.chunk_by(|a, b| a.kind == ParamKind::Button && b.kind == ParamKind::Button) {
@@ -635,11 +636,14 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
                     None
                 }
                 ParamKind::Button => {
-                    ui.horizontal(|ui| {
-                        let pressed = row.iter().filter(|b| widgets::button(ui, b.title(), std::mem::take(&mut first_button), true).clicked());
-                        pressed.last().map(|b| Used::Set(b.name.clone(), Value::Null))
-                    })
-                    .inner
+                    let button = ui
+                        .horizontal(|ui| {
+                            let pressed = row.iter().filter(|b| widgets::button(ui, b.title(), std::mem::take(&mut first_button), true).clicked());
+                            pressed.last().map(|b| Used::Set(b.name.clone(), Value::Null))
+                        })
+                        .inner;
+                    button_hits.extend(button);
+                    None
                 }
                 _ => {
                     let current = values.get(&p.name).cloned().unwrap_or_else(|| p.default_value());
@@ -650,6 +654,7 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
             ui.end_row();
         }
     });
+    used.extend(button_hits);
     used
 }
 
