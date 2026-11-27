@@ -471,3 +471,26 @@ fn joining_takes_a_code_of_either_kind_or_a_link() {
     assert_eq!((&r["status"], &r["reason"]), (&json!("failed"), &json!("No session with that code")));
     assert_eq!(s.message.as_deref(), Some("No session with that code"));
 }
+
+/// A file whose review settings are past this build's limits is not shared, hosted or published:
+/// joining clients apply arriving values against the limits they were built with, so a file
+/// written by a looser build would break them. Nothing reaches the link; the error names the
+/// lists and the way out.
+#[test]
+fn a_file_past_the_review_limits_is_not_shared() {
+    use figcraft_doc::{DesignReview, MAX_RADII};
+
+    let mut s = Session::new();
+    s.doc_mut().unwrap().design_review = DesignReview { radii: (0..MAX_RADII + 1).map(|i| i as f64).collect(), ..Default::default() };
+    for (cmd, p) in [
+        ("collab.host", json!({})),
+        ("collab.share", json!({"via": "local"})),
+        ("collab.share", json!({"via": "online", "server": "wss://s.example/"})),
+        ("collab.publish", json!({"server": "wss://s.example/"})),
+    ] {
+        let e = err(&mut s, cmd, p);
+        assert!(e.contains("can't be shared"), "{cmd}: {e}");
+        assert!(e.contains(&format!("{} corner radii (this build keeps at most {MAX_RADII})", MAX_RADII + 1)), "{cmd}: {e}");
+        assert!(e.contains("design.configure"), "{cmd}: {e}");
+    }
+}
