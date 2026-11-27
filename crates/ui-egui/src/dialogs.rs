@@ -348,13 +348,17 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                 let selected = langs().find(|(code, _)| on(code)).map_or(tr("System"), |(_, name)| name);
                 let resp = crate::widgets::dropdown(ui, selected, 220.0, None);
                 let mut pick = None;
-                crate::right::menu_popup(&resp).show(|ui| {
-                    for (code, name) in langs() {
-                        if crate::right::menu_check(ui, on(code), name, "") {
-                            pick = Some(code);
-                            ui.close();
+                // Vertical-only fallback: keep the menu anchored to the dropdown's start edge.
+                let alt = if ui.style().right_to_left { &[egui::RectAlign::TOP_END] } else { &[egui::RectAlign::TOP_START] };
+                crate::right::menu_popup(&resp).align_alternatives(alt).show(|ui| {
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for (code, name) in langs() {
+                            if crate::right::menu_check(ui, on(code), name, "") {
+                                pick = Some(code);
+                                ui.close();
+                            }
                         }
-                    }
+                    });
                 });
                 if let Some(code) = pick {
                     app.run("pref.language", json!({"language": code}));

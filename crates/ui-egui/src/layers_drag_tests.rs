@@ -135,6 +135,97 @@ fn setup() -> (Ui, NodeId, NodeId, NodeId) {
 }
 
 #[test]
+fn vertical_auto_layout_layers_follow_the_canvas_before_and_after_a_drop() {
+    let mut s = Session::new();
+    let frame = id(s.execute("node.create", &json!({"type": "frame", "width": 180, "height": 160, "props": {"layout": "vertical"}})).unwrap());
+    let rect = |s: &mut Session, name: &str| {
+        id(s.execute("node.create", &json!({"type": "rectangle", "parent": frame, "width": 80, "height": 30, "name": name})).unwrap())
+    };
+    let first = rect(&mut s, "First");
+    let second = rect(&mut s, "Second");
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.insert(frame);
+    let canvas_top = |u: &Ui, id: NodeId| u.app.session.doc().unwrap().world_bounds(id).unwrap().y0;
+    assert!(canvas_top(&u, first) < canvas_top(&u, second));
+    let (top, bottom) = (u.row_at(first), u.row_at(second));
+    assert!(top.y < bottom.y, "the Layers panel follows the vertical flow");
+
+    let above_first = top - vec2(0.0, 4.0);
+    u.drag_to(bottom, above_first);
+    u.button(above_first, false);
+    assert!(canvas_top(&u, second) < canvas_top(&u, first), "dropping above moves it up on the canvas");
+    assert!(u.row_at(second).y < u.row_at(first).y, "the Layers order follows the drop");
+
+    u.app.run("select.set", json!({"ids": [second]}));
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let press = |u: &mut Ui, key| {
+        u.frame(
+            [true, false]
+                .into_iter()
+                .map(|pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Default::default() })
+                .collect(),
+        );
+    };
+    for _ in 0..4 {
+        press(&mut u, egui::Key::F6);
+        if u.app.ui.nav.region == crate::a11y::Region::Layers {
+            break;
+        }
+    }
+    assert_eq!(u.app.ui.nav.region, crate::a11y::Region::Layers);
+    press(&mut u, egui::Key::ArrowDown);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), vec![first]);
+    assert_eq!(crate::a11y::focused_name(&u.ctx), "First");
+}
+
+#[test]
+fn grouped_drop_between_vertical_and_stacked_rows_keeps_the_visible_order() {
+    for source_vertical in [true, false] {
+        let mut s = Session::new();
+        let container = |s: &mut Session, x, vertical| {
+            let props = if vertical { json!({"layout": "vertical"}) } else { json!({}) };
+            id(s.execute("node.create", &json!({"type": "frame", "x": x, "width": 180, "height": 160, "props": props})).unwrap())
+        };
+        let source = container(&mut s, 0, source_vertical);
+        let target = container(&mut s, 240, !source_vertical);
+        let rect = |s: &mut Session, parent, name| {
+            id(s.execute("node.create", &json!({"type": "rectangle", "parent": parent, "width": 80, "height": 30, "name": name})).unwrap())
+        };
+        let (a, b) = if source_vertical {
+            (rect(&mut s, source, "A"), rect(&mut s, source, "B"))
+        } else {
+            let b = rect(&mut s, source, "B");
+            (rect(&mut s, source, "A"), b)
+        };
+        let c = rect(&mut s, target, "C");
+        s.execute("select.set", &json!({"ids": [b, a]})).unwrap();
+        let mut u = Ui::new(s);
+        u.app.ui.expanded.extend([source, target]);
+        let top = u.row_at(a);
+        assert!(top.y < u.row_at(b).y);
+        let above_c = u.row_at(c) - vec2(0.0, 4.0);
+        u.drag_to(top, above_c);
+        u.button(above_c, false);
+
+        let (a_row, b_row, c_row) = (u.row_at(a), u.row_at(b), u.row_at(c));
+        assert!(a_row.y < b_row.y && b_row.y < c_row.y, "A, B, C in the destination (source vertical: {source_vertical})");
+        let doc = u.app.session.doc().unwrap();
+        assert!(doc.node(source).unwrap().children.is_empty());
+        let want = if source_vertical { vec![c, b, a] } else { vec![a, b, c] };
+        assert_eq!(doc.node(target).unwrap().children, want);
+
+        u.app.run("edit.undo", json!({}));
+        let doc = u.app.session.doc().unwrap();
+        assert_eq!(doc.node(a).unwrap().parent, Some(source));
+        assert_eq!(doc.node(b).unwrap().parent, Some(source));
+        assert_eq!(doc.node(target).unwrap().children, vec![c]);
+    }
+}
+
+#[test]
 fn holding_over_a_collapsed_frame_opens_it_and_dropping_moves_the_layer_in() {
     let (mut u, frame, child, rect) = setup();
     let (r, f) = (u.row_at(rect), u.row_at(frame));

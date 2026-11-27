@@ -181,12 +181,23 @@ fn lit_row(
     // These menus sit on the theme's popup fill (white in the light theme), not on the dark
     // `t.menu` of the menu bar: the theme's text, white only on the green highlight (#972).
     let col = if hovered { t.menu_text } else { t.text };
-    ui.painter().galley(pos2(r.min.x + MENU_PAD + lead, r.center().y - text.size().y / 2.0), text, col);
-    if let Some(k) = keys {
-        let at = pos2(r.max.x - MENU_PAD - k.size().x, r.center().y - k.size().y / 2.0);
-        ui.painter().galley(at, k, if hovered { t.menu_text } else { t.text_secondary });
+    let rtl = crate::widgets::rtl(ui);
+    if rtl {
+        ui.painter().galley(pos2(r.max.x - MENU_PAD - lead - text.size().x, r.center().y - text.size().y / 2.0), text, col);
+        if let Some(k) = keys {
+            let at = pos2(r.min.x + MENU_PAD, r.center().y - k.size().y / 2.0);
+            ui.painter().galley(at, k, if hovered { t.menu_text } else { t.text_secondary });
+        }
+    } else {
+        ui.painter().galley(pos2(r.min.x + MENU_PAD + lead, r.center().y - text.size().y / 2.0), text, col);
+        if let Some(k) = keys {
+            let at = pos2(r.max.x - MENU_PAD - k.size().x, r.center().y - k.size().y / 2.0);
+            ui.painter().galley(at, k, if hovered { t.menu_text } else { t.text_secondary });
+        }
     }
-    art(ui.painter(), r, col);
+    // In RTL, anchor right-aligned trailing artwork near the reading end (left) so it stays opposite the label.
+    let art_r = if rtl && art_w > 0.0 { Rect::from_min_max(r.min, pos2((r.min.x + art_w + MENU_PAD).min(r.max.x), r.max.y)) } else { r };
+    art(ui.painter(), art_r, col);
     resp
 }
 
@@ -261,16 +272,54 @@ const CHECK_COL: f32 = 14.0;
 /// `Some(true)`) is drawn in its own column ahead of the icon, so a checked entry's label does
 /// not move against the unchecked ones.
 pub fn menu_icon_item(ui: &mut Ui, icon: Option<crate::icons::Icon>, on: Option<bool>, label: &str, shortcut: &str) -> bool {
+    let rtl = crate::widgets::rtl(ui);
     let paint = |p: &egui::Painter, r: Rect, col: Color32| {
         if on == Some(true) {
             let mark = p.layout_no_wrap("✓".to_owned(), regular(11.5), col);
-            p.galley(pos2(r.min.x + MENU_PAD, r.center().y - mark.size().y / 2.0), mark, col);
+            let x = if rtl { r.max.x - MENU_PAD - mark.size().x } else { r.min.x + MENU_PAD };
+            p.galley(pos2(x, r.center().y - mark.size().y / 2.0), mark, col);
         }
         if let Some(icon) = icon {
-            crate::icons::paint(p, Rect::from_min_size(pos2(r.min.x + MENU_PAD + CHECK_COL, r.center().y - 8.0), vec2(16.0, 16.0)), icon, col);
+            let x = if rtl { r.max.x - MENU_PAD - CHECK_COL - 16.0 } else { r.min.x + MENU_PAD + CHECK_COL };
+            crate::icons::paint(p, Rect::from_min_size(pos2(x, r.center().y - 8.0), vec2(16.0, 16.0)), icon, col);
         }
     };
     let resp = lit_row(ui, label, shortcut, 0.0, CHECK_COL + 22.0, paint, false);
     a11y::menu_item(&resp, label, shortcut, on);
     resp.clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtl_lit_row_places_art_opposite_label() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = true);
+        let mut art_rect = None;
+        ctx.run_ui(Default::default(), |ui| {
+            egui::Area::new(egui::Id::unique("menu-rtl-test")).fixed_pos(pos2(0.0, 0.0)).show(ui.ctx(), |ui| {
+                ui.set_width(220.0);
+                let _ = lit_row(
+                    ui,
+                    "קצוות עגולים",
+                    "",
+                    64.0,
+                    0.0,
+                    |_pt, r, _| {
+                        art_rect = Some(r);
+                    },
+                    false,
+                );
+            });
+        })
+        .textures_delta
+        .clear();
+        let art_r = art_rect.expect("art invoked");
+        // Artwork paints relative to art_r.max.x in [art_r.max.x - 64.0, art_r.max.x],
+        // so its right edge stays on the left side while the RTL label sits at r.max.x - MENU_PAD.
+        assert!((art_r.max.x - (art_r.min.x + 64.0 + MENU_PAD)).abs() < 0.01, "art_r={art_r:?}");
+        assert!(art_r.max.x < 100.0, "expected trailing left placement, got {art_r:?}");
+    }
 }
