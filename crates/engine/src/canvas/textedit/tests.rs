@@ -569,3 +569,52 @@ fn an_empty_ime_commit_ends_the_composition_without_inserting_text() {
     end(&mut s).unwrap();
     assert_eq!(insert_ime_commit(&mut s, "").unwrap(), ImeInsertion::Nothing);
 }
+
+#[test]
+fn rich_text_pastes_its_runs_and_drops_a_link_to_a_style_this_file_lacks() {
+    let (mut s, id) = setup("ab");
+    begin(&mut s, id, Some(2), false).unwrap();
+    let mut bold = data(&s, id).style.clone();
+    bold.font_style = "Bold".into();
+    bold.style_id = Some("from another file".into());
+    let plain = data(&s, id).style.clone();
+    insert_rich(&mut s, &RichText { text: "XY".into(), spans: vec![(0, 1, bold), (1, 2, plain)], images: Default::default() }).unwrap();
+    let t = data(&s, id);
+    assert_eq!(t.characters, "abXY");
+    assert_eq!(t.style_at(2).font_style, "Bold");
+    assert_eq!(t.style_at(2).style_id, None, "a link to a style this file doesn't have");
+    assert_eq!(t.style_at(3).font_style, "Regular");
+    assert_eq!(sel(&s), (4, 4));
+    set_caret(&mut s, 2, false).unwrap();
+    set_caret(&mut s, 4, true).unwrap();
+    let copied = selected_rich_text(&s).unwrap();
+    assert_eq!(copied.text, "XY");
+    assert_eq!(copied.spans.iter().map(|(a, b, st)| (*a, *b, st.font_style.as_str())).collect::<Vec<_>>(), [(0, 1, "Bold"), (1, 2, "Regular")]);
+}
+
+#[test]
+fn copied_characters_bring_the_image_their_fill_uses_into_another_file() {
+    let (mut source, id) = setup("ab");
+    let data = figcraft_doc::ImageData { bytes: std::sync::Arc::new(vec![1, 2, 3]), width: 2, height: 2 };
+    {
+        let doc = source.doc_mut().unwrap();
+        doc.images.insert("pic".into(), data.clone());
+        doc.get_mut(id).unwrap().fills = vec![figcraft_color::Paint::image("pic", figcraft_color::ImageScaleMode::Fill)];
+    }
+    begin(&mut source, id, Some(0), false).unwrap();
+    set_caret(&mut source, 2, true).unwrap();
+    let copied = selected_rich_text(&source).unwrap();
+    let (mut s, target) = setup("cd");
+    begin(&mut s, target, Some(2), false).unwrap();
+    insert_rich(&mut s, &copied).unwrap();
+    assert_eq!(s.doc().unwrap().images.get("pic"), Some(&data), "the run's image fill resolves here");
+}
+
+#[test]
+fn copied_text_layers_join_one_per_line_with_their_runs_in_place() {
+    let (mut s, first) = setup("ab");
+    let second = crate::params::id_of(&s.execute("text.create", &json!({"text": "cdé", "x": 0, "y": 50})).unwrap()["id"]).unwrap();
+    let joined = layers_rich_text(s.doc().unwrap(), &[first, second]).unwrap();
+    assert_eq!(joined.text, "ab\ncdé");
+    assert_eq!(joined.spans.iter().map(|(a, b, _)| (*a, *b)).collect::<Vec<_>>(), [(0, 2), (3, 6)]);
+}
