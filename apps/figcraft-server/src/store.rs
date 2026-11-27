@@ -258,6 +258,18 @@ struct Log {
     bytes: u64,
     /// Changed since the last compaction.
     dirty: bool,
+    /// Shared branch state changed since the last compaction.
+    branch_dirty: bool,
+}
+
+fn is_branch_journal(j: &figcraft_collab::Journal) -> bool {
+    matches!(
+        j,
+        figcraft_collab::Journal::BranchCreate(_)
+            | figcraft_collab::Journal::BranchEdit { .. }
+            | figcraft_collab::Journal::BranchUpdateFromMain { .. }
+            | figcraft_collab::Journal::BranchState { .. }
+    )
 }
 
 struct Entry {

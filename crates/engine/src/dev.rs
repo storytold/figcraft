@@ -8,4 +8,5 @@ pub mod dev_measurements;
 pub mod dev_resources;
 pub mod devcompare;
 pub mod devinspect;
+pub mod responsive;
 pub mod tailwind;
