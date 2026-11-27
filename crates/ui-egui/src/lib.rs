@@ -203,6 +203,8 @@ mod menu_input_tests;
 #[cfg(test)]
 mod menu_overflow_tests;
 #[cfg(test)]
+mod menu_scroll_tests;
+#[cfg(test)]
 mod mirror_tests;
 #[cfg(test)]
 mod missing_fonts_tests;
@@ -231,6 +233,8 @@ mod paste_image_tests;
 mod pen_mode_tests;
 #[cfg(test)]
 mod perf_tests;
+#[cfg(test)]
+mod pixel_grid_tests;
 #[cfg(test)]
 mod plugin_panel_tests;
 #[cfg(test)]
