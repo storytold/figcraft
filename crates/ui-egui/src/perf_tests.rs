@@ -116,10 +116,10 @@ fn report(layers: usize) {
     let open: Vec<NodeId> = b.app.session.doc().unwrap().nodes().filter(|n| !n.children.is_empty()).map(|n| n.id).collect();
     b.app.ui.expanded.extend(open);
     rows.push(("first frame, every layer expanded", b.frame(vec![])));
-    b.app.ui.layers_focus = true;
     let top = b.app.session.doc().ok().and_then(|d| d.node(page)?.children.last().copied());
     b.app.session.set_selection(top.into_iter().collect());
     b.frame(vec![]);
+    b.frame(key(Key::F6, Modifiers::SHIFT));
     rows.push(("arrow key down the expanded layers", b.mean(30, |_| key(Key::ArrowDown, Modifiers::NONE))));
     b.app.ui.expanded.clear();
     b.frame(vec![]);

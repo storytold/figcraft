@@ -651,7 +651,7 @@ mod tests {
         let badge = id_of(
             &s.execute(
                 "vector.create",
-                &json!({"path": "M0 0 H24 V24 H0 Z", "name": "badge", "props": {"fill": "none", "stroke": "#1F3A68", "strokeWeight": 2}}),
+                &json!({"path": "M0 0 H24 V24 H0 Z", "name": "badge", "props": {"fill": "none", "stroke": "#1F3A68", "strokeWeight": 4}}),
             )
             .unwrap()["id"],
         )
