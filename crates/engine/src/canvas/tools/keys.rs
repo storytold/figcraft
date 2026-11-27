@@ -58,6 +58,14 @@ impl Session {
     /// frame's. Boolean groups are hit by their results ([`crate::booleans::result_outline`]); in
     /// outline mode shapes only on their outlines.
     pub fn hit(&self, doc: &Document, page: NodeId, p: Point, tol: f64) -> Option<NodeId> {
+        self.hit_pick(doc, page, p, tol, false)
+    }
+
+    /// [`Session::hit`] for a pick (a press, a hover, a right-click) with Cmd/Ctrl held when
+    /// `deep`: it reaches through a nested frame, component or instance where that has no
+    /// visible fill (see [`figcraft_doc::geometry::HitOpts::deep`]).
+    pub fn hit_pick(&self, doc: &Document, page: NodeId, p: Point, tol: f64, deep: bool) -> Option<NodeId> {
+        let opts = figcraft_doc::geometry::HitOpts { deep, ..Default::default() };
         let sel = self.selection();
         let result = crate::booleans::result_outline(doc, &sel);
         let focus = self.ds().ok().and_then(crate::DocState::focused);
@@ -68,8 +76,8 @@ impl Session {
             return figcraft_doc::geometry::hit_outlines(doc, focus.unwrap_or(page), p, tol, Some(&result), also);
         }
         match focus {
-            Some(f) => figcraft_doc::geometry::hit_in(doc, f, p, tol, Some(&result)),
-            None => doc.hit_test(page, p, tol, Some(&result)),
+            Some(f) => figcraft_doc::geometry::hit_in_opts(doc, f, p, tol, Some(&result), opts),
+            None => figcraft_doc::geometry::hit_leaf_opts(doc, page, p, tol, Some(&result), opts),
         }
     }
 

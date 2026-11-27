@@ -5,12 +5,13 @@
 //! branch tab's edits and its own version history go into its branch ([`sync`]) and are saved with
 //! the main file. Merging adds a version to the main file's history; the branch keeps its own.
 //!
-//! In a live session a branch stays with the person who made it (others don't see it), and
-//! merging it is one edit of the session document, which syncs to everyone like any other. The
-//! session server takes new layers only in the sender's own id space, so a branch made in the
-//! session makes its ids in yours, far above the ids the main file makes there ([`WINDOW`]).
-//! Merging a branch made outside the session is refused when it adds layers, styles, variables or
-//! comments (their ids are in another space).
+//! In a live session whose server supports shared branches, branches sync across everyone in the
+//! session (creation, edits, updates from main, merge and archive) so any editor can open, edit,
+//! review and merge a peer's branch. On older servers without shared branches a branch stays with
+//! the person who made it. Merging is one edit of the session document, which syncs to everyone
+//! like any other. Each editor allocates new branch ids in their own client space, far above the
+//! ids the main file makes there ([`WINDOW`]). Merging a branch made outside the session is refused
+//! when it adds layers, styles, variables or comments (their ids are in another space).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -35,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "branch.create",
             "Create branch",
-            "{name?}  a copy of the file to work on separately, opened in a new tab; it remembers the file as it is now (its base); in a live session it stays yours → {id, name, index (its tab)}",
+            "{name?}  a copy of the file to work on separately, opened in a new tab; it remembers the file as it is now (its base); in a live session it syncs to peers when the server supports shared branches → {id, name, index (its tab)}",
             false,
             create
         ),
@@ -323,18 +324,12 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let id = crate::cmd::file::unique_id(|id| ds.branches.iter().any(|b| b.id == id));
     let uid = ds.uid;
     let time = crate::cmd::comment::now_secs();
-    s.ds_mut()?.branches_mut().push(Branch {
-        id: id.clone(),
-        name: name.clone(),
-        time,
-        client,
-        state: BranchState::Active,
-        base,
-        head: Arc::new(head),
-        versions: Vec::new(),
-    });
+    let branch =
+        Branch { id: id.clone(), name: name.clone(), time, client, state: BranchState::Active, base, head: Arc::new(head), versions: Vec::new() };
+    s.ds_mut()?.branches_mut().push(branch.clone());
     if live.is_some() {
         s.live_branch_base(uid, &id);
+        s.live_branch_create(uid, &branch);
     }
     let index = open_tab(s, uid, &id)?;
     if let Some(tab) = s.docs.get_mut(index) {
@@ -350,16 +345,19 @@ fn open_tab(s: &mut Session, main: u64, id: &str) -> Result<usize> {
         return Ok(i);
     }
     let live = s.live_client_id("branch.open", main)?;
+    let shared = s.live_branch_shared(main, id);
     let m = s.docs.iter().find(|d| d.uid == main).ok_or(EngineError::NoDocument)?;
     let b = m.branches.iter().find(|b| b.id == id).ok_or_else(|| bad("branch.open", format!("no branch `{id}`")))?;
     let mut doc = (*b.head).clone();
-    // A branch read from a file has no client id yet.
-    doc.set_client_id(b.client);
+    // A branch read from a file has no client id yet. On a shared branch in a live session,
+    // allocate new ids in your own client space so multiple people can edit the same branch.
+    let owner_client = if shared { live.unwrap_or(b.client) } else { b.client };
+    doc.set_client_id(owner_client);
     // In your live session, a branch that would make ids right where the main file makes them (one
-    // read from a file that made none yet) moves up.
-    if live == Some(b.client)
+    // read from a file that made none yet, or a peer's shared branch you opened) moves up.
+    if live == Some(owner_client)
         && doc.next_id().0.abs_diff(m.doc.next_id().0) < WINDOW
-        && let Some(start) = live_window(s, main, b.client)
+        && let Some(start) = live_window(s, main, owner_client)
     {
         doc.reserve_ids(NodeId(start.0 - 1));
     }
@@ -402,6 +400,7 @@ fn archive(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(b) = m.branches_mut().get_mut(bi) {
         b.state = BranchState::Archived;
     }
+    s.live_branch_set_state(uid, &id, BranchState::Archived);
     close_tabs(s, uid, Some(&id));
     Ok(json!({"archived": true}))
 }
@@ -439,6 +438,11 @@ fn combine(s: &mut Session, p: &Value, from: Side) -> Result<Value> {
     }
     let live = s.live_client_id(cmd, main_uid)?;
     let picks = resolutions(cmd, p)?;
+    // Flush any local edits on a shared branch before merging into main so the server already
+    // holds every node/entry the merge brings in.
+    if from == Side::Branch {
+        s.live_branch_edit(main_uid, &id);
+    }
     let (base, head, main) = documents(s, mi, bi).ok_or(EngineError::NoDocument)?;
     let plan = merge::plan(&base, &head, &main).map_err(|e| EngineError::Other(e.to_string()))?;
     let pick = |k: &Key| picks.get(&k.to_string()).copied();
@@ -448,7 +452,7 @@ fn combine(s: &mut Session, p: &Value, from: Side) -> Result<Value> {
     }
     let into = if from == Side::Branch { &main } else { &head };
     let (mut doc, touched) = plan.merge(into, from, &pick).map_err(|e| EngineError::Other(format!("can't merge: {e}")))?;
-    if let Some(client) = live.filter(|_| from == Side::Branch)
+    if let Some(client) = live.filter(|_| from == Side::Branch && !s.live_branch_shared(main_uid, &id))
         && let Some(what) = foreign(&plan, &base, &main, &doc, client, s.live_branch_in_session(main_uid, &id))
     {
         let why = format!(
@@ -472,7 +476,9 @@ fn combine(s: &mut Session, p: &Value, from: Side) -> Result<Value> {
         if let Some(b) = m.branches_mut().get_mut(bi) {
             b.state = BranchState::Merged;
         }
+        let before_batch = s.live_last_batch(main_uid);
         s.record(main_uid, Some("Merge branch"), main, selection, page);
+        s.live_branch_merge(main_uid, &id, before_batch);
         close_tabs(s, main_uid, Some(&id));
         s.active = s.docs.iter().position(|d| d.uid == main_uid).unwrap_or(s.active);
         out["merged"] = json!(true);
@@ -485,11 +491,12 @@ fn combine(s: &mut Session, p: &Value, from: Side) -> Result<Value> {
             t.history.redo.clear();
         }
         if let Some(b) = s.docs.get_mut(mi).and_then(|m| m.branches_mut().get_mut(bi)) {
-            b.base = main;
-            b.head = doc;
+            b.base = main.clone();
+            b.head = doc.clone();
         }
         if live.is_some() {
             s.live_branch_base(main_uid, &id);
+            s.live_branch_update_from_main(main_uid, &id, &main, &doc);
         }
         note(s, mi, bi, UPDATED);
         out["updated"] = json!(true);

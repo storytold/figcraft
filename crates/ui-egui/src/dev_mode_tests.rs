@@ -240,3 +240,20 @@ fn the_toolbar_keeps_the_inspect_tab_for_the_annotation_tool() {
     crate::toolbar::choose(&mut u.app, figcraft_engine::ToolId::Rectangle);
     assert_eq!(u.app.ui.right_tab, crate::RightTab::Design, "a drawing tool leaves it");
 }
+
+#[test]
+fn a_rule_draft_belongs_to_its_document_and_outlives_a_refusal() {
+    let (mut u, f, _) = setup();
+    let gone = NodeId(999_999);
+    let field = crate::dev_mode::rule_draft(&u.app, gone);
+    u.ctx.data_mut(|d| d.insert_temp(field, "Cards stack".to_string()));
+    crate::dev_mode::add_rule(&mut u.app, &u.ctx, gone, "Cards stack");
+    assert_eq!(u.ctx.data(|d| d.get_temp::<String>(field)).as_deref(), Some("Cards stack"), "a refused rule keeps its text");
+    let field = crate::dev_mode::rule_draft(&u.app, f);
+    u.ctx.data_mut(|d| d.insert_temp(field, "Cards stack".to_string()));
+    crate::dev_mode::add_rule(&mut u.app, &u.ctx, f, "Cards stack");
+    assert_eq!(u.ctx.data(|d| d.get_temp::<String>(field)), None, "an added rule clears it");
+    // Another document's layer with the same id has a draft of its own.
+    u.run("file.new", json!({}));
+    assert_ne!(crate::dev_mode::rule_draft(&u.app, f), field);
+}
