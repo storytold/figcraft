@@ -9,14 +9,24 @@ fn web_links_are_opened() {
         "http://example.com",
         "https://example.com",
         "https://example.com/a/b?c=d#e",
+        "https://example.com?c=d",
+        "https://example.com#e",
         "HTTPS://EXAMPLE.COM",
         "HtTp://example.com",
         "mailto:a@b.c",
         "mailto:a@b.c?subject=hi",
         "  https://example.com  ",
         "https://user:pw@example.com:8443/p",
+        "https://user:pw@[::1]:8443/p",
     ] {
         assert!(openable(url), "{url:?} should open");
+    }
+}
+
+#[test]
+fn web_links_without_a_host_are_refused() {
+    for url in ["https://?c=d", "http://#e", "https://user@", "https://user@:443/p", "https://:443/p", "https://user:pw@?c=d", "https://@#e"] {
+        assert!(!openable(url), "{url:?} must be refused");
     }
 }
 
