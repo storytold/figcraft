@@ -818,9 +818,10 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   it is larger; the choice is kept. In the browser the interface always follows the browser's zoom.
 - `pref.autoSave {on?}`: files that have a path save themselves a few seconds after they change
   (off by default; the desktop app's timer does it, so scripts still call `file.save`).
-- `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of in a new file
-  (off by default; files named on the command line still open, and `--control` starts in a new
-  file anyway, so control callers have a document).
+- `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of reopening the
+  files open when it last quit (off by default; with nothing to reopen it starts on the Home screen
+  too; files named on the command line still open, and with nothing open `--control` starts in a new
+  file, so control callers have a document).
 - `pref.language {language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|sv|vi|zh-Hans|zh-Hant|…}`: the app's interface language, applied live ("system":
   the OS or browser language; a language without a catalog shows English). Command ids, labels and
   every result stay English.
