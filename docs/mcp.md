@@ -374,7 +374,10 @@ Or in a project's `.mcp.json`:
   tracking shortcuts, a canvas drag) detaches that field's variable; fields the edit
   left as they were stay bound.
   `variable.addMode {from}` duplicates a mode, `variable.moveMode {collection, mode, to}` reorders
-  (index 0 is the default mode, which layers on Auto follow). `variable.update {codeSyntax: {WEB?,
+  (index 0 is the default mode, which layers on Auto follow). `variable.move {variables, before?}`
+  reorders variables within their collection (the order the Variables window and the pickers list),
+  `variable.sort {collection, group?, descending?}` sorts them by name, numbers by value (50 before
+  100). `variable.update {codeSyntax: {WEB?,
   iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one, SwiftUI the iOS one and
   Compose the Android one (a variable without one keeps its value there).
 - **Live previews**: `text.preview {command, params}` shows what `style.apply`,
@@ -1125,7 +1128,9 @@ most when it can't be reached).
   by name in their set, styles by name and type, variables by collection, name and type, modes by
   name), keeping overrides; one undo step → `{components, styles, variables, unmatched: [names
   still from `from`, including this file's collections that extend one of its collections],
-  removed (nothing of `from` was left, so it was removed)}`.
+  dropped: [`from`'s copies nothing used before the swap, which it removed rather than moved: a
+  component imported but not placed, or whose instances were deleted; a variable imported but not
+  bound], removed (nothing of `from` was left, so it was removed)}`.
 
 ### Overrides and variants
 

@@ -207,46 +207,59 @@ fn side_strokes(n: &Node) -> Option<Arc<BezPath>> {
     }))
 }
 
+/// A plain stroke: no dashes, width profile or brush.
+fn plain_stroke(n: &Node) -> bool {
+    let props = &n.stroke;
+    props.dashes.is_empty() && props.profile().is_none() && props.brush.is_none()
+}
+
+/// Whether a closed node's inside/outside stroke is an even-odd ring of two outlines ([`ring`]).
+fn ring_stroke(n: &Node, closed: bool) -> bool {
+    let props = &n.stroke;
+    plain_stroke(n) && closed && props.align != StrokeAlign::Center
+        // An outside ring grows square corners as miters; other joins take the generic outline.
+        && !(props.align == StrokeAlign::Outside && props.join != StrokeJoin::Miter && n.corners.radii.contains(&0.0))
+}
+
+/// A rect's or full ellipse's outline moved `inset` inwards (outwards when negative), `None` for
+/// other shapes or one inset to nothing.
+fn ring(n: &Node, inset: f64) -> Option<BezPath> {
+    let (x0, y0, ww, hh) = (inset, inset, n.width - 2.0 * inset, n.height - 2.0 * inset);
+    if ww <= 0.0 || hh <= 0.0 {
+        return None;
+    }
+    match n.kind {
+        NodeKind::Rectangle
+        | NodeKind::Frame
+        | NodeKind::Component { .. }
+        | NodeKind::ComponentSet { .. }
+        | NodeKind::Instance { .. }
+        | NodeKind::Section { .. }
+            if n.corners.smoothing == 0.0 =>
+        {
+            let radii = n.corners.radii.map(|r| if r > 0.0 { (r - inset).max(0.0) } else { 0.0 });
+            let mut p = figcraft_geom::rounded_rect(ww, hh, radii, 0.0);
+            p.apply_affine(Affine::translate((x0, y0)));
+            Some(p)
+        }
+        NodeKind::Ellipse { sweep, inner, .. } if figcraft_geom::full_sweep(sweep) && inner == 0.0 => {
+            Some(figcraft_geom::kurbo::Ellipse::from_rect(Rect::new(x0, y0, x0 + ww, y0 + hh)).to_path(0.05))
+        }
+        _ => None,
+    }
+}
+
 /// The stroke area of a node in local coordinates.
 pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
-    let props = &n.stroke;
     if let Some(p) = side_strokes(n) {
         return p;
     }
     // Rect/ellipse inside/outside strokes without booleans: an even-odd ring of two outlines.
-    if props.dashes.is_empty() && props.profile().is_none() && props.brush.is_none() && closed && props.align != StrokeAlign::Center
-        // An outside ring grows square corners as miters; other joins take the generic outline.
-        && !(props.align == StrokeAlign::Outside && props.join != StrokeJoin::Miter && n.corners.radii.contains(&0.0))
-    {
-        let w = props.weight;
-        let ring = |inset: f64| -> Option<BezPath> {
-            let (x0, y0, ww, hh) = (inset, inset, n.width - 2.0 * inset, n.height - 2.0 * inset);
-            if ww <= 0.0 || hh <= 0.0 {
-                return None;
-            }
-            match n.kind {
-                NodeKind::Rectangle
-                | NodeKind::Frame
-                | NodeKind::Component { .. }
-                | NodeKind::ComponentSet { .. }
-                | NodeKind::Instance { .. }
-                | NodeKind::Section { .. }
-                    if n.corners.smoothing == 0.0 =>
-                {
-                    let radii = n.corners.radii.map(|r| if r > 0.0 { (r - inset).max(0.0) } else { 0.0 });
-                    let mut p = figcraft_geom::rounded_rect(ww, hh, radii, 0.0);
-                    p.apply_affine(Affine::translate((x0, y0)));
-                    Some(p)
-                }
-                NodeKind::Ellipse { sweep, inner, .. } if figcraft_geom::full_sweep(sweep) && inner == 0.0 => {
-                    Some(figcraft_geom::kurbo::Ellipse::from_rect(Rect::new(x0, y0, x0 + ww, y0 + hh)).to_path(0.05))
-                }
-                _ => None,
-            }
-        };
-        let (outer, inner) = match props.align {
-            StrokeAlign::Inside => (ring(0.0), ring(w)),
-            _ => (ring(-w), ring(0.0)),
+    if ring_stroke(n, closed) {
+        let w = n.stroke.weight;
+        let (outer, inner) = match n.stroke.align {
+            StrokeAlign::Inside => (ring(n, 0.0), ring(n, w)),
+            _ => (ring(n, -w), ring(n, 0.0)),
         };
         if let Some(mut o) = outer {
             if let Some(i) = inner {
@@ -256,6 +269,54 @@ pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
         }
     }
     cached_stroke_outline(n, path, closed)
+}
+
+/// What a closed node with outline `path` (filled by `rule`) fills under an inside or outside
+/// stroke that hides what is under it: out to the middle of the stroke, so the fill neither shows
+/// at the stroke's outer edge (a light fringe on an inside stroke) nor leaves a gap at its inner
+/// edge (what is behind showing between an outside stroke and the fill) (#2635). `None`: fill
+/// `path` as it is.
+fn fill_to_stroke_middle(n: &Node, path: &BezPath, rule: FillRule) -> Option<(Arc<BezPath>, FillRule)> {
+    let props = &n.stroke;
+    let opaque = n
+        .strokes
+        .iter()
+        .rev()
+        .find(|p| p.visible && p.opacity > 0.0)
+        .is_some_and(|p| p.blend == BlendMode::Normal && p.opacity >= 1.0 && matches!(p.kind, PaintKind::Solid { color } if color.a >= 1.0));
+    if !(opaque && plain_stroke(n) && props.sides.is_none() && props.align != StrokeAlign::Center && n.has_visible_stroke()) {
+        return None;
+    }
+    let half = match props.align {
+        StrokeAlign::Inside => props.weight / 2.0,
+        _ => -props.weight / 2.0,
+    };
+    if ring_stroke(n, true)
+        && let Some(r) = ring(n, half)
+    {
+        return Some((Arc::new(r), FillRule::Winding));
+    }
+    // shortcut: even-odd outlines (booleans, even-odd networks) keep filling as they are, until
+    // the boolean below reads them by their own rule.
+    if rule != FillRule::Winding {
+        return None;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    hash_path(path, &mut h);
+    ("fill to stroke middle", props.weight.to_bits(), props.align as u8, props.join as u8, props.miter_limit.to_bits()).hash(&mut h);
+    let key = h.finish();
+    let cached = locked(stroke_cache()).get(key);
+    let out = match cached {
+        Some(p) => p,
+        None => {
+            let centre = figcraft_pathops::stroke_center(path, props.weight, props);
+            let op = if half > 0.0 { figcraft_doc::BoolOp::Subtract } else { figcraft_doc::BoolOp::Union };
+            let p = Arc::new(figcraft_pathops::boolean_step(path, &centre, op).ok()?);
+            locked(stroke_cache()).insert(key, p.clone());
+            p
+        }
+    };
+    Some((out, FillRule::EvenOdd))
 }
 
 /// The stroke a boolean operand contributes: like [`stroke_area`], but never an even-odd ring
@@ -887,6 +948,16 @@ fn fill_vector_regions(ctx: &Ctx, pix: &mut Pixmap, n: &Node, network: &figcraft
     }
 }
 
+/// Fills `n`'s closed outline `path` (by `rule`, drawn at `xf`) with `paints`, out to the middle of
+/// a stroke that hides it ([`fill_to_stroke_middle`]).
+fn fill_outline(ctx: &Ctx, pix: &mut Pixmap, n: &Node, paints: &[Paint], path: &BezPath, rule: FillRule, xf: Affine) {
+    let under = fill_to_stroke_middle(n, path, rule);
+    let (path, rule) = under.as_ref().map_or((path, rule), |(p, r)| (&**p, *r));
+    if let Some(tp) = ts_path(path) {
+        fill_with(pix, &tp, paints, n.width, n.height, xf, rule, ctx, None);
+    }
+}
+
 /// Fills, `over_fills`, children (clipped), strokes and text of a node, without opacity/effects.
 fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize, over_fills: OverFills) {
     let doc = ctx.doc;
@@ -933,8 +1004,8 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
             // strokes on top.
             for k in &keys {
                 let fills = layout.styles.get(*k).and_then(|s| s.fills.as_ref()).unwrap_or(&n.fills);
-                if let Some(tp) = by_style.get(k).and_then(ts_path) {
-                    fill_with(pix, &tp, fills, w, h, gxf, FillRule::Winding, ctx, None);
+                if let Some(path) = by_style.get(k) {
+                    fill_outline(ctx, pix, n, fills, path, FillRule::Winding, gxf);
                 }
                 for (_, item) in ink.iter().filter(|(style, _)| style == k) {
                     match item {
@@ -975,10 +1046,8 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
             if !splatted && closed {
                 if let Some(network) = styled_network {
                     fill_vector_regions(ctx, pix, n, network, xf);
-                } else if let Some((path, rule)) = &outline
-                    && let Some(tp) = ts_path(path)
-                {
-                    fill_with(pix, &tp, &n.fills, w, h, xf, *rule, ctx, None);
+                } else if let Some((path, rule)) = &outline {
+                    fill_outline(ctx, pix, n, &n.fills, path, *rule, xf);
                 }
             }
             if let Some(f) = over_fills {
