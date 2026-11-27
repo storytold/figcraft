@@ -107,13 +107,16 @@ use serde_json::{Value, json};
 mod derived;
 mod doc_state;
 mod error;
+mod file_views;
 mod prefs;
+mod reopen;
 mod session;
 mod view_state;
 
 pub use derived::{changed_nodes, normalize};
 pub use doc_state::{DocState, History, HistoryEntry, Interaction, PREVIEW_READ_ONLY, Preedit, TextEdit, VersionPreview};
 pub use error::{EngineError, Result, bad};
+pub use file_views::{FileView, MAX_FILE_VIEWS, PageView};
 pub use prefs::{Clipboard, DefaultProps, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UI_SCALE_SIZES, UiRequest, clamp_ui_scale};
 pub use session::Forward;
 pub use view_state::ViewState;
@@ -489,6 +492,8 @@ mod panels_behaviour_tests;
 #[cfg(test)]
 mod paste_missing_image_tests;
 #[cfg(test)]
+mod paste_over_tests;
+#[cfg(test)]
 mod paste_sibling_tests;
 #[cfg(test)]
 mod path_read_caps_tests;
@@ -549,6 +554,8 @@ mod proto_run_tests;
 #[cfg(test)]
 mod proto_tail_tests;
 #[cfg(test)]
+mod reopen_tests;
+#[cfg(test)]
 mod rest_slot_tests;
 #[cfg(test)]
 mod retained_walk_tests;
@@ -570,6 +577,8 @@ mod scale_tool_tests;
 mod scaled_instance_tests;
 #[cfg(test)]
 mod section_contents_tests;
+#[cfg(test)]
+mod section_marquee_tests;
 #[cfg(test)]
 mod section_tests;
 #[cfg(test)]
@@ -624,6 +633,8 @@ mod text_metrics_local_tests;
 mod text_motion_tests;
 #[cfg(test)]
 mod text_style_picker_tests;
+#[cfg(test)]
+mod text_tab_tests;
 #[cfg(test)]
 mod text_tail_tests;
 #[cfg(test)]
@@ -697,6 +708,8 @@ mod widgets_tests;
 mod export_bounds_tests;
 #[cfg(test)]
 mod page_view_tests;
+#[cfg(test)]
+mod paste_properties_tests;
 #[cfg(test)]
 mod selection_reorder_tests;
 #[cfg(test)]

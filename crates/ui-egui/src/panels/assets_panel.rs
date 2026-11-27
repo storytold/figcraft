@@ -37,9 +37,9 @@ const MAX_THUMBS: usize = 600;
 const THUMBS_PER_FRAME: usize = 8;
 /// Layers compared per component when checking whether its thumbnail is stale.
 const MAX_COMPARED: usize = 20_000;
-/// Look for changed library files this often (seconds) while the panel shows.
+/// Look for changed library files this often (seconds).
 const LIBRARY_REFRESH: f64 = 2.0;
-/// Ask team libraries' servers for newer versions this often (seconds) while the panel shows.
+/// Ask team libraries' servers for newer versions this often (seconds).
 // shortcut: polled (a few bytes when nothing changed); a server push needs a connection per
 // library, worth it once libraries are used beyond the Assets panel.
 const SERVER_REFRESH: f64 = 30.0;
@@ -278,33 +278,42 @@ fn build_listing(app: &FigApp, doc: &Document, q: &str, key: (u64, String, u64))
     Listing { key, local: foldered("", local), local_styles, libraries, updates }
 }
 
-/// Re-read enabled library files that changed on disk (throttled).
-fn refresh_libraries(app: &mut FigApp, ui: &Ui) {
+/// Re-read enabled library files that changed on disk (throttled), every logic tick whether or not
+/// the Assets panel shows, so the style pickers list library styles too. A library this file
+/// hasn't tried to read yet (just opened or added) is read at once.
+pub(crate) fn refresh_libraries(app: &mut FigApp, ctx: &egui::Context) {
     let Ok(doc) = app.session.doc() else { return };
     if doc.libraries.enabled.is_empty() {
         return;
     }
     let paths: Vec<String> = doc.libraries.enabled.iter().map(|l| l.path.clone()).collect();
     let id = Id::unique("asset_libraries_checked");
-    let now = ui.input(|i| i.time);
-    let last: Option<f64> = ui.data(|d| d.get_temp(id));
-    if last.is_none_or(|l| now - l >= LIBRARY_REFRESH) {
+    // The paths the last read tried: one that was refused (too large, not on this computer) is
+    // never cached, and would otherwise be tried again every frame.
+    let tried_id = Id::unique("asset_libraries_tried");
+    let now = ctx.input(|i| i.time);
+    let last: Option<f64> = ctx.data(|d| d.get_temp(id));
+    let tried: Vec<String> = ctx.data(|d| d.get_temp(tried_id)).unwrap_or_default();
+    let unread_here = paths.iter().any(|p| !is_server_link(p) && app.session.libraries.cached(p).is_none() && !tried.contains(p));
+    if unread_here || last.is_none_or(|l| now - l >= LIBRARY_REFRESH) {
         for p in &paths {
             let _ = app.session.libraries.load(p);
         }
-        ui.data_mut(|d| d.insert_temp(id, now));
+        ctx.data_mut(|d| {
+            d.insert_temp(id, now);
+            d.insert_temp(tried_id, paths.clone());
+        });
         // Team libraries: in the background, at once for one not fetched yet.
         let sid = Id::unique("asset_server_libraries_checked");
-        let fetched: Option<f64> = ui.data(|d| d.get_temp(sid));
+        let fetched: Option<f64> = ctx.data(|d| d.get_temp(sid));
         // Only the ones you added or checked: a file can't make the app contact a server (#1097).
         let team: Vec<&String> = paths.iter().filter(|p| is_server_link(p) && app.session.library_allowed(p)).collect();
         let unread = team.iter().any(|p| app.session.libraries.cached(p).is_none());
         if !team.is_empty() && (unread || fetched.is_none_or(|l| now - l >= SERVER_REFRESH)) {
             app.session.refresh_server_libraries();
-            ui.data_mut(|d| d.insert_temp(sid, now));
+            ctx.data_mut(|d| d.insert_temp(sid, now));
         }
     }
-    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(LIBRARY_REFRESH));
 }
 
 /// The search field with the libraries button; returns the lowercase query.
@@ -577,12 +586,15 @@ fn render_thumbs(ui: &Ui, w: f32, thumbs: &mut Thumbs, wanted: &[(Source, NodeId
     }
 }
 
-/// Draw the Assets panel: refresh libraries, switch to the libraries view when asked,
-/// otherwise cache a listing keyed by revision, query and library state, render local and
+/// Draw the Assets panel: repaint every `LIBRARY_REFRESH` while the file has libraries (so a
+/// library changed on disk shows; the app's tick reads it), switch to the libraries view when
+/// asked, otherwise cache a listing keyed by revision, query and library state, render local and
 /// enabled-library assets with reused thumbnails, and dispatch place, style, hide, toggle
 /// and drag actions.
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
-    refresh_libraries(app, ui);
+    if app.session.doc().is_ok_and(|d| !d.libraries.enabled.is_empty()) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(LIBRARY_REFRESH));
+    }
     if app.ui.libraries {
         libraries_view(app, ui);
         return;
