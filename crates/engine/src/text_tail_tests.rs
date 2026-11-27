@@ -221,11 +221,11 @@ fn list_keys_at_list_items() {
             2,
             "Tab",
             false,
-            "a\n\tb",
+            "a\nb",
             vec![(B, 0), (P, 1)],
-            "a plain paragraph at a level isn't an item: Tab types a tab",
+            "a plain paragraph at a level isn't an item: Tab leaves the list alone (and moves to the next text, none here)",
         ),
-        ("a\nb", vec![(P, 0), (P, 0)], 3, "Tab", false, "a\nb\t", vec![(P, 0), (P, 0)], "outside a list Tab types a tab"),
+        ("a\nb", vec![(P, 0), (P, 0)], 3, "Tab", false, "a\nb", vec![(P, 0), (P, 0)], "outside a list Tab types no tab"),
         ("a", vec![(B, 8)], 1, "Tab", false, "a", vec![(B, 8)], "silent: nesting stops at 8 levels"),
     ];
     for (chars, before, caret, k, shift, after, want, why) in cases {

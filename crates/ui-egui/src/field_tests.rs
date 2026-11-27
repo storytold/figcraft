@@ -554,6 +554,14 @@ fn arithmetic_commits_tab_moves_on_and_escape_restores() {
     // With the keyboard on a field and nothing typed, the arrows step it.
     key(&mut u, Key::ArrowUp, Modifiers::NONE);
     assert_eq!(geom(&u, a).0, 78.0);
+    // An editor opened from the keyboard is the same one Tab stop in both directions.
+    for (first, mods) in [("X", Modifiers::NONE), ("Y", Modifiers::SHIFT)] {
+        assert_eq!(focused_name(&u.ctx), first);
+        key(&mut u, Key::Enter, Modifiers::NONE);
+        assert!(u.ctx.text_edit_focused(), "Enter opens the editor of {first}");
+        key(&mut u, Key::Tab, mods);
+        assert_eq!(focused_name(&u.ctx), if first == "X" { "Y" } else { "X" }, "one Tab from the editor of {first}");
+    }
 }
 
 /// Answers a Save as dialog with `path`, once, and counts the dialogs asked for.
@@ -1350,43 +1358,37 @@ fn a_deferred_field_save_does_not_retarget_a_closed_moved_or_foreign_owner() {
 }
 
 /// A save prepared for A must not force its cached X editor into B when routing changes the
-/// presented document before the fields draw, even though both panels use the same widget ID.
+/// presented document before the fields draw, even though both panels use the same widget ID. The
+/// control channel is the route that presents B in the save's pass: a click on B's tab cannot, as
+/// the runtime ends a pass at a pointer press and the click lands in the next one.
 #[test]
 fn a_prepared_field_save_cannot_commit_into_a_same_pass_replacement_document() {
-    for route in ["control", "tab"] {
-        for save_as in [false, true] {
-            for discard in [false, true] {
-                prepared_save_cannot_enter_a_replacement(route, save_as, discard);
-            }
+    for save_as in [false, true] {
+        for discard in [false, true] {
+            prepared_save_cannot_enter_a_replacement(save_as, discard);
         }
     }
 }
 
-/// The save shortcut's key events (and, routing by tab, a click on the tab at `tab_at`), with the modifiers held.
-fn save_events(route: &str, save_as: bool, tab_at: egui::Pos2) -> (Vec<Event>, Modifiers) {
+/// The save shortcut's key events, with the modifiers held.
+fn save_events(save_as: bool) -> (Vec<Event>, Modifiers) {
     let mut modifiers = if cfg!(target_os = "macos") { Modifiers::COMMAND } else { Modifiers::COMMAND.plus(Modifiers::CTRL) };
     if save_as {
         modifiers = modifiers.plus(Modifiers::SHIFT);
     }
-    let mut events = vec![
+    let events = vec![
         Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: true, repeat: false, modifiers },
         Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: false, repeat: false, modifiers },
     ];
-    if route == "tab" {
-        events.push(Event::PointerMoved(tab_at));
-        for pressed in [true, false] {
-            events.push(Event::PointerButton { pos: tab_at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
-        }
-    }
     (events, modifiers)
 }
 
-/// One route/save-as/discard combination of the same-pass replacement test: a save prepared for A
-/// must not commit A's cached X editor into B when routing presents B before the fields draw,
-/// even though both panels use the same widget ID.
-fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard: bool) {
+/// One save-as/discard combination of the same-pass replacement test: a save prepared for A must
+/// not commit A's cached X editor into B when routing presents B before the fields draw, even
+/// though both panels use the same widget ID.
+fn prepared_save_cannot_enter_a_replacement(save_as: bool, discard: bool) {
     let (mut u, a, _) = setup();
-    let dir = std::env::temp_dir().join(format!("figcraft-field-save-owner-{}-{route}-{save_as}-{discard}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("figcraft-field-save-owner-{}-{save_as}-{discard}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (path, other, copy) = (dir.join("a.figcraft"), dir.join("b.figcraft"), dir.join("copy.figcraft"));
     u.app.session.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
@@ -1399,7 +1401,6 @@ fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard:
     u.app.session.execute("select.set", &json!({"ids": [b]})).unwrap();
     let other_index = u.app.session.active;
     let other_uid = u.app.session.ds().unwrap().uid;
-    let other_name = u.app.session.doc().unwrap().name.clone();
     let other_model = u.app.session.ds().unwrap().doc.clone();
     let before_switch_revision = u.app.session.ds().unwrap().revision;
     let other_history = u.app.session.undo_depth();
@@ -1414,15 +1415,7 @@ fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard:
     assert_eq!(other_revision, before_switch_revision + 1, "the setup switch advances only B's command revision");
     let asked = std::rc::Rc::new(std::cell::Cell::new(0));
     u.app.services = Box::new(SaveAsPicker { path: Some(copy.clone()), asked: asked.clone() });
-    let output = u.frame_output(vec![]);
-    let nodes = output.platform_output.accesskit_update.unwrap().nodes;
-    let tab = nodes
-        .iter()
-        .map(|(_, node)| node)
-        .find(|node| node.role() == Role::Tab && node.label() == Some(other_name.as_str()))
-        .expect("the actual B tab");
-    let bounds = tab.bounds().unwrap();
-    let tab_at = pos2(((bounds.x0 + bounds.x1) / 2.0) as f32, ((bounds.y0 + bounds.y1) / 2.0) as f32);
+    u.frame(vec![]);
     let (at, _) = field(&mut u, "X");
     click(&mut u, at);
     assert_eq!(u.ctx.memory(|m| m.focused()), Some(Id::unique("pos_x").with("te")));
@@ -1431,20 +1424,15 @@ fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard:
     assert_eq!(u.ctx.data(|d| d.get_temp::<String>(Id::unique("pos_x").with("editing"))), Some("77".into()));
     assert_eq!(geom(&u, a).0, 10.0, "A's raw draft is not committed yet");
     assert_eq!(u.app.session.ds().unwrap().uid, owner, "the save begins with A presented");
-    let reply = if route == "control" {
-        let (reply, rx) = std::sync::mpsc::channel();
-        u.app.control_queue.push(crate::ControlRequest {
-            id: json!("same-pass-switch"),
-            method: "engine.execute".into(),
-            params: json!({"command": "doc.switch", "params": {"index": other_index}, "window": 0}),
-            reply,
-            state: Default::default(),
-        });
-        Some(rx)
-    } else {
-        None
-    };
-    let (events, modifiers) = save_events(route, save_as, tab_at);
+    let (reply, rx) = std::sync::mpsc::channel();
+    u.app.control_queue.push(crate::ControlRequest {
+        id: json!("same-pass-switch"),
+        method: "engine.execute".into(),
+        params: json!({"command": "doc.switch", "params": {"index": other_index}, "window": 0}),
+        reply,
+        state: Default::default(),
+    });
+    let (events, modifiers) = save_events(save_as);
     if discard {
         let mut events = events;
         events.insert(0, Event::ModifiersChanged(modifiers));
@@ -1452,13 +1440,11 @@ fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard:
     } else {
         u.frame_with(events, modifiers);
     }
-    if let Some(reply) = reply {
-        let reply = reply.try_recv().expect("real control::drain acknowledged doc.switch in this pass");
-        assert!(reply.result.is_ok(), "{:?}", reply.result);
-    }
+    let reply = rx.try_recv().expect("real control::drain acknowledged doc.switch in this pass");
+    assert!(reply.result.is_ok(), "{:?}", reply.result);
     let unchanged = |u: &Ui| {
         assert_eq!(u.app.session.ds().unwrap().uid, other_uid, "the real same-pass route presents B");
-        assert_eq!(geom(u, b), (200.0, 40.0, 30.0, 30.0), "A's draft cannot enter B's field: route={route}, save_as={save_as}, discard={discard}");
+        assert_eq!(geom(u, b), (200.0, 40.0, 30.0, 30.0), "A's draft cannot enter B's field: save_as={save_as}, discard={discard}");
         assert!(std::sync::Arc::ptr_eq(&u.app.session.ds().unwrap().doc, &other_model), "B's model is untouched");
         assert_eq!(u.app.session.ds().unwrap().revision, other_revision);
         assert_eq!(u.app.session.undo_depth(), other_history, "B's undo/redo history is unchanged");

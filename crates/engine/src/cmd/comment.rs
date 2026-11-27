@@ -874,8 +874,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let v = &mut s.ds_mut()?.view;
             let zoom = v.zoom;
             v.fit(r, crate::ViewState::MAX_ZOOM);
-            // Pins at one spot: at least double the zoom so they come apart.
-            if v.zoom < zoom * 2.0 {
+            // A single pin position has no span to fit, so double the previous zoom.
+            if r.width() == 0.0 && r.height() == 0.0 && v.zoom < zoom * 2.0 {
                 v.set_zoom_at(zoom * 2.0, (v.cx, v.cy));
             }
             Ok(json!({"zoom": v.zoom}))

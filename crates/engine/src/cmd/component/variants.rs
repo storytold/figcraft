@@ -166,7 +166,7 @@ pub(super) fn create_set(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Grow a component set so it wraps its variants with 20 px of padding (right and bottom).
-pub(super) fn fit_set(doc: &mut Document, set: NodeId) {
+pub(crate) fn fit_set(doc: &mut Document, set: NodeId) {
     let Some(kids) = doc.node(set).map(|n| n.children.clone()) else { return };
     let (mut w, mut h) = (0.0f64, 0.0f64);
     for c in kids {

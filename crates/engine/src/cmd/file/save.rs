@@ -173,7 +173,8 @@ fn wants_data(p: &Value) -> bool {
 
 /// Save the file of the active tab (the main file for a branch tab, with its branches), or export
 /// the active document as an experimental `.fig` copy without changing its native save state.
-/// Without a path the file comes back as base64 `data` for the caller to deliver (#969).
+/// Without a path the file comes back as base64 `data` for the caller to deliver (#969). Saved
+/// to another file, the document takes that file's name, as its tab does.
 fn save_to(s: &mut Session, path: Option<String>) -> Result<Value> {
     if let Some(path) = path.as_deref().filter(|p| ext(p) == "fig") {
         return export_fig(s, &json!({"path": path}));
@@ -185,9 +186,7 @@ fn save_to(s: &mut Session, path: Option<String>) -> Result<Value> {
         refuse_dropping_images(ds, path)?;
     }
     let mut snapshot = FileSnapshot::of(ds);
-    let follows_path = ds.path.as_deref().map_or(ds.doc.name == "Untitled", |old| ds.doc.name == file_stem(old));
     if let Some(path) = path.as_deref()
-        && follows_path
         && ds.path.as_deref() != Some(path)
     {
         Arc::make_mut(&mut snapshot.doc).name = file_stem(path);

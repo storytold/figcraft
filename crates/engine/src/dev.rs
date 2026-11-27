@@ -1,4 +1,5 @@
 pub mod annotations;
+pub mod asset_handoff;
 pub mod code_connect;
 pub mod codegen;
 pub mod component_codegen;
@@ -7,4 +8,5 @@ pub mod dev_measurements;
 pub mod dev_resources;
 pub mod devcompare;
 pub mod devinspect;
+pub mod responsive;
 pub mod tailwind;

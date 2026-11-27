@@ -1,8 +1,9 @@
 //! On-canvas text editing: caret, selection, typing. A whole editing session is one undo step.
 
+use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 
-use figcraft_doc::{Document, ListStyle, NodeId, NodeKind, TextData};
+use figcraft_doc::{Document, ImageData, ListStyle, NodeId, NodeKind, TextData};
 
 use crate::{EngineError, Preedit, Result, Session, TextEdit};
 
@@ -401,6 +402,94 @@ pub fn list_indent(s: &mut Session, out: bool) -> Result<bool> {
     Ok(text_of(s, id)? != before)
 }
 
+/// Whether Tab in text layer `id` moves between text layers: not in a board object's text (a
+/// sticky's note, a table cell, a code block) or a widget's field, where it types as before.
+fn tabs_between_texts(doc: &Document, id: NodeId) -> bool {
+    !in_board_object(doc, id) && crate::widgets::field_of(doc, id).is_none()
+}
+
+fn in_board_object(doc: &Document, id: NodeId) -> bool {
+    std::iter::once(id).chain(doc.ancestors(id)).any(|a| doc.node(a).is_some_and(|n| n.board.is_some()))
+}
+
+/// Tab (Shift+Tab: `back`) while editing text layer `from`: editing it ends as Escape ends it, and
+/// the next (previous) text layer in reading order is edited with all of its text selected. At the
+/// last (first) one nothing happens.
+fn tab_to_next_text(s: &mut Session, from: NodeId, back: bool) -> Result<()> {
+    let order = reading_order(s.doc()?, tab_stops(s.doc()?, from));
+    let Some(at) = order.iter().position(|t| *t == from) else { return Ok(()) };
+    let next = if back { at.checked_sub(1).and_then(|i| order.get(i)) } else { order.get(at + 1) };
+    let Some(&next) = next else { return Ok(()) };
+    end(s)?;
+    begin(s, next, None, false)
+}
+
+/// The text layers Tab moves between from text layer `from`: those in the top-level layer holding
+/// it (the frame or group on the page or in a section), at any depth and inside instances, that are
+/// visible and unlocked with every layer around them and not in a board object; for a text on the
+/// page or in a section itself, the text layers beside it there. `from` is always one of them.
+fn tab_stops(doc: &Document, from: NodeId) -> Vec<NodeId> {
+    let is_section = |id: &NodeId| doc.node(*id).is_some_and(|n| matches!(n.kind, NodeKind::Section { .. }));
+    let chain: Vec<NodeId> = std::iter::once(from).chain(doc.ancestors(from)).collect();
+    let Some(page_at) = chain.iter().position(|c| doc.node(*c).is_some_and(|n| n.is_page())) else { return vec![from] };
+    let top = chain.get(..page_at).and_then(|below| below.iter().rev().copied().find(|c| !is_section(c)));
+    let stop = |n: &figcraft_doc::Node| n.visible && !n.locked && n.board.is_none();
+    let mut out = Vec::new();
+    match top {
+        Some(top) if top != from => {
+            let mut stack = vec![top];
+            let mut seen = 0usize;
+            while let Some(id) = stack.pop() {
+                seen += 1;
+                if seen > 1_000_000 {
+                    break;
+                }
+                let Some(n) = doc.node(id).filter(|n| stop(n)) else { continue };
+                if matches!(n.kind, NodeKind::Text(_)) {
+                    out.push(id);
+                }
+                stack.extend(n.children.iter().copied());
+            }
+        }
+        _ => {
+            let beside = doc.node(from).and_then(|n| n.parent).and_then(|p| doc.node(p)).map(|p| p.children.clone()).unwrap_or_default();
+            out.extend(beside.into_iter().filter(|c| doc.node(*c).is_some_and(|n| stop(n) && matches!(n.kind, NodeKind::Text(_)))));
+        }
+    }
+    if !out.contains(&from) {
+        out.push(from);
+    }
+    out
+}
+
+/// `ids` in reading order by their boxes on the page: rows top to bottom, each row left to right.
+/// Rows are made from the top down: a layer joins the row of the topmost layer before it when the
+/// two overlap vertically by more than nothing and by at least half the height of the shorter one,
+/// else it starts the next row. Layers without bounds are left out.
+fn reading_order(doc: &Document, ids: Vec<NodeId>) -> Vec<NodeId> {
+    let mut boxes: Vec<(NodeId, figcraft_geom::Rect)> = ids.into_iter().filter_map(|i| Some((i, doc.world_bounds(i)?))).collect();
+    boxes.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0).then(a.1.x0.total_cmp(&b.1.x0)));
+    let mut rows: Vec<Vec<(NodeId, figcraft_geom::Rect)>> = Vec::new();
+    for (id, b) in boxes {
+        let joins = |row: &Vec<(NodeId, figcraft_geom::Rect)>| {
+            row.first().is_some_and(|(_, a)| {
+                let overlap = a.y1.min(b.y1) - a.y0.max(b.y0);
+                overlap > 0.0 && overlap >= 0.5 * a.height().min(b.height())
+            })
+        };
+        match rows.last_mut() {
+            Some(row) if joins(row) => row.push((id, b)),
+            _ => rows.push(vec![(id, b)]),
+        }
+    }
+    rows.into_iter()
+        .flat_map(|mut row| {
+            row.sort_by(|a, b| a.1.x0.total_cmp(&b.1.x0).then(a.1.y0.total_cmp(&b.1.y0)));
+            row.into_iter().map(|(id, _)| id)
+        })
+        .collect()
+}
+
 /// The kind of word char `i` belongs to: 0 for spaces and punctuation, else its script, so a word
 /// ends where the script changes (Han, hiragana, katakana and Hangul runs are words of their own in
 /// text without spaces). Combining marks and voicing marks belong to the char before them.
@@ -459,7 +548,9 @@ fn word_right(chars: &[char], mut i: usize) -> usize {
     i
 }
 
-/// A named key: Backspace, Delete, Left, Right, Up, Down, Home, End, Enter, Escape, SelectAll.
+/// A named key: Backspace, Delete, Left, Right, Up, Down, Home, End, Enter, Tab, Escape, SelectAll.
+/// Tab and Shift+Tab outside a list, a code block, a board object and a widget's field edit the
+/// next or previous text layer ([`tab_to_next_text`]).
 /// `word` moves or deletes by word, `line` to the line's ends (Up/Down, Home/End: the text's ends);
 /// [`crate::keymap::text_motion`] gives them for the platform's keys. `ArrowLeft` etc. also work.
 pub fn key(s: &mut Session, key: &str, shift: bool, word: bool, line: bool) -> Result<()> {
@@ -484,6 +575,7 @@ pub fn key(s: &mut Session, key: &str, shift: bool, word: bool, line: bool) -> R
     match key {
         "Escape" => return end(s),
         "Enter" => return insert(s, "\n"),
+        "Tab" if !word && !line && tabs_between_texts(s.doc()?, te.id) => return tab_to_next_text(s, te.id, shift),
         "Tab" => return insert(s, "\t"),
         "Backspace" | "Delete" => {
             return edit(s, |t, te| {
@@ -854,6 +946,106 @@ pub fn selected_text(s: &Session) -> Option<String> {
     let doc = s.doc().ok()?;
     let t = doc.node(id)?.kind.text()?;
     Some(t.characters.chars().skip(a).take(b.saturating_sub(a)).collect())
+}
+
+/// Copied characters with their formatting, for a paste into a text edit that keeps it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RichText {
+    pub text: String,
+    /// Styled runs as `(from, to, style)` char ranges of `text`. Each style carries its fills,
+    /// the layer's own where the run had none, so the characters keep their colour elsewhere.
+    pub spans: Vec<(usize, usize, figcraft_doc::TextStyle)>,
+    /// The data of the images the runs' fills use, so they resolve in another file.
+    pub images: BTreeMap<String, ImageData>,
+}
+
+/// The selected characters while editing, with their formatting (for copy).
+pub fn selected_rich_text(s: &Session) -> Option<RichText> {
+    let (id, a, b) = selected_range(s)?;
+    rich_text_of(s.doc().ok()?, id, a, b)
+}
+
+/// The characters of the text layers `ids`, one per line, with their formatting; None when one of
+/// them isn't a text layer or there are no characters.
+pub fn layers_rich_text(doc: &Document, ids: &[NodeId]) -> Option<RichText> {
+    let mut joined = RichText { text: String::new(), spans: Vec::new(), images: BTreeMap::new() };
+    let mut offset = 0;
+    for (i, id) in ids.iter().enumerate() {
+        let layer = rich_text_of(doc, *id, 0, usize::MAX)?;
+        if i > 0 {
+            joined.text.push('\n');
+            offset += 1;
+        }
+        joined.text.push_str(&layer.text);
+        joined.spans.extend(layer.spans.into_iter().map(|(from, to, style)| (from + offset, to + offset, style)));
+        joined.images.extend(layer.images);
+        offset += layer.text.chars().count();
+    }
+    (!joined.text.is_empty()).then_some(joined)
+}
+
+/// Chars `a..b` of the text layer `id` (`b` past the end means to the end), with their formatting.
+fn rich_text_of(doc: &Document, id: NodeId, a: usize, b: usize) -> Option<RichText> {
+    let n = doc.node(id)?;
+    let t = n.kind.text()?;
+    let b = b.min(t.char_count());
+    let text: String = t.characters.chars().skip(a).take(b.saturating_sub(a)).collect();
+    let spans: Vec<(usize, usize, figcraft_doc::TextStyle)> = t
+        .spans()
+        .into_iter()
+        .filter(|(from, to, _)| *to > a && *from < b)
+        .map(|(from, to, style)| {
+            let mut style = style.clone();
+            style.fills.get_or_insert_with(|| n.fills.clone());
+            (from.max(a) - a, to.min(b) - a, style)
+        })
+        .collect();
+    let mut images = BTreeMap::new();
+    for paint in spans.iter().flat_map(|(_, _, style)| style.fills.iter().flatten()) {
+        if let figcraft_color::PaintKind::Image(img) = &paint.kind
+            && let Some(d) = doc.images.get(&img.image)
+        {
+            images.insert(img.image.clone(), d.clone());
+        }
+    }
+    Some(RichText { text, spans, images })
+}
+
+/// Replace the selection in the text edit with `rich`, keeping its formatting. A link to a style
+/// this file doesn't have is dropped, a fill equal to the layer's is left to the layer, and the
+/// copied image data is added where this file lacks the key, as a pasted layer's is.
+pub fn insert_rich(s: &mut Session, rich: &RichText) -> Result<()> {
+    if s.ds()?.text_edit.is_some() {
+        let doc = s.doc_mut()?;
+        for (k, v) in &rich.images {
+            doc.images.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    let doc = s.doc()?;
+    let layer_fills = s.ds()?.text_edit.as_ref().and_then(|te| doc.node(te.id)).map(|n| n.fills.clone());
+    let spans: Vec<(usize, usize, figcraft_doc::TextStyle)> = rich
+        .spans
+        .iter()
+        .map(|(from, to, style)| {
+            let mut style = style.clone();
+            if style.style_id.as_deref().is_some_and(|id| doc.style(id).is_none()) {
+                style.style_id = None;
+            }
+            if style.fills == layer_fills {
+                style.fills = None;
+            }
+            (*from, *to, style)
+        })
+        .collect();
+    edit(s, |t, te| {
+        let (a, b) = range(te);
+        t.replace_range(a, b, &rich.text);
+        for (from, to, style) in &spans {
+            t.restyle(a + from, a + to, |x| *x = style.clone());
+        }
+        te.caret = a + rich.text.chars().count();
+        te.anchor = te.caret;
+    })
 }
 
 /// The selected range while editing (for styling commands), or None.

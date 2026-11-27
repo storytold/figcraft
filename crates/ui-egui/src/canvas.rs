@@ -17,9 +17,11 @@ use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 mod autopan;
 mod background;
 mod builder;
+mod drag_sprite;
 mod input;
+pub(crate) use input::release_fields_for_press;
 mod outline;
-mod overlays;
+pub(crate) mod overlays;
 mod render;
 mod rulers;
 
@@ -51,12 +53,15 @@ pub mod widget_bar;
 pub struct CanvasState {
     pub rect: Rect,
     texture: Option<egui::TextureHandle>,
+    tex_pixels: Option<Arc<egui::ColorImage>>,
     tex_view: Option<figcraft_render::View>,
     /// The file ([`figcraft_engine::DocState::uid`]) and page the texture shows: it is drawn only
     /// on them.
     tex_of: Option<(u64, NodeId)>,
     /// The texture is a coarse preview (see [`crate::render_worker`]).
     pub tex_coarse: bool,
+    /// The texture leaves out layers ([`crate::render_worker::Done::skipped`]): it is not kept as the page's image.
+    tex_skipped: bool,
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
     /// Which of the worker's images the texture holds ([`render_worker::Done::frame`]), when it
@@ -70,6 +75,10 @@ pub struct CanvasState {
     /// the texture doesn't reach, and the file and page it is of.
     surround: Option<(egui::TextureHandle, figcraft_render::View, (u64, NodeId))>,
     submitted: Option<JobKey>,
+    /// The dragged layers drawn from a texture of their own while the base render stays put
+    /// ([`drag_sprite`]), and the gesture (its start document, held weakly) that can't have one.
+    sprite: Option<drag_sprite::Sprite>,
+    sprite_declined: Option<std::sync::Weak<figcraft_doc::Document>>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
     /// What the last canvas render had to do (shown by `ui.inspect`).
@@ -103,19 +112,56 @@ pub struct CanvasState {
     wheel_is_mouse: bool,
 }
 
+#[cfg(test)]
+impl CanvasState {
+    /// The layers the last submitted canvas job leaves out.
+    pub(crate) fn submitted_skip(&self) -> Option<&[NodeId]> {
+        self.submitted.as_ref().map(|k| k.skip.as_slice())
+    }
+
+    /// The file and page the texture shows.
+    pub(crate) fn tex_of(&self) -> Option<(u64, NodeId)> {
+        self.tex_of
+    }
+
+    /// A page or tab switch to `shown`, as the canvas does on a frame.
+    pub(crate) fn switch_to(&mut self, shown: (u64, NodeId)) {
+        self.switch_texture(Some(shown), |_| true);
+    }
+
+    /// Whether an image of `of` is kept for a switch back to it.
+    pub(crate) fn keeps(&self, of: (u64, NodeId)) -> bool {
+        self.kept.iter().any(|k| k.of == of)
+    }
+
+    /// Whether the canvas holds a texture.
+    pub(crate) fn has_texture(&self) -> bool {
+        self.texture.is_some()
+    }
+
+    /// Where the drag sprite shows on screen (at one pixel per point), if there is one.
+    pub(crate) fn sprite_rect(&self, app: &FigApp) -> Option<Rect> {
+        drag_sprite::screen_rect(app, 1.0)
+    }
+}
+
 impl Default for CanvasState {
     fn default() -> Self {
         Self {
             rect: Rect::NOTHING,
             texture: None,
+            tex_pixels: None,
             tex_view: None,
             tex_of: None,
             tex_coarse: false,
+            tex_skipped: false,
             tex_seq: 0,
             tex_frame: None,
             kept: Vec::new(),
             surround: None,
             submitted: None,
+            sprite: None,
+            sprite_declined: None,
             want_view: None,
             render_work: None,
             preview_latency_ms: None,
@@ -148,6 +194,20 @@ struct Kept {
     seq: u64,
 }
 
+/// `part` put on `image` at (x, y) `at`, as [`egui::TextureHandle::set_partial`] puts it on the
+/// texture; rows that don't lie in the image are left out.
+fn put_patch(image: &mut egui::ColorImage, at: [usize; 2], part: &egui::ColorImage) {
+    let (w, [x, y]) = (image.size[0], at);
+    for (r, row) in part.pixels.chunks(part.size[0].max(1)).enumerate() {
+        let start = (y + r) * w + x;
+        if x + row.len() <= w
+            && let Some(into) = image.pixels.get_mut(start..start + row.len())
+        {
+            into.copy_from_slice(row);
+        }
+    }
+}
+
 impl CanvasState {
     /// When the file or page shown is no longer the one the texture is of, set the texture aside
     /// (if refined) and bring back the image kept for `shown`, if any. Images of files that are no
@@ -156,13 +216,16 @@ impl CanvasState {
     fn switch_texture(&mut self, shown: Option<(u64, NodeId)>, open: impl Fn(u64) -> bool) {
         if shown.is_some() && self.tex_of != shown {
             let back = self.kept.iter().position(|k| Some(k.of) == shown).map(|i| self.kept.remove(i));
+            self.tex_pixels = None;
             let (texture, view, of) = (self.texture.take(), self.tex_view.take(), self.tex_of.take());
-            if let (Some(texture), Some(view), Some(of), false) = (texture, view, of, self.tex_coarse) {
+            // An image without the dragged layers isn't the page's complete one: not kept.
+            if let (Some(texture), Some(view), Some(of), false, false) = (texture, view, of, self.tex_coarse, self.tex_skipped) {
                 self.kept.insert(0, Kept { texture, view, of, seq: self.tex_seq });
             }
             self.tex_coarse = false;
             // The worker's image is of the other file or page: this texture is none of its.
             self.tex_frame = None;
+            self.tex_skipped = false;
             if let Some(k) = back {
                 (self.texture, self.tex_view, self.tex_of, self.tex_seq) = (Some(k.texture), Some(k.view), Some(k.of), k.seq);
             }
@@ -175,6 +238,48 @@ impl CanvasState {
     /// this too: the canvas isn't shown there, and closing the last file leads to it.
     pub(crate) fn drop_closed(&mut self, open: impl Fn(u64) -> bool) {
         self.kept.retain(|k| open(k.of.0));
+    }
+
+    /// Put a finished render's pixels on the texture, and on the copy kept of it
+    /// ([`Self::pixel_under`] reads that, so the colour it gives is the one shown).
+    fn take_pixels(&mut self, ctx: &egui::Context, pixels: render_worker::Pixels, filter: egui::TextureOptions) {
+        match pixels {
+            render_worker::Pixels::Whole(image) => {
+                let image = Arc::new(image);
+                match &mut self.texture {
+                    Some(t) => t.set(Arc::clone(&image), filter),
+                    None => self.texture = Some(ctx.load_texture("figcraft-canvas", Arc::clone(&image), filter)),
+                }
+                self.tex_pixels = Some(image);
+            }
+            // Patches of the image the texture holds (the worker was told which).
+            render_worker::Pixels::Patches(parts) => {
+                let Some(t) = &mut self.texture else { return };
+                for (at, part) in parts {
+                    if let Some(kept) = &mut self.tex_pixels {
+                        put_patch(Arc::make_mut(kept), at, &part);
+                    }
+                    t.set_partial(at, part, filter);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn pixel_under(&self, p: Point, of: Option<(u64, NodeId)>, page: Color32) -> Option<Color32> {
+        let (image, v) = (self.tex_pixels.as_ref()?, self.tex_view.as_ref()?);
+        if of.is_none() || self.tex_of != of {
+            return None;
+        }
+        let x = ((p.x - v.origin.0) * v.scale).floor();
+        let y = ((p.y - v.origin.1) * v.scale).floor();
+        let [w, h] = image.size;
+        if !(x >= 0.0 && y >= 0.0 && x < w as f64 && y < h as f64) {
+            return None;
+        }
+        let c = *image.pixels.get(y as usize * w + x as usize)?;
+        let under = 255 - u16::from(c.a());
+        let over = |a: u8, b: u8| (u16::from(a) + (u16::from(b) * under + 127) / 255).min(255) as u8;
+        Some(Color32::from_rgb(over(c.r(), page.r()), over(c.g(), page.g()), over(c.b(), page.b())))
     }
 }
 
@@ -240,8 +345,9 @@ fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers
         sy: f64::from(pos.y),
         shift: m.shift,
         alt: m.alt,
-        // Crop mode: resizing the layer crops it, as Cmd/Ctrl-resizing does.
-        cmd: m.command || app.ui.crop.is_some(),
+        // Crop mode: resizing the layer crops it, as Cmd/Ctrl-resizing does (not while its points
+        // are being edited, where Cmd/Ctrl bends a segment).
+        cmd: m.command || (app.ui.crop.is_some() && app.session.ds().is_ok_and(|d| d.vector_edit.is_none())),
         ctrl: m.ctrl,
         zoom,
         pressure: app.canvas.pressure,
@@ -258,6 +364,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let ctx = ui.ctx().clone();
     let ppp = ctx.pixels_per_point();
     let resp = ui.interact(rect, ui.scope_id().with("canvas"), Sense::click_and_drag());
+    // Tab is the focused canvas's (next layer, pick select) only while FigCraft's regions run; over
+    // a dialog, the palette or the presenter it moves the focus.
+    crate::framework::host_canvas(&ctx, resp.id, !crate::a11y::blocked(app));
+    // A press on the canvas takes the keyboard from panel fields; Tab is then its own. Real presses
+    // only: egui makes clicks of Enter and Space on a focused widget.
+    if resp.hovered() && ctx.input(|i| i.pointer.primary_pressed() || i.pointer.secondary_pressed()) {
+        resp.request_focus();
+    }
     let key_box = app.ui.key_box;
     crate::a11y::canvas(&mut app.ui.nav, &resp, || key_box.map_or_else(|| describe(&app.session), describe_box));
     if let Ok(ds) = app.session.ds_mut() {
@@ -278,7 +392,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
             // Otherwise keep the centre.
             ds.view.vw = f64::from(rect.width());
             ds.view.vh = f64::from(rect.height());
-            if first {
+            if first && ds.fit_when_sized {
                 ds.zoom_to_fit();
             }
         }
@@ -302,7 +416,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         Some((rect, _)) => crate::drop_overlay(&ctx, rect, tr("Drop to use this image")),
         None => crate::drop_overlay(&ctx, ctx.content_rect(), label),
     }
-    crate::guides::end_released(&ctx);
+    crate::guides::end_released(app, &ctx);
     crate::live::track_pointer(app, &ctx);
     app.sync_preedit();
     // Retained rendering snaps the view outward and adds one pixel on each axis.
@@ -319,7 +433,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         })
         .unwrap_or(t.canvas);
     let dots = crate::board_bar::dots(app, bg, &t);
-    request_render(app, worker, ppp, max_texture_side, dots);
+    request_render(app, worker, &ctx, ppp, max_texture_side, dots);
+    drag_sprite::drop_orphan(&mut app.canvas);
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
@@ -341,18 +456,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         } else {
             egui::TextureOptions::LINEAR
         };
-        match (done.image, &mut app.canvas.texture) {
-            (render_worker::Pixels::Whole(image), Some(t)) => t.set(image, filter),
-            (render_worker::Pixels::Whole(image), None) => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", image, filter)),
-            // Patches of the image the texture holds (the worker was told which).
-            (render_worker::Pixels::Patches(parts), Some(t)) => {
-                for (at, image) in parts {
-                    t.set_partial(at, image, filter);
-                }
-            }
-            (render_worker::Pixels::Patches(_), None) => {}
-        }
+        app.canvas.take_pixels(&ctx, done.image, filter);
         app.canvas.tex_frame = (done.frame != 0 && !done.coarse).then_some(done.frame);
+        let done_at = done.at;
         let latency = Some(done.at.elapsed().as_secs_f64() * 1000.0);
         if done.coarse {
             app.canvas.preview_latency_ms = latency;
@@ -362,7 +468,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_view = Some(done.view);
         app.canvas.tex_of = Some((done.uid, done.page));
         app.canvas.tex_coarse = done.coarse;
+        app.canvas.tex_skipped = done.skipped;
         app.canvas.tex_seq = done.seq;
+        drag_sprite::arrived(&mut app.canvas, done_at, done.coarse);
     }
     // The image around the view always comes whole (nothing tells its worker what is held).
     if let Some(around) = worker.surround()
@@ -406,6 +514,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     if let Some((texture, image_rect)) = image {
         painter.image(texture, image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
+    drag_sprite::draw(app, &painter, ppp);
     crate::dev_mode::refresh_measurements(app);
     app.session.tool.labels = overlays(app, &painter, &t);
     crate::frame_labels::rename_field(app, ui);
@@ -444,6 +553,11 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         let panning = app.canvas.space_pan || app.canvas.middle_pan.is_some();
         let shown = crate::cursors::on_canvas(panning, ctx.input(|i| i.pointer.any_down()), app.canvas.zoom_tool, app.session.tool.overlay.cursor);
         shown.show(&ctx, at);
+        if shown == crate::cursors::Shown::Drawn(crate::cursors::Glyph::Eyedropper)
+            && let Some(c) = app.canvas.pixel_under(app.to_page(at), app.session.ds().ok().map(|ds| (ds.uid, ds.page)), bg)
+        {
+            crate::cursors::sampled_swatch(&ctx, at, c);
+        }
         app.canvas.cursor = Some(shown);
     }
 }
