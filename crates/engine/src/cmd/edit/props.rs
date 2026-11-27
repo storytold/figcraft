@@ -268,12 +268,13 @@ pub(super) fn stroke_brush(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
-pub(super) fn reparent(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = req_targets("node.reparent", s, p)?;
-    let parent = req_id("node.reparent", p, "parent")?;
-    let index = opt_index("node.reparent", p, "index")?;
+pub(super) fn reparent(s: &mut Session, p: &Value, cmd: &str, keep_order: bool) -> Result<Value> {
+    let ids = req_targets(cmd, s, p)?;
+    let parent = req_id(cmd, p, "parent")?;
+    let index = opt_index(cmd, p, "index")?;
     let doc = s.doc_mut()?;
-    let ids = z_sorted(doc, &roots(doc, &ids));
+    let roots = roots(doc, &ids);
+    let ids = if keep_order { roots } else { z_sorted(doc, &roots) };
     // `index` is where the first moved layer ends up among the parent's children (bottom first),
     // counted after the move, the way `node.reorder` counts it. The layers land together, keeping
     // their order, under the sibling that stays put and ends up just after them (none: on top).

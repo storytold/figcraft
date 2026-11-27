@@ -89,6 +89,8 @@ pub struct Done {
     pub page: NodeId,
     /// A coarse preview, refined by a later image unless a newer request replaced it.
     pub coarse: bool,
+    /// The image leaves out the layers of [`Job::skip`] (a drag's base render): not the page's complete image.
+    pub skipped: bool,
     /// [`Job::at`].
     pub at: Instant,
     /// The request it answers, numbered by the worker in order (0 outside a worker).
@@ -145,7 +147,7 @@ fn done(job: &Job, view: View, pix: &Pixmap, work: Work, ms: f64, coarse: bool) 
     if job.proof {
         mark_outside_srgb(&mut image, pix, job.doc.color_profile);
     }
-    Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0 }
+    Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, skipped: !job.skip.is_empty(), at: job.at, seq: 0 }
 }
 
 /// The coarse image around the view is this many views wide and tall, centred on it.

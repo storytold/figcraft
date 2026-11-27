@@ -93,8 +93,8 @@ pub fn invoke(app: &mut FigApp, id: &str) {
             app.run(id, json!({}));
         }
         "file.open" => app.open_dialog(),
-        // From the keyboard or a menu, typing goes on in the new sticky.
-        "board.nextSticky" => {
+        // From the keyboard, a menu or the Actions palette, typing goes on in what was made.
+        "board.nextSticky" | "board.mindMapAdd" | "board.mindMap" => {
             app.run(id, json!({"edit": true}));
         }
         "help.checkForUpdates" | "app.checkForUpdates" => crate::updates_ui::check(app),
