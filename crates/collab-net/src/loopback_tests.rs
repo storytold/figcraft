@@ -290,6 +290,39 @@ fn a_view_token_lets_people_look_and_not_edit() {
     host.stop();
 }
 
+/// A file whose review settings are past this build's limits is not hosted: joining clients
+/// would refuse the value when it reaches them. The error names the lists and the way out.
+#[test]
+fn a_file_with_review_settings_past_the_limits_is_not_shared() {
+    use figcraft_doc::{DesignReview, MAX_DISABLED, MAX_RADII};
+
+    let probe = Probe::new();
+    let mut doc = Document::new("Shared file");
+    doc.repair();
+    doc.design_review = DesignReview {
+        radii: (0..MAX_RADII + 1).map(|i| i as f64).collect(),
+        disabled: (0..MAX_DISABLED + 1).map(|i| format!("rule.{i}")).collect(),
+        ..Default::default()
+    };
+    let cfg = HostConfig {
+        addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+        any_port_if_taken: false,
+        file: FILE.into(),
+        token: TOKEN.into(),
+        view_token: None,
+        doc,
+        name: "Hana".into(),
+        limits: fast_limits(),
+        core: Limits::default(),
+    };
+    let e = Host::start(cfg, probe.inbox.clone()).err().expect("settings past the limits are refused");
+    let text = e.to_string();
+    assert!(text.contains("can't be shared"), "{text}");
+    assert!(text.contains(&format!("{} corner radii (this build keeps at most {MAX_RADII})", MAX_RADII + 1)), "{text}");
+    assert!(text.contains(&format!("{} disabled rules", MAX_DISABLED + 1)), "{text}");
+    assert!(text.contains("design.configure"), "{text}");
+}
+
 #[test]
 fn unreachable_hosts_fail_at_once() {
     // A port nothing listens on.

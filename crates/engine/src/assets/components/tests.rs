@@ -283,6 +283,50 @@ fn variant_switch_keeps_compatible_overrides() {
 }
 
 #[test]
+fn typed_text_stays_across_variants_that_nest_it_differently() {
+    let mut s = Session::new();
+    // Each variant's Label layers, by the frames holding them.
+    let shapes: [(&str, &[&[&str]]); 4] =
+        [("Kind=Plain", &[&["text"]]), ("Kind=Boxed", &[&["div", "text"]]), ("Kind=Twice", &[&["a"], &["b"]]), ("Kind=Moved", &[&["a"], &["c"]])];
+    let mut labels = Vec::new();
+    let mut variants = Vec::new();
+    for (k, (name, paths)) in shapes.into_iter().enumerate() {
+        let v = idv(&ex(&mut s, "frame.create", json!({"x": k as f64 * 300.0, "y": 0, "width": 200, "height": 60, "name": name})));
+        for frames in paths {
+            let mut parent = v;
+            for f in *frames {
+                parent = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 60, "parent": parent, "name": f})));
+            }
+            labels.push(idv(&ex(&mut s, "text.create", json!({"text": "I agree", "x": 0, "y": 0, "parent": parent, "props": {"name": "Label"}}))));
+        }
+        variants.push(idv(&ex(&mut s, "component.create", json!({"ids": [v]}))));
+    }
+    ex(&mut s, "component.combineVariants", json!({"ids": variants.clone()}));
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": variants[0], "x": 0, "y": 300})));
+    let typed = copy_of(&s, i, labels[0]);
+    ex(&mut s, "text.set", json!({"id": typed, "characters": "Architect"}));
+
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Kind": "Boxed"}}));
+    healthy(&s);
+    assert_eq!(chars(&s, copy_of(&s, i, labels[1])), "Architect", "one frame deeper, same name");
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Kind": "Plain"}}));
+    assert_eq!(chars(&s, copy_of(&s, i, labels[0])), "Architect", "and back");
+
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Kind": "Twice"}}));
+    healthy(&s);
+    let texts: Vec<String> = labels[2..4].iter().map(|l| chars(&s, copy_of(&s, i, *l))).collect();
+    assert_eq!(texts, ["I agree", "I agree"], "two layers of that name: neither is the one typed into");
+
+    // `a › Label` matches by path; the leftover `b › Label` and `c › Label` still share a name with it.
+    let typed = copy_of(&s, i, labels[3]);
+    ex(&mut s, "text.set", json!({"id": typed, "characters": "Architect"}));
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Kind": "Moved"}}));
+    healthy(&s);
+    let texts: Vec<String> = labels[4..].iter().map(|l| chars(&s, copy_of(&s, i, *l))).collect();
+    assert_eq!(texts, ["I agree", "I agree"], "a name two layers share doesn't pair what path matching left over");
+}
+
+#[test]
 fn detach_keeps_the_look() {
     let mut s = Session::new();
     let (icon, shape, button, nested) = button(&mut s);

@@ -21,7 +21,7 @@ mod drag_sprite;
 mod input;
 pub(crate) use input::release_fields_for_press;
 mod outline;
-mod overlays;
+pub(crate) mod overlays;
 mod render;
 mod rulers;
 
@@ -280,8 +280,9 @@ fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers
         sy: f64::from(pos.y),
         shift: m.shift,
         alt: m.alt,
-        // Crop mode: resizing the layer crops it, as Cmd/Ctrl-resizing does.
-        cmd: m.command || app.ui.crop.is_some(),
+        // Crop mode: resizing the layer crops it, as Cmd/Ctrl-resizing does (not while its points
+        // are being edited, where Cmd/Ctrl bends a segment).
+        cmd: m.command || (app.ui.crop.is_some() && app.session.ds().is_ok_and(|d| d.vector_edit.is_none())),
         ctrl: m.ctrl,
         zoom,
         pressure: app.canvas.pressure,
@@ -326,7 +327,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
             // Otherwise keep the centre.
             ds.view.vw = f64::from(rect.width());
             ds.view.vh = f64::from(rect.height());
-            if first {
+            if first && ds.fit_when_sized {
                 ds.zoom_to_fit();
             }
         }
@@ -350,7 +351,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         Some((rect, _)) => crate::drop_overlay(&ctx, rect, tr("Drop to use this image")),
         None => crate::drop_overlay(&ctx, ctx.content_rect(), label),
     }
-    crate::guides::end_released(&ctx);
+    crate::guides::end_released(app, &ctx);
     crate::live::track_pointer(app, &ctx);
     app.sync_preedit();
     // Retained rendering snaps the view outward and adds one pixel on each axis.
