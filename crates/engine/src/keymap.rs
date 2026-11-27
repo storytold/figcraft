@@ -316,6 +316,7 @@ pub static KEYS: &[Binding] = &[
     k(Edit, "edit.copyProperties", &["Alt+Cmd+C"]),
     k(Edit, "edit.pasteProperties", &["Alt+Cmd+V"]),
     k(Edit, "edit.copyAsPng", &["Shift+Cmd+C"]),
+    k(Edit, "edit.copyLink", &["Cmd+L"]),
     k(Edit, "file.export", &["Shift+Cmd+E"]),
     k(Edit, "file.import", &["Shift+Cmd+I"]),
     // Transform

@@ -226,3 +226,18 @@ fn select_layer_needs_more_than_one_layer_under_the_pointer() {
     let shapes = flat(&u.frame_output(vec![]).shapes);
     assert!(has_text(&shapes, "Select layer"), "two layers: it shows");
 }
+
+#[test]
+fn cmd_l_copies_the_link_of_the_selected_frame() {
+    let mut s = Session::new();
+    let frame = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 200, "name": "specs"})).unwrap());
+    s.set_selection(vec![frame]);
+    let copied = Arc::new(Mutex::new(Vec::new()));
+    let mut u = Ui::new(s);
+    u.app.services = Box::new(Copied(copied.clone()));
+    u.frame(vec![]);
+    let held = egui::Modifiers { command: true, mac_cmd: cfg!(target_os = "macos"), ctrl: !cfg!(target_os = "macos"), ..egui::Modifiers::NONE };
+    let l = |pressed| egui::Event::Key { key: egui::Key::L, physical_key: Some(egui::Key::L), pressed, repeat: false, modifiers: held };
+    u.frame_with(vec![l(true), l(false)], held);
+    assert_eq!(copied.lock().unwrap().last().cloned(), Some(format!("figcraft://node/{}", frame.0)));
+}
