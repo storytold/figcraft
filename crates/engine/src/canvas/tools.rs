@@ -69,10 +69,11 @@ pub enum ToolId {
     Highlighter,
     Eraser,
     Stamp,
+    MindMap,
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 27] = [
+    pub const ALL: [ToolId; 28] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -100,6 +101,7 @@ impl ToolId {
         ToolId::Highlighter,
         ToolId::Eraser,
         ToolId::Stamp,
+        ToolId::MindMap,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -130,6 +132,7 @@ impl ToolId {
             ToolId::Highlighter => "highlighter",
             ToolId::Eraser => "eraser",
             ToolId::Stamp => "stamp",
+            ToolId::MindMap => "mindMap",
         }
     }
     /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
@@ -169,6 +172,7 @@ impl ToolId {
             ToolId::Highlighter => "Highlighter",
             ToolId::Eraser => "Eraser",
             ToolId::Stamp => "Stamp",
+            ToolId::MindMap => "Mind map",
         }
     }
 
@@ -176,7 +180,14 @@ impl ToolId {
     pub fn on_boards(self) -> bool {
         matches!(
             self,
-            ToolId::Sticky | ToolId::BoardShape | ToolId::Connector | ToolId::Marker | ToolId::Highlighter | ToolId::Eraser | ToolId::Stamp
+            ToolId::Sticky
+                | ToolId::BoardShape
+                | ToolId::Connector
+                | ToolId::Marker
+                | ToolId::Highlighter
+                | ToolId::Eraser
+                | ToolId::Stamp
+                | ToolId::MindMap
         )
     }
     /// The tool's key (from [`crate::keymap`]; empty when it has none).
@@ -542,6 +553,27 @@ fn at_45_degrees(last: Point, p: Point) -> Point {
     let v = p - last;
     let ang = (v.atan2() / (std::f64::consts::PI / 4.0)).round() * std::f64::consts::PI / 4.0;
     last + Vec2::from_angle(ang) * v.hypot()
+}
+
+/// Add where the pointer is to a Pencil (Marker, Highlighter) stroke: a sample once it has moved
+/// half a screen pixel, or with Shift one straight segment from where the stroke started, at the
+/// nearest 45° step, as the Line tool and the Pen keep theirs (#2447).
+fn pencil_add(points: &mut Vec<Point>, pressure: &mut Vec<Option<f32>>, ev: &PointerEvent) {
+    let min = 0.5 / ev.zoom.max(1e-6);
+    if ev.shift
+        && let (Some(&start), Some(&first)) = (points.first(), pressure.first())
+    {
+        let end = at_45_degrees(start, ev.p());
+        points.truncate(1);
+        pressure.truncate(1);
+        if (end - start).hypot() > min {
+            points.push(end);
+            pressure.push(ev.pressure.or(first));
+        }
+    } else if points.last().is_none_or(|l| (*l - ev.p()).hypot() > min) {
+        points.push(ev.p());
+        pressure.push(ev.pressure);
+    }
 }
 
 /// The handles a pen path shows while it is drawn ([`Overlay::pen_handles`]): the last anchor's in

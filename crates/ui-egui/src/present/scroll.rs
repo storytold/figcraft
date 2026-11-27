@@ -73,10 +73,16 @@ impl Presenter {
         true
     }
 
-    /// How far `frame` scrolls (in `doc`, without scroll offsets): the presented frame within the
-    /// device's screen, other frames within themselves.
+    /// What of the presented frame shows (page units): its device's screen, else the window when
+    /// the frame is bigger than it. None: the frame shows whole.
+    pub(super) fn screen(&self, doc: &Document) -> Option<(f64, f64)> {
+        viewport(doc, self.current).or(self.window)
+    }
+
+    /// How far `frame` scrolls (in `doc`, without scroll offsets): the presented frame within its
+    /// screen ([`Self::screen`]), other frames within themselves.
     pub(super) fn range(&self, doc: &Document, frame: NodeId) -> (f64, f64) {
-        let vp = if frame == self.current { viewport(doc, frame) } else { None };
+        let vp = if frame == self.current { self.screen(doc) } else { None };
         scroll_range_in(doc, frame, vp)
     }
 

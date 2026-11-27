@@ -333,6 +333,9 @@ pub struct Presenter {
     pan: Option<(f64, f64)>,
     /// How far the view can pan, and the zoom it shows at (from the last layout).
     pan_range: (f64, f64),
+    /// Without a device, the part of the presented frame the window shows (page units) when the
+    /// frame is bigger: the window is then its screen (from the last layout).
+    window: Option<(f64, f64)>,
     zoom: f64,
     /// Scrolling that carries on after the input let go.
     fling: Option<Fling>,
@@ -398,6 +401,7 @@ impl Presenter {
             view: PresentView::default(),
             pan: None,
             pan_range: (0.0, 0.0),
+            window: None,
             zoom: 1.0,
             fling: None,
             wheel: None,
