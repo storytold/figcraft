@@ -23,6 +23,11 @@ pub struct Swapped {
     pub styles: usize,
     pub variables: usize,
     pub unmatched: Vec<String>,
+    /// The old library's copies the swap removed because nothing in the document used them before
+    /// it (an imported component no instance shows, a variable nothing binds), named as in
+    /// `unmatched`. Copies that went because what used them moved to the other library aren't
+    /// listed.
+    pub dropped: Vec<String>,
     /// Nothing of the old library is used any more: it was removed from the document.
     pub removed: bool,
 }
@@ -70,15 +75,45 @@ fn match_components(doc: &Document, records: &[ImportedComponent], m: &LibraryMa
     pairs
 }
 
+/// `from`'s copies in `doc`, each by its local id with its name as [`Swapped::dropped`] gives it.
+fn copies_of(doc: &Document, from: &str) -> Vec<(String, String)> {
+    let libs = &doc.libraries;
+    let coll_name = |id: &str| doc.variables.collection_by_id(id).map(|c| c.name.clone()).unwrap_or_default();
+    let components = libs
+        .components
+        .iter()
+        .filter(|r| r.library == from)
+        .map(|r| (format!("node {}", r.root.0), format!("component {}", doc.node(r.root).map(|n| n.name.as_str()).unwrap_or_default())));
+    let styles = libs
+        .styles
+        .iter()
+        .filter(|r| r.library == from)
+        .map(|r| (format!("style {}", r.local), format!("style {}", doc.style(&r.local).map(|st| st.name.as_str()).unwrap_or_default())));
+    let variables = libs.variables.iter().filter(|r| r.library == from).map(|r| {
+        let name = doc.variables.get_by_id(&r.local).map(|v| format!("{}/{}", coll_name(&v.collection), v.name)).unwrap_or_default();
+        (format!("variable {}", r.local), format!("variable {name}"))
+    });
+    let collections = libs
+        .collections
+        .iter()
+        .filter(|r| r.library == from)
+        .map(|r| (format!("collection {}", r.local), format!("collection {}", coll_name(&r.local))));
+    components.chain(styles).chain(variables).chain(collections).collect()
+}
+
 /// Swap the copies of library `from` in `doc` to library `to` by names (see the module docs).
 pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Result<Swapped> {
     let m = &to.manifest;
     if m.id == from {
         return Err(EngineError::Other("that is the same library".into()));
     }
-    // Only what the document uses counts (copies nothing uses any more go first).
+    // Only what the document uses counts: copies nothing uses any more go first, and are listed
+    // (#2569). Those the final prune takes were in use, by what moved to B.
+    let before = copies_of(doc, from);
     prune(doc, from)?;
     let mut out = Swapped::default();
+    let kept: BTreeSet<String> = copies_of(doc, from).into_iter().map(|(id, _)| id).collect();
+    out.dropped = before.into_iter().filter(|(id, _)| !kept.contains(id)).map(|(_, name)| name).collect();
     let store = doc.library_store();
     let outside = |d: &Document, id: NodeId| store.is_none_or(|s| d.page_of(id) != Some(s));
 
