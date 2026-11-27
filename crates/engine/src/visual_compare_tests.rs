@@ -223,3 +223,27 @@ fn only_a_frame_component_or_instance_is_compared() {
         assert!(s.execute("inspect.compare", &json!({"id": id, "data": data})).is_ok(), "{id}");
     }
 }
+
+#[test]
+fn only_the_frames_own_area_is_drawn_for_the_comparison() {
+    let mut s = session();
+    let (f, _) = card(&mut s);
+    s.execute("node.set", &json!({"ids": [f], "props": {"clipsContent": false}})).unwrap();
+    let data = capture(&mut s, f, 1.0);
+    // A layer past the frame's left edge is drawn, but it isn't part of the page.
+    make(&mut s, json!({"type": "rectangle", "parent": f, "x": -160, "y": 20, "width": 100, "height": 100, "props": {"fill": "#00AA00"}}));
+    let v = compare(&mut s, f, &data);
+    assert_eq!(v["total"], 0, "{v}");
+}
+
+#[test]
+fn a_shape_with_see_through_corners_leaves_the_layer_under_it_to_blame() {
+    let mut s = session();
+    let (f, b) = card(&mut s);
+    make(&mut s, json!({"type": "ellipse", "parent": f, "name": "Dot", "x": 100, "y": 80, "width": 120, "height": 60, "props": {"fill": "#FFFFFF"}}));
+    s.execute("node.set", &json!({"ids": [b], "props": {"fill": "#C02020"}})).unwrap();
+    let data = capture(&mut s, f, 1.0);
+    s.execute("node.set", &json!({"ids": [b], "props": {"fill": "#2040C0"}})).unwrap();
+    let v = compare(&mut s, f, &data);
+    assert!(differs(&v, "Box").is_some(), "the box shows through the ellipse's corners: {v}");
+}

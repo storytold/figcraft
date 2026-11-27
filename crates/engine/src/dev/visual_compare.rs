@@ -5,6 +5,7 @@
 //! developer's own tools made.
 
 use figcraft_doc::{Document, NodeId, NodeKind};
+use figcraft_geom::Rect;
 use figcraft_render::Pixmap;
 use serde_json::{Value, json};
 
@@ -29,6 +30,8 @@ const MIN_SHARE: f64 = 0.02;
 const MAX_LISTED: usize = 100;
 /// Most layers looked at.
 const MAX_LAYERS: usize = 5_000;
+/// Most layers whose drawn shape is worked out; past it, a layer is matched by its box.
+const MAX_DRAWN: usize = 300;
 /// Longest `data` read (base64 characters): [`MAX_CAPTURE`] encoded, checked before decoding.
 const MAX_DATA: usize = (MAX_CAPTURE as usize / 3 + 1) * 4;
 
@@ -145,6 +148,31 @@ fn visible(doc: &Document, id: NodeId) -> (Vec<NodeId>, bool) {
     (out, false)
 }
 
+/// The cells of `area` (a grid of `per` cells to a CSS pixel from `origin`) that layer `id` draws
+/// on, from its own drawing: what it leaves see-through (an ellipse's corners, the space around
+/// glyphs) stays with the layers under it. `None` when it can't be drawn.
+fn coverage(doc: &Document, id: NodeId, origin: (f64, f64), per: f64, (x0, y0, x1, y1): Area) -> Option<Vec<bool>> {
+    let (w, h) = (usize::try_from(x1 - x0).ok()?, usize::try_from(y1 - y0).ok()?);
+    if w == 0 || h == 0 {
+        return Some(Vec::new());
+    }
+    let at = |cell: i32, o: f64| o + f64::from(cell) / per;
+    let page = Rect::new(at(x0, origin.0), at(y0, origin.1), at(x1, origin.0), at(y1, origin.1));
+    let drawn = figcraft_render::render_area(doc, &[id], page, per)?;
+    let (pw, ph) = (drawn.width() as usize, drawn.height() as usize);
+    let data = drawn.data();
+    let span = |i: usize, n: usize, of: usize| (i * of / n, ((i + 1) * of / n).max(i * of / n + 1).min(of));
+    let mut out = Vec::with_capacity(w * h);
+    for y in 0..h {
+        let (sy0, sy1) = span(y, h, ph);
+        for x in 0..w {
+            let (sx0, sx1) = span(x, w, pw);
+            out.push((sy0..sy1).any(|sy| (sx0..sx1).any(|sx| data.get((sy * pw + sx) * 4 + 3).is_some_and(|a| *a > 0))));
+        }
+    }
+    Some(out)
+}
+
 /// Number parameter `key`: `None` when left out; anything but a number is refused.
 fn number(cmd: &str, p: &Value, key: &str) -> Result<Option<f64>> {
     match get(p, key) {
@@ -199,16 +227,21 @@ fn compare(s: &mut Session, p: &Value) -> Result<Value> {
     let same_size = (cw - fw).abs() < 1.0 && (ch - fh).abs() < 1.0;
     // Compared on the area both have, at one size.
     let (w, h) = (fw.min(cw), fh.min(ch));
-    // Bounded by the larger of the two as well: the design is gridded whole, so a capture far
-    // smaller than the frame must not make that grid (and the drawing) huge.
-    let per = (f64::from(MAX_SIDE) / fw.max(fh).max(cw).max(ch)).min(density).max(0.01);
-    // Drawn at twice the compared size at most (enough to smooth its edges as the capture's are),
-    // not at the capture's density: a tall page at 2x would be hundreds of megabytes.
-    let drawn = figcraft_render::render_node(doc, id, density.min(per * 2.0)).ok_or_else(|| bad(cmd, "the layer can't be rendered"))?;
-    let (gw, gh) = (((w * per).ceil() as usize).max(1), ((h * per).ceil() as usize).max(1));
-    let full = |size: f64, side: f64, grid: usize| ((grid as f64) * size / side).round().max(1.0) as usize;
-    let design = Image::from(&drawn, full(fw, w, gw), full(fh, h, gh));
-    let shot = Image::from(&capture, full(cw, w, gw), full(ch, h, gh));
+    // Bounded by the larger of the two as well: both are gridded whole, so a capture far smaller
+    // than the frame must not make the frame's grid (and its drawing) huge. No floor: a gigantic
+    // frame just gets a coarser grid.
+    let per = (f64::from(MAX_SIDE) / fw.max(fh).max(cw).max(ch)).min(density);
+    // Every grid comes from `per` itself, never from a rounded overlap: one cell of a tiny capture
+    // must not stand for thousands of the frame's.
+    let cells = |css: f64| ((css * per).ceil() as usize).max(1);
+    // Only the frame's own rectangle, as the capture holds it: not its export area, which takes in
+    // strokes, effects and layers past an edge that doesn't clip. Drawn at twice the compared size
+    // at most (enough to smooth its edges as the capture's are), not at the capture's density: a
+    // tall page at 2x would be hundreds of megabytes.
+    let drawn = figcraft_render::render_area(doc, &[id], bounds, density.min(per * 2.0)).ok_or_else(|| bad(cmd, "the layer can't be rendered"))?;
+    let (gw, gh) = (cells(w), cells(h));
+    let design = Image::from(&drawn, cells(fw), cells(fh));
+    let shot = Image::from(&capture, cells(cw), cells(ch));
     let mut differing = vec![false; gw * gh];
     let mut changed = 0usize;
     for y in 0..gh {
@@ -225,6 +258,7 @@ fn compare(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (layers, layers_cut) = visible(doc, id);
     let mut claimed = vec![false; gw * gh];
+    let (mut drawn_shapes, mut by_box) = (0usize, 0usize);
     // (weight, layer, its area, share differing, is text)
     let mut found: Vec<(f64, NodeId, Area, f64, bool)> = Vec::new();
     // Deepest first: a child's difference isn't its parent's too.
@@ -233,10 +267,32 @@ fn compare(s: &mut Session, p: &Value) -> Result<Value> {
         let corner = |v: f64, origin: f64, limit: usize| (((v - origin) * per).round().max(0.0) as usize).min(limit) as i32;
         let area = (corner(b.x0, bounds.x0, gw), corner(b.y0, bounds.y0, gh), corner(b.x1, bounds.x0, gw), corner(b.y1, bounds.y0, gh));
         let (x0, y0, x1, y1) = area;
+        // A layer with an unclaimed difference in its box claims only the cells it draws on, so a
+        // see-through part leaves them to the layers under it. Drawing each one costs, so it is
+        // done only for those, and only up to a limit (said in the result).
+        let open = (y0..y1).any(|y| {
+            (x0..x1).any(|x| {
+                let at = y as usize * gw + x as usize;
+                claimed.get(at).is_some_and(|c| !c) && differing.get(at).is_some_and(|d| *d)
+            })
+        });
+        let shape = if !open {
+            None
+        } else if drawn_shapes < MAX_DRAWN {
+            drawn_shapes += 1;
+            coverage(doc, *layer, (bounds.x0, bounds.y0), per, area)
+        } else {
+            by_box += 1;
+            None
+        };
         let (mut own, mut bad_pixels) = (0usize, 0usize);
         let text = matches!(n.kind, NodeKind::Text(_));
+        let width = (x1 - x0).max(0) as usize;
         for y in y0..y1 {
             for x in x0..x1 {
+                if shape.as_ref().is_some_and(|c| !c.get((y - y0) as usize * width + (x - x0) as usize).copied().unwrap_or(false)) {
+                    continue;
+                }
                 let at = y as usize * gw + x as usize;
                 let (Some(free), Some(differs)) = (claimed.get_mut(at), differing.get(at)) else { continue };
                 if *free {
@@ -291,7 +347,12 @@ fn compare(s: &mut Session, p: &Value) -> Result<Value> {
     });
     if layers_cut {
         // Layers past the cap weren't looked at: their differences fall to the layers above them.
-        out["truncated"] = json!({"maxLayers": MAX_LAYERS});
+        out["truncated"]["maxLayers"] = json!(MAX_LAYERS);
+    }
+    if by_box > 0 {
+        // Past the limit, a layer was matched by its whole box: a see-through part of it may
+        // hide a difference that belongs to a layer under it.
+        out["truncated"]["matchedByBox"] = json!(by_box);
     }
     Ok(out)
 }
@@ -300,7 +361,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.compare",
         "Compare with a capture",
-        "{id? (a frame, component or instance; default the first selected layer, refused when it is anything else), path | data (base64; not both): a capture of the built page, density? (device pixels per CSS pixel; default from the widths), tolerance? (out of 255, default 24)}  the layers that differ, deepest first  → {target, viewport {width, height}, capture {width, height, density, sameSize, cssWidth, cssHeight}, changedPercent, differences: [{id, name, type, kind: position|color|content, percent, expected, actual, offset?, note?}] (at most 100, largest first), total, note, truncated? {maxLayers}}",
+        "{id? (a frame, component or instance; default the first selected layer, refused when it is anything else), path | data (base64; not both): a capture of the built page, density? (device pixels per CSS pixel; default from the widths), tolerance? (out of 255, default 24)}  the layers that differ, deepest first  → {target, viewport {width, height}, capture {width, height, density, sameSize, cssWidth, cssHeight}, changedPercent, differences: [{id, name, type, kind: position|color|content, percent, expected, actual, offset?, note?}] (at most 100, largest first), total, note, truncated? {maxLayers?, matchedByBox?}}",
         false,
         compare
     )]
