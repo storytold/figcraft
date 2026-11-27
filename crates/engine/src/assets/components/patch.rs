@@ -1,4 +1,6 @@
-use super::diff::{binding_group, bound_differently, diff_groups, follow_boolean_defaults, geometry_derived, rebound_groups, variable_groups};
+use super::diff::{
+    binding_group, bound_differently, diff_groups, follow_boolean_defaults, follow_value_defaults, geometry_derived, rebound_groups, variable_groups,
+};
 use super::guard::{own_slot_content, relink_copy};
 use super::instances::{copy_group, field_group, sync_instance};
 use super::sync::insert_linked;
@@ -13,7 +15,9 @@ type OverrideGroups = (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>);
 /// whose properties or main were switched, or whose overrides were reset.
 pub fn sync_after_edit(doc: &mut Document, before: &Document, changed: &[NodeId], touched: &BTreeSet<NodeId>) {
     let mut changed = changed.to_vec();
-    for id in follow_boolean_defaults(doc, before, &changed) {
+    let mut followed = follow_boolean_defaults(doc, before, &changed);
+    followed.extend(follow_value_defaults(doc, before, &changed));
+    for id in followed {
         if !changed.contains(&id) {
             changed.push(id);
         }

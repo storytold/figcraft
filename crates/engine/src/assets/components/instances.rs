@@ -1,5 +1,5 @@
 use super::cycles::{contains_itself_error, would_contain_itself};
-use super::diff::{binding_group, bindings_of};
+use super::diff::{VALUE_FIELDS, binding_group, bindings_of, own_layers, shown_value};
 use super::sync::{insert_linked, sync_instance_depth};
 use super::{
     Affine, BTreeMap, ChildLayout, DocError, Document, Node, NodeId, NodeKind, Value, default_instance_name, default_props, holds_content, is_slot,
@@ -24,7 +24,7 @@ pub fn create_instance_at(doc: &mut Document, component: NodeId, parent: NodeId,
     let mut root = comp.clone();
     root.id = id;
     root.name = default_instance_name(doc, component);
-    root.kind = NodeKind::Instance { component, props: default_props(&comp) };
+    root.kind = NodeKind::Instance { component, props: start_props(doc, &comp) };
     root.children.clear();
     root.parent = None;
     root.source = Some(component);
@@ -44,6 +44,29 @@ pub fn create_instance_at(doc: &mut Document, component: NodeId, parent: NodeId,
     doc.insert(root, parent, index)?;
     sync_instance(doc, id);
     Ok(id)
+}
+
+/// The property values a new instance of main `comp` starts with: what the main shows. That is
+/// the defaults, except that a text or instance swap property takes what `comp`'s own layer bound
+/// to it shows (the first, in layer order): a set's variants share one default, but each can show
+/// its own text or icon.
+fn start_props(doc: &Document, comp: &Node) -> BTreeMap<String, Value> {
+    let mut out = default_props(comp);
+    let mut taken = Vec::new();
+    for d in own_layers(doc, comp.id) {
+        let Some(n) = doc.node(d) else { continue };
+        for f in VALUE_FIELDS {
+            if let Some(name) = n.prop_refs.get(f)
+                && out.contains_key(name)
+                && !taken.contains(name)
+                && let Some(v) = shown_value(doc, n, f)
+            {
+                out.insert(name.clone(), v);
+                taken.push(name.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Copy `id` within its own file under `parent` (at `index`), keeping its local transform. A file

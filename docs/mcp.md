@@ -1160,6 +1160,15 @@ most when it can't be reached).
   property's other bound layers (in every variant of a set) follow. New instances start from the
   default; existing instances keep the values they have. Files open as saved: a main whose bound
   layer disagrees with the default stays that way until one of them is edited.
+- **Text and instance swap properties**: on the main component, the value is the text of the bound
+  layer, or the component its bound nested instance shows. A new instance starts from what its
+  main shows (for a variant, that variant's own layer; text a variable sets starts from the
+  default). Editing that text (`node.set {characters}`, typing) or swapping that instance
+  (`instance.swap`) on a lone main sets the default. In a set, the variants share the default but
+  each can show its own value, so editing one variant changes neither the default nor the other
+  variants. `component.editProperty {name, default}` puts the new default in the main's bound
+  layers: every one on a lone main, and in a set those that showed the old default. Existing
+  instances keep the values they have; an edit inside an instance is that instance's value.
 - `component.pushChanges {id?}` copies the instance's overrides into its main (from a layer of a
   nested instance too: always into the outer instance's main).
 
