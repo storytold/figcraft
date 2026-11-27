@@ -220,8 +220,9 @@ fn shift_dragging_padding_and_gap_snaps_to_the_big_nudge() {
     let layout = |u: &Ui| u.app.session.doc().unwrap().node(f).unwrap().layout.clone().unwrap();
     let zones = al_zones(&u.app).unwrap();
     // Top padding grows downward, the horizontal gap rightward; 7 is past the nearest multiple below.
-    let cases: [(Pos2, Vec2, fn(&AutoLayout) -> f64); 2] =
-        [(zones.bands[0].1.center(), vec2(0.0, 7.0), |l| l.padding[0]), (zones.gaps[0].rect.center(), vec2(7.0, 0.0), |l| l.gap)];
+    // Where to press, how far to drag, and the value that drag changes.
+    type Case = (Pos2, Vec2, fn(&AutoLayout) -> f64);
+    let cases: [Case; 2] = [(zones.bands[0].1.center(), vec2(0.0, 7.0), |l| l.padding[0]), (zones.gaps[0].rect.center(), vec2(7.0, 0.0), |l| l.gap)];
     for (from, delta, value) in cases {
         let before = layout(&u);
         u.frame(vec![Event::PointerMoved(from)]);
