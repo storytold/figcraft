@@ -1024,3 +1024,42 @@ fn setting_characters_as_a_command_never_renames_the_layer() {
     s.execute("node.set", &json!({"id": t, "props": {"characters": "Site em 7 dias"}})).unwrap();
     assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("Site em 7 dias", "Title"), "the field keeps its name");
 }
+
+fn top_middle(s: &Session, t: NodeId) -> (f64, f64) {
+    let doc = s.doc().unwrap();
+    let p = doc.world_transform(t) * figcraft_geom::kurbo::Point::new(doc.node(t).unwrap().width / 2.0, 0.0);
+    (p.x, p.y)
+}
+
+#[test]
+fn centred_auto_width_text_grows_and_shrinks_both_ways() {
+    let font = test_mono_font();
+    for (src, rotation) in [("ANCHOR TEST\nabc", 0.0), ("abc", 0.0), ("abc", 90.0)] {
+        let mut s = Session::new();
+        let t = text(&mut s, src, json!({"fontSize": 40, "fontFamily": font, "textAlign": "center", "textAutoResize": "widthAndHeight"}));
+        s.execute("node.set", &json!({"id": t, "props": {"x": 200, "y": 50, "rotation": rotation}})).unwrap();
+        let anchor = top_middle(&s, t);
+        let w0 = size(&s, t).0;
+        begin(&mut s, t, Some(src.chars().count()), false).unwrap();
+        for c in "defghijklmnopqrstuvwxyz".chars() {
+            crate::textedit::insert(&mut s, &c.to_string()).unwrap();
+            assert_near(top_middle(&s, t), anchor, &format!("{src:?} at {rotation}°: typing {c}"));
+        }
+        assert!(size(&s, t).0 > w0 + 1e-6, "{src:?} at {rotation}°: typing grows the text");
+        for _ in 0..23 {
+            key(&mut s, "Backspace", false, false, false).unwrap();
+            assert_near(top_middle(&s, t), anchor, &format!("{src:?} at {rotation}°: deleting"));
+        }
+        assert!((size(&s, t).0 - w0).abs() < 1e-6, "back to the starting width");
+    }
+}
+
+#[test]
+fn left_aligned_auto_width_text_still_grows_to_the_right() {
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "abc", json!({"fontSize": 40, "fontFamily": font, "textAutoResize": "widthAndHeight"}));
+    let left = s.doc().unwrap().world_transform(t);
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abcdefghijklmnop"}})).unwrap();
+    assert_eq!(s.doc().unwrap().world_transform(t), left);
+}

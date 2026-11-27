@@ -111,11 +111,22 @@ pub(super) fn scaled(a: &Kv<'static>, b: &Kv<'static>, k: f64, slack: f64) -> bo
     }
 }
 
+/// A `guides` list without its guids. Every guide written has a guid of its own, so two layers' guides are the same
+/// when their axes and offsets are.
+fn bare_guides(v: &Kv<'static>) -> Vec<Kv<'static>> {
+    let bare = |g: &Kv<'static>| match g {
+        Kv::Object(f) => o(f.iter().filter(|(k, _)| *k != "guid").cloned().collect()),
+        other => other.clone(),
+    };
+    v.list().iter().map(bare).collect()
+}
+
 /// The fields of `mine` that differ from `theirs` (a layer and the main's layer it mirrors), and
 /// the ones only `theirs` has at their empty values.
 pub(super) fn changed(mine: Fields, theirs: &Fields) -> Fields {
+    let same = |k: &str, a: &Kv<'static>, b: &Kv<'static>| a == b || (k == "guides" && bare_guides(a) == bare_guides(b));
     let cleared: Fields = theirs.iter().filter(|(k, _)| !mine.iter().any(|(mk, _)| mk == k)).filter_map(|(k, _)| Some((*k, unset(k)?))).collect();
-    let mut out: Fields = mine.into_iter().filter(|(k, v)| !theirs.iter().any(|(tk, tv)| tk == k && tv == v)).collect();
+    let mut out: Fields = mine.into_iter().filter(|(k, v)| !theirs.iter().any(|(tk, tv)| tk == k && same(k, tv, v))).collect();
     out.extend(cleared);
     out
 }
@@ -181,9 +192,14 @@ fn unset(key: &str) -> Option<Kv<'static>> {
         }
         "variableConsumptionMap" | "variableModeBySetMap" | "gridColumnsSizing" | "gridRowsSizing" => o(vec![("entries", arr(Vec::new()))]),
         "mask" | "rectangleCornerRadiiIndependent" | "borderStrokeWeightsIndependent" => b(false),
-        "effects" | "dashPattern" | "layoutGrids" | "exportSettings" | "prototypeInteractions" | "fillGeometry" | "variableWidthPoints" => {
-            arr(Vec::new())
-        }
+        "effects"
+        | "dashPattern"
+        | "layoutGrids"
+        | "exportSettings"
+        | "prototypeInteractions"
+        | "fillGeometry"
+        | "variableWidthPoints"
+        | "guides" => arr(Vec::new()),
         "cornerSmoothing" | "stackChildPrimaryGrow" => fl(0.0),
         "stackMode" => e("NONE"),
         "stackChildAlignSelf" | "stackPositioning" => e("AUTO"),

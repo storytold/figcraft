@@ -204,7 +204,33 @@ fn importer_notes() -> BTreeSet<String> {
             keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), &["warn("]));
         }
     }
+    // The `.fig` mapping itself is craft-fig's (`craft_fig::rest`); its notes are ours to translate.
+    let rest = craft_fig_src().join("rest");
+    for path in sources(&rest).into_iter().chain([rest.with_extension("rs")]) {
+        if !path.file_name().unwrap().to_string_lossy().contains("tests") {
+            keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), &["warn("]));
+        }
+    }
     keys
+}
+
+/// The `src` directory of the craft-fig sources this build uses, as Cargo resolved them.
+fn craft_fig_src() -> std::path::PathBuf {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    // Unfiltered, `cargo metadata` needs every target's packages (accesskit_ios, ...) in Cargo's
+    // cache, and `--offline` cannot fetch them; a build fetches only the host's. Filter to the host.
+    let version = std::process::Command::new(&cargo).arg("-vV").output().unwrap();
+    let version = String::from_utf8(version.stdout).unwrap();
+    let host = version.lines().find_map(|l| l.strip_prefix("host: ")).expect("cargo -vV names its host");
+    let out = std::process::Command::new(&cargo)
+        .args(["metadata", "--format-version", "1", "--offline", "--filter-platform", host])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "cargo metadata: {}", String::from_utf8_lossy(&out.stderr));
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let package = meta["packages"].as_array().unwrap().iter().find(|p| p["name"] == "craft-fig").expect("craft-fig is a dependency");
+    std::path::Path::new(package["manifest_path"].as_str().unwrap()).parent().unwrap().join("src")
 }
 
 /// The lookup functions whose first argument is a catalog key.
@@ -558,9 +584,49 @@ fn right_to_left_languages_mirror_the_window() {
     for code in ["en", "", "es-419", "zh-Hans", "tr", "ru", "arn", "hey"] {
         assert!(!writes_right_to_left(code), "{code}");
     }
-    // Every catalog that mirrors is one of them, and the Arabic one does.
+    // Every catalog that mirrors is one of them, and the Arabic and Hebrew ones do.
     assert!(LANGS.iter().any(|l| l.code == "ar" && writes_right_to_left(l.code)));
+    assert!(LANGS.iter().any(|l| l.code == "he" && writes_right_to_left(l.code)));
     assert!(!writes_right_to_left(LANGS[0].code), "English reads left to right");
+}
+
+#[test]
+fn hebrew_tags_and_plurals() {
+    let he = LANGS.iter().position(|l| l.code == "he").expect("locales/he.toml is baked in");
+    assert_eq!(LANGS[he].name, "עברית");
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "iw", "iw-IL", "iw_IL.UTF-8"] {
+        assert_eq!(resolve(tag, None), he, "{tag}");
+        assert_eq!(resolve("system", Some(tag)), he, "{tag}");
+    }
+    assert!(!plural_one(he, 0) && plural_one(he, 1) && !plural_one(he, 2) && !plural_one(he, 5));
+    let singular = fill(counted(he, "{n} layers", 1), &[("n", &1)]);
+    let dual = fill(counted(he, "{n} layers", 2), &[("n", &2)]);
+    assert_eq!(singular, "1 שכבה");
+    assert_eq!(dual, "2 שכבות");
+}
+
+#[test]
+fn the_built_in_hebrew_face_draws_the_hebrew_catalog() {
+    if !figcraft_text::CRAFT_FONTS.iter().any(|f| f.family == "Noto Sans Hebrew" && f.style == "Regular") {
+        eprintln!("built without craft-fonts' Noto Sans Hebrew; skipping");
+        return;
+    }
+    let Some(face) = figcraft_text::face_with_char('א', &["Noto Sans Hebrew"]) else {
+        panic!("the supplied Noto Sans Hebrew face must draw Hebrew");
+    };
+    let he = &LANGS[LANGS.iter().position(|l| l.code == "he").unwrap()];
+    let letters: BTreeSet<char> = he
+        .ui
+        .iter()
+        .chain(he.commands)
+        .chain(he.menu)
+        .flat_map(|(_, t)| forms(t))
+        .flat_map(str::chars)
+        .filter(|c| matches!(u32::from(*c), 0x05D0..=0x05EA))
+        .collect();
+    assert!(letters.len() >= 27);
+    let missing: String = letters.iter().filter(|c| !face.has_char(**c)).collect();
+    assert!(missing.is_empty(), "Hebrew catalog glyphs missing from the embedded face: {missing:?}");
 }
 
 #[test]

@@ -1,9 +1,9 @@
-use super::super::map::{MAX_SCALE_FACTOR, MIN_SCALE_FACTOR};
 use super::common::{
     bool_data, changed, layout_grid, prop_type, resolved_alike, scaled, sort_position, symbol_data, text_data, text_value, var_data, variant_pairs,
 };
 use super::scale::main_equal_lengths;
 use super::{AUX, BTreeMap, Bound, Exporter, Fields, Kv, MAX_NODES, Node, NodeId, NodeKind, PropDef, StyleKind, Value, arr, b, e, fl, guid, o, s};
+use super::{MAX_SCALE_FACTOR, MIN_SCALE_FACTOR};
 
 /// A changed effect/grid style, and a payload only when it differs from that style's values.
 struct ListStyleOverride {
@@ -210,15 +210,11 @@ impl<'d> Exporter<'d> {
                 _ => None,
             };
             let sized = matches!(d.kind, NodeKind::Instance { .. }) || d.overrides.contains("size");
-            rows.push(Row {
-                path: o(vec![("guids", arr(guids))]),
-                main_equal_lengths: if scale_candidate.is_some() { main_equal_lengths(&mine, &theirs) } else { Vec::new() },
-                styles: self.changed_list_styles(d, &mine, &theirs),
-                changed: changed(mine, &theirs),
-                theirs,
-                sized,
-                swap,
-            });
+            let main_equal_lengths = if scale_candidate.is_some() { main_equal_lengths(&mine, &theirs) } else { Vec::new() };
+            let styles = self.changed_list_styles(d, &mine, &theirs);
+            let mut changed = changed(mine, &theirs);
+            self.bound_override_interactions(d, &mut changed);
+            rows.push(Row { path: o(vec![("guids", arr(guids))]), main_equal_lengths, styles, changed, theirs, sized, swap });
         }
         // An instance scaled as a whole (the Scale tool) is `factor` times its main in every length:
         // sizes, places and stroke weights, its own and its layers'. A resized one keeps its weights.
@@ -248,7 +244,9 @@ impl<'d> Exporter<'d> {
         if factor.is_some() {
             of.extend(main_equal_lengths(&root_mine, &root_theirs));
         }
-        of.extend(changed(root_mine, &root_theirs).into_iter().filter(|(k, v)| *k == "size" || !follows(k, v, &root_theirs)));
+        let mut root_changed = changed(root_mine, &root_theirs);
+        self.bound_override_interactions(n, &mut root_changed);
+        of.extend(root_changed.into_iter().filter(|(k, v)| *k == "size" || !follows(k, v, &root_theirs)));
         if of.len() > 1 {
             overrides.push(o(of));
         }

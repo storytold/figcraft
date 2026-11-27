@@ -47,6 +47,10 @@ pub trait Services {
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
         None
     }
+    /// One supported raster image copied as a file, separate from its clipboard icon or filename.
+    fn clipboard_image_file(&mut self) -> Option<PathBuf> {
+        None
+    }
     fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
         None
     }

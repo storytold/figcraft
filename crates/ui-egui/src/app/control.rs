@@ -90,6 +90,8 @@ impl FigApp {
                 "quality": if self.canvas.tex_coarse { "preview" } else { "refined" },
                 "previewLatencyMs": self.canvas.preview_latency_ms,
                 "refineLatencyMs": self.canvas.refine_latency_ms,
+                // The share of the canvas only the page colour covered last frame (no render reached it).
+                "uncovered": self.canvas.uncovered,
             },
             "live": live::inspect(self),
             "window": self.windows.current,

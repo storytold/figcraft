@@ -218,6 +218,49 @@ fn set_prop_defs(doc: &mut Document, c: NodeId, rename: Option<(&str, &str)>, f:
     Ok(())
 }
 
+/// Give each of components `comps` that lacks it property `name` (`def`), and their existing
+/// instances its default.
+fn give_prop(doc: &mut Document, comps: &[NodeId], name: &str, def: &PropDef) -> Result<()> {
+    for c in comps {
+        if prop_defs(doc, *c).contains_key(name) {
+            continue;
+        }
+        set_prop_defs(doc, *c, None, |m| {
+            m.insert(name.to_string(), def.clone());
+        })?;
+        if !takes_value(def) {
+            continue;
+        }
+        for inst in instances_of(doc, *c) {
+            if let NodeKind::Instance { props, .. } = &mut doc.get_mut(inst)?.kind {
+                props.entry(name.to_string()).or_insert_with(|| prop_default_value(def));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Give every one of components `comps` (the variants of a set) the properties any of them has:
+/// a set's properties belong to all its variants, as `component.addProperty` gives them, so one
+/// made on a component before it was combined stays on an instance switched to another variant.
+/// A variant that has a property of that name keeps its own.
+pub(super) fn share_props(doc: &mut Document, comps: &[NodeId]) -> Result<()> {
+    let mut all: Vec<(String, PropDef)> = Vec::new();
+    for c in comps {
+        if let Some(NodeKind::Component { props, prop_order, .. }) = doc.node(*c).map(|n| &n.kind) {
+            for (k, d) in ordered_props(props, prop_order) {
+                if !all.iter().any(|(n, _)| n == k) {
+                    all.push((k.clone(), d.clone()));
+                }
+            }
+        }
+    }
+    for (name, def) in &all {
+        give_prop(doc, comps, name, def)?;
+    }
+    Ok(())
+}
+
 fn valid_prop_name(cmd: &str, name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() || name.contains([',', '=']) || name.chars().count() > 200 {
@@ -295,20 +338,7 @@ pub(super) fn add_prop_for(cmd: &str, s: &mut Session, p: &Value) -> Result<Valu
         }
         _ => return Err(bad(cmd, "type: boolean|text|instanceSwap|variant|slot")),
     };
-    for c in &comps {
-        set_prop_defs(doc, *c, None, |m| {
-            m.insert(name.clone(), def.clone());
-        })?;
-        // Existing instances get the default.
-        if !takes_value(&def) {
-            continue;
-        }
-        for inst in instances_of(doc, *c) {
-            if let NodeKind::Instance { props, .. } = &mut doc.get_mut(inst)?.kind {
-                props.entry(name.clone()).or_insert_with(|| prop_default_value(&def));
-            }
-        }
-    }
+    give_prop(doc, &comps, &name, &def)?;
     if let Some(l) = layer {
         bind(cmd, doc, l, Some(&name), None)?;
     }

@@ -339,6 +339,8 @@ pub fn prop_default_value(d: &PropDef) -> Value {
 }
 
 #[cfg(test)]
+mod nested_binding_tests;
+#[cfg(test)]
 mod rebase_source_tests;
 
 #[cfg(test)]
