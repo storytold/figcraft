@@ -586,8 +586,10 @@ pub fn responsive_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: Nod
         ui.data_mut(|d| d.insert_temp(field, v.clone()));
         draft = v;
     }
-    // While the field has focus, what it holds is the rule.
-    let draft = ui.data(|d| d.get_temp::<String>(editor)).unwrap_or(draft);
+    // While the field has focus, what it holds is the rule. Only then: text it kept when the
+    // section went away mid-edit isn't shown, so it mustn't be what Add rule sends.
+    let focused = ui.memory(|m| m.has_focus(editor.with("te")));
+    let draft = if focused { ui.data(|d| d.get_temp::<String>(editor)).unwrap_or(draft) } else { draft };
     row(ui, 32.0, |ui| {
         if widgets::button(ui, tr("Add rule"), false, !draft.trim().is_empty()).clicked() {
             add_rule(app, ui.ctx(), id, &draft);

@@ -286,3 +286,41 @@ fn the_group_field_belongs_to_its_document() {
     u.run("file.new", json!({}));
     assert_ne!(crate::dev_mode::group_field(&u.app, f), here, "another document's layer with the same id has its own field");
 }
+
+/// `n` frames with no input.
+fn idle(u: &mut crate::layers_drag_tests::Ui, n: usize) {
+    for _ in 0..n {
+        u.frame(vec![]);
+    }
+}
+
+/// A frame named `name`, marked desktop and selected, with the Inspect tab drawn.
+fn marked_frame(u: &mut crate::layers_drag_tests::Ui, name: &str) -> NodeId {
+    let f = id(&u.app.run("frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 400, "name": name})).unwrap());
+    u.app.run("responsive.set", json!({"ids": [f], "viewport": "desktop"}));
+    u.app.run("select.set", json!({"ids": [f]}));
+    idle(u, 3);
+    f
+}
+
+#[test]
+fn a_rule_left_typed_when_the_section_hid_isnt_added_unseen() {
+    let mut u = crate::layers_drag_tests::Ui::new(Session::new());
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    u.ctx.enable_accesskit();
+    let f = marked_frame(&mut u, "Home");
+    let te = crate::dev_mode::rule_editor(&u.app, f).with("te");
+    u.ctx.memory_mut(|m| m.request_focus(te));
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("Stale".into())]);
+    // The section goes while the field has focus, then comes back.
+    u.app.run("select.set", json!({"ids": []}));
+    idle(&mut u, 3);
+    u.app.run("select.set", json!({"ids": [f]}));
+    idle(&mut u, 3);
+    let add = tree(&mut u).into_iter().find(|n| n.role() == Role::Button && n.label() == Some("Add rule")).expect("Add rule");
+    click(&mut u, centre(&add));
+    idle(&mut u, 2);
+    let rules = u.app.session.doc().unwrap().node(f).unwrap().annotations.len();
+    assert_eq!(rules, 0, "nothing the field doesn't show is added");
+}
