@@ -292,6 +292,8 @@ impl FigApp {
         self.ui.narrow = narrow;
         // A narrow window shows the right panel when its button asks for it, a board's too.
         let right_open = (self.right_panel_shown(hidden) && !narrow && !right_minimized) || mobile == Some(MobilePanel::Right);
+        // A field left for the canvas commits as the panels draw, before the canvas takes the press.
+        canvas::release_fields_for_press(&ctx);
         // A highlighted fill, stroke or effect row goes with the panel it's in, before it draws.
         crate::property_rows::reconcile(self, &ctx, right_open);
         // A right-to-left UI language mirrors the window: the "left" rail and panel go on the

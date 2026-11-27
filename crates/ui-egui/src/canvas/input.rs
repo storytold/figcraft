@@ -134,7 +134,9 @@ fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui:
             refused = true;
             continue;
         }
-        let pt = hover_pos.map(|h| app.to_page(h)).unwrap_or_default();
+        // macOS reports no pointer while a file is dragged in from another app, so a quick drop
+        // comes with no position: the file then lands in the middle of the view, not at 0, 0.
+        let pt = app.to_page(hover_pos.unwrap_or_else(|| app.canvas.rect.center()));
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped.png".into());
         let (command, mut params) = match well.take() {
             Some(params) => ("image.replace", params),
@@ -186,6 +188,28 @@ fn pan_view(app: &mut FigApp, ctx: &egui::Context, pos: Pos2, mods: &egui::Modif
     }
     if !middle_down && !ctx.input(|i| i.pointer.primary_down()) {
         app.canvas.middle_pan = None;
+    }
+}
+
+/// A press on the canvas takes the keyboard from a panel field before the panels draw, so the
+/// field commits to the layers it was edited for. Drawn after the panels, the press would first
+/// select another layer, and the field would commit to that one (or into the move the press
+/// starts, which an unmoved release puts back).
+pub(crate) fn release_fields_for_press(ctx: &egui::Context) {
+    let Some(canvas) = crate::a11y::canvas_id(ctx).and_then(|id| ctx.read_response(id)) else { return };
+    let press = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+            _ => None,
+        })
+    });
+    let on_canvas = press.is_some_and(|p| canvas.rect.contains(p) && ctx.layer_id_at(p) == Some(canvas.layer_id));
+    if on_canvas && crate::a11y::field_focused(ctx) {
+        ctx.memory_mut(|m| {
+            if let Some(f) = m.focused() {
+                m.surrender_focus(f);
+            }
+        });
     }
 }
 
@@ -297,6 +321,9 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         open_context_menu(app, pos, mods.command);
         return true;
     }
+    if crop_mode_multi_click(app, resp, pos, &mods) {
+        return true;
+    }
     // A third quick click is counted as a triple, not a double (a click elsewhere in between still
     // leaves its time in the sequence): it means the same here — edit, enter, open — unless a
     // vector or text is being edited, where a triple already has its own meaning. A triple on
@@ -406,6 +433,18 @@ fn pan_past_edge(app: &mut FigApp, ctx: &egui::Context, mods: &egui::Modifiers) 
     {
         send(app, PointerKind::Move, at, mods);
     }
+}
+
+/// A double- or triple-click in crop mode stays in crop mode (it would edit the points), and is
+/// taken here. Its last press may have begun a resize on a side of the layer: its release ends that.
+fn crop_mode_multi_click(app: &mut FigApp, resp: &egui::Response, pos: Pos2, mods: &egui::Modifiers) -> bool {
+    if app.ui.crop.is_none() || !(resp.double_clicked() || resp.triple_clicked()) {
+        return false;
+    }
+    if std::mem::take(&mut app.canvas.dragging) {
+        send(app, PointerKind::Up, pos, mods);
+    }
+    true
 }
 
 fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
