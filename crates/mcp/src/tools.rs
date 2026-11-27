@@ -298,7 +298,7 @@ fn tools() -> Vec<Value> {
             "Compare a capture you made of the built page with a frame, on this computer. Size the browser to the `viewport` it returns (the frame's size in CSS pixels), capture the page to a file, and call this again. It names the layers that differ, largest first and each on the deepest layer it belongs to, as a position, colour or content difference with the expected and actual colours and any offset. Fix those; don't aim for a pixel score, because fonts and antialiasing always differ a little between renderers.",
             obj(
                 json!({
-                    "id": id_schema("The frame (default the first selected layer)"),
+                    "id": id_schema("The frame, component or instance (default the first selected layer; any other kind of layer is refused)"),
                     "image": string("The capture: a PNG, JPEG or WebP file, absolute or relative to where this server runs"),
                     "density": num("Device pixels per CSS pixel (default from the widths)"),
                     "tolerance": num("How different a pixel must be to count, out of 255 (default 24)")

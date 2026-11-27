@@ -162,6 +162,13 @@ fn compare(s: &mut Session, p: &Value) -> Result<Value> {
         [] => return Err(bad(cmd, "select the frame to compare with")),
         _ => return Err(bad(cmd, "compare one frame at a time")),
     };
+    // A page is built from a frame, a component or an instance of one. Any other layer would still
+    // give a result, and it would look like a real answer: refuse it instead.
+    let target = s.doc()?.get(id)?;
+    if !target.kind.is_frame_like() || matches!(target.kind, NodeKind::ComponentSet { .. }) {
+        let kind = target.kind.type_name().to_lowercase();
+        return Err(bad(cmd, format!("{:?} is a {kind}: compare a frame, component or instance", target.name)));
+    }
     let (density, tolerance) = (number(cmd, p, "density")?, number(cmd, p, "tolerance")?);
     let bytes = match (get(p, "data"), string(p, "path")) {
         (Some(_), Some(_)) => return Err(bad(cmd, "pass `path` or `data`, not both")),
@@ -293,7 +300,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.compare",
         "Compare with a capture",
-        "{id? (the frame; default the first selected layer), path | data (base64; not both): a capture of the built page, density? (device pixels per CSS pixel; default from the widths), tolerance? (out of 255, default 24)}  the layers that differ, deepest first  → {target, viewport {width, height}, capture {width, height, density, sameSize, cssWidth, cssHeight}, changedPercent, differences: [{id, name, type, kind: position|color|content, percent, expected, actual, offset?, note?}] (at most 100, largest first), total, note, truncated? {maxLayers}}",
+        "{id? (a frame, component or instance; default the first selected layer, refused when it is anything else), path | data (base64; not both): a capture of the built page, density? (device pixels per CSS pixel; default from the widths), tolerance? (out of 255, default 24)}  the layers that differ, deepest first  → {target, viewport {width, height}, capture {width, height, density, sameSize, cssWidth, cssHeight}, changedPercent, differences: [{id, name, type, kind: position|color|content, percent, expected, actual, offset?, note?}] (at most 100, largest first), total, note, truncated? {maxLayers}}",
         false,
         compare
     )]

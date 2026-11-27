@@ -206,3 +206,20 @@ fn one_frame_is_compared_at_a_time() {
     let e = s.execute("inspect.compare", &json!({"ids": [f, b], "data": data})).unwrap_err().to_string();
     assert!(e.contains("one frame"), "{e}");
 }
+
+#[test]
+fn only_a_frame_component_or_instance_is_compared() {
+    let mut s = session();
+    let (f, b) = card(&mut s);
+    let data = capture(&mut s, f, 1.0);
+    let e = s.execute("inspect.compare", &json!({"id": b, "data": data})).unwrap_err().to_string();
+    assert!(e.contains("frame"), "a rectangle named outright: {e}");
+    s.execute("select.set", &json!({"ids": [b]})).unwrap();
+    let e = s.execute("inspect.compare", &json!({"data": data})).unwrap_err().to_string();
+    assert!(e.contains("frame"), "a rectangle selected: {e}");
+    let c = s.execute("component.create", &json!({"ids": [f]})).unwrap()["id"].as_u64().unwrap();
+    let i = s.execute("instance.create", &json!({"component": c, "x": 800, "y": 0})).unwrap()["id"].as_u64().unwrap();
+    for id in [c, i] {
+        assert!(s.execute("inspect.compare", &json!({"id": id, "data": data})).is_ok(), "{id}");
+    }
+}

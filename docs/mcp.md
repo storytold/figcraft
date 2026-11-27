@@ -486,9 +486,11 @@ under `fonts`. Their licences are for the project to check.
 
 ### Visual verification
 
-`compare_design` (the command `inspect.compare {id?, path | data}`) checks a built page against its
-frame, one frame at a time, on this computer, with a capture the agent's own browser tools made. FigCraft doesn't drive a
-browser, and no image leaves the computer through it.
+`compare_design` (the command `inspect.compare {id?, path | data}`) checks a built page against the
+frame it was built from (a frame, a component or an instance; any other layer, given or selected, is
+refused, since its result would look like a real answer), one at a time, on this computer, with a
+capture the agent's own browser tools made. FigCraft doesn't drive a browser, and no image leaves the
+computer through it.
 
 1. Read the frame's size from `design_context` (or `get_node`): its width and height are the
    browser's viewport in CSS pixels. Each result repeats it as `viewport`.
