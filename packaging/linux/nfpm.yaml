@@ -1,6 +1,7 @@
 # .deb and .rpm packages (nfpm: https://nfpm.goreleaser.com). Run by package.sh, which stages
 # the file tree, substitutes its path for ${STAGE} (nfpm doesn't expand env vars in `src`),
-# drops the lines marked `#cli` when the workspace has no apps/figcraft-cli, and exports VERSION,
+# drops the lines marked `#cli` when the workspace has no apps/figcraft-cli (and those marked
+# `#stable-cli` in a Nightly build, which ships no CLI man pages or completions), and exports VERSION,
 # NFPM_ARCH and FIGCRAFT_MAINTAINER.
 #
 #   nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/release/
@@ -82,6 +83,12 @@ contents:
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree
+  # Debian's zsh reads vendor-completions, not /usr/share/zsh/site-functions as Fedora's and
+  # openSUSE's do (its debian/rules sets --enable-additional-fpath). A Nightly has no completions.
+  - src: /usr/share/zsh/site-functions/_figcraft-cli #stable-cli
+    dst: /usr/share/zsh/vendor-completions/_figcraft-cli #stable-cli
+    type: symlink #stable-cli
+    packager: deb #stable-cli
 
 scripts:
   postinstall: packaging/linux/postinst.sh

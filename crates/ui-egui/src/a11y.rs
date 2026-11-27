@@ -275,6 +275,11 @@ fn shared<R>(ctx: &Context, f: impl FnOnce(&mut Shared) -> R) -> R {
     ctx.data_mut(|d| f(d.get_temp_mut_or_default::<Shared>(id)))
 }
 
+/// The canvas's widget id, once it has been drawn.
+pub fn canvas_id(ctx: &Context) -> Option<Id> {
+    shared(ctx, |s| s.canvas)
+}
+
 /// Whether a widget other than the canvas has the keyboard (a field, a focused button): the
 /// canvas shortcuts stay off then.
 pub fn field_focused(ctx: &Context) -> bool {

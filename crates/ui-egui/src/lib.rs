@@ -111,6 +111,8 @@ mod devmode_tail_tests;
 #[cfg(test)]
 mod display_name_tests;
 #[cfg(test)]
+mod drop_position_tests;
+#[cfg(test)]
 mod duplicate_paint_tests;
 #[cfg(test)]
 mod export_name_tests;
@@ -137,6 +139,8 @@ mod guide_snap_tests;
 #[cfg(test)]
 mod header_icon_size_tests;
 #[cfg(test)]
+mod hex_field_target_tests;
+#[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
@@ -152,6 +156,8 @@ mod ime_tests;
 mod import_report_tests;
 #[cfg(test)]
 mod inspect_fields_tests;
+#[cfg(test)]
+mod instances_shared_props_tests;
 #[cfg(test)]
 mod layers_behaviour_tests;
 #[cfg(test)]
@@ -199,6 +205,8 @@ mod menu_input_tests;
 #[cfg(test)]
 mod menu_overflow_tests;
 #[cfg(test)]
+mod menu_scroll_tests;
+#[cfg(test)]
 mod mirror_tests;
 #[cfg(test)]
 mod missing_fonts_tests;
@@ -227,6 +235,8 @@ mod paste_image_tests;
 mod pen_mode_tests;
 #[cfg(test)]
 mod perf_tests;
+#[cfg(test)]
+mod pixel_grid_tests;
 #[cfg(test)]
 mod plugin_panel_tests;
 #[cfg(test)]
@@ -289,6 +299,8 @@ mod text_link_tests;
 #[cfg(test)]
 mod text_mixed_fill_tests;
 #[cfg(test)]
+mod text_paste_style_tests;
+#[cfg(test)]
 mod tidy_tests;
 #[cfg(test)]
 mod titlebar_tests;
@@ -302,6 +314,8 @@ mod usage_summary_tests;
 mod variable_picker_tests;
 #[cfg(test)]
 mod variables_export_ui_tests;
+#[cfg(test)]
+mod variables_group_create_tests;
 #[cfg(test)]
 mod variables_rename_tests;
 #[cfg(test)]
@@ -457,6 +471,9 @@ pub struct UiState {
     pub right_width: f32,
     /// The right sidebar as drawn this frame, after fitting the window.
     pub right_panel_rect: Option<egui::Rect>,
+    /// The layers the Design panel showed, and the pass it did, while one of its fields had the
+    /// keyboard (see `design_selection`).
+    pub field_selection: Option<(u64, Vec<figcraft_doc::NodeId>)>,
     pub right_tab: RightTab,
     /// The tab of the previous frame, to see the right panel change mode.
     pub last_right_tab: RightTab,
@@ -553,8 +570,9 @@ pub struct UiState {
     pub layer_search: bool,
     pub layer_filter: String,
     pub layer_anchor: Option<NodeId>,
-    /// The layers panel has the keyboard: arrow keys move through its rows instead of nudging
-    /// (set by a click on a row, cleared by a press on the canvas).
+    /// A layer row was clicked last: Shift+F10 opens the context menu at its row (set by a click on
+    /// a row, cleared by a press on the canvas). Arrow keys still nudge; they move through the rows
+    /// only once F6 has put the keyboard on the layers panel.
     pub layers_focus: bool,
     /// The file (its `uid`) whose pages list has the keyboard: Delete with no layers selected deletes
     /// its current page (set by a click on a page row or the add-page button, cleared by a click on a
@@ -631,6 +649,9 @@ pub struct UiState {
     /// copy changes the engine clipboard without writing the OS clipboard; the generation then
     /// no longer matches, so the stale mirror is not mistaken for the user's own copy.
     pub last_copy_generation: u64,
+    /// The formatting of the characters last copied as text: a paste into a text edit of those
+    /// same characters keeps it.
+    pub text_copy: Option<figcraft_engine::textedit::RichText>,
     /// The fill, stroke or effect row highlighted in the Design panel: Cmd/Ctrl+C copies it.
     pub property_row: Option<property_rows::Highlight>,
     /// A paint or effect copied from its row: Cmd/Ctrl+V pastes it while it's the last copy.
@@ -683,6 +704,7 @@ impl Default for UiState {
             left_width: PANEL_DEFAULT,
             right_width: PANEL_DEFAULT,
             right_panel_rect: None,
+            field_selection: None,
             right_tab: RightTab::Design,
             last_right_tab: RightTab::Design,
             left_tab: LeftTab::File,
@@ -778,6 +800,7 @@ impl Default for UiState {
 
             last_copy: None,
             last_copy_generation: 0,
+            text_copy: None,
             property_row: None,
             property_copy: None,
             after_field: None,

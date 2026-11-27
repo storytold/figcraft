@@ -202,7 +202,10 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.highlighter", &["U"]),
     k(Tools, "tool.eraser", &["E"]),
     k(Tools, "tool.stamp", &["W"]),
-    k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"]).label("Board: a new sticky beside the selected one, or the next shape joined to it").both(),
+    k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"])
+        .label("Board: a new sticky beside the selected one, the next shape joined to it, or a mind map node's next sibling")
+        .both(),
+    k(Tools, "board.mindMapAdd", &["Cmd+Enter"]).label("Board: a child of the selected mind map node").both(),
     // View
     // The documentation gives both keys for the pixel grid in different places.
     k(View, "view.pixelGrid", &["Shift+'", "Cmd+'"]),
@@ -365,6 +368,7 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Selection, "Pick select: next or previous layer", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
     (Selection, "Pick select: into a layer, out to its parent", "↵ / ⇧↵", "Enter / Shift+Enter"),
     (Selection, "Pick select: select the picked layer", "Space", "Space"),
+    (Text, "While editing text: next or previous text layer", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
     (Edit, "Duplicate by dragging", "⌥ drag", "Alt+drag"),
     (Transform, "Nudge (Shift: big nudge)", "← ↑ → ↓", "← ↑ → ↓"),
     (Transform, "Resize by the nudge amount", "⌘ arrows", "Ctrl+arrows"),

@@ -131,6 +131,11 @@ fn shows(code: &str, web: bool) -> bool {
         // Arabic; keep the catalog out until an embedded Arabic fallback is supplied.
         return figcraft_text::face_with_char('ع', &["Noto Sans Arabic"]).is_some();
     }
+    if code.split(['-', '_']).next().is_some_and(|b| b.eq_ignore_ascii_case("he") || b.eq_ignore_ascii_case("iw")) {
+        // Desktop draws Hebrew with a system face (or bundled craft-fonts); the web leaves it out
+        // unless Noto Sans Hebrew is embedded (FIGCRAFT_EMBED_SCRIPTS=Hebr).
+        return figcraft_text::face_with_char('א', &["Noto Sans Hebrew"]).is_some();
+    }
     if code.split('-').next() == Some("ta") {
         // Desktop draws Tamil with a system face (#2018); the web has none until craft-fonts
         // carries Noto Sans Tamil.
@@ -231,6 +236,15 @@ mod tests {
         let face = figcraft_text::face_with_char('ع', &["Noto Sans Arabic"]).is_some();
         assert_eq!(shows("ar", true), face);
         assert_eq!(shows("ar-SA", true), face);
+    }
+
+    #[test]
+    fn the_web_offers_hebrew_only_with_its_face() {
+        assert!(shows("he", false), "desktop always lists Hebrew");
+        let face = figcraft_text::face_with_char('א', &["Noto Sans Hebrew"]).is_some();
+        assert_eq!(shows("he", true), face);
+        assert_eq!(shows("he-IL", true), face);
+        assert_eq!(shows("iw-IL", true), face);
     }
 
     #[test]

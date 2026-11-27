@@ -192,7 +192,9 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
             mods.push(format!(".frame(width: {w}, height: {h})"));
         }
     }
-    if let Some(c) = stroke_color(n) {
+    if !matches!(n.kind, NodeKind::Vector { .. })
+        && let Some(c) = stroke_color(n)
+    {
         mods.push(format!(
             ".overlay(RoundedRectangle(cornerRadius: {corner}).stroke({}, lineWidth: {}))",
             bound(&["stroke"], swift_color(c)),

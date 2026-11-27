@@ -556,8 +556,9 @@ pub(crate) fn list_width(ui: &Ui) -> f32 {
 }
 
 /// A name's room on a row stops growing here: a name of thousands of characters (#1650) elides
-/// past it instead of making the list that wide.
-pub(crate) const NAME_ROOM: f32 = 1200.0;
+/// past it instead of making the list that wide. 400 pt still holds a long variant name
+/// (`Size=small, Type=primary, State=default, Icon=leading, Width=full`) in full.
+pub(crate) const NAME_ROOM: f32 = 400.0;
 
 /// A row's name: the layer's, or its kind's label when it has none.
 fn row_name(n: &figcraft_doc::Node) -> &str {
@@ -616,12 +617,22 @@ fn hides_children(n: &figcraft_doc::Node, dimmed: bool) -> bool {
     dimmed || !n.visible || n.hides_contents()
 }
 
+fn vertical_flow(n: &figcraft_doc::Node) -> bool {
+    n.layout.as_ref().is_some_and(|layout| layout.mode == figcraft_doc::LayoutMode::Vertical)
+}
+
+/// Follow a vertical flow from top to bottom; elsewhere start at the top of the stacking order.
+fn panel_children(n: &figcraft_doc::Node) -> impl Iterator<Item = &NodeId> {
+    let mut children = n.children.iter();
+    let forward = vertical_flow(n);
+    std::iter::from_fn(move || if forward { children.next() } else { children.next_back() })
+}
+
 fn collect(doc: &Document, id: NodeId, depth: usize, dimmed: bool, locked: bool, expanded: &BTreeSet<NodeId>, out: &mut Vec<Row>) {
     let Some(n) = doc.node(id) else { return };
     let dim_kids = !n.is_page() && hides_children(n, dimmed);
     let lock_kids = locked || n.locked;
-    // Layers panel lists top of the stack first.
-    for c in n.children.iter().rev() {
+    for c in panel_children(n) {
         let Some(cn) = doc.node(*c) else { continue };
         let has_kids = !cn.children.is_empty() || matches!(cn.kind, NodeKind::BooleanOp { .. });
         out.push(Row { id: *c, depth, has_kids, dimmed: dim_kids, locked_above: lock_kids });
@@ -631,10 +642,10 @@ fn collect(doc: &Document, id: NodeId, depth: usize, dimmed: bool, locked: bool,
     }
 }
 
-/// Layers whose name contains `q` (lowercase), top of the stack first, as a flat list.
+/// Layers whose name contains `q` (lowercase), in panel order as a flat list.
 fn matching(doc: &Document, id: NodeId, q: &str, out: &mut Vec<Row>) {
     let Some(n) = doc.node(id) else { return };
-    for c in n.children.iter().rev() {
+    for c in panel_children(n) {
         let Some(cn) = doc.node(*c) else { continue };
         let name = if cn.name.is_empty() { cn.kind.label() } else { cn.name.as_str() };
         if name.to_lowercase().contains(q) {
@@ -983,42 +994,59 @@ fn select_clicked(app: &mut FigApp, rows: &[Row], sel: &[NodeId], id: NodeId, m:
 
 /// Drops `moving` on `target` (`zone`: 0 into it, -1 above, 1 below), unless Dev Mode refuses
 /// (a drag started in the design can end after a switch to it).
-fn drop_layers(app: &mut FigApp, doc: &Document, moving: &[NodeId], target: NodeId, zone: i8) {
+fn drop_layers(app: &mut FigApp, doc: &Document, rows: &[Row], moving: &[NodeId], target: NodeId, zone: i8) {
     if crate::menus::dev_mode_refuses(app, "node.reparent") {
         return;
     }
-    let ids = moving.to_vec();
-    match zone {
-        0 => {
-            app.run("node.reparent", json!({"ids": ids, "parent": target}));
-        }
-        z => {
-            // Above in the list = higher z = after the target among siblings.
-            if let Some(parent) = doc.node(target).and_then(|n| n.parent) {
-                let idx = doc.index_in_parent(target).unwrap_or(0);
-                let gap = if z < 0 { idx + 1 } else { idx };
-                // `index` is the final position: the dragged layers below the gap leave it.
-                let below = doc.node(parent).map_or(0, |p| p.children.iter().take(gap).filter(|c| ids.contains(c)).count());
-                app.run("node.reparent", json!({"ids": ids, "parent": parent, "index": gap - below}));
-            }
-        }
+    let parent = if zone == 0 { Some(target) } else { doc.node(target).and_then(|n| n.parent) };
+    let Some(parent) = parent.and_then(|id| doc.node(id)) else { return };
+    let forward = vertical_flow(parent);
+    let mut pending: BTreeSet<_> = moving.iter().copied().collect();
+    let index = (zone != 0).then(|| {
+        let idx = doc.index_in_parent(target).unwrap_or(0);
+        // Above means before the target in a vertical flow, after it in a stack.
+        let gap = if (zone < 0) != forward { idx + 1 } else { idx };
+        // `index` is the final position: the dragged layers below the gap leave it.
+        let below = parent.children.iter().take(gap).filter(|c| pending.contains(c)).count();
+        gap - below
+    });
+    // Keep the displayed order of the moved rows. A selection can include a layer outside
+    // the current list (for example, under a collapsed row); include it after the listed rows.
+    let mut ids: Vec<_> = rows.iter().map(|row| row.id).chain(moving.iter().copied()).filter(|id| pending.remove(id)).collect();
+    if !forward {
+        ids.reverse();
+    }
+    app.run("layers.reparent", json!({"ids": ids, "parent": parent.id, "index": index}));
+}
+
+/// The eye and padlock's span on a row (`rr`, the row inset 8 pt from each side) wider than the view:
+/// its end stops 8 pt inside the view's edge, where it is on a row as wide as the view, but never so
+/// far in that the buttons cover the row's disclosure triangle, icon or name start (`name_x`,
+/// unmirrored). Returns that row span (what [`eye_lock`] places them at the end of) and the
+/// buttons' 48 pt: the eye and padlock are 20 pt each, 4 pt from the end and 2 pt apart.
+fn row_buttons(rr: Rect, view: Rect, name_x: f32, rtl: bool) -> (Rect, Rect) {
+    if rtl {
+        let name_start = rr.min.x + rr.max.x - name_x;
+        let end = Rect::from_min_max(pos2(rr.min.x.max((view.min.x + 8.0).min(name_start - 48.0)), rr.min.y), rr.max);
+        return (end, Rect::from_x_y_ranges(end.min.x..=(end.min.x + 48.0), rr.y_range()));
+    }
+    let end = Rect::from_min_max(rr.min, pos2(rr.max.x.min((view.max.x - 8.0).max(name_x + 48.0)), rr.max.y));
+    (end, Rect::from_x_y_ranges((end.max.x - 48.0)..=end.max.x, rr.y_range()))
+}
+
+/// Where a row's name is drawn: the view, less the eye and padlock's `buttons` while they show, so
+/// a long name is clipped before them instead of drawn under them.
+fn name_clip(view: Rect, buttons: Rect, buttons_shown: bool, rtl: bool) -> Rect {
+    match (buttons_shown, rtl) {
+        (false, _) => view,
+        (true, false) => Rect::from_x_y_ranges(view.min.x..=view.max.x.min(buttons.min.x), view.y_range()),
+        (true, true) => Rect::from_x_y_ranges(view.min.x.max(buttons.max.x)..=view.max.x, view.y_range()),
     }
 }
 
-/// The eye and padlock of a row: painted when hovered (`over`, false in Dev Mode) or set, and, outside
-/// Dev Mode, clickable; a drag over them starts a sweep. Returns the layers whose eye / padlock was clicked.
-fn eye_lock(
-    ui: &mut Ui,
-    t: &Tokens,
-    rects: [Rect; 2],
-    row: &Row,
-    n: &figcraft_doc::Node,
-    over: bool,
-    dev: bool,
-    sweep: &mut Option<Sweep>,
-) -> (Option<NodeId>, Option<NodeId>) {
-    let [r, rr] = rects;
-    let (mut vis, mut lock) = (None, None);
+/// Whether row `r`'s layer shows as hidden and as locked: what a sweep in progress sets for the rows
+/// it took in, else the layer's own state. The row joins the sweep when the pointer is on it.
+fn swept_state(ui: &Ui, r: Rect, row: &Row, n: &figcraft_doc::Node, sweep: &mut Option<Sweep>) -> (bool, bool) {
     // A sweep across the eyes or padlocks takes in the rows the pointer passes.
     if let Some(sw) = sweep.as_mut()
         && !sw.ids.contains(&row.id)
@@ -1029,9 +1057,26 @@ fn eye_lock(
         sw.ids.push(row.id);
     }
     let swept = |lock: bool| sweep.as_ref().filter(|sw| sw.lock == lock && sw.ids.contains(&row.id)).map(|sw| sw.on);
+    (swept(false).unwrap_or(!n.visible), swept(true).unwrap_or(n.locked))
+}
+
+/// The eye and padlock of a row, shown `hidden` and `locked` ([`swept_state`]): painted when hovered
+/// (`over`, false in Dev Mode) or set, and, outside Dev Mode, clickable; a drag over them starts a
+/// sweep. Returns the layers whose eye / padlock was clicked.
+fn eye_lock(
+    ui: &mut Ui,
+    t: &Tokens,
+    rects: [Rect; 2],
+    row: &Row,
+    n: &figcraft_doc::Node,
+    (hidden, locked): (bool, bool),
+    over: bool,
+    dev: bool,
+    sweep: &mut Option<Sweep>,
+) -> (Option<NodeId>, Option<NodeId>) {
+    let [r, rr] = rects;
+    let (mut vis, mut lock) = (None, None);
     // Lock / eye on hover (or when set); a layer in a locked one shows a faint padlock.
-    let hidden = swept(false).unwrap_or(!n.visible);
-    let locked = swept(true).unwrap_or(n.locked);
     // In Dev Mode they only show what is set.
     let show_lock = over || locked || row.locked_above;
     let show_eye = over || hidden;
@@ -1302,6 +1347,8 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             let icon_rect = Rect::from_center_size(pos2(fx(x0 + 22.0), r.center().y), vec2(14.0, 14.0));
             icons::paint(ui.painter(), icon_rect, icon, icon_col);
             let name_x = x0 + 36.0;
+            let (buttons_end, buttons) = row_buttons(rr, ui.clip_rect(), name_x, rtl);
+            let toggles = swept_state(ui, r, row, n, &mut sweep);
             if app.ui.rename.is_some_and(|rn| rn.id == row.id) {
                 if let Some(new) = rename_field(app, ui, row.id, row.depth, &n.name, r) {
                     rename_done = Some((row.id, new));
@@ -1313,9 +1360,11 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 // Room before the lock and eye buttons (the row is wide enough for the whole
                 // name, up to `NAME_ROOM`: a row widened by a deeper name gives no more).
                 let max_w = (rr.max.x - 56.0 - name_x).clamp(20.0, NAME_ROOM);
-                crate::bidi::paint_name_from(ui.painter(), pos2(fx(name_x), r.center().y), rtl, &name, font, col, max_w);
+                let buttons_shown = (over && !dev) || toggles.0 || toggles.1 || row.locked_above;
+                let clip = name_clip(ui.clip_rect(), buttons, buttons_shown, rtl);
+                crate::bidi::paint_name_from(&ui.painter().with_clip_rect(clip), pos2(fx(name_x), r.center().y), rtl, &name, font, col, max_w);
             }
-            let (v, l) = eye_lock(ui, &t, [r, rr], row, n, over && !dev, dev, &mut sweep);
+            let (v, l) = eye_lock(ui, &t, [r, buttons_end], row, n, toggles, over && !dev, dev, &mut sweep);
             vis = v.or(vis);
             lock = l.or(lock);
             if resp.clicked() {
@@ -1411,7 +1460,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             d.remove::<(NodeId, f64)>(Id::unique("layer_drag_hold"));
         });
         if let (Some(_), Some((target, zone))) = (dragging, drop) {
-            drop_layers(app, &doc, &moving, target, zone);
+            drop_layers(app, &doc, &rows, &moving, target, zone);
         }
     }
     if let Ok(ds) = app.session.ds_mut() {

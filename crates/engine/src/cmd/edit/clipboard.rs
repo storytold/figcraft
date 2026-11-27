@@ -127,6 +127,7 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
     // A design-app paste replaces the copied layers, not the copied rows: a `fill.copy` before it
     // still pastes afterwards.
     let props = s.clipboard.props.take();
+    let props_source_doc = s.clipboard.props_source_doc;
     let paint = s.clipboard.paint.take();
     let stroke = s.clipboard.stroke.take();
     let paint_images = std::mem::take(&mut s.clipboard.paint_images);
@@ -138,6 +139,7 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
         nodes,
         images,
         props,
+        props_source_doc,
         paint,
         stroke,
         paint_images,
@@ -219,8 +221,18 @@ pub(super) fn cut(s: &mut Session, p: &Value) -> Result<Value> {
     delete(s, &json!({"ids": layers}))
 }
 
-/// Paste the clipboard under `parent` with the copied top-left moved to `at` (page coords).
+/// Paste the clipboard under `parent` with the copied top-left moved to `at` (page coords). A
+/// copied main is pasted as an instance of it; in another file, as an instance of it from the
+/// library the source file publishes, and as a copy of it when that library doesn't offer it.
 pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Result<Vec<NodeId>> {
+    paste_layers(s, parent, at, false)
+}
+
+/// [`paste_into`]. With `as_variants`, copied variants pasted into `parent`, their own set, are
+/// deep copies (new variants, as Duplicate makes) and the set grows to hold them. Only a plain
+/// paste with that set, or a layer in it, selected asks for this; every other paste of a copied
+/// main, into another set too, still makes an instance.
+fn paste_layers(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>, as_variants: bool) -> Result<Vec<NodeId>> {
     let clip = s.clipboard.clone();
     if clip.nodes.is_empty() {
         return Err(EngineError::Disabled("edit.paste".into(), "the clipboard is empty".into()));
@@ -238,16 +250,22 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         (Some((x, y)), Some(b)) => Affine::translate((x - b.x0, y - b.y0)),
         _ => Affine::IDENTITY,
     };
+    let into_set = as_variants && copy_local && copied_variants_set(doc, &clip.nodes) == Some(parent);
     let mut out = Vec::new();
     let mut all = BTreeMap::new();
     for (root, nodes) in &clip.nodes {
-        if copy_local
-            && clip.copied_components.contains(root)
-            && let Some(n) = nodes.first().filter(|n| matches!(n.kind, NodeKind::Component { .. }))
-            && doc.node(*root).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))
-        {
-            let instance = crate::components::create_instance(doc, *root, parent, 0.0, 0.0)?;
+        let copied_main = nodes.first().filter(|n| clip.copied_components.contains(root) && matches!(n.kind, NodeKind::Component { .. }));
+        let main = match (copied_main, foreign) {
+            (Some(_), _) if copy_local => {
+                (!into_set && doc.node(*root).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))).then_some(*root)
+            }
+            (Some(_), Some(src)) => crate::library::published_main(doc, src, clip.source_path.as_deref(), *root)?,
+            _ => None,
+        };
+        if let (Some(main), Some(n)) = (main, copied_main) {
+            let instance = crate::components::create_instance(doc, main, parent, 0.0, 0.0)?;
             doc.get_mut(instance)?.transform = doc.world_transform(parent).inverse() * shift * n.transform;
+            keep_a_cropped_images_proportions(doc, instance, parent);
             out.push(instance);
             continue;
         }
@@ -261,8 +279,13 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         if let Some(r) = nodes.first_mut() {
             r.transform = doc.world_transform(into).inverse() * shift * r.transform;
         }
-        out.push(doc.paste_nodes(&nodes, &map, *root, into, None)?);
+        let pasted = doc.paste_nodes(&nodes, &map, *root, into, None)?;
+        keep_a_cropped_images_proportions(doc, pasted, into);
+        out.push(pasted);
         all.extend(map);
+    }
+    if into_set {
+        crate::cmd::component::fit_set(doc, parent);
     }
     // Board connectors pasted with what they join join the pasted copies.
     let originals: Vec<(NodeId, figcraft_doc::BoardItem)> =
@@ -273,6 +296,24 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
     }
     crate::library::count_inserted(doc, &out);
     Ok(out)
+}
+
+/// Lock the aspect ratio of a layer pasted into an auto layout frame when it shows an image cropped
+/// to it and fills one axis while fixed on the other, so layout can't squash the image.
+fn keep_a_cropped_images_proportions(doc: &mut Document, pasted: NodeId, parent: NodeId) {
+    use figcraft_doc::Sizing;
+    if doc.node(parent).is_none_or(|p| p.layout.is_none()) {
+        return;
+    }
+    let Ok(n) = doc.get_mut(pasted) else { return };
+    let cropped = n
+        .fills
+        .iter()
+        .any(|f| f.visible && matches!(&f.kind, figcraft_color::PaintKind::Image(i) if i.scale_mode == figcraft_color::ImageScaleMode::Crop));
+    let sizing = (n.child_layout.sizing_h, n.child_layout.sizing_v);
+    if cropped && matches!(sizing, (Sizing::Fill, Sizing::Fixed) | (Sizing::Fixed, Sizing::Fill)) {
+        n.constrain_proportions = true;
+    }
 }
 
 pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
@@ -286,7 +327,16 @@ pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     let sel = s.selection();
     let doc = s.doc()?;
     let copy_local = s.ds()?.uid == s.clipboard.source_doc;
-    let target = id(p, "parent").or_else(|| {
+    let variants_set = copied_variants_set(doc, &s.clipboard.nodes)
+        .filter(|set| copy_local && id(p, "parent").is_none() && !sel.is_empty() && sel.iter().all(|i| doc.is_ancestor(*set, *i)));
+    // Where the copied variants are now, not where they were copied: the set may have moved since.
+    let below_the_variants = variants_set.and_then(|set| {
+        let copied: Vec<NodeId> = s.clipboard.nodes.iter().map(|(root, _)| *root).collect();
+        let left = doc.bounds_of(&copied)?.x0;
+        let bottom = doc.node(set)?.children.iter().filter_map(|c| doc.world_bounds(*c)).map(|r| r.y1).reduce(f64::max)?;
+        Some((left, bottom + 20.0))
+    });
+    let target = id(p, "parent").or(variants_set).or_else(|| {
         sel.first()
             .copied()
             .filter(|i| {
@@ -301,6 +351,7 @@ pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     let parent = target.unwrap_or(page);
     let at = match (num(p, "x"), num(p, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
+        _ if below_the_variants.is_some() => below_the_variants,
         _ => {
             let b = s.clipboard.bounds;
             match (target, b) {
@@ -323,7 +374,7 @@ pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     };
-    let ids = paste_into(s, parent, at)?;
+    let ids = paste_layers(s, parent, at, variants_set.is_some())?;
     if let Some(sel) = sibling_of {
         let above = s.doc()?.index_in_parent(sel).map(|ix| ix + 1);
         move_above(s, &ids, parent, above)?;
@@ -360,14 +411,27 @@ fn move_above(s: &mut Session, ids: &[NodeId], parent: NodeId, above: Option<usi
     Ok(())
 }
 
+/// The set the copied layers are variants of: every copied root is a main component in `doc` whose
+/// parent is that one component set. `None` for anything else.
+fn copied_variants_set(doc: &Document, copied: &[(NodeId, Vec<Node>)]) -> Option<NodeId> {
+    let mut sets = copied.iter().map(|(root, _)| {
+        let n = doc.node(*root).filter(|n| matches!(n.kind, NodeKind::Component { .. }))?;
+        n.parent.filter(|set| doc.node(*set).is_some_and(|p| matches!(p.kind, NodeKind::ComponentSet { .. })))
+    });
+    let first = sets.next()??;
+    sets.all(|set| set == Some(first)).then_some(first)
+}
+
+/// Paste over selection (Shift+Cmd/Ctrl+V): the copies go into the parent of the selected layer
+/// [`last_seen`] picks, just above it, at the place it gives.
 pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
     let sel = s.selection();
     let page = s.page()?;
     let doc = s.doc()?;
-    let (parent, at, above) = match sel.first() {
-        Some(i) => {
-            let parent = doc.node(*i).and_then(|n| n.parent).unwrap_or(page);
-            (parent, doc.world_bounds(*i).map(|b| (b.x0, b.y0)), doc.index_in_parent(*i).map(|ix| ix + 1))
+    let (parent, at, above) = match last_seen(doc, &sel) {
+        Some((i, at)) => {
+            let parent = doc.node(i).and_then(|n| n.parent).unwrap_or(page);
+            (parent, at, doc.index_in_parent(i).map(|ix| ix + 1))
         }
         None => (page, None, None),
     };
@@ -375,6 +439,38 @@ pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
     move_above(s, &ids, parent, above)?;
     s.set_selection(ids.clone());
     Ok(json!({"ids": ids}))
+}
+
+/// The selected layer Paste over selection pastes after, and where the copies' top-left goes.
+///
+/// One layer: that layer, at its position. Several in one auto layout frame's flow (none absolutely
+/// positioned): the last of them in the flow, which the layout follows. Several elsewhere: the lowest (then rightmost), with the copies
+/// below it, as far below as it is from the selected layers above it. A selection with nothing above
+/// its lowest layer is a row: the copies go right of the rightmost, as far as it is from its
+/// neighbour on the left. Layers that overlap every way get the copies right under the lowest.
+fn last_seen(doc: &Document, sel: &[NodeId]) -> Option<(NodeId, Option<(f64, f64)>)> {
+    let first = *sel.first()?;
+    let top_left = |i: NodeId| doc.world_bounds(i).map(|b| (b.x0, b.y0));
+    if sel.len() == 1 {
+        return Some((first, top_left(first)));
+    }
+    let parent = doc.node(first).and_then(|n| n.parent);
+    let one_flow = parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+        && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.parent == parent && !n.child_layout.absolute));
+    if one_flow {
+        let last = sel.iter().copied().max_by_key(|i| doc.index_in_parent(*i))?;
+        return Some((last, top_left(last)));
+    }
+    let boxes: Vec<(NodeId, figcraft_geom::Rect)> = sel.iter().filter_map(|i| Some((*i, doc.world_bounds(*i)?))).collect();
+    let (lowest, low) = *boxes.iter().max_by(|(_, a), (_, b)| a.y1.total_cmp(&b.y1).then(a.x1.total_cmp(&b.x1)))?;
+    if let Some(above) = boxes.iter().filter(|(_, o)| o.y1 <= low.y0).map(|(_, o)| o.y1).max_by(f64::total_cmp) {
+        return Some((lowest, Some((low.x0, low.y1 + (low.y0 - above)))));
+    }
+    let (rightmost, right) = *boxes.iter().max_by(|(_, a), (_, b)| a.x1.total_cmp(&b.x1).then(a.y1.total_cmp(&b.y1)))?;
+    match boxes.iter().filter(|(_, o)| o.x1 <= right.x0).map(|(_, o)| o.x1).max_by(f64::total_cmp) {
+        Some(left) => Some((rightmost, Some((right.x1 + (right.x0 - left), right.y0)))),
+        None => Some((lowest, Some((low.x0, low.y1)))),
+    }
 }
 
 pub(super) fn paste_replace(s: &mut Session, p: &Value) -> Result<Value> {
@@ -417,7 +513,19 @@ pub(super) fn copy_props_of(doc: &Document, id: NodeId) -> Value {
         v["cornerRadius"] = json!(n.corners.radii);
         v["cornerSmoothing"] = json!(n.corners.smoothing);
     }
+    // A frame's layout grids go with its look, as its fills do.
+    if n.kind.is_frame_like() {
+        v["grids"] = json!(n.grids);
+        v["gridStyle"] = json!(n.styles.grid);
+    }
+    // The links behind the values: the styles and the variables they come from, so the pasted
+    // layer follows them as the copied one does.
+    v["fillStyle"] = json!(n.styles.fill);
+    v["strokeStyle"] = json!(n.styles.stroke);
+    v["effectStyle"] = json!(n.styles.effect);
+    v["boundVariables"] = Value::Object(n.bound.iter().filter(|(f, _)| copied_binding(f)).map(|(f, v)| (f.clone(), json!(v))).collect());
     if let NodeKind::Text(t) = &n.kind {
+        v["textStyle"] = json!(n.styles.text);
         v["fontFamily"] = json!(t.style.font_family);
         v["fontStyle"] = json!(t.style.font_style);
         v["fontSize"] = json!(t.style.font_size);
@@ -432,26 +540,110 @@ pub(super) fn copy_props(s: &mut Session, p: &Value) -> Result<Value> {
     let id = targets(s, p).first().copied().ok_or_else(|| bad("edit.copyProperties", "select one layer"))?;
     let v = copy_props_of(s.doc()?, id);
     s.clipboard.props = Some(v.clone());
+    s.clipboard.props_source_doc = s.ds()?.uid;
     Ok(v)
+}
+
+/// Copied properties `props` without their style and variable links, for a paste into another
+/// file: the copied ids name the source file's styles and variables, and the same ids here can
+/// name unrelated ones. The values paste unlinked, and the layer's own links on them go.
+fn without_links(mut props: Value) -> Value {
+    if let Some(m) = props.as_object_mut() {
+        for (k, v) in m.iter_mut() {
+            if k.ends_with("Style") && !k.starts_with("font") {
+                *v = Value::Null;
+            } else if k == "boundVariables" {
+                *v = json!({});
+            }
+        }
+    }
+    props
 }
 
 /// Give layer `id` the properties [`copy_props_of`] copied (`props`), those it can take: the text
 /// properties only to text, the corners only to a layer with corners.
 pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, props: &Value) -> Result<()> {
     let mut m = props.as_object().cloned().unwrap_or_default();
-    let is_text = matches!(doc.get(id)?.kind, NodeKind::Text(_));
-    if !is_text {
-        m.retain(|k, _| !k.starts_with("font") && k != "lineHeight" && k != "letterSpacing");
+    let n = doc.get(id)?;
+    let (is_text, corners, frame) = (matches!(n.kind, NodeKind::Text(_)), n.kind.has_corner_radius(), n.kind.is_frame_like());
+    let takes = |k: &str| {
+        let text = k.starts_with("font") || k.starts_with("paragraph") || matches!(k, "lineHeight" | "letterSpacing" | "textStyle");
+        let corner = k == "cornerSmoothing" || k.ends_with("Radius");
+        let grid = k == "gridStyle" || k == "grids" || k.starts_with("layoutGrids/");
+        (is_text || !text) && (corners || !corner) && (frame || !grid)
+    };
+    m.retain(|k, _| takes(k));
+    // A style or variable the file doesn't have (deleted since the copy) isn't here to link to: the
+    // values it gave are pasted without a link, so the layer's own link goes too.
+    let here = |v: &Value| v.as_str().is_none_or(|sid| doc.style(sid).is_some());
+    for (k, v) in m.iter_mut() {
+        if k.ends_with("Style") && !k.starts_with("font") && !here(v) {
+            *v = Value::Null;
+        }
     }
-    if !doc.get(id)?.kind.has_corner_radius() {
-        m.remove("cornerRadius");
-        m.remove("cornerSmoothing");
+    if let Some(Value::Object(copied)) = m.get_mut("boundVariables") {
+        copied.retain(|_, v| v.as_str().is_some_and(|vid| doc.variables.get_by_id(vid).is_some()));
+    }
+    // The layer's own bindings on what is pasted give way to the copied layer's: kept, a binding
+    // would hold the old value over the pasted one. A binding on what the copy doesn't carry (a
+    // text layer's font size, pasted from a frame) stays.
+    if let Some(Value::Object(copied)) = m.get("boundVariables") {
+        let mut bound: serde_json::Map<String, Value> =
+            n.bound.keys().filter(|f| copied_binding(f) && m.contains_key(pasted_key(f))).map(|f| (f.clone(), Value::Null)).collect();
+        bound.extend(copied.iter().filter(|(f, _)| takes(f)).map(|(f, v)| (f.clone(), v.clone())));
+        m.insert("boundVariables".into(), Value::Object(bound));
     }
     crate::cmd::props::apply(cmd, doc, id, &m)
 }
 
+/// The key of the properties [`copy_props_of`] copies that sets what a variable bound to `field`
+/// sets: a corner's radius is `cornerRadius`, a side's stroke weight `strokeWeight`, the font
+/// weight `fontStyle`, a layout grid's field `grids` and a paint's or effect's field its list.
+fn pasted_key(field: &str) -> &str {
+    match field {
+        "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "cornerRadius",
+        f if crate::cmd::props::STROKE_SIDES.contains(&f) => "strokeWeight",
+        "fontWeight" => "fontStyle",
+        f => match f.split_once('/') {
+            Some(("layoutGrids", _)) => "grids",
+            Some((list, _)) => list,
+            None => f,
+        },
+    }
+}
+
+/// Whether a variable bound to `field` goes with the properties [`copy_props_of`] copies: not a
+/// size, auto layout spacing, visibility or text content.
+fn copied_binding(field: &str) -> bool {
+    !matches!(
+        field,
+        "width"
+            | "height"
+            | "minWidth"
+            | "maxWidth"
+            | "minHeight"
+            | "maxHeight"
+            | "gap"
+            | "columnGap"
+            | "rowGap"
+            | "crossGap"
+            | "padding"
+            | "paddingHorizontal"
+            | "paddingVertical"
+            | "paddingTop"
+            | "paddingRight"
+            | "paddingBottom"
+            | "paddingLeft"
+            | "visible"
+            | "characters"
+    )
+}
+
 pub(super) fn paste_props(s: &mut Session, p: &Value) -> Result<Value> {
-    let props = s.clipboard.props.clone().ok_or_else(|| EngineError::Disabled("edit.pasteProperties".into(), "no copied properties".into()))?;
+    let mut props = s.clipboard.props.clone().ok_or_else(|| EngineError::Disabled("edit.pasteProperties".into(), "no copied properties".into()))?;
+    if s.ds()?.uid != s.clipboard.props_source_doc {
+        props = without_links(props);
+    }
     let ids = req_targets("edit.pasteProperties", s, p)?;
     let doc = s.doc_mut()?;
     for i in ids {

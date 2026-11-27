@@ -94,7 +94,7 @@ fn assert_save_state_unchanged(s: &Session, before: &DocState, recent: &[String]
 }
 
 #[test]
-fn first_native_save_uses_chosen_filename_for_an_untitled_document() {
+fn saving_to_another_file_names_the_document_after_it() {
     let mut files = SaveFiles::new();
     let path = files.path("Redis.figcraft");
     let copy = files.path("Redis copy.figcraft");
@@ -111,9 +111,19 @@ fn first_native_save_uses_chosen_filename_for_an_untitled_document() {
 
     s.execute("file.saveAs", &json!({"path": copy.to_string_lossy()})).unwrap();
     assert_eq!(s.ds().unwrap().doc.name, "Redis copy");
-    s.execute("file.rename", &json!({"name": "Chosen title"})).unwrap();
+    s.execute("file.rename", &json!({"name": "Chosen: title"})).unwrap();
+    s.execute("file.save", &json!({})).unwrap();
+    assert_eq!(s.ds().unwrap().doc.name, "Chosen: title", "saving to the same file keeps a name given here");
     s.execute("file.saveAs", &json!({"path": manual_copy.to_string_lossy()})).unwrap();
-    assert_eq!(s.ds().unwrap().doc.name, "Chosen title");
+    assert_eq!(s.ds().unwrap().doc.name, "Other", "a name given here too");
+    assert_eq!(figcraft_format::load_bytes(&std::fs::read(&manual_copy).unwrap()).unwrap().0.name, "Other");
+
+    // A file without one on disk yet: imported, here with its source's name.
+    let imported = files.path("Imported.figcraft");
+    let mut i = Session::new();
+    i.execute("file.rename", &json!({"name": "ШИМ"})).unwrap();
+    i.execute("file.saveAs", &json!({"path": imported.to_string_lossy()})).unwrap();
+    assert_eq!(i.ds().unwrap().doc.name, "Imported");
 }
 
 #[test]

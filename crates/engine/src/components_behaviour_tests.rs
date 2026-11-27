@@ -115,6 +115,7 @@ fn copying_a_variant_pastes_an_instance_but_copying_its_set_keeps_the_components
     let (set, _, hover) = button_set(&mut s);
     ex(&mut s, "select.set", json!({"ids": [hover]}));
     ex(&mut s, "edit.copy", json!({}));
+    ex(&mut s, "select.set", json!({"ids": []}));
     let pasted = crate::params::id_of(&ex(&mut s, "edit.paste", json!({}))["ids"][0]).unwrap();
     assert_eq!(component_of(&s, pasted), hover);
     assert_eq!(node(&s, pasted).name, node(&s, set).name);
@@ -239,6 +240,108 @@ fn alt_dragging_a_main_component_copies_an_instance() {
     assert_eq!(s.doc().unwrap().world_bounds(copy).unwrap().x0, 200.0);
     assert_eq!(s.doc().unwrap().world_bounds(main).unwrap().x0, 0.0, "the main stays");
     healthy(&s);
+}
+
+#[test]
+fn pasting_a_variant_with_its_set_selected_adds_a_variant_below_the_others() {
+    let mut s = Session::new();
+    let (set, _, hover) = button_set(&mut s);
+    let bounds = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap();
+    let named = |s: &Session, i: NodeId, name: &str| kids(s, i).into_iter().find(|c| node(s, *c).name == name).unwrap();
+    ex(&mut s, "select.set", json!({"ids": [hover]}));
+    ex(&mut s, "edit.copy", json!({}));
+    let bottom = kids(&s, set).iter().map(|k| bounds(&s, *k).y1).fold(f64::MIN, f64::max);
+    let pasted = crate::params::id_of(&ex(&mut s, "edit.paste", json!({}))["ids"][0]).unwrap();
+    assert!(matches!(node(&s, pasted).kind, NodeKind::Component { .. }));
+    assert_eq!(node(&s, pasted).parent, Some(set));
+    assert_eq!(kids(&s, set).len(), 3);
+    assert_eq!(chars(&s, named(&s, pasted, "Label")), "Hover");
+    let (b, h) = (bounds(&s, pasted), bounds(&s, hover));
+    assert_eq!((b.x0, b.y0), (h.x0, bottom + 20.0));
+    assert!(bounds(&s, set).y1 >= b.y1, "the set grows to hold it");
+
+    let label = named(&s, hover, "Label");
+    ex(&mut s, "select.set", json!({"ids": [label]}));
+    let second = crate::params::id_of(&ex(&mut s, "edit.paste", json!({}))["ids"][0]).unwrap();
+    assert_eq!(node(&s, second).parent, Some(set), "a layer inside a variant selected");
+    assert_eq!(bounds(&s, second).y0, b.y1 + 20.0);
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(kids(&s, set).len(), 3);
+    healthy(&s);
+}
+
+#[test]
+fn a_variant_pasted_into_its_set_after_the_set_moved_lands_under_the_variant() {
+    let mut s = Session::new();
+    let (set, _, hover) = button_set(&mut s);
+    let bounds = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap();
+    ex(&mut s, "select.set", json!({"ids": [hover]}));
+    ex(&mut s, "edit.copy", json!({}));
+    let x = bounds(&s, set).x0;
+    ex(&mut s, "node.set", json!({"id": set, "props": {"x": x + 1000.0}}));
+    let pasted = crate::params::id_of(&ex(&mut s, "edit.paste", json!({}))["ids"][0]).unwrap();
+    let (b, h, sb) = (bounds(&s, pasted), bounds(&s, hover), bounds(&s, set));
+    assert_eq!(b.x0, h.x0, "under the copied variant where it is now, not where it was copied");
+    assert!(sb.x0 <= b.x0 && sb.x1 >= b.x1 && sb.y1 >= b.y1, "inside the set");
+    healthy(&s);
+}
+
+/// Copy `main`, select `selected` and run `command` with `params`; the first pasted layer.
+fn copy_then(s: &mut Session, main: NodeId, selected: &[NodeId], command: &str, params: Value) -> NodeId {
+    ex(s, "select.set", json!({"ids": [main]}));
+    ex(s, "edit.copy", json!({}));
+    ex(s, "select.set", json!({"ids": selected}));
+    crate::params::id_of(&ex(s, command, params)["ids"][0]).unwrap()
+}
+
+// Only a plain paste with the copied variants' own set, or a layer in it, selected makes new
+// variants. Every other paste of a copied main into a set makes an instance of it there, as
+// before: the tests below.
+
+#[test]
+fn a_variant_pasted_with_another_set_selected_is_an_instance() {
+    let mut s = Session::new();
+    let (set, _, hover) = button_set(&mut s);
+    let (other, ..) = button_set(&mut s);
+    ex(&mut s, "node.set", json!({"id": other, "props": {"y": 300}}));
+    let pasted = copy_then(&mut s, hover, &[other], "edit.paste", json!({}));
+    assert_eq!(component_of(&s, pasted), hover);
+    assert_eq!(node(&s, pasted).parent, Some(other));
+    assert_eq!((kids(&s, set).len(), kids(&s, other).len()), (2, 3));
+    healthy(&s);
+}
+
+#[test]
+fn a_main_that_is_no_variant_pasted_with_a_set_selected_is_an_instance() {
+    let mut s = Session::new();
+    let (set, ..) = button_set(&mut s);
+    let k = kit(&mut s);
+    let pasted = copy_then(&mut s, k.card, &[set], "edit.paste", json!({}));
+    assert_eq!(component_of(&s, pasted), k.card);
+    assert_eq!(node(&s, pasted).parent, Some(set));
+    healthy(&s);
+}
+
+#[test]
+fn a_variant_pasted_with_its_own_set_as_an_explicit_parent_is_an_instance() {
+    let mut s = Session::new();
+    let (set, _, hover) = button_set(&mut s);
+    let pasted = copy_then(&mut s, hover, &[hover], "edit.paste", json!({"parent": set}));
+    assert_eq!(component_of(&s, pasted), hover);
+    assert_eq!(node(&s, pasted).parent, Some(set));
+    healthy(&s);
+}
+
+#[test]
+fn pasting_over_or_replacing_a_variant_makes_an_instance_of_the_copied_variant() {
+    for command in ["edit.pasteOver", "edit.pasteReplace"] {
+        let mut s = Session::new();
+        let (set, default, hover) = button_set(&mut s);
+        let pasted = copy_then(&mut s, hover, &[default], command, json!({}));
+        assert_eq!(component_of(&s, pasted), hover, "{command} on a variant of the copied variant's set");
+        assert_eq!(node(&s, pasted).parent, Some(set), "{command}");
+        healthy(&s);
+    }
 }
 
 #[test]
@@ -1416,4 +1519,51 @@ fn a_failing_create_set_leaves_no_components_behind() {
     assert_eq!(undo_len(&s), undo);
     assert_eq!(snapshot(&s), before);
     assert_eq!(s.selection(), selection);
+}
+
+/// One variant of a tab bar: an auto layout root holding an "Inner" fill frame with an absolute
+/// stretched "BG" and `tabs` flow children. Returns the component.
+fn tabs_variant(s: &mut Session, name: &str, x: f64, root_w: f64, tabs: usize) -> NodeId {
+    let root = idv(&ex(s, "frame.create", json!({"x": x, "y": 0, "width": root_w, "height": 100, "name": name})));
+    ex(s, "node.set", json!({"id": root, "props": {"layout": "horizontal", "padding": 10, "mainAlign": "center"}}));
+    let inner_w = root_w - 20.0;
+    let inner = idv(&ex(s, "frame.create", json!({"x": 0, "y": 0, "width": inner_w, "height": 80, "parent": root, "name": "Inner"})));
+    ex(s, "node.set", json!({"id": inner, "props": {"layout": "horizontal", "sizingH": "fill", "sizingV": "fixed", "gap": 0, "padding": 0}}));
+    let bg = idv(&ex(s, "shape.rectangle", json!({"x": 0, "y": 0, "width": inner_w, "height": 80, "parent": inner, "props": {"name": "BG"}})));
+    ex(s, "node.set", json!({"id": bg, "props": {"absolute": true, "constraints": {"horizontal": "leftRight", "vertical": "topBottom"}}}));
+    for t in 0..tabs {
+        ex(s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 60, "height": 80, "parent": inner, "props": {"name": format!("Tab{t}")}}));
+    }
+    idv(&ex(s, "component.create", json!({"ids": [root]})))
+}
+
+/// (root, inner, bg) widths and the bg's left edge of an instance of a [`tabs_variant`].
+fn tabs_geometry(s: &Session, inst: NodeId) -> (f64, f64, f64, f64) {
+    let inner = kids(s, inst).into_iter().find(|c| node(s, *c).name == "Inner").unwrap();
+    let bg = kids(s, inner).into_iter().find(|c| node(s, *c).name == "BG").unwrap();
+    let [.., x, _] = node(s, bg).transform.as_coeffs();
+    (node(s, inst).width, node(s, inner).width, node(s, bg).width, x)
+}
+
+#[test]
+fn switching_variants_re_lays_out_stretched_children_like_a_fresh_instance() {
+    let mut s = Session::new();
+    let narrow = tabs_variant(&mut s, "Tabs=2", 0.0, 200.0, 2);
+    let wide = tabs_variant(&mut s, "Tabs=4", 300.0, 400.0, 4);
+    let set = idv(&ex(&mut s, "component.combineVariants", json!({"ids": [narrow, wide]})));
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": set, "x": 0, "y": 300})));
+    assert_eq!(component_of(&s, i), narrow, "the top-left variant is the default");
+    // Growing: switching to the wider variant lays out like an instance made from it directly.
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Tabs": "4"}}));
+    let direct = idv(&ex(&mut s, "instance.create", json!({"component": wide, "x": 500, "y": 300})));
+    assert_eq!(tabs_geometry(&s, i), tabs_geometry(&s, direct), "switched matches a fresh wide instance");
+    let (_, inner, bg, x) = tabs_geometry(&s, i);
+    assert_eq!((bg, x), (inner, 0.0), "the stretched background exactly fits its frame");
+    // Shrinking back: same, the other way.
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Tabs": "2"}}));
+    let direct = idv(&ex(&mut s, "instance.create", json!({"component": narrow, "x": 500, "y": 500})));
+    assert_eq!(tabs_geometry(&s, i), tabs_geometry(&s, direct), "switched matches a fresh narrow instance");
+    let (_, inner, bg, x) = tabs_geometry(&s, i);
+    assert_eq!((bg, x), (inner, 0.0), "the stretched background exactly fits its frame");
+    healthy(&s);
 }
