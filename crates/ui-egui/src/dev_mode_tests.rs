@@ -257,3 +257,32 @@ fn a_rule_draft_belongs_to_its_document_and_outlives_a_refusal() {
     u.run("file.new", json!({}));
     assert_ne!(crate::dev_mode::rule_draft(&u.app, f), field);
 }
+
+#[test]
+fn a_typed_rule_stays_when_the_field_loses_focus() {
+    let mut s = Session::new();
+    let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 400, "name": "Home"})).unwrap());
+    s.execute("select.set", &json!({"ids": [f]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let te = crate::dev_mode::rule_editor(&u.app, f).with("te");
+    u.ctx.memory_mut(|m| m.request_focus(te));
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("Cards stack".into())]);
+    // Click something else in the panel: the field loses focus as it does in use.
+    let mobile = tree(&mut u).into_iter().find(|n| n.role() == Role::Button && n.label() == Some("Mobile")).expect("the Mobile button");
+    click(&mut u, centre(&mobile));
+    u.frame(vec![]);
+    let draft = u.ctx.data(|d| d.get_temp::<String>(crate::dev_mode::rule_draft(&u.app, f)));
+    assert_eq!(draft.as_deref(), Some("Cards stack"));
+}
+
+#[test]
+fn the_group_field_belongs_to_its_document() {
+    let (mut u, f, _) = setup();
+    let here = crate::dev_mode::group_field(&u.app, f);
+    u.run("file.new", json!({}));
+    assert_ne!(crate::dev_mode::group_field(&u.app, f), here, "another document's layer with the same id has its own field");
+}
