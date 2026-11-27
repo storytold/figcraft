@@ -67,7 +67,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "library.swap",
             "Swap library",
-            "{from (an enabled library: id, name or path), to (another enabled library)}  re-points every component instance, style and variable copied from `from` to the published one of the same name in `to` (instances keep their overrides) → {components, styles, variables, unmatched: [names still from `from`], removed (nothing of `from` is used any more: it was removed)}",
+            "{from (an enabled library: id, name or path), to (another enabled library)}  re-points every component instance, style and variable copied from `from` to the published one of the same name in `to` (instances keep their overrides) → {components, styles, variables, unmatched: [names still from `from`], dropped: [names of `from`'s copies nothing used (a component imported but not placed, a variable imported but not bound): removed, not moved], removed (nothing of `from` is used any more: it was removed)}",
             true,
             swap_cmd
         ),
@@ -599,7 +599,9 @@ fn swap_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`from` and `to` are the same library"));
     }
     let r = crate::library_swap::swap_library(s.doc_mut()?, &from, &lib)?;
-    Ok(json!({"components": r.components, "styles": r.styles, "variables": r.variables, "unmatched": r.unmatched, "removed": r.removed}))
+    Ok(
+        json!({"components": r.components, "styles": r.styles, "variables": r.variables, "unmatched": r.unmatched, "dropped": r.dropped, "removed": r.removed}),
+    )
 }
 
 fn assets_json(lib: &PublishedLibrary) -> Value {
