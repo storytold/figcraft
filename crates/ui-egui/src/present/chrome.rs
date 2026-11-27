@@ -51,7 +51,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let mut action = None;
     // Typing a reply to a comment keeps the keys from the prototype, and so does the link notice
     // while it shows; Shift+C shows the comments.
-    let typing = ctx.egui_wants_keyboard_input() || pres.link_notice.is_some();
+    let typing = crate::a11y::field_focused(&ctx) || pres.link_notice.is_some();
     if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::C)) {
         action = Some(BarAction::Comments);
     }

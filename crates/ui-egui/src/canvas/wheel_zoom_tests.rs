@@ -29,7 +29,7 @@ impl Canvas {
     }
 
     fn with_invert(scroll_wheel_zoom: bool, invert_zoom: bool) -> Self {
-        let mut c = Self { ctx: egui::Context::default(), app: FigApp::new(Session::new(), Box::new(NoServices)), time: 0.0 };
+        let mut c = Self { ctx: crate::framework::headless_context(), app: FigApp::new(Session::new(), Box::new(NoServices)), time: 0.0 };
         c.app.run("pref.scrollWheelZoom", json!({"on": scroll_wheel_zoom}));
         c.app.run("pref.invertZoom", json!({"on": invert_zoom}));
         for _ in 0..3 {
@@ -50,6 +50,7 @@ impl Canvas {
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
     }
