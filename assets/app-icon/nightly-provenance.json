@@ -1,0 +1,58 @@
+{
+  "title": "FigCraft nightly deep-background icons",
+  "author": "@skylartaylor",
+  "license": "MIT OR Apache-2.0",
+  "source_commit": "e2f19109c34cc1679ef1ef7421e484629c5de996",
+  "inputs": [
+    {
+      "path": "assets/app-icon/figcraft-1024.png",
+      "sha256": "e10adf0347b54ff05fce3baa707b7ca36e6d6cd47a35aa46a1f1c9c01390c598",
+      "purpose": "the padded macOS-grid master; every frame is an area average of it, none is upscaled"
+    }
+  ],
+  "method": {
+    "kind": "generated derivative of the project-owned icon (packaging/nightly-icons.py)",
+    "original_palette": {
+      "ink": "#0b0b0c",
+      "paper": "#efe9dc",
+      "background": "#02da96"
+    },
+    "nightly_background": "#019668",
+    "transform": "Solve each pixel's field contribution from the palette (ink and paper are neutral, the field is saturated; the least-squares weight of the two colour differences), move that contribution to the deeper field and leave ink, paper, shading and alpha exactly as they are. The frames at 1024, 512, 256, 128, 64, 48, 32 and 16 px are premultiplied area averages of the master (the 48 px one is a fractional 21.33:1, not a crop). Windows frames are 32bpp DIBs up to 128 px plus one 256 px PNG; the macOS slots are PNG payloads. No badge, crescent or letter.",
+    "generator_sha256": "d8573ec68f3aed8269fee9d99db5fdaffa1a8c5d82a948f5d874af70bb218bcc"
+  },
+  "outputs": {
+    "assets/app-icon/figcraft-nightly-1024.png": "318da484eeb40dcd58dc3d70606e6efc044017c5421966cb3d6aee75f649491f",
+    "assets/app-icon/figcraft-nightly.png": "eb81423ad00afc91689c0cf4cd4d52aa3a2ebc60ca2dad41c52907c7490656c4",
+    "assets/app-icon/figcraft-nightly-256.png": "979401b2fb1f899052a3c8f9e9fab44305af823520b935f8fcf6f01f4aeca23f",
+    "assets/app-icon/figcraft-nightly-128.png": "9b8bb0bd3efbb93333540df7cf0592a3ae11691ea74a0da1bbcdeb75d7a95d52",
+    "assets/app-icon/figcraft-nightly-64.png": "4ef7d60239bc1521c8d71ad032396b51e045393d08c4228a632ab3693803cd0b",
+    "assets/app-icon/figcraft-nightly-48.png": "96fc32d251ab4f9688d0343ef805f92a53ca828e4c7a7de86b201f64602bce59",
+    "assets/app-icon/figcraft-nightly-32.png": "aac4f94dfcb310b9058a6ea66abacac034ead1e0366f0e6e347eb3d6b6ee47d5",
+    "assets/app-icon/figcraft-nightly-16.png": "3508f7d6124095a6a2c44ac55f41fffb1a495d25e3e4365afc4d1a2899cf7cfc",
+    "assets/app-icon/figcraft-nightly.ico": "7113c2a841e70ae15d4be47ec21e13fb7f5f62a99f461f3408ccbb0874ac6f63",
+    "assets/app-icon/figcraft-nightly.icns": "7f8fa9156c1b07d778e24094d047fbb3436e8f574ca49d74be905802ca063aff"
+  },
+  "ico_frame_sizes": [
+    16,
+    32,
+    48,
+    64,
+    128,
+    256
+  ],
+  "icns_png_slots": {
+    "icp4": 16,
+    "icp5": 32,
+    "ic11": 32,
+    "icp6": 64,
+    "ic12": 64,
+    "ic07": 128,
+    "ic08": 256,
+    "ic13": 256,
+    "ic09": 512,
+    "ic14": 512,
+    "ic10": 1024
+  },
+  "validation": "The provenance hashes, the PNG CRCs and dimensions, and both container member lists are checked by packaging/nightly-icon-tests.py. Visual comparison against the stable icon was reviewed at 256, 48 and 16 px. Explorer, Finder and iconutil qualification of the packed containers remains unrun (no Windows or macOS host here)."
+}

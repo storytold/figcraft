@@ -98,3 +98,26 @@ fn fill_rule_normalization_keeps_even_odd_holes_and_more_than_4096_contours() {
     assert!(all.winding(Point::new(8192.5, 0.5)) != 0, "last contour survives beyond the old 4096-face cap");
     assert!((area(&all) - 4097.0).abs() < 1e-6);
 }
+
+/// Two near-touching curved shapes, reduced from linesweeper's own regression input (`sasha_0`,
+/// MIT OR Apache-2.0) for the sweep that never ended in 0.4: it looped allocating until the
+/// system ran out of memory, so Save froze drawing the thumbnail of a file with such a boolean
+/// group (#2394). Run on a thread so a hang fails here instead of stalling the test run.
+#[test]
+fn a_near_degenerate_boolean_finishes() {
+    let a = BezPath::from_svg(
+        "M6025,9840.5 C5968.463992389773,10053.842780234541 5933.1526880433003,10032.968601506755 5908.0786848870821,9992.7335731863113 \
+         C5922.5320746617581,10015.926221894515 5948.1042351958995,10013.643209438689 5948.6368267411644,10013.571880444044 Z",
+    )
+    .unwrap();
+    let b = BezPath::from_svg(
+        "M5919.7428657446435,9896.7806765477981 C6009.9213151129161,9929.2664268136868 5908.0786848870839,9992.7335731863132 5908.0786848870839,9992.7335731863132 \
+         C5922.5320813616336,10015.926232645474 5948.1042554148153,10013.643206799046 5948.6368267411754,10013.571880444044 \
+         C5946.7576348925104,10013.823557352434 5941.1787512170895,10015.181060952815 5932.3878200776162,10016.112588163749 Z",
+    )
+    .unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(boolean_step(&a, &b, BoolOp::Union)));
+    let r = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the sweep should finish");
+    assert!(r.is_ok_and(|p| !p.elements().is_empty()));
+}

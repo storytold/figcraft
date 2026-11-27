@@ -19,7 +19,8 @@ pub(crate) struct Ui {
 
 impl Ui {
     pub(crate) fn new(s: Session) -> Self {
-        let mut u = Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0, screen: vec2(1440.0, 900.0) };
+        let mut u =
+            Self { ctx: crate::framework::headless_context(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0, screen: vec2(1440.0, 900.0) };
         for _ in 0..3 {
             u.frame(vec![]);
         }
@@ -48,6 +49,8 @@ impl Ui {
         self.app.clock.set_test_now(Some(self.time));
         let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.screen)), time: Some(self.time), ..raw };
         let app = &mut self.app;
+        // As the shells do: the runtime gets FigCraft's frame input before the frame.
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
         out
@@ -62,6 +65,7 @@ impl Ui {
         self.app.clock.set_test_now(Some(self.time));
         let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), ..raw };
         let Ui { ctx, app, .. } = self;
+        app.before_input(ctx);
         let mut out = ctx.run_ui(input, |ui| {
             app.ui(ui);
             if ui.ctx().current_pass_index() == 0 {
