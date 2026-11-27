@@ -139,6 +139,38 @@ impl Session {
             return crate::vectoredit::begin_many(self, &ids);
         }
         // Groups, frames and boolean groups: select one level deeper (the layer under the pointer).
+        if ev.shift && !ev.cmd {
+            // Both presses recorded here are this double-click's; without them (the presses came in
+            // one frame with the double-click, or with another tool) the current selection stands in.
+            let before_the_clicks = match std::mem::take(&mut self.tool.selections_before_last_two_presses) {
+                [Some((first, before)), Some((second, _))] if within_slop(ev, first) && within_slop(ev, second) => before,
+                _ => sel.clone(),
+            };
+            let entered_here = before_the_clicks.iter().any(|s| *s == leaf || doc.is_ancestor(*s, leaf));
+            let deeper = if entered_here {
+                figcraft_doc::geometry::enter_target(&doc, leaf, &before_the_clicks)
+            } else {
+                let mut branch = doc.ancestors(leaf);
+                branch.reverse();
+                branch.push(leaf);
+                let clicked = select_target(&doc, leaf, &before_the_clicks, false);
+                let beside_the_selection = before_the_clicks
+                    .iter()
+                    .filter_map(|s| branch.iter().rposition(|b| doc.is_ancestor(*b, *s)))
+                    .max()
+                    .and_then(|shared| branch.get(shared + 1))
+                    .copied();
+                let start = beside_the_selection.filter(|b| doc.is_ancestor(clicked, *b)).unwrap_or(clicked);
+                figcraft_doc::geometry::enter_target(&doc, leaf, &[start])
+            };
+            let mut alongside: Vec<NodeId> = before_the_clicks
+                .into_iter()
+                .filter(|s| doc.contains(*s) && *s != deeper && !doc.is_ancestor(*s, deeper) && !doc.is_ancestor(deeper, *s))
+                .collect();
+            alongside.push(deeper);
+            self.set_selection(alongside);
+            return Ok(());
+        }
         let deeper = figcraft_doc::geometry::enter_target(&doc, leaf, &sel);
         if deeper != target || !sel.contains(&deeper) {
             self.set_selection(vec![deeper]);

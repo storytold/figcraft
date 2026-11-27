@@ -162,6 +162,11 @@ impl Session {
         }
         let tool = self.acting_tool();
         let edits = matches!(tool, ToolId::Move | ToolId::Scale) && !self.tool.dev_mode;
+        // Presses with another tool don't record the selection: the ones from before them aren't
+        // this double-click's.
+        if ev.kind == PointerKind::Down && !matches!(tool, ToolId::Move | ToolId::Scale) {
+            self.tool.selections_before_last_two_presses = Default::default();
+        }
         if edits && self.origin_pointer(ev)? {
             return Ok(());
         }
@@ -181,6 +186,9 @@ impl Session {
                     }
                     // A click on the canvas deselects a ruler guide (the UI selects guides itself).
                     self.ds_mut()?.guide = None;
+                    let now = self.ds()?.selection.clone();
+                    let [_, last] = std::mem::take(&mut self.tool.selections_before_last_two_presses);
+                    self.tool.selections_before_last_two_presses = [last, Some((ev.p(), now))];
                     self.move_down(ev)
                 }
                 ToolId::Hand => {
