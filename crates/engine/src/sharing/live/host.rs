@@ -36,6 +36,24 @@ pub(super) fn unavailable(cmd: &str) -> EngineError {
     )
 }
 
+/// A file whose review settings are past this build's limits can't be shared or published:
+/// every joining client applies arriving values against the limits it was built with, so a file
+/// written by an older or looser build would break them (and no build silently trims what the
+/// file's author set). The error names the lists and the way out.
+fn check_sharable(cmd: &str, doc: &figcraft_doc::Document) -> Result<()> {
+    let over = doc.design_review.over_limits();
+    if over.is_empty() {
+        return Ok(());
+    }
+    let list = over.iter().map(|(what, have, max)| format!("{have} {what} (this build keeps at most {max})")).collect::<Vec<_>>().join(", ");
+    Err(bad(
+        cmd,
+        format!(
+            "this file can't be shared: its design review settings hold {list}; trim them with design.configure (or reset the settings), then share again"
+        ),
+    ))
+}
+
 /// `collab.host`: host the open file (on this machine unless `p` says where) with an invite link.
 pub(super) fn host(s: &mut Session, p: &Value) -> Result<Value> {
     start_host(s, "collab.host", p, Bind::Local, false, false)?;
@@ -57,6 +75,7 @@ fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool, vi
         Some(other) => other.parse::<IpAddr>().map(Bind::Addr).map_err(|_| bad(cmd, "`bind` must be \"local\", \"lan\" or an IP address"))?,
     };
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
+    check_sharable(cmd, &doc)?;
     let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc, short, view };
     let (id, info) = s.live.start(cmd, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
     s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), ..Live::default() });
@@ -75,6 +94,7 @@ pub(super) fn publish(s: &mut Session, p: &Value) -> Result<Value> {
 fn start_publish(s: &mut Session, cmd: &str, server: &str, p: &Value, share: bool) -> Result<SessionId> {
     let key = string(p, "key").map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
+    check_sharable(cmd, &doc)?;
     let name = string(p, "name").map(|n| n.trim().chars().filter(|c| !c.is_control()).take(256).collect::<String>()).filter(|n| !n.is_empty());
     let me = display_name(&s.prefs);
     let opts = PublishOptions { server: server.trim().to_string(), key, name: name.unwrap_or_else(|| doc.name.clone()), me, doc, share };

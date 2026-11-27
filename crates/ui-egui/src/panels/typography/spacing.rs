@@ -97,7 +97,7 @@ fn lead_field(ui: &mut Ui, id: Id, glyph: LeadGlyph, value: &str, width: f32, ti
     let text_rect = Rect::from_min_max(pos2(lead.max.x, rect.min.y), rect.max);
     let editing_id = id.with("editing");
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
-    let resp = ui.interact(rect, id.with("click"), Sense::click()).on_hover_text(tip);
+    let resp = ui.interact(rect, id.with("click"), crate::widgets::field_sense(editing.is_some())).on_hover_text(tip);
     crate::a11y::text(&resp, tip, value);
     ui.painter().rect_filled(rect, CornerRadius::same(5), t.field);
     if editing.is_some() {
