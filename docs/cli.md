@@ -192,8 +192,8 @@ Runs commands in a headless session (a new document, or `--in`), printing one JS
 {"command":"frame.create","ok":true,"result":{"id":2},"step":0}
 ```
 
-The whole script is **one undo step**, and it is **all-or-nothing**, exactly like running the same
-commands through `command.batch` (the MCP tool `batch`, the control channel, plugins). A step key
+The script groups document edits into **one undo step**, like running the same commands through
+`command.batch` (the MCP tool `batch`, the control channel, and plugins). A step key
 other than `command`, `params` and `as`, or a parameter the command's doc (`figcraft-cli commands`)
 doesn't list, fails the script with an error naming it (`ids` and `id` are always taken). A step named
 with `"as"` can be used by later steps: `{"$ref": "name"}` in a step's params is the `id` in that
@@ -214,12 +214,12 @@ The result lines are printed once the script is through, so none of them reports
 took back.
 
 To keep going past a failed command, make a step a `command.batch` with `"onError": "continue"`
-([MCP server](mcp.md) has the rules). The script itself stays all-or-nothing: if a
-later top-level step fails, that batch's edits are rolled back with everything else.
+([MCP server](mcp.md) has the rules). If a later top-level step fails, FigCraft rolls back that
+batch's document edits along with the script's other document edits.
 
-A failing step prints one line with `"ok": false`, the error and `"rolledBack": true`, writes
-nothing (`--out` is not saved, and the session's documents go back to how the script found them),
-and exits with code 1:
+If a top-level step fails during execution, the CLI prints one JSON line with `"ok": false`, the
+error and `"rolledBack": true`, skips the final `--out` save, and exits with code 1. Files written
+by earlier steps, such as a `file.saveAs` step with a path, remain on disk.
 
 ```text
 {"step":1,"command":"node.set","ok":false,"error":"no such node 99999","rolledBack":true}
