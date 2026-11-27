@@ -59,7 +59,7 @@ pub struct Asset {
 }
 
 /// Most assets listed for one selection.
-const MAX_ASSETS: usize = 200;
+pub const MAX_ASSETS: usize = 200;
 /// Largest side of a layer listed as an icon.
 const ICON_MAX: f64 = 128.0;
 

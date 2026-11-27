@@ -112,7 +112,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         ui.add_space(6.0);
         let name = ui.add(egui::TextEdit::singleline(&mut s.name).hint_text(tr("Name")).desired_width(260.0));
         widgets::select_all_on_focus(ui, &name, &s.name);
-        if ui.memory(|m| m.focused().is_none()) {
+        if !crate::a11y::field_focused(ui.ctx()) {
             name.request_focus();
         }
         if s.variable {

@@ -393,9 +393,47 @@ pub fn raster_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
 }
 
 /// The page-space rectangle a node exports: a clipping frame's box (plus its own effects), else
-/// everything it paints.
+/// everything it paints. Each layer counts the fill and stroke outlines it draws (see
+/// [`drawn_bounds`]), so a stroke inside its frame leaves the export the frame's size; the
+/// renderer's own bounds ([`Document::world_render_bounds`]) only bound how far a stroke can reach.
 pub fn export_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
-    doc.world_render_bounds(id)
+    doc.world_render_bounds_with(id, &|n, world| drawn_bounds(doc, n, world).unwrap_or_else(|| n.own_paint_bounds(world)))
+}
+
+/// The page area `n` paints itself under `world` (its children aside), measured on the outlines
+/// it draws: its fill's and its stroke's (joins, caps and alignment as drawn), grown by its
+/// effects. A dashed stroke counts as a solid one too, so where the dashes fall doesn't change the
+/// size, and as its dashes, whose square ends can stand out past it round a curve. `None` where
+/// those outlines don't cover what it paints: text (glyphs and their
+/// strokes), a layer without an outline of its own, and drop shadows whose spread grows the
+/// outline (see [`figcraft_doc::Node::outline_spreads`]).
+fn drawn_bounds(doc: &Document, n: &figcraft_doc::Node, world: Affine) -> Option<Rect> {
+    if matches!(n.kind, NodeKind::Text(_)) || n.outline_spreads().next().is_some() {
+        return None;
+    }
+    let shape = match n.kind {
+        NodeKind::BooleanOp { .. } => node_outline(doc, n).map(|(p, _)| p),
+        _ => figcraft_doc::geometry::shape_path(n),
+    };
+    let stroke = stroke_fill(doc, n).map(|(p, _)| p);
+    let solid = (!n.stroke.dashes.is_empty())
+        .then(|| {
+            let mut undashed = n.clone();
+            undashed.stroke.dashes.clear();
+            stroke_fill(doc, &undashed).map(|(p, _)| p)
+        })
+        .flatten();
+    let placed = |p: &figcraft_geom::BezPath| {
+        use figcraft_geom::kurbo::Shape;
+        let mut p = p.clone();
+        p.apply_affine(world);
+        (!p.elements().is_empty()).then(|| p.bounding_box())
+    };
+    let drawn = [shape.as_ref().and_then(placed), stroke.as_deref().and_then(placed), solid.as_deref().and_then(placed)]
+        .into_iter()
+        .flatten()
+        .reduce(|a, b| a.union(b))?;
+    Some(n.grow_by_effects(drawn))
 }
 
 /// Rasterise one node at `scale` (export). Transparent background.
@@ -490,25 +528,35 @@ pub fn to_srgb(pix: &mut Pixmap, profile: ColorProfile) {
     profile.conversion_to(ColorProfile::Srgb).apply_pixels(pix.data_mut());
 }
 
-/// Write `pixels` with `enc`, embedding `icc` when given.
-fn write_encoded(
-    mut enc: impl image::ImageEncoder,
-    pixels: &[u8],
-    p: &Pixmap,
-    kind: image::ExtendedColorType,
-    icc: Option<Vec<u8>>,
-) -> Result<(), String> {
-    if let Some(icc) = icc {
-        enc.set_icc_profile(icc).map_err(|e| e.to_string())?;
-    }
-    enc.write_image(pixels, p.width(), p.height(), kind).map_err(|e| e.to_string())
+/// Encode `img` with `craft_image_codecs` into `format`.
+fn encode_with_codec(
+    img: &craft_image_codecs::Image,
+    format: craft_image_codecs::Format,
+    opts: &craft_image_codecs::EncodeOptions,
+) -> Result<Vec<u8>, String> {
+    craft_image_codecs::encode(img, format, opts).map_err(|e| e.to_string())
 }
 
-/// Encode as PNG, with an `iCCP` chunk when `icc` is given.
-fn png_with(p: &Pixmap, icc: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    write_encoded(image::codecs::png::PngEncoder::new(&mut out), &to_rgba8(p), p, image::ExtendedColorType::Rgba8, icc)?;
-    Ok(out)
+/// Build a `craft_image_codecs::Image` from straight RGBA8 or RGB8 bytes.
+fn codec_image(
+    p: &Pixmap,
+    layout: craft_image_codecs::ChannelLayout,
+    data: Vec<u8>,
+    icc: Option<Vec<u8>>,
+    cicp: Option<craft_image_codecs::Cicp>,
+) -> Result<craft_image_codecs::Image, String> {
+    let mut img = craft_image_codecs::Image::from_u8(p.width(), p.height(), layout, data).map_err(|e| e.to_string())?;
+    img.icc = icc;
+    img.cicp = cicp;
+    Ok(img)
+}
+
+/// Encode as PNG, with an `iCCP` chunk (and optional `cICP` chunk) when given.
+fn png_with(p: &Pixmap, icc: Option<Vec<u8>>, cicp: Option<craft_image_codecs::Cicp>) -> Result<Vec<u8>, String> {
+    let embed_icc = icc.is_some();
+    let img = codec_image(p, craft_image_codecs::ChannelLayout::Rgba, to_rgba8(p), icc, cicp)?;
+    let opts = craft_image_codecs::EncodeOptions { embed_icc, embed_metadata: false, ..Default::default() };
+    encode_with_codec(&img, craft_image_codecs::Format::Png, &opts)
 }
 
 /// Encode as JPEG over `background` (JPEG has no alpha), with an ICC profile when given.
@@ -524,22 +572,29 @@ fn jpeg_with(p: &Pixmap, background: Color, quality: u8, icc: Option<Vec<u8>>) -
             rgb.push(((s * a + b * (255 - a) + 127) / 255) as u8);
         }
     }
-    let mut out = Vec::new();
-    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
-    write_encoded(enc, &rgb, p, image::ExtendedColorType::Rgb8, icc)?;
-    Ok(out)
+    let embed_icc = icc.is_some();
+    let img = codec_image(p, craft_image_codecs::ChannelLayout::Rgb, rgb, icc, None)?;
+    let opts = craft_image_codecs::EncodeOptions {
+        jpeg_quality: quality.clamp(1, 100),
+        jpeg_chroma_subsampling: false, // Preserve full chroma resolution from before the shared codec cutover.
+        embed_icc,
+        embed_metadata: false,
+        ..Default::default()
+    };
+    encode_with_codec(&img, craft_image_codecs::Format::Jpeg, &opts)
 }
 
 /// Encode as lossless WebP, with an ICC profile when given.
 fn webp_with(p: &Pixmap, icc: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    write_encoded(image::codecs::webp::WebPEncoder::new_lossless(&mut out), &to_rgba8(p), p, image::ExtendedColorType::Rgba8, icc)?;
-    Ok(out)
+    let embed_icc = icc.is_some();
+    let img = codec_image(p, craft_image_codecs::ChannelLayout::Rgba, to_rgba8(p), icc, None)?;
+    let opts = craft_image_codecs::EncodeOptions { webp_lossless: true, embed_icc, embed_metadata: false, ..Default::default() };
+    encode_with_codec(&img, craft_image_codecs::Format::WebP, &opts)
 }
 
 /// Encode as PNG (untagged).
 pub fn encode_png(p: &Pixmap) -> Result<Vec<u8>, String> {
-    png_with(p, None)
+    png_with(p, None, None)
 }
 
 /// Encode as JPEG over `background` (JPEG has no alpha).
@@ -566,8 +621,17 @@ pub fn encode_export_with(p: &Pixmap, format: ExportFormat, profile: ColorProfil
     let icc = (!profile.is_srgb()).then(|| profile.icc());
     match format {
         ExportFormat::Png => {
-            let png = png_with(p, icc)?;
-            Ok(if profile.is_srgb() { png_insert_chunk(png, b"sRGB", &[0]) } else { png_insert_chunk(png, b"cICP", &profile.cicp()) })
+            let cicp = (!profile.is_srgb()).then(|| {
+                let [primaries, transfer, matrix, full_range] = profile.cicp();
+                craft_image_codecs::Cicp {
+                    primaries: u16::from(primaries),
+                    transfer: u16::from(transfer),
+                    matrix: u16::from(matrix),
+                    full_range: full_range != 0,
+                }
+            });
+            let png = png_with(p, icc, cicp)?;
+            Ok(if profile.is_srgb() { png_insert_chunk(png, b"sRGB", &[0]) } else { png })
         }
         ExportFormat::Jpg => jpeg_with(p, Color::WHITE, quality, Some(profile.icc())),
         ExportFormat::Webp => webp_with(p, icc),

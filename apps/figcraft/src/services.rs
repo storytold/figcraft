@@ -31,9 +31,18 @@ pub struct Desktop {
 /// folder names), and craft-settings' app id: `FIGCRAFT_CONFIG_DIR` names another folder.
 const APP_ID: &str = "FigCraft";
 
-/// Where the preferences, recovery copies and installed plugins live ([`settings_dir`]).
+/// Where the preferences, recovery copies and installed plugins live ([`settings_dir`]), or the
+/// Nightly's private profile.
 pub fn config_dir() -> Option<PathBuf> {
-    settings_dir(&craft_settings::Probe { platform_config_dir: platform_dir(), ..Default::default() })
+    config_dir_for(crate::launch_profile::current(), &craft_settings::Probe { platform_config_dir: platform_dir(), ..Default::default() })
+}
+
+/// The data root this launch uses: every piece of user state (the preferences and recent files,
+/// the recovery copies, the installed plugins) hangs off it, so a Nightly build keeps all of it in
+/// the profile the Launcher handed it and the stable app's folder is never read or written.
+/// Stable resolves the folder exactly as it always did.
+pub(crate) fn config_dir_for(profile: &crate::launch_profile::Profile, probe: &craft_settings::Probe) -> Option<PathBuf> {
+    profile.root().map(Path::to_path_buf).or_else(|| settings_dir(probe))
 }
 
 /// The platform's config folder, read from the environment as before: `%APPDATA%` on Windows,

@@ -159,8 +159,8 @@ fn presenter_scales_by_its_options_and_pans_what_overflows() {
     u.key(at, Key::Z);
     let p = presenter(&u);
     assert_eq!((p["scale"].as_str(), num(&p["zoom"])), (Some("actual"), 1.0));
-    assert_eq!(p["panRange"], json!([624.0, 2244.0]));
-    assert_eq!(p["pan"], json!([312.0, 0.0]));
+    assert_eq!(p["panRange"], json!([560.0, 2180.0]));
+    assert_eq!(p["pan"], json!([280.0, 0.0]));
     // The wheel pans down; a drag pans with the pointer.
     let wheel = move || {
         vec![
@@ -198,6 +198,20 @@ fn presenter_scales_by_its_options_and_pans_what_overflows() {
     assert_eq!(presenter(&u)["name"], "Small");
     u.key(at, Key::R);
     assert_eq!(presenter(&u)["name"], "Big");
+}
+
+#[test]
+fn a_frame_the_size_of_the_window_shows_at_100_percent_without_panning() {
+    let mut s = Session::new();
+    let f = id(&s.execute("node.create", &json!({"type": "frame", "name": "Desktop", "x": 0, "y": 0, "width": 1440, "height": 820})).unwrap());
+    let mut u = Ui::new(s);
+    u.run("proto.present", json!({"start": f}));
+    u.run("proto.presentOptions", json!({"scale": "actual"}));
+    let p = presenter(&u);
+    assert_eq!((p["scale"].as_str(), num(&p["zoom"])), (Some("actual"), 1.0));
+    assert_eq!(p["panRange"], json!([0.0, 0.0]));
+    u.run("proto.presentOptions", json!({"scale": "fit"}));
+    assert!(num(&presenter(&u)["zoom"]) < 1.0, "fit keeps its padding");
 }
 
 #[test]

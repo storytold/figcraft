@@ -4,6 +4,7 @@ use figcraft_ui_egui::{FigApp, NoServices};
 use serde_json::json;
 
 fn frame(ctx: &egui::Context, app: &mut FigApp, size: Vec2) {
+    app.before_input(ctx);
     let mut out = ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() }, |ui| app.ui(ui));
     out.textures_delta.clear();
 }
@@ -15,7 +16,7 @@ fn scene(selected: bool, rulers: bool) -> (egui::Context, FigApp) {
     if selected {
         session.execute("guide.select", &json!({"index": 0})).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = figcraft_ui_egui::framework::headless_context();
     let mut app = FigApp::new(session, Box::new(NoServices));
     frame(&ctx, &mut app, vec2(1440.0, 900.0));
     frame(&ctx, &mut app, vec2(1440.0, 900.0));
