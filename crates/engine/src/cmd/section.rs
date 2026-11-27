@@ -61,11 +61,11 @@ fn toggle_contents(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "select a section"));
     }
     let hide = boolean(p, "hidden").unwrap_or_else(|| !sections.iter().all(|i| doc.node(*i).is_some_and(|n| n.hides_contents())));
-    // Selected layers inside a section being hidden give way to the section.
+    // Selected layers inside sections being hidden give way to the outermost targeted section.
     let sel: Vec<NodeId> = s.selection();
     let mut new_sel: Vec<NodeId> = Vec::new();
     for i in sel {
-        let inside = if hide { sections.iter().copied().find(|sec| doc.is_ancestor(*sec, i)) } else { None };
+        let inside = if hide { doc.ancestors(i).into_iter().rfind(|ancestor| sections.contains(ancestor)) } else { None };
         let keep = inside.unwrap_or(i);
         if !new_sel.contains(&keep) {
             new_sel.push(keep);
