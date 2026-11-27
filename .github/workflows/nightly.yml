@@ -22,7 +22,7 @@ jobs:
       actions: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@be00e5ccd18b68e950c8a08532f2230e7c3d0cba
+    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
     with:
       tooling-revision: be00e5ccd18b68e950c8a08532f2230e7c3d0cba
       app-name: figcraft

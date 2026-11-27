@@ -8,20 +8,22 @@ workflows:
     '.github/workflows/house-rules.yml': []
     '.github/workflows/lockfile.yml':
         - 'actions/checkout@v7.0.1'
-        - 'step-security/harden-runner@v2.22.4'
+        - 'step-security/harden-runner@v2.23.0'
     '.github/workflows/nightly-macos.yml':
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
         - 'actions/upload-artifact@v7.0.2'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
-        - 'step-security/harden-runner@v2.22.4'
+        - 'step-security/harden-runner@v2.23.0'
         - 'storytold/craft-common-actions@f5141455aac7b2eb4708aa259d8ffcdf10fde939'
+        - 'storytold/craft-common-actions@f94a43818dabb2e85f2f4d5cd768bb8e5662600a'
     '.github/workflows/nightly-sign.yml': []
     '.github/workflows/nightly.yml': []
     '.github/workflows/nix.yml': []
     '.github/workflows/notify-services.yml': []
     '.github/workflows/packaging-lint.yml':
+        - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
         - 'actions/checkout@v7.0.1'
-        - 'step-security/harden-runner@v2.22.4'
+        - 'step-security/harden-runner@v2.23.0'
     '.github/workflows/release.yml': []
     '.github/workflows/sonarcloud.yml': []
     '.github/workflows/windows-arm64.yml': []
@@ -46,9 +48,9 @@ dependencies:
         commit: 'sha1-8dd607977d06adf4ed49b190381e74c17a9dd25f'
         owner_id: 88700172
         repo_id: 1249865941
-    'step-security/harden-runner@v2.22.4':
-        ref: 'v2.22.4'
-        commit: 'sha1-1d88384fd173af6ecb012dfd0264a306b711241a'
+    'step-security/harden-runner@v2.23.0':
+        ref: 'v2.23.0'
+        commit: 'sha1-aebdcf6156ab6691adf63218240e476564a1ed4c'
         owner_id: 88700172
         repo_id: 422287306
     'storytold/craft-common-actions@f5141455aac7b2eb4708aa259d8ffcdf10fde939':
@@ -58,3 +60,8 @@ dependencies:
         repo_id: 1414429108
         uses:
             - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+    'storytold/craft-common-actions@f94a43818dabb2e85f2f4d5cd768bb8e5662600a':
+        ref: 'main'
+        commit: 'sha1-f94a43818dabb2e85f2f4d5cd768bb8e5662600a'
+        owner_id: 76897702
+        repo_id: 1414429108
