@@ -157,6 +157,8 @@ mod import_report_tests;
 #[cfg(test)]
 mod inspect_fields_tests;
 #[cfg(test)]
+mod instances_shared_props_tests;
+#[cfg(test)]
 mod layers_behaviour_tests;
 #[cfg(test)]
 mod layers_component_rows_tests;
