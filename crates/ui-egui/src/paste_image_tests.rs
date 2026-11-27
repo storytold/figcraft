@@ -28,6 +28,7 @@ const HELD: [Held; 3] = [Held::Ours, Held::Text, Held::Image];
 
 #[derive(Default)]
 struct Clip {
+    file: Option<std::path::PathBuf>,
     text: Option<String>,
     image: Option<(u32, u32, Vec<u8>)>,
     png: Option<Vec<u8>>,
@@ -45,6 +46,9 @@ impl Services for Desktop {
     }
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
         self.0.borrow().image.clone()
+    }
+    fn clipboard_image_file(&mut self) -> Option<std::path::PathBuf> {
+        self.0.borrow().file.clone()
     }
     fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
         self.0.borrow().png.clone()
@@ -191,6 +195,18 @@ fn cmd_v_pastes_an_image_copied_elsewhere() {
     w.app.session.execute("select.none", &json!({})).unwrap();
     w.cmd_v();
     assert_eq!(w.named("Pasted image"), 2, "and again");
+}
+
+#[test]
+fn a_copied_image_file_pastes_its_contents_even_when_the_clipboard_offers_a_filename_and_icon() {
+    let mut w = Win::new();
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/app-icon/figcraft-48.png");
+    *w.clip.borrow_mut() = Clip { file: Some(file.clone()), text: Some("figcraft-48.png".into()), image: Some((2, 2, vec![255; 16])), png: None };
+    w.cmd_v();
+    let doc = w.app.session.doc().unwrap();
+    assert_eq!(w.named("Pasted image"), 1);
+    let stored = doc.images.values().next().expect("an image on the canvas");
+    assert_eq!(stored.bytes.as_slice(), std::fs::read(file).unwrap());
 }
 
 #[test]
