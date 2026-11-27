@@ -512,6 +512,9 @@ fn collection_row(app: &mut FigApp, ui: &mut Ui, view: &View, c: &Collection, st
             extend(app, view.id(), &c.id, st);
             ui.close();
         }
+        if view.editable() {
+            sort_items(app, ui, json!({"collection": c.id}));
+        }
         if view.editable() && menu_item(ui, tr("Delete collection"), "") {
             app.run("variable.deleteCollection", json!({"collection": c.id}));
             ui.close();
@@ -597,6 +600,7 @@ fn group_rows(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
                 duplicate_group(app, &members, &list, g);
                 ui.close();
             }
+            sort_items(app, ui, json!({"collection": coll.id, "group": g}));
             if menu_item(ui, tr("Delete group"), "") {
                 let steps: Vec<serde_json::Value> = members
                     .iter()
@@ -674,6 +678,35 @@ fn duplicate_group(app: &mut FigApp, members: &[&Variable], list: &[String], g: 
         );
     }
     app.run("command.batch", json!({"label": "Duplicate group", "commands": steps}));
+}
+
+/// Sort by name, A to Z and Z to A, menu items for the variables `scope` names (`variable.sort`'s
+/// collection and group).
+fn sort_items(app: &mut FigApp, ui: &mut Ui, scope: Value) {
+    for (label, descending) in [(tr_noop("Sort A to Z"), false), (tr_noop("Sort Z to A"), true)] {
+        if menu_item(ui, tr(label), "") {
+            let mut p = scope.clone();
+            p["descending"] = json!(descending);
+            app.run("variable.sort", p);
+            ui.close();
+        }
+    }
+}
+
+/// The `variable.move` params that move `v` one row up (or `down`) past its neighbour among the
+/// table's rows of its group; None at the group's end.
+fn step_move(view: &View, coll: &Collection, st: &Editor, v: &Variable, down: bool) -> Option<Value> {
+    let g = group_of(&v.name);
+    let rows: Vec<&String> = st.order.iter().filter(|id| view.vars.get_by_id(id).is_some_and(|x| group_of(&x.name) == g)).collect();
+    let i = rows.iter().position(|id| **id == v.id)?;
+    if !down {
+        return Some(json!({"variables": [v.id], "before": rows.get(i.checked_sub(1)?)?}));
+    }
+    let next = rows.get(i + 1)?;
+    // Right after the next row: before what follows it in the collection, else last.
+    let all: Vec<&Variable> = view.in_collection(&coll.id).collect();
+    let after = all.iter().position(|x| x.id == **next).and_then(|k| all.get(k + 1)).map(|x| &x.id);
+    Some(json!({"variables": [v.id], "before": after}))
 }
 
 fn create_collection(app: &mut FigApp, vars: &Variables, st: &mut Editor) {
@@ -767,6 +800,21 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         st.selected.clear();
+    }
+    // Alt+Up / Alt+Down move the one selected variable past its neighbour in its group.
+    if let [id] = st.selected.as_slice()
+        && view.editable()
+        && st.rename.is_none()
+        && !crate::a11y::field_focused(ui.ctx())
+        && let Some(v) = view.vars.get_by_id(id)
+    {
+        let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowDown));
+        let up = !down && ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp));
+        if (up || down)
+            && let Some(p) = step_move(view, coll, st, v, down)
+        {
+            app.run("variable.move", p);
+        }
     }
     let width = (NAME_W + coll.modes.len() as f32 * MODE_W + 40.0).max(ui.available_width());
     egui::ScrollArea::both().id_salt("vars_table").auto_shrink([false, false]).show(ui, |ui| {
@@ -938,6 +986,14 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
             if menu_item(ui, tr("Duplicate"), "") {
                 app.run("variable.duplicate", json!({"variable": v.id}));
                 ui.close();
+            }
+            for (label, key, down) in [(tr_noop("Move up"), "Alt+ArrowUp", false), (tr_noop("Move down"), "Alt+ArrowDown", true)] {
+                if let Some(p) = step_move(view, coll, st, v, down)
+                    && menu_item(ui, tr(label), &crate::toolbar::pretty_shortcut(key))
+                {
+                    app.run("variable.move", p);
+                    ui.close();
+                }
             }
             if !inherited && menu_item(ui, tr("Delete variable"), "") {
                 app.run("variable.delete", json!({"variable": v.id}));
