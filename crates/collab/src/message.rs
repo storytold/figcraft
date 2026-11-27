@@ -34,9 +34,15 @@ pub const COMMENTS: &str = "comments";
 /// read it).
 pub const PACKED: &str = "packed";
 
+/// The word a client puts in its [`Hello::client_version`] when it reads
+/// [`DocProp::DesignReview`](crate::DocProp::DesignReview): a server keeps review-setting changes
+/// out of the batches, catch-up deltas and snapshots it sends to clients that don't say so
+/// (older ones couldn't decode the variant at all).
+pub const DESIGN_REVIEW: &str = "design-review";
+
 /// The `client_version` this build announces: its version, then what it reads beyond the protocol.
 pub fn client_version() -> String {
-    format!("{} {SIGNALS} {HOSTING} {COMMENTS} {PACKED}", env!("CARGO_PKG_VERSION"))
+    format!("{} {SIGNALS} {HOSTING} {COMMENTS} {PACKED} {DESIGN_REVIEW}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Whether `client_version` announces `word`.
@@ -62,6 +68,11 @@ pub fn reads_comments(client_version: &str) -> bool {
 /// A [`Hello::client_version`] that announces [`PACKED`].
 pub fn reads_packed(client_version: &str) -> bool {
     announces(client_version, PACKED)
+}
+
+/// A [`Hello::client_version`] that announces [`DESIGN_REVIEW`].
+pub fn reads_design_review(client_version: &str) -> bool {
+    announces(client_version, DESIGN_REVIEW)
 }
 
 /// Join a file's session.

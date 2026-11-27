@@ -245,6 +245,27 @@ fn typing_at_offers_names_and_enter_inserts_one() {
 }
 
 #[test]
+fn tab_inserts_the_picked_name_and_keeps_the_field_only_while_the_picker_is_open() {
+    let mut s = Session::new();
+    let c = add(&mut s, 100.0, 100.0, "Who can check?", "Sam Lee");
+    s.execute("comment.reply", &json!({"id": c, "text": "Me", "author": "Ada"})).unwrap();
+    let mut u = Ui::new(s);
+    u.run("view.set", json!({"zoom": 1, "cx": 100, "cy": 100}));
+    u.run("comment.open", json!({"id": c, "view": "keep"}));
+    u.frames(2, Vec::new);
+    u.frame(vec![Event::Text("Thanks @sa".into())]);
+    u.frame(vec![]);
+    assert_eq!(comments(&u)["mentions"], json!(["Sam Lee"]));
+    let field = u.ctx.memory(|m| m.focused()).expect("the reply field has the keyboard");
+    key(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.ui.comments.reply, "Thanks @Sam Lee ");
+    assert_eq!(u.ctx.memory(|m| m.focused()), Some(field), "the field keeps the keyboard");
+    // The picker is closed: Tab moves on.
+    key(&mut u, Key::Tab, Modifiers::NONE);
+    assert_ne!(u.ctx.memory(|m| m.focused()), Some(field), "Tab leaves the field");
+}
+
+#[test]
 fn the_presenter_shows_the_frames_comments() {
     let mut s = Session::new();
     let f = id(&s.execute("node.create", &json!({"type": "frame", "x": 0, "y": 0, "width": 400, "height": 300})).unwrap());

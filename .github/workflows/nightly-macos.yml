@@ -1,0 +1,92 @@
+name: Nightly macOS build
+
+# Builds the unsigned Apple-silicon FigCraft Nightly (packaging/macos/nightly.sh) on a hosted macOS
+# runner and checks the archive as the Launcher unpacks it, ending with the bundle's version query
+# (packaging/macos/nightly-verify.sh --expect unsigned). No secrets and no environment: the real Nightly
+# is signed and notarized by the shared release-ref signer (craft-common-actions), which calls
+# packaging/macos/nightly-sign.sh.
+on:
+  # macOS runners are shared with release builds: pull requests run this only with the `full-ci`
+  # label, never by changed paths. `labeled` so adding it starts a run.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a labelled PR cancels its older run. Any event that will not build (no `full-ci`
+# label, or another label added) gets a group of its own, so it never cancels a real build.
+concurrency:
+  group: nightly-macos-${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci') && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Nightly .app (aarch64, unsigned)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      RUST_BACKTRACE: 1
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The same craft-fonts commit the Nightly producer pins (nightly.yml craft-fonts-ref), so the
+      # bundle's notices and fonts match a shipped build.
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        with:
+          ref: 37827adc41fd165f9a9234ac40f94dbad353aa69
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        with:
+          targets: aarch64-apple-darwin
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
+      # A version of the prepared Nightly form for this commit; the real one comes from the feed's
+      # identity job. Only nightly.sh's input checks read it.
+      - name: Prepare a Nightly identity for this commit
+        run: |
+          set -euo pipefail
+          base="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"].split("-")[0])')"
+          sha="$(git rev-parse HEAD)"
+          date="$(date -u +%Y-%m-%d)"
+          {
+            echo "FIGCRAFT_BUILD_SHA=$sha"
+            echo "FIGCRAFT_BUILD_DATE=$date"
+            echo "FIGCRAFT_VERSION=$base-nightly.${date//-/}.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT.g${sha:0:12}"
+          } >>"$GITHUB_ENV"
+      - name: Build the unsigned Nightly bundle
+        env:
+          FIGCRAFT_BUILD_CHANNEL: nightly-v1
+          CARGO_TARGET_DIR: ${{ runner.temp }}/nightly-targets
+          DIST: ${{ runner.temp }}/nightly-dist
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: bash packaging/macos/nightly.sh --arch aarch64
+      - name: Check the archive and the bundle's version
+        run: bash packaging/macos/nightly-verify.sh --expect unsigned --input "$RUNNER_TEMP/nightly-dist/figcraft-$FIGCRAFT_VERSION-macos-aarch64-nightly.zip"
+      # Keeps the verified unsigned zip briefly for keyless signer tests and hand testing. Unsigned only.
+      - name: Keep the unsigned archive
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: figcraft-nightly-macos-aarch64-unsigned
+          path: ${{ runner.temp }}/nightly-dist/figcraft-${{ env.FIGCRAFT_VERSION }}-macos-aarch64-nightly.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

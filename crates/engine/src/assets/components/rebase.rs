@@ -1,4 +1,4 @@
-use super::diff::{diff_groups, variable_groups};
+use super::diff::{diff_groups, rebound_groups, variable_groups};
 use super::instances::{field_group, path_map};
 use super::{BTreeMap, BTreeSet, Document, MAX_DEPTH, Node, NodeId, NodeKind, default_instance_name, holds_content};
 
@@ -216,6 +216,7 @@ pub fn rebase_instance_with(doc: &mut Document, inst: NodeId, mains: &mut MainPa
             let mut bound: Vec<&str> = m.prop_refs.keys().map(|f| field_group(f)).collect();
             bound.extend(variable_groups(n, m));
             overrides.extend(value_groups(m, n).into_iter().filter(|g| !bound.contains(&g.as_str())));
+            overrides.extend(rebound_groups(n, m).into_iter().map(str::to_string));
             if matches!((&m.kind, &n.kind), (NodeKind::Instance { component: a, .. }, NodeKind::Instance { component: b, .. }) if a != b) {
                 overrides.insert("component".into());
             }
@@ -233,6 +234,7 @@ pub fn rebase_instance_with(doc: &mut Document, inst: NodeId, mains: &mut MainPa
             let mut groups: Vec<String> = value_groups(m, n)
                 .into_iter()
                 .filter(|g| !matches!(g.as_str(), "name" | "exports" | "interactions") && !from_variables.contains(&g.as_str()))
+                .chain(rebound_groups(n, m).into_iter().map(str::to_string))
                 .filter(|g| placed_source.is_some() || !matches!(g.as_str(), "resizing" | "modes"))
                 .collect();
             let named = if placed_source.is_some() { n.name != m.name } else { n.name != default_instance_name(doc, component) };

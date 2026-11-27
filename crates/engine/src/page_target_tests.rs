@@ -46,6 +46,30 @@ fn page_delete_keeps_a_frame_and_its_child() {
 }
 
 #[test]
+fn malformed_page_ids_do_not_target_the_open_page() {
+    let mut s = Session::new();
+    let first = s.page().unwrap();
+    let open = id_of(&ex(&mut s, "page.add", json!({})));
+    let layer = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})));
+    ex(&mut s, "select.set", json!({"ids": [layer]}));
+
+    for (cmd, params) in [("page.delete", json!({"id": "bad page"})), ("page.move", json!({"id": "bad page", "index": 0}))] {
+        let err = s.execute(cmd, &params).expect_err("an invalid id must be refused");
+        assert!(err.to_string().contains("`id` must be a node id"), "{err}");
+        assert_eq!(s.doc().unwrap().pages, [first, open]);
+        assert_eq!(s.page().unwrap(), open);
+        assert_eq!(s.selection(), [layer]);
+    }
+
+    ex(&mut s, "page.move", json!({"index": 0}));
+    assert_eq!(s.doc().unwrap().pages, [open, first]);
+    ex(&mut s, "page.move", json!({"id": null, "index": 1}));
+    assert_eq!(s.doc().unwrap().pages, [first, open]);
+    assert_eq!(s.page().unwrap(), open);
+    assert_eq!(s.selection(), [layer]);
+}
+
+#[test]
 fn page_commands_still_work_on_pages() {
     let mut s = Session::new();
     let first = s.page().unwrap();

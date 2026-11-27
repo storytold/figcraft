@@ -15,7 +15,7 @@ const ZOOM_RANGE: (f32, f32) = (0.1, 10.0);
 /// What to give egui for a saved choice on this screen and window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Plan {
-    /// For `Context::set_zoom_factor`: the size drawn, relative to the system's scale.
+    /// The interface scale the runtime applies (`RootEnv::scale`): the size drawn, relative to the system's scale.
     pub zoom: f32,
     /// Physical pixels per point once drawn (the zoom times the system's scale).
     pub drawn: f32,

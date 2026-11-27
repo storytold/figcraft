@@ -1,4 +1,5 @@
 pub mod annotations;
+pub mod asset_handoff;
 pub mod code_connect;
 pub mod codegen;
 pub mod component_codegen;
