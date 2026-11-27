@@ -181,13 +181,15 @@ fn arrows_move_the_highlight_and_enter_runs_it() {
 }
 
 /// A trackpad tap sends the press and the release in one frame; the press must not close a
-/// context menu the release just opened, but a later outside press still does.
+/// context menu the release just opened, but a later outside press still does. The runtime ends a
+/// pass at its press, so the release, which opens the menu, arrives in the next frame.
 #[test]
 fn context_menu_survives_a_same_frame_tap() {
     let mut u = Ui::new(Session::new());
     let p = Pos2::new(1000.0, 600.0);
     let b = |pressed| Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
     u.frame(vec![Event::PointerMoved(p), b(true), b(false)]);
+    u.frame(vec![]);
     assert!(u.app.ui.context_menu.is_some(), "the opening tap's press is spared");
     u.frame(vec![]);
     assert!(u.app.ui.context_menu.is_some(), "the menu stays open");
