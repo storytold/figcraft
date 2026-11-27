@@ -269,7 +269,7 @@ fn contributors_in(ui: &mut egui::Ui, contributors: &[Contributor], total_commit
         }
         ui.separator();
         ui.label(RichText::new(tr("Sort")).color(t.text_secondary));
-        craft_ui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
             for k in SortKey::ALL {
                 if ui.selectable_label(v.key == k, k.label().0).clicked() {
                     v.key = k;
