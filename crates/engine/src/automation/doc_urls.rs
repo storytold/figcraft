@@ -55,5 +55,9 @@ pub fn openable(url: &str) -> bool {
     // The authority is made of host characters only (an opener that can't parse the address may
     // fall back to treating it as a file path).
     let authority = after.split(['/', '?', '#']).next().unwrap_or_default();
-    authority.chars().all(|c| !c.is_ascii() || c.is_ascii_alphanumeric() || "-._~:@[]%!$&'()*+,;=".contains(c))
+    // A query, fragment, userinfo or port alone does not supply a host.
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    !host.is_empty()
+        && !host.starts_with(':')
+        && authority.chars().all(|c| !c.is_ascii() || c.is_ascii_alphanumeric() || "-._~:@[]%!$&'()*+,;=".contains(c))
 }
