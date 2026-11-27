@@ -237,6 +237,91 @@ fn grey_profiles() {
     assert!(near(px[0], [188.0; 3], 2.0) && near(px[1], [255.0; 3], 1.0), "{px:?}");
 }
 
+/// A procedural 2 × 2 PNG; confirm the encoder and shared decoder keep every 16-bit sample.
+fn png16(samples: &[u16], kind: ExtendedColorType, profile: Option<Vec<u8>>) -> Vec<u8> {
+    let raw: Vec<u8> = samples.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let mut bytes = Vec::new();
+    encode(image::codecs::png::PngEncoder::new(&mut bytes), &raw, 2, 2, kind, profile);
+    let decoded = craft_image_codecs::decode(&bytes).unwrap();
+    assert_eq!(decoded.sample_type(), craft_image_codecs::SampleType::U16);
+    assert_eq!(decoded.to_u16_samples().unwrap(), samples);
+    bytes
+}
+
+#[test]
+fn rgba16_thumbnail_averages_before_quantizing() {
+    let bytes = png16(&[0, 0, 0, 65535, 256, 256, 256, 65535].repeat(2), ExtendedColorType::Rgba16, None);
+    let (p, _) = images::decode_within(&bytes, ColorProfile::Srgb, 1, u64::MAX).unwrap();
+    assert_eq!((p.width(), p.height()), (1, 1));
+    // Average 128 rounds to U8 zero. Quantizing first gives 0 and 1, whose average rounds to 1.
+    assert_eq!(p.data(), &[0, 0, 0, 255]);
+}
+
+#[test]
+fn gray_alpha16_thumbnail_averages_before_quantizing_and_profile_conversion() {
+    let bytes = png16(&[0, 65535, 256, 65535].repeat(2), ExtendedColorType::La16, Some(icc(b"GRAY", "Linear grey", SRGB_D50, &Trc::Gamma(1.0))));
+    let source = Source::of(&bytes);
+    assert_eq!(source.name.as_deref(), Some("Linear grey"));
+    assert!(source.is_gray());
+    let (p, fallback) = images::decode_within(&bytes, ColorProfile::Srgb, 1, u64::MAX).unwrap();
+    assert!(!fallback, "the greyscale ICC profile must be used");
+    assert_eq!((p.width(), p.height()), (1, 1));
+    // Resize to grey 128, quantize to zero, then apply the existing 8-bit ICC transform.
+    assert_eq!(p.data(), &[0, 0, 0, 255]);
+}
+
+#[test]
+fn gray_alpha16_thumbnail_keeps_alpha_precision_until_after_scaling() {
+    let bytes = png16(&[65535, 0, 65535, 256].repeat(2), ExtendedColorType::La16, Some(icc(b"GRAY", "Linear grey", SRGB_D50, &Trc::Gamma(1.0))));
+    assert!(Source::of(&bytes).is_gray());
+    let (p, fallback) = images::decode_within(&bytes, ColorProfile::Srgb, 1, u64::MAX).unwrap();
+    assert!(!fallback);
+    assert_eq!((p.width(), p.height()), (1, 1));
+    // Alpha averages to 128 and quantizes to zero, so premultiplication clears the white RGB.
+    assert_eq!(p.data(), &[0, 0, 0, 0]);
+}
+
+#[test]
+fn u16_thumbnail_matches_previous_box_sampling_at_nonintegral_ratio() {
+    // For 16→14, the legacy floating-point edge includes source pixel 8 in output pixel 6.
+    for (w, h, limit) in [(7, 5, 4), (16, 1, 14)] {
+        let source = image::ImageBuffer::from_fn(w, h, |x, y| image::Rgb([if x == 8 { u16::MAX } else { 0 }, 1500 * y as u16, 4000 * x as u16]));
+        let raw: Vec<u8> = source.as_raw().iter().flat_map(|sample| sample.to_ne_bytes()).collect();
+        let mut bytes = Vec::new();
+        encode(image::codecs::png::PngEncoder::new(&mut bytes), &raw, w, h, ExtendedColorType::Rgb16, None);
+
+        let expected = image::DynamicImage::ImageRgb16(source).thumbnail(limit, limit).to_rgba8();
+        let (p, _) = images::decode_within(&bytes, ColorProfile::Srgb, limit, u64::MAX).unwrap();
+        assert_eq!((p.width(), p.height()), expected.dimensions());
+        assert_eq!(p.data(), expected.as_raw(), "{w}×{h} with side limit {limit}");
+    }
+}
+
+#[test]
+fn u16_thumbnail_handles_a_source_rectangle_larger_than_a_u32_sum() {
+    let (w, h) = (257, 257);
+    let samples = vec![u8::MAX; w as usize * h as usize * 2];
+    let mut bytes = Vec::new();
+    encode(image::codecs::png::PngEncoder::new(&mut bytes), &samples, w, h, ExtendedColorType::L16, None);
+
+    let (p, _) = images::decode_within(&bytes, ColorProfile::Srgb, 1, 512 << 20).unwrap();
+    assert_eq!((p.width(), p.height()), (1, 1));
+    assert_eq!(p.data(), &[255; 4]);
+}
+
+#[test]
+fn full_size_u16_images_keep_the_existing_quantization() {
+    let rgba = png16(&[0, 256, 32768, 65535].repeat(4), ExtendedColorType::Rgba16, None);
+    let p = images::decode(&rgba).unwrap();
+    assert_eq!((p.width(), p.height()), (2, 2));
+    assert_eq!(p.data(), &[0, 1, 128, 255].repeat(4));
+
+    let grey = png16(&[0, 256].repeat(4), ExtendedColorType::La16, Some(icc(b"GRAY", "Linear grey", SRGB_D50, &Trc::Gamma(1.0))));
+    let p = images::decode(&grey).unwrap();
+    assert_eq!((p.width(), p.height()), (2, 2));
+    assert_eq!(p.data(), &[0, 0, 0, 1].repeat(4));
+}
+
 #[test]
 fn unusable_profiles_fall_back_to_srgb() {
     let img = samples();
@@ -333,4 +418,44 @@ fn profile_parser_survives_junk() {
     }
     let _ = Source::of(b"");
     let _ = Source::of(&[0x89, b'P', b'N', b'G']);
+}
+
+#[test]
+fn f32_thumbnail_averages_before_quantizing() {
+    let samples = [0.0_f32, 0.0, 0.0, 1.0, 0.002, 0.002, 0.002, 1.0].repeat(2);
+    let raw: Vec<u8> = samples.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let img = craft_image_codecs::Image::from_raw(2, 2, craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::F32, raw).unwrap();
+    let exr = craft_image_codecs::encode(&img, craft_image_codecs::Format::OpenExr, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    let (p, _) = images::decode_within(&exr, ColorProfile::Srgb, 1, u64::MAX).unwrap();
+    assert_eq!((p.width(), p.height()), (1, 1));
+    // Average 0.001 * 255 = 0.255 rounds to 0; quantizing first rounds 0.002 * 255 = 0.51 to 1,
+    // whose 8-bit average rounds to 1.
+    assert_eq!(p.data(), &[0, 0, 0, 255]);
+}
+
+#[test]
+fn non_finite_f32_and_f16_thumbnails_clamp_like_full_size_decode() {
+    let samples = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0, 1.0, f32::NEG_INFINITY, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0];
+    let raw: Vec<u8> = samples.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let f32_img =
+        craft_image_codecs::Image::from_raw(2, 2, craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::F32, raw).unwrap();
+    let f16_img = f32_img.convert(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::F16);
+
+    for (label, img) in [("f32", f32_img), ("f16", f16_img)] {
+        let exr = craft_image_codecs::encode(&img, craft_image_codecs::Format::OpenExr, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let (full, _) = images::decode_within(&exr, ColorProfile::Srgb, 2, u64::MAX).unwrap();
+        assert_eq!(&full.data()[..4], &[0, 255, 0, 255], "{label} full-size pixel 0");
+        let (thumb, _) = images::decode_within(&exr, ColorProfile::Srgb, 1, u64::MAX).unwrap();
+        assert_eq!((thumb.width(), thumb.height()), (1, 1), "{label} thumb dimensions");
+        assert_eq!(thumb.data(), &[191, 64, 64, 255], "{label} thumb pixels");
+    }
+
+    let nan_alpha = [1.0_f32, 1.0, 1.0, f32::NAN, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    let alpha_raw: Vec<u8> = nan_alpha.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let alpha_img =
+        craft_image_codecs::Image::from_raw(2, 2, craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::F32, alpha_raw).unwrap();
+    let alpha_exr =
+        craft_image_codecs::encode(&alpha_img, craft_image_codecs::Format::OpenExr, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    let (alpha_thumb, _) = images::decode_within(&alpha_exr, ColorProfile::Srgb, 1, u64::MAX).unwrap();
+    assert_eq!(alpha_thumb.data(), &[191, 191, 191, 191]);
 }

@@ -16,7 +16,7 @@ fn widths(language: &str) -> Vec<f32> {
     // Truncating text also shows Max lines.
     let text = s.execute("text.create", &json!({"text": "Type", "props": {"textAutoResize": "truncate"}})).unwrap()["id"].clone();
     s.execute("select.set", &json!({"ids": [text]})).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = figcraft_ui_egui::framework::headless_context();
     let mut app = FigApp::new(s, Box::new(NoServices));
     let open = Id::unique("ty_settings_open");
     let mut widths = Vec::new();
@@ -26,6 +26,7 @@ fn widths(language: &str) -> Vec<f32> {
         }
         let raw =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(i as f64 / 60.0), ..Default::default() };
+        app.before_input(&ctx);
         ctx.run_ui(raw, |ui| app.ui(ui)).textures_delta.clear();
         // From the frame after the one it opened on (egui's sizing pass).
         if i > 3 {
