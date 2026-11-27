@@ -2731,7 +2731,7 @@ version = "0.18.1"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
- "linesweeper 0.4.0",
+ "linesweeper",
 ]
 
 [[package]]
@@ -4266,19 +4266,6 @@ name = "linebender_resource_handle"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
-
-[[package]]
-name = "linesweeper"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c19728333c060c6569a53c9a0e56c4be0df52cb4e6e07a8fbe16084cecce769"
-dependencies = [
- "arrayvec",
- "kurbo",
- "polycool",
- "rustc-hash 2.1.3",
- "smallvec",
-]
 
 [[package]]
 name = "linesweeper"
@@ -7076,7 +7063,7 @@ version = "0.18.0"
 source = "git+https://github.com/storytold/vectorcraft.git?rev=6b3a6b8788ebcb420d69449199cbdf323888d27e#6b3a6b8788ebcb420d69449199cbdf323888d27e"
 dependencies = [
  "kurbo",
- "linesweeper 0.5.0",
+ "linesweeper",
  "thiserror 2.0.21",
  "vectorcraft-geom",
 ]

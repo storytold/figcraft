@@ -114,7 +114,7 @@ icu_segmenter = { version = "2.3", default-features = false, features = ["compil
 # Code export: layer names transliterated into ASCII identifiers (pure Rust data tables, zero
 # dependencies, BSD-3-Clause, no_std so the web build keeps it too).
 deunicode = "1.6"
-linesweeper = "0.4"
+linesweeper = "0.5"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # `.fig` import: raw deflate chunks (already built for zip) and zstd chunks (pure Rust, MIT, wasm-safe).
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
