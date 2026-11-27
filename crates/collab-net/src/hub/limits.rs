@@ -1,4 +1,4 @@
-use super::{Access, Arc, HashMap, IpAddr, Ipv6Addr, Mutex, PoisonError, SocketAddr};
+use super::{Access, Arc, HashMap, IpAddr, Ipv6Addr, Mutex, PoisonError};
 
 /// What a link lets a hello do.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,11 +19,6 @@ pub fn ip_key(ip: IpAddr) -> IpAddr {
         }
         v4 => v4,
     }
-}
-
-/// The loopback address of `addr`'s family.
-pub(super) fn loopback(addr: SocketAddr) -> std::net::IpAddr {
-    if addr.is_ipv6() { std::net::Ipv6Addr::LOCALHOST.into() } else { std::net::Ipv4Addr::LOCALHOST.into() }
 }
 
 /// A block of addresses: its first address and its prefix length (2001:db8:: as a /64 and as a

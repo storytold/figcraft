@@ -1520,3 +1520,50 @@ fn a_failing_create_set_leaves_no_components_behind() {
     assert_eq!(snapshot(&s), before);
     assert_eq!(s.selection(), selection);
 }
+
+/// One variant of a tab bar: an auto layout root holding an "Inner" fill frame with an absolute
+/// stretched "BG" and `tabs` flow children. Returns the component.
+fn tabs_variant(s: &mut Session, name: &str, x: f64, root_w: f64, tabs: usize) -> NodeId {
+    let root = idv(&ex(s, "frame.create", json!({"x": x, "y": 0, "width": root_w, "height": 100, "name": name})));
+    ex(s, "node.set", json!({"id": root, "props": {"layout": "horizontal", "padding": 10, "mainAlign": "center"}}));
+    let inner_w = root_w - 20.0;
+    let inner = idv(&ex(s, "frame.create", json!({"x": 0, "y": 0, "width": inner_w, "height": 80, "parent": root, "name": "Inner"})));
+    ex(s, "node.set", json!({"id": inner, "props": {"layout": "horizontal", "sizingH": "fill", "sizingV": "fixed", "gap": 0, "padding": 0}}));
+    let bg = idv(&ex(s, "shape.rectangle", json!({"x": 0, "y": 0, "width": inner_w, "height": 80, "parent": inner, "props": {"name": "BG"}})));
+    ex(s, "node.set", json!({"id": bg, "props": {"absolute": true, "constraints": {"horizontal": "leftRight", "vertical": "topBottom"}}}));
+    for t in 0..tabs {
+        ex(s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 60, "height": 80, "parent": inner, "props": {"name": format!("Tab{t}")}}));
+    }
+    idv(&ex(s, "component.create", json!({"ids": [root]})))
+}
+
+/// (root, inner, bg) widths and the bg's left edge of an instance of a [`tabs_variant`].
+fn tabs_geometry(s: &Session, inst: NodeId) -> (f64, f64, f64, f64) {
+    let inner = kids(s, inst).into_iter().find(|c| node(s, *c).name == "Inner").unwrap();
+    let bg = kids(s, inner).into_iter().find(|c| node(s, *c).name == "BG").unwrap();
+    let [.., x, _] = node(s, bg).transform.as_coeffs();
+    (node(s, inst).width, node(s, inner).width, node(s, bg).width, x)
+}
+
+#[test]
+fn switching_variants_re_lays_out_stretched_children_like_a_fresh_instance() {
+    let mut s = Session::new();
+    let narrow = tabs_variant(&mut s, "Tabs=2", 0.0, 200.0, 2);
+    let wide = tabs_variant(&mut s, "Tabs=4", 300.0, 400.0, 4);
+    let set = idv(&ex(&mut s, "component.combineVariants", json!({"ids": [narrow, wide]})));
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": set, "x": 0, "y": 300})));
+    assert_eq!(component_of(&s, i), narrow, "the top-left variant is the default");
+    // Growing: switching to the wider variant lays out like an instance made from it directly.
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Tabs": "4"}}));
+    let direct = idv(&ex(&mut s, "instance.create", json!({"component": wide, "x": 500, "y": 300})));
+    assert_eq!(tabs_geometry(&s, i), tabs_geometry(&s, direct), "switched matches a fresh wide instance");
+    let (_, inner, bg, x) = tabs_geometry(&s, i);
+    assert_eq!((bg, x), (inner, 0.0), "the stretched background exactly fits its frame");
+    // Shrinking back: same, the other way.
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Tabs": "2"}}));
+    let direct = idv(&ex(&mut s, "instance.create", json!({"component": narrow, "x": 500, "y": 500})));
+    assert_eq!(tabs_geometry(&s, i), tabs_geometry(&s, direct), "switched matches a fresh narrow instance");
+    let (_, inner, bg, x) = tabs_geometry(&s, i);
+    assert_eq!((bg, x), (inner, 0.0), "the stretched background exactly fits its frame");
+    healthy(&s);
+}
