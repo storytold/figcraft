@@ -69,6 +69,54 @@ fn large_pictures_are_scaled_down_to_fit_never_up() {
 }
 
 #[test]
+fn shrunk_16_bit_pngs_keep_native_precision_until_display_conversion() {
+    use image::{DynamicImage, ImageBuffer};
+
+    // At 2-to-1, these channels average below the first 8-bit rounding threshold.
+    let cases = [
+        DynamicImage::ImageLuma16(ImageBuffer::from_raw(2, 1, vec![0, 129]).unwrap()),
+        DynamicImage::ImageLumaA16(ImageBuffer::from_raw(2, 1, vec![0, 0, 129, 129]).unwrap()),
+        DynamicImage::ImageRgb16(ImageBuffer::from_raw(2, 1, vec![0, u16::MAX, 129, 129, u16::MAX, 0]).unwrap()),
+        DynamicImage::ImageRgba16(ImageBuffer::from_raw(2, 1, vec![0, u16::MAX, 129, 0, 129, u16::MAX, 0, 129]).unwrap()),
+    ];
+    for picture in cases {
+        let mut bytes = Cursor::new(Vec::new());
+        picture.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let thumbnail = decode_thumbnail(bytes.get_ref(), 1).unwrap();
+        let expected = picture.thumbnail(1, 1).into_rgba8();
+        assert_eq!((thumbnail.width, thumbnail.height), (1, 1));
+        assert_eq!(&thumbnail.rgba, expected.as_raw(), "{:?}", picture.color());
+    }
+}
+
+#[test]
+fn large_16_bit_thumbnail_footprints_average_without_overflow() {
+    let image = image::ImageBuffer::from_pixel(512, 512, image::Luma([u16::MAX]));
+    let mut bytes = Cursor::new(Vec::new());
+    image::DynamicImage::ImageLuma16(image).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    let thumbnail = decode_thumbnail(bytes.get_ref(), 1).unwrap();
+    assert_eq!((thumbnail.width, thumbnail.height), (1, 1));
+    assert_eq!(thumbnail.rgba, [255, 255, 255, 255]);
+}
+
+#[test]
+fn wide_thumbnail_footprints_keep_distinct_color_and_alpha() {
+    let image =
+        image::ImageBuffer::from_fn(
+            768,
+            512,
+            |x, _| {
+                if x < 384 { image::Rgba([u16::MAX, 0, 0, 32768]) } else { image::Rgba([0, u16::MAX, 0, u16::MAX]) }
+            },
+        );
+    let mut bytes = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba16(image).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    let thumbnail = decode_thumbnail(bytes.get_ref(), 2).unwrap();
+    assert_eq!((thumbnail.width, thumbnail.height), (2, 1));
+    assert_eq!(thumbnail.rgba, [255, 0, 0, 128, 0, 255, 0, 255]);
+}
+
+#[test]
 fn missing_damaged_oversized_and_non_zip_input_give_none() {
     // No thumbnail in the archive.
     let bytes = crate::save_bytes(&Document::new("File"), None).unwrap();
@@ -188,6 +236,19 @@ fn previews_carry_the_first_pages_colour() {
 }
 
 #[test]
+fn sketch_preview_rejects_archives_above_the_import_entry_limit() {
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("previews/preview.png", stored).unwrap();
+    zip.write_all(&png(1, 1)).unwrap();
+    for number in 0..craft_sketch::MAX_ENTRIES {
+        zip.start_file(format!("pages/{number}.json"), stored).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    assert!(crate::thumbnail::sketch_preview_png(Cursor::new(bytes)).is_none());
+}
+
+#[test]
 fn sketch_files_show_their_preview_png() {
     use crate::thumbnail::{Preview, file_preview};
     let d = dir("sketch");
@@ -203,4 +264,33 @@ fn sketch_files_show_their_preview_png() {
     let junk = d.join("junk.sketch");
     std::fs::write(&junk, [0xFFu8; 64]).unwrap();
     assert_eq!(file_preview(&junk, 640), Preview::default());
+}
+
+#[test]
+fn thumbnail_decode_keeps_stored_orientation_and_supports_webp_and_gif() {
+    // 24x16 JPEG with EXIF orientation 6 (rotate 90 CW) must keep stored 24x16 / 12x8 dimensions.
+    let rgb = image::RgbImage::from_pixel(24, 16, image::Rgb([200, 40, 20]));
+    let mut jpg = Vec::new();
+    rgb.write_to(&mut Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
+    let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+    exif.extend_from_slice(&6u16.to_le_bytes());
+    exif.extend_from_slice(&[0; 6]);
+    let mut oriented = jpg[..2].to_vec();
+    oriented.extend_from_slice(&[0xff, 0xe1]);
+    oriented.extend_from_slice(&u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
+    oriented.extend_from_slice(&exif);
+    oriented.extend_from_slice(&jpg[2..]);
+
+    let full = decode_thumbnail(&oriented, 64).unwrap();
+    assert_eq!((full.width, full.height), (24, 16));
+    let scaled = decode_thumbnail(&oriented, 12).unwrap();
+    assert_eq!((scaled.width, scaled.height), (12, 8));
+
+    let img = image::RgbaImage::from_pixel(10, 6, image::Rgba([10, 20, 30, 255]));
+    for fmt in [image::ImageFormat::WebP, image::ImageFormat::Gif] {
+        let mut bytes = Vec::new();
+        img.write_to(&mut Cursor::new(&mut bytes), fmt).unwrap();
+        let thumb = decode_thumbnail(&bytes, 64).unwrap();
+        assert_eq!((thumb.width, thumb.height), (10, 6), "{fmt:?}");
+    }
 }

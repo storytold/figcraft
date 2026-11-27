@@ -54,6 +54,8 @@ pub fn start() {
                 canvas,
                 options,
                 Box::new(move |cc| {
+                    // The UI runtime FigCraft's egui UI is hosted by; the page owns the canvas, so it has no window system.
+                    figcraft_ui_egui::framework::install_headless(&cc.egui_ctx);
                     if let Some(rs) = &cc.wgpu_render_state {
                         log::info!("figcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
@@ -210,6 +212,7 @@ impl eframe::App for WebShell {
         if let Some(bridge) = &self.host {
             bridge.set_dirty(self.fig.session.docs.iter().any(|d| d.is_dirty()));
         }
+        self.fig.close_path(ctx);
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -217,6 +220,7 @@ impl eframe::App for WebShell {
         // to draw: the batch is applied by this frame and acknowledged once it is presented, as on
         // the desktop (`apps/figcraft/src/main.rs`). Without this hook the batch sat in its queue
         // and its promise never settled.
+        self.fig.before_input(ctx);
         let events = figcraft_ui_egui::windows::take_input(&mut self.fig, raw_input.viewport_id);
         raw_input.events.extend(events);
         crate::pasted::begin_frame(&mut self.fig, raw_input, ctx);
