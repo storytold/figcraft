@@ -187,9 +187,8 @@ fn page_step(s: &mut Session, dir: i64) -> Result<Value> {
         }
     };
     let ds = s.ds_mut()?;
-    ds.page = pg;
+    ds.open_page(pg);
     ds.selection.clear();
-    ds.zoom_to_fit();
     Ok(json!({"page": pg}))
 }
 
@@ -568,7 +567,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.set",
             "Choose tool",
-            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|annotation|shapeBuilder | on boards: sticky|shape|connector|marker|highlighter|eraser|stamp}",
+            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|annotation|shapeBuilder | on boards: sticky|shape|connector|marker|highlighter|eraser|stamp|mindMap}",
             false,
             |s, p| {
                 let t = req_string("tool.set", p, "tool")?;

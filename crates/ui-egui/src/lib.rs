@@ -17,9 +17,12 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod a11y;
 pub mod bidi;
 pub mod canvas;
+pub mod channel;
 pub mod cjk;
+mod combo_menu;
 pub mod control;
 pub mod dialogs;
+pub mod framework;
 pub mod home;
 pub mod i18n;
 pub mod icons;
@@ -58,6 +61,8 @@ mod bool_menu_icon_tests;
 #[cfg(test)]
 mod branch_ui_tests;
 #[cfg(test)]
+mod canvas_autopan_tests;
+#[cfg(test)]
 mod canvas_double_click_tests;
 #[cfg(test)]
 mod canvas_drag_tests;
@@ -75,6 +80,8 @@ mod colorpicker_eyedropper_tests;
 mod colorpicker_selection_tests;
 #[cfg(test)]
 mod comments_tests;
+#[cfg(test)]
+mod component_header_tests;
 #[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
@@ -104,17 +111,23 @@ mod devmode_tail_tests;
 #[cfg(test)]
 mod display_name_tests;
 #[cfg(test)]
+mod drop_position_tests;
+#[cfg(test)]
 mod duplicate_paint_tests;
 #[cfg(test)]
 mod export_name_tests;
 #[cfg(test)]
 mod export_preview_tests;
 #[cfg(test)]
+mod field_ellipsis_tests;
+#[cfg(test)]
 mod field_tests;
 #[cfg(test)]
 mod font_menu_regrow_tests;
 #[cfg(test)]
 mod frame_label_tests;
+#[cfg(test)]
+mod frame_new_from_selection_tests;
 #[cfg(test)]
 mod gap_handle_tests;
 #[cfg(test)]
@@ -125,6 +138,8 @@ mod guide_release_tests;
 mod guide_snap_tests;
 #[cfg(test)]
 mod header_icon_size_tests;
+#[cfg(test)]
+mod hex_field_target_tests;
 #[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
@@ -286,6 +301,8 @@ mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
 #[cfg(test)]
+mod usage_summary_tests;
+#[cfg(test)]
 mod variable_picker_tests;
 #[cfg(test)]
 mod variables_export_ui_tests;
@@ -294,11 +311,19 @@ mod variables_rename_tests;
 #[cfg(test)]
 mod variables_select_tests;
 #[cfg(test)]
+mod variables_window_resize_tests;
+#[cfg(test)]
+mod variant_own_value_tests;
+#[cfg(test)]
 mod variants_discovery_tests;
+#[cfg(test)]
+mod vector_align_tests;
 #[cfg(test)]
 mod vector_keys_tests;
 #[cfg(test)]
 mod vector_panel_tests;
+#[cfg(test)]
+mod vector_point_radius_tests;
 #[cfg(test)]
 mod vector_point_xy_tests;
 #[cfg(test)]
@@ -436,6 +461,9 @@ pub struct UiState {
     pub right_width: f32,
     /// The right sidebar as drawn this frame, after fitting the window.
     pub right_panel_rect: Option<egui::Rect>,
+    /// The layers the Design panel showed, and the pass it did, while one of its fields had the
+    /// keyboard (see `design_selection`).
+    pub field_selection: Option<(u64, Vec<figcraft_doc::NodeId>)>,
     pub right_tab: RightTab,
     /// The tab of the previous frame, to see the right panel change mode.
     pub last_right_tab: RightTab,
@@ -662,6 +690,7 @@ impl Default for UiState {
             left_width: PANEL_DEFAULT,
             right_width: PANEL_DEFAULT,
             right_panel_rect: None,
+            field_selection: None,
             right_tab: RightTab::Design,
             last_right_tab: RightTab::Design,
             left_tab: LeftTab::File,
@@ -858,6 +887,10 @@ pub struct FigApp {
     pub(crate) ime: egui::ime_context::ImeContextTracker,
     /// The check for a newer release and its prompt (desktop; [`updates_ui`]).
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// The framework dialogs (the update dialogs), run once per frame after the main window's UI.
+    pub framework_dialogs: craft_ui::dialog::DialogHost,
+    /// Who FigCraft is to the framework's dialogs ([`framework::host`]).
+    pub(crate) framework_host: std::sync::Arc<craft_host::Host>,
     /// Test-only count of the one IME observation each viewport pass makes.
     #[cfg(test)]
     pub(crate) ime_observations: u32,

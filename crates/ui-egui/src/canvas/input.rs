@@ -134,7 +134,9 @@ fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui:
             refused = true;
             continue;
         }
-        let pt = hover_pos.map(|h| app.to_page(h)).unwrap_or_default();
+        // macOS reports no pointer while a file is dragged in from another app, so a quick drop
+        // comes with no position: the file then lands in the middle of the view, not at 0, 0.
+        let pt = app.to_page(hover_pos.unwrap_or_else(|| app.canvas.rect.center()));
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped.png".into());
         let (command, mut params) = match well.take() {
             Some(params) => ("image.replace", params),
@@ -189,6 +191,28 @@ fn pan_view(app: &mut FigApp, ctx: &egui::Context, pos: Pos2, mods: &egui::Modif
     }
 }
 
+/// A press on the canvas takes the keyboard from a panel field before the panels draw, so the
+/// field commits to the layers it was edited for. Drawn after the panels, the press would first
+/// select another layer, and the field would commit to that one (or into the move the press
+/// starts, which an unmoved release puts back).
+pub(crate) fn release_fields_for_press(ctx: &egui::Context) {
+    let Some(canvas) = crate::a11y::canvas_id(ctx).and_then(|id| ctx.read_response(id)) else { return };
+    let press = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+            _ => None,
+        })
+    });
+    let on_canvas = press.is_some_and(|p| canvas.rect.contains(p) && ctx.layer_id_at(p) == Some(canvas.layer_id));
+    if on_canvas && crate::a11y::field_focused(ctx) {
+        ctx.memory_mut(|m| {
+            if let Some(f) = m.focused() {
+                m.surrender_focus(f);
+            }
+        });
+    }
+}
+
 /// The pointer and keys on the canvas. False when something on it with a cursor of its own has
 /// the pointer (a comment pin, a ruler guide, a gradient or padding handle): the tool's cursor
 /// then doesn't show.
@@ -226,6 +250,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
                 send(app, PointerKind::Up, at, &mods);
             }
         }
+        pan_past_edge(app, &ctx, &mods);
         // Leaving the canvas: nothing is hovered there any more.
         if !app.canvas.dragging && std::mem::take(&mut app.canvas.hovering) {
             left(app);
@@ -283,9 +308,15 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     if !app.canvas.dragging && resp.hovered() && crate::guides::input(app, &ctx, pos) {
         return false;
     }
-    if !app.canvas.dragging && resp.hovered() && crate::handles::input(app, &ctx, pos) {
-        return false;
-    }
+    let handle_cursor = if !app.canvas.dragging && resp.hovered() {
+        match crate::handles::input(app, &ctx, pos) {
+            crate::handles::Input::Captured => return false,
+            crate::handles::Input::Hover(cursor) => Some(cursor),
+            crate::handles::Input::Ignored => None,
+        }
+    } else {
+        None
+    };
     if resp.secondary_clicked() {
         open_context_menu(app, pos, mods.command);
         return true;
@@ -338,12 +369,6 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         app.canvas.dragging = true;
         app.ui.context_menu = None;
         app.ui.tool_flyout = None;
-        // Clicking the canvas takes focus from panel fields.
-        ctx.memory_mut(|m| {
-            if let Some(f) = m.focused() {
-                m.surrender_focus(f);
-            }
-        });
         Some(PointerKind::Down)
     } else if app.canvas.dragging && primary_released {
         app.canvas.dragging = false;
@@ -371,6 +396,11 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     if force.is_some() {
         app.canvas.pressure = force;
     }
+    // A drag held near the edge pans before the move goes out, so it lands on the document point
+    // now under the pointer (and the pan goes on while the pointer is still: it asks for frames).
+    if kind == Some(PointerKind::Move) && super::autopan::wanted(app, &ctx) {
+        super::autopan::pan(app, &ctx, pos);
+    }
     if let Some(k) = kind {
         let at = if matches!(k, PointerKind::Down) { press_pos.unwrap_or(pos) } else { pos };
         send(app, k, at, &mods);
@@ -382,10 +412,26 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
             send(app, PointerKind::Up, release_pos.unwrap_or(pos), &mods);
         }
     }
-    true
+    // Padding hover changes the cursor without skipping the normal hover and context-menu paths.
+    if let Some(cursor) = handle_cursor {
+        ctx.set_cursor_icon(cursor);
+        false
+    } else {
+        true
+    }
 }
 
 /// Pointer event `kind` at screen point `pos`, to the tools.
+/// A drag held past the edge pans toward it, the layer or box going with the pointer.
+fn pan_past_edge(app: &mut FigApp, ctx: &egui::Context, mods: &egui::Modifiers) {
+    if super::autopan::wanted(app, ctx)
+        && let Some(at) = ctx.input(|i| i.pointer.latest_pos())
+        && super::autopan::pan(app, ctx, at)
+    {
+        send(app, PointerKind::Move, at, mods);
+    }
+}
+
 fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
     let ev = pointer_event(app, kind, pos, m);
     // A hover where nothing changed since the last one finds what that one found (the state is
