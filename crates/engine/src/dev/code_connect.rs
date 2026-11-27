@@ -26,6 +26,11 @@ pub const MAX_TEMPLATE: usize = 4_000;
 pub const MAX_NAME: usize = 100;
 /// Longest import path (chars).
 pub const MAX_IMPORT: usize = 300;
+/// Longest source path, and notes (chars).
+pub const MAX_SOURCE: usize = 300;
+pub const MAX_NOTES: usize = 2_000;
+/// Most properties with mapped values on a link, and values on each.
+const MAX_MAPPED: usize = 100;
 /// Most links a connect file holds.
 pub const MAX_FILE_LINKS: usize = 5_000;
 /// Largest connect file read (bytes).
@@ -377,6 +382,8 @@ fn html_text(s: &str) -> String {
 
 /// `link`'s template with `values` (one per parameter of `c`), every line prefixed by `pad`.
 pub(crate) fn render(doc: &Document, c: &Component, values: &[(String, Value)], link: &CodeLink, lang: CodeLang, pad: &str) -> String {
+    // A value is written as code calls it; a condition reads the design's own value.
+    let coded = &in_code(values, link);
     let mut out = String::new();
     // A quoted attribute stays open across substitutions: `title="{a} {b}"` must treat both
     // placeholders as attribute values, not text after the first one.
@@ -391,7 +398,7 @@ pub(crate) fn render(doc: &Document, c: &Component, values: &[(String, Value)], 
                     vue_attr = None;
                 }
             }
-            Piece::Value { name, inner } => match find(c, values, name) {
+            Piece::Value { name, inner } => match find(c, coded, name) {
                 Some((p, v)) => {
                     let e = expr(doc, c, p, v, lang);
                     // JSX and `view!`: a plain string reads best as an attribute value, anything
@@ -454,6 +461,12 @@ pub(crate) fn render(doc: &Document, c: &Component, values: &[(String, Value)], 
     out.lines().map(|l| if l.is_empty() { "\n".to_string() } else { format!("{pad}{l}\n") }).collect()
 }
 
+/// `values` with each design value the link names turned into what code calls it.
+fn in_code(values: &[(String, Value)], link: &CodeLink) -> Vec<(String, Value)> {
+    let code = |prop: &str, v: &Value| link.values.get(prop)?.get(v.as_str()?).cloned();
+    values.iter().map(|(prop, v)| (prop.clone(), code(prop, v).map_or_else(|| v.clone(), Value::String))).collect()
+}
+
 /// A starting template: the code component called with every property (but slots) passed.
 fn default_template(c: &Component, lang: CodeLang, name: &str) -> String {
     let params: Vec<&str> = c.params.iter().filter(|p| p.kind != ParamKind::Slot).map(|p| p.ident.as_str()).collect();
@@ -467,6 +480,15 @@ fn default_template(c: &Component, lang: CodeLang, name: &str) -> String {
         CodeLang::ArkUi => format!("{name}({{ {} }})", params.iter().map(|p| format!("{p}: {{{p}}}")).collect::<Vec<_>>().join(", ")),
         _ => format!("{name}({})", params.iter().map(|p| format!("{p} = {{{p}}}")).collect::<Vec<_>>().join(", ")),
     }
+}
+
+/// Why `source` can't name a file in a code repository: it goes down from the repository's root.
+fn check_source(source: &str) -> std::result::Result<(), String> {
+    let plain = source.chars().count() <= MAX_SOURCE
+        && !source.contains('\\')
+        && !source.chars().any(char::is_control)
+        && std::path::Path::new(source).components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir));
+    if plain { Ok(()) } else { Err(format!("source: a path inside the code repository, up to {MAX_SOURCE} characters")) }
 }
 
 /// Checks a link: its name, import path and template. Returns the placeholder names that aren't
@@ -500,6 +522,14 @@ pub fn check(c: &Component, link: &CodeLink, lang: CodeLang) -> std::result::Res
             _ => format!("importPath: a module or package name (letters, digits, _ and .), up to {MAX_IMPORT} characters"),
         });
     }
+    check_source(&link.source)?;
+    if link.notes.chars().count() > MAX_NOTES {
+        return Err(format!("notes: up to {MAX_NOTES} characters"));
+    }
+    let long = |s: &String| s.chars().count() > MAX_NAME;
+    if link.values.len() > MAX_MAPPED || link.values.values().any(|m| m.len() > MAX_MAPPED || m.iter().any(|(k, v)| long(k) || long(v))) {
+        return Err(format!("values: at most {MAX_MAPPED} properties of {MAX_MAPPED} values, each up to {MAX_NAME} characters"));
+    }
     let t = &link.template;
     if t.trim().is_empty() || t.chars().count() > MAX_TEMPLATE || t.chars().any(|ch| ch.is_control() && !"\n\t\r".contains(ch)) {
         return Err(format!("template: the snippet, up to {MAX_TEMPLATE} characters"));
@@ -513,6 +543,12 @@ pub fn check(c: &Component, link: &CodeLink, lang: CodeLang) -> std::result::Res
             && !unknown.iter().any(|u| u == name)
         {
             unknown.push(name.to_string());
+        }
+    }
+    // `in_code` reads a mapping by property name, so a key that is only a parameter name does nothing.
+    for prop in link.values.keys() {
+        if !c.params.iter().any(|p| p.prop == *prop) && !unknown.iter().any(|u| u == prop) {
+            unknown.push(prop.clone());
         }
     }
     Ok(unknown)
@@ -557,12 +593,103 @@ fn store(doc: &mut Document, owner: NodeId, link: CodeLink) -> Result<()> {
     Ok(())
 }
 
+/// The variant properties of component or set `owner`, with their values.
+pub fn variants(doc: &Document, owner: NodeId) -> Vec<(String, Vec<String>)> {
+    main_of(doc, owner)
+        .and_then(|m| describe(doc, m))
+        .map(|c| c.params.iter().filter_map(|p| if let ParamKind::Variant(v) = &p.kind { Some((p.prop.clone(), v.clone())) } else { None }).collect())
+        .unwrap_or_default()
+}
+
+/// A link as the connect file holds it.
+fn link_json(component: &str, l: &CodeLink) -> Value {
+    let mut v = link_fields(l);
+    v["component"] = json!(component);
+    v
+}
+
+/// A link's own fields, as the connect file and `inspect.designContext` give them: its keys are
+/// the file's, and a mapping's property names and values stay as written.
+pub(crate) fn link_fields(l: &CodeLink) -> Value {
+    let mut v = json!({"language": l.language, "importPath": l.import_path, "name": l.name, "template": l.template});
+    if !l.source.is_empty() {
+        v["source"] = json!(l.source);
+    }
+    if !l.values.is_empty() {
+        v["values"] = json!(l.values);
+    }
+    if !l.notes.is_empty() {
+        v["notes"] = json!(l.notes);
+    }
+    v
+}
+
+/// The components and sets `ids` are, use or hold (every one in the file without `ids`).
+fn listed(doc: &Document, ids: Option<&[NodeId]>) -> Vec<NodeId> {
+    let mut out: Vec<NodeId> = match ids {
+        None => doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).map(|n| n.id).collect(),
+        Some(ids) => ids.iter().flat_map(|i| doc.subtree(*i)).filter_map(|i| owner(doc, i)).collect(),
+    };
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// What an agent needs to use a component: its code link for each language, or that it has none.
+fn entry(doc: &Document, id: NodeId, root: Option<&str>) -> Option<Value> {
+    let n = doc.node(id)?;
+    let links: Vec<Value> = n
+        .code_links
+        .iter()
+        .map(|l| {
+            let lang = CodeLang::from_id(&l.language);
+            let mut v = link_fields(l);
+            v["import"] = json!(lang.map(|k| import_line(l, k)));
+            v["snippet"] = json!(lang.and_then(|k| connected_code(doc, id, k, l)));
+            if let Some(root) = root.filter(|_| !l.source.is_empty()) {
+                v["sourceFound"] = json!(crate::file_access::exists(std::path::Path::new(root).join(&l.source)));
+            }
+            v
+        })
+        .collect();
+    Some(json!({
+        "id": id,
+        "name": n.name,
+        "type": n.kind.type_name(),
+        "mapped": !links.is_empty(),
+        "properties": crate::cmd::component::describe_props(doc, id)["properties"],
+        "links": links,
+    }))
+}
+
+fn list(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "codeConnect.list";
+    let doc = s.doc()?;
+    // Anything named must be layers; nothing named lists every component in the file.
+    let named = get(p, "ids").is_some() || get(p, "id").is_some();
+    let ids = if named { Some(crate::params::req_targets(cmd, s, p)?) } else { None };
+    let root = text(cmd, p, "root")?;
+    let unmapped = crate::params::boolean(p, "unmapped").unwrap_or(false);
+    let all: Vec<Value> = listed(doc, ids.as_deref()).into_iter().filter_map(|id| entry(doc, id, root.as_deref())).collect();
+    let count = |m: bool| all.iter().filter(|e| e["mapped"] == m).count();
+    let (mapped, missing) = (count(true), count(false));
+    let components: Vec<Value> = all.into_iter().filter(|e| !unmapped || e["mapped"] == false).collect();
+    Ok(json!({"components": components, "mapped": mapped, "unmapped": missing}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!(
+            "codeConnect.list",
+            "List code connections",
+            "{ids? | id? (the components those layers are, use or hold; default every component in the file), unmapped? (only those without a link), root? (the code repository: says if each link's source is there)}  → {components: [{id, name, type, mapped, properties, links: [{language, importPath, import, name, template, snippet, source?, sourceFound?, values?, notes?}]}], mapped, unmapped}",
+            false,
+            list
+        ),
+        spec!(
             "codeConnect.set",
             "Connect to code",
-            "{id? (component, set or instance; default the selection), language?: react|leptos|vue|swiftui|compose|arkui|flutter (default react), importPath?, name? (default the generated name), template? (default a call passing every property)}  links the component (its set, for a variant) to its code component; fields left out keep their current value. Placeholders: {property} (its name or parameter name) and {property ? \"a\" : \"b\"}; other {…} stay as written  → {component, language, code (the snippet for the layer), unknown (placeholder names that aren't properties)}",
+            "{id? (component, set or instance; default the selection), language?: react|leptos|vue|swiftui|compose|arkui|flutter (default react), importPath?, name? (default the generated name), template? (default a call passing every property), source? (the file, relative to the code repository), values? ({property: {design value: code value}}), notes?}  links the component (its set, for a variant) to its code component; fields left out keep their current value. Placeholders: {property} (its name or parameter name) and {property ? \"a\" : \"b\"}; other {…} stay as written  → {component, language, code (the snippet for the layer), unknown (placeholder names that aren't properties)}",
             true,
             |s, p| {
                 let cmd = "codeConnect.set";
@@ -578,7 +705,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => old.template,
                 };
                 let import_path = text(cmd, p, "importPath")?.map_or(old.import_path, |i| i.trim().to_string());
-                let link = CodeLink { language: lang.id().into(), import_path, name, template };
+                let source = text(cmd, p, "source")?.map_or(old.source, |v| v.trim().to_string());
+                let notes = text(cmd, p, "notes")?.unwrap_or(old.notes);
+                let values = match get(p, "values") {
+                    None => old.values,
+                    Some(v) => serde_json::from_value(v.clone()).map_err(|_| bad(cmd, "values: {property: {design value: code value}}"))?,
+                };
+                let link = CodeLink { language: lang.id().into(), import_path, name, template, source, values, notes };
                 let unknown = check(&c, &link, lang).map_err(|e| bad(cmd, e))?;
                 let code = connected_code(doc, id, lang, &link);
                 store(s.doc_mut()?, owner, link)?;
@@ -610,27 +743,34 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "codeConnect.export",
             "Export code connections",
-            "{path? (write it there, e.g. figcraft.connect.json in the code repository)}  every component's links as {version: 1, links: [{component (its name), language, importPath, name, template}]}, sorted  → {text, links} or {path, links}",
+            "{path? (write it there, e.g. figcraft.connect.json in the code repository; other top-level keys of a file already there stay, and so do the links of components this file doesn't have; a file there it can't read is left alone and the export refused)}  every component's links as {version: 1, links: [{component (its name), language, importPath, name, template, source?, values?, notes?}]}, sorted  → {text, links} or {path, links}",
             false,
             |s, p| {
                 let cmd = "codeConnect.export";
                 let path = text(cmd, p, "path")?;
                 let doc = s.doc()?;
-                let mut links: Vec<Value> = doc
-                    .nodes()
-                    .filter(|n| owner(doc, n.id) == Some(n.id))
-                    .flat_map(|n| {
-                        n.code_links.iter().map(|l| {
-                            json!({"component": n.name, "language": l.language, "importPath": l.import_path, "name": l.name, "template": l.template})
-                        })
-                    })
-                    .collect();
+                let mut links: Vec<Value> =
+                    doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).flat_map(|n| n.code_links.iter().map(|l| link_json(&n.name, l))).collect();
                 let key =
                     |v: &Value| (v["component"].as_str().unwrap_or_default().to_string(), v["language"].as_str().unwrap_or_default().to_string());
-                links.sort_by_key(key);
                 let count = links.len();
-                let text =
-                    serde_json::to_string_pretty(&json!({"version": VERSION, "links": links})).map_err(|e| EngineError::Other(e.to_string()))? + "\n";
+                // The file also holds the project's settings and the links of other designs: only
+                // the links of this file's components are this command's.
+                let old = match path.as_deref() {
+                    Some(path) => kept_keys(cmd, path)?,
+                    None => serde_json::Map::new(),
+                };
+                let here: Vec<&str> = doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).map(|n| n.name.as_str()).collect();
+                let others = old.get("links").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+                links.extend(others.iter().filter(|l| !l.get("component").and_then(Value::as_str).is_some_and(|c| here.contains(&c))).cloned());
+                links.sort_by_key(key);
+                let mut file = json!({"version": VERSION, "links": links});
+                if let Some(fields) = file.as_object_mut() {
+                    for (k, v) in old {
+                        fields.entry(k).or_insert(v);
+                    }
+                }
+                let text = serde_json::to_string_pretty(&file).map_err(|e| EngineError::Other(e.to_string()))? + "\n";
                 match path {
                     Some(path) => {
                         crate::cmd::file::write(&path, text.as_bytes())?;
@@ -648,6 +788,18 @@ pub fn specs() -> Vec<CommandSpec> {
             import
         ),
     ]
+}
+
+/// The top-level keys of the connect file at `path`, none when there is no file. A file that
+/// can't be read as one is an error: writing over it would lose what it holds.
+fn kept_keys(cmd: &str, path: &str) -> Result<serde_json::Map<String, Value>> {
+    if !crate::file_access::exists(path) {
+        return Ok(serde_json::Map::new());
+    }
+    match serde_json::from_slice(&crate::cmd::file::read_capped(path, MAX_FILE)?) {
+        Ok(Value::Object(fields)) => Ok(fields),
+        _ => Err(bad(cmd, format!("{path} isn't a connect file it can read, so it was left as it is"))),
+    }
 }
 
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
@@ -688,11 +840,24 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             ));
             continue;
         };
+        let values = match e.get("values") {
+            None | Some(Value::Null) => Default::default(),
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(values) => values,
+                Err(_) => {
+                    warnings.push(format!("link {}: values: {{property: {{design value: code value}}}}, all strings", i + 1));
+                    continue;
+                }
+            },
+        };
         let link = CodeLink {
             language: lang.id().into(),
             import_path: field("importPath").unwrap_or_default().to_string(),
             name: name.into(),
             template: template.into(),
+            source: field("source").unwrap_or_default().to_string(),
+            values,
+            notes: field("notes").unwrap_or_default().to_string(),
         };
         let matches = owners.get(component).cloned().unwrap_or_default();
         if matches.is_empty() {

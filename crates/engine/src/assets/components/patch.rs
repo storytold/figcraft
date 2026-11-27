@@ -1,4 +1,4 @@
-use super::diff::{binding_group, bindings_of, diff_groups, follow_boolean_defaults, geometry_derived, variable_groups};
+use super::diff::{binding_group, bound_differently, diff_groups, follow_boolean_defaults, geometry_derived, rebound_groups, variable_groups};
 use super::guard::{own_slot_content, relink_copy};
 use super::instances::{copy_group, field_group, sync_instance};
 use super::sync::insert_linked;
@@ -179,12 +179,17 @@ fn override_groups(doc: &Document, before: &Document, id: NodeId, n: &Node, b: &
         // Binding another variable (or none) where the main binds one is an override.
         for (k, _) in b.bound.iter().chain(n.bound.iter()) {
             let Some(g) = binding_group(k) else { continue };
-            let rebound = b.bound.get(k) != n.bound.get(k) && !bindings_of(n, g).eq(bindings_of(src, g));
+            let rebound = b.bound.get(k) != n.bound.get(k) && bound_differently(n, src, g);
             if rebound && !groups.contains(&g) {
                 groups.push(g);
             }
         }
-        cleared = raw.iter().filter(|g| !matches!(**g, "size" | "position") && !differs.contains(g) && n.overrides.contains(**g)).copied().collect();
+        let rebound = rebound_groups(n, src);
+        cleared = raw
+            .iter()
+            .filter(|g| !matches!(**g, "size" | "position") && !differs.contains(g) && !rebound.contains(g) && n.overrides.contains(**g))
+            .copied()
+            .collect();
         if top_root {
             cleared.retain(|g| !matches!(*g, "component" | "props"));
         }
