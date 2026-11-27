@@ -99,6 +99,33 @@ fn node_find_instances_match_main_name_and_visit_actual_children_only() {
     found(&mut s, json!({"root": inst, "text": "original"}), &[]);
     found(&mut s, json!({"root": inst, "text": "changed"}), &[child]);
     found(&mut s, json!({}), &[main, original, inst, child, broken]);
+    found(&mut s, json!({"orphaned": true}), &[broken]);
+    found(&mut s, json!({"orphaned": false}), &[inst]);
+    found(&mut s, json!({"orphaned": true, "name": "other"}), &[]);
+    assert!(s.execute("node.find", &json!({"orphaned": "true"})).is_err());
+}
+
+#[test]
+fn deleting_a_component_reports_only_the_instances_it_leaves_orphaned() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    let frame = add(&mut s, page, NodeKind::Frame, "With a main");
+    let main = add(&mut s, frame, NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() }, "Main");
+    let other_main =
+        add(&mut s, page, NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() }, "Other");
+    let deleted = idv(&ex(&mut s, "instance.create", json!({"component": main, "parent": frame})));
+    let survivor = idv(&ex(&mut s, "instance.create", json!({"component": main})));
+    let linked = idv(&ex(&mut s, "instance.create", json!({"component": other_main})));
+
+    let first = ex(&mut s, "edit.delete", json!({"ids": [other_main]}));
+    assert_eq!(first["orphaned"], json!([linked]));
+    let result = ex(&mut s, "edit.delete", json!({"ids": [frame]}));
+    assert_eq!(result["orphaned"], json!([survivor]));
+    assert!(!s.doc().unwrap().contains(deleted));
+    found(&mut s, json!({"orphaned": true}), &[survivor, linked]);
+
+    ex(&mut s, "edit.undo", json!({}));
+    found(&mut s, json!({"orphaned": true}), &[linked]);
 }
 
 #[test]
