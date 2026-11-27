@@ -1085,6 +1085,8 @@ name and sets them this way);
   same library, components the other file publishes as a library are used from it (and that
   library is enabled when the other file is saved), and other mains stay behind: the instance shows
   a missing main (`component.restoreMain` makes it a main here).
+  A main component copied from a file that publishes it as a library pastes as an instance of
+  it from that library (enabled the same way); a main that library doesn't offer pastes as a copy.
 
 ### Team libraries
 

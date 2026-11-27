@@ -221,8 +221,18 @@ pub(super) fn cut(s: &mut Session, p: &Value) -> Result<Value> {
     delete(s, &json!({"ids": layers}))
 }
 
-/// Paste the clipboard under `parent` with the copied top-left moved to `at` (page coords).
+/// Paste the clipboard under `parent` with the copied top-left moved to `at` (page coords). A
+/// copied main is pasted as an instance of it; in another file, as an instance of it from the
+/// library the source file publishes, and as a copy of it when that library doesn't offer it.
 pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Result<Vec<NodeId>> {
+    paste_layers(s, parent, at, false)
+}
+
+/// [`paste_into`]. With `as_variants`, copied variants pasted into `parent`, their own set, are
+/// deep copies (new variants, as Duplicate makes) and the set grows to hold them. Only a plain
+/// paste with that set, or a layer in it, selected asks for this; every other paste of a copied
+/// main, into another set too, still makes an instance.
+fn paste_layers(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>, as_variants: bool) -> Result<Vec<NodeId>> {
     let clip = s.clipboard.clone();
     if clip.nodes.is_empty() {
         return Err(EngineError::Disabled("edit.paste".into(), "the clipboard is empty".into()));
@@ -240,15 +250,20 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         (Some((x, y)), Some(b)) => Affine::translate((x - b.x0, y - b.y0)),
         _ => Affine::IDENTITY,
     };
+    let into_set = as_variants && copy_local && copied_variants_set(doc, &clip.nodes) == Some(parent);
     let mut out = Vec::new();
     let mut all = BTreeMap::new();
     for (root, nodes) in &clip.nodes {
-        if copy_local
-            && clip.copied_components.contains(root)
-            && let Some(n) = nodes.first().filter(|n| matches!(n.kind, NodeKind::Component { .. }))
-            && doc.node(*root).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))
-        {
-            let instance = crate::components::create_instance(doc, *root, parent, 0.0, 0.0)?;
+        let copied_main = nodes.first().filter(|n| clip.copied_components.contains(root) && matches!(n.kind, NodeKind::Component { .. }));
+        let main = match (copied_main, foreign) {
+            (Some(_), _) if copy_local => {
+                (!into_set && doc.node(*root).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))).then_some(*root)
+            }
+            (Some(_), Some(src)) => crate::library::published_main(doc, src, clip.source_path.as_deref(), *root)?,
+            _ => None,
+        };
+        if let (Some(main), Some(n)) = (main, copied_main) {
+            let instance = crate::components::create_instance(doc, main, parent, 0.0, 0.0)?;
             doc.get_mut(instance)?.transform = doc.world_transform(parent).inverse() * shift * n.transform;
             keep_a_cropped_images_proportions(doc, instance, parent);
             out.push(instance);
@@ -268,6 +283,9 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         keep_a_cropped_images_proportions(doc, pasted, into);
         out.push(pasted);
         all.extend(map);
+    }
+    if into_set {
+        crate::cmd::component::fit_set(doc, parent);
     }
     // Board connectors pasted with what they join join the pasted copies.
     let originals: Vec<(NodeId, figcraft_doc::BoardItem)> =
@@ -309,7 +327,16 @@ pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     let sel = s.selection();
     let doc = s.doc()?;
     let copy_local = s.ds()?.uid == s.clipboard.source_doc;
-    let target = id(p, "parent").or_else(|| {
+    let variants_set = copied_variants_set(doc, &s.clipboard.nodes)
+        .filter(|set| copy_local && id(p, "parent").is_none() && !sel.is_empty() && sel.iter().all(|i| doc.is_ancestor(*set, *i)));
+    // Where the copied variants are now, not where they were copied: the set may have moved since.
+    let below_the_variants = variants_set.and_then(|set| {
+        let copied: Vec<NodeId> = s.clipboard.nodes.iter().map(|(root, _)| *root).collect();
+        let left = doc.bounds_of(&copied)?.x0;
+        let bottom = doc.node(set)?.children.iter().filter_map(|c| doc.world_bounds(*c)).map(|r| r.y1).reduce(f64::max)?;
+        Some((left, bottom + 20.0))
+    });
+    let target = id(p, "parent").or(variants_set).or_else(|| {
         sel.first()
             .copied()
             .filter(|i| {
@@ -324,6 +351,7 @@ pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     let parent = target.unwrap_or(page);
     let at = match (num(p, "x"), num(p, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
+        _ if below_the_variants.is_some() => below_the_variants,
         _ => {
             let b = s.clipboard.bounds;
             match (target, b) {
@@ -346,7 +374,7 @@ pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     };
-    let ids = paste_into(s, parent, at)?;
+    let ids = paste_layers(s, parent, at, variants_set.is_some())?;
     if let Some(sel) = sibling_of {
         let above = s.doc()?.index_in_parent(sel).map(|ix| ix + 1);
         move_above(s, &ids, parent, above)?;
@@ -381,6 +409,17 @@ fn move_above(s: &mut Session, ids: &[NodeId], parent: NodeId, above: Option<usi
         doc.reorder(i, above + k)?;
     }
     Ok(())
+}
+
+/// The set the copied layers are variants of: every copied root is a main component in `doc` whose
+/// parent is that one component set. `None` for anything else.
+fn copied_variants_set(doc: &Document, copied: &[(NodeId, Vec<Node>)]) -> Option<NodeId> {
+    let mut sets = copied.iter().map(|(root, _)| {
+        let n = doc.node(*root).filter(|n| matches!(n.kind, NodeKind::Component { .. }))?;
+        n.parent.filter(|set| doc.node(*set).is_some_and(|p| matches!(p.kind, NodeKind::ComponentSet { .. })))
+    });
+    let first = sets.next()??;
+    sets.all(|set| set == Some(first)).then_some(first)
 }
 
 pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
