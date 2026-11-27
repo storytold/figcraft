@@ -4,12 +4,31 @@
 //! guide lines (with spacing labels) for the canvas to draw in red. Vector points also snap to
 //! other points (see `vectoredit::snap`); landing on one shows a marker (a zero-length guide).
 
-use figcraft_doc::{BoardItem, Document, NodeId};
+use figcraft_doc::{BoardItem, Document, Node, NodeId, NodeKind};
 use figcraft_geom::{Affine, Point, Rect, Vec2, transform_rect_bbox};
 use serde::Serialize;
 
 use crate::guides;
 use crate::tools::UNMEASURED_SNAP_PX;
+
+/// Whether `n` lands on whole pixels when dragged whatever Snap to pixel grid says: frames,
+/// sections, components, component sets and instances. Figma's help: they "always snap to the
+/// pixel grid, even if Snap to pixel grid is disabled". Other layers follow the setting.
+pub fn always_on_pixels(n: &Node) -> bool {
+    n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. })
+}
+
+/// Put `id`'s position in its parent on whole pixels when its axes are its parent's: returns
+/// whether it moved. A layer turned off its parent's axes keeps its position.
+pub fn settle_on_pixels(doc: &mut Document, id: NodeId) -> crate::Result<bool> {
+    let n = doc.get_mut(id)?;
+    let [a, b, c, d, e, f] = n.transform.as_coeffs();
+    if !guides::axis_aligned(n.transform) || (e.round() == e && f.round() == f) {
+        return Ok(false);
+    }
+    n.transform = Affine::new([a, b, c, d, e.round(), f.round()]);
+    Ok(true)
+}
 
 /// A guide line to draw: from (x0, y0) to (x1, y1) in page coordinates, with an optional label
 /// (a distance) at its middle; `dashed` marks a measurement's extension line.
