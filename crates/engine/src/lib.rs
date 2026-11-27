@@ -16,6 +16,7 @@ mod canvas;
 pub mod catalog;
 pub mod cmd;
 mod content;
+mod design;
 mod dev;
 pub mod events;
 mod extensions;
@@ -696,6 +697,8 @@ mod widgets_tests;
 mod export_bounds_tests;
 #[cfg(test)]
 mod page_view_tests;
+#[cfg(test)]
+mod paste_properties_tests;
 #[cfg(test)]
 mod selection_reorder_tests;
 #[cfg(test)]
