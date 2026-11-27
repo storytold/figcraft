@@ -102,3 +102,54 @@ fn right_panel_dropdown_menus_fit_the_panel() {
     assert!(menu.width() <= app.ui.right_width, "menu {menu:?} fits the {} px panel", app.ui.right_width);
     assert!(menu.max.x <= SCREEN.x && menu.min.x >= panel_left - 8.0, "menu {menu:?} inside the window, under the panel");
 }
+
+#[test]
+fn preferences_language_menu_stays_aligned_to_dropdown() {
+    use egui::accesskit::Role;
+
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
+    for mirrored in [false, true] {
+        let mut app = FigApp::new(Session::new(), Box::new(NoServices));
+        app.ui.preferences = true;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut t = 0.0;
+        let mut frame = |app: &mut FigApp, events: Vec<Event>| {
+            t += 1.0 / 60.0;
+            let raw = RawInput { screen_rect: Some(screen), time: Some(t), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| app.ui(ui));
+            out.textures_delta.clear();
+            out
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+        // Set after viewport_setup's first-frame language init so it is not overwritten.
+        app.ui.mirrored = mirrored;
+        for _ in 0..2 {
+            frame(&mut app, vec![]);
+        }
+        assert_eq!(ctx.global_style().right_to_left, mirrored);
+        let out = frame(&mut app, vec![]);
+        let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
+        let combo =
+            nodes.into_iter().map(|(_, n)| n).find(|n| n.role() == Role::ComboBox && n.value() == Some("System")).expect("the Language dropdown");
+        let b = combo.bounds().expect("Language dropdown bounds");
+        let dropdown = Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32));
+        let at = dropdown.center();
+        frame(&mut app, press(at, true));
+        frame(&mut app, press(at, false));
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+        let shown = menus(&ctx);
+        let [menu] = shown.as_slice() else { panic!("one Language menu open (mirrored={mirrored}): {shown:?}") };
+        assert!(menu.height() <= 360.0, "Language menu should scroll instead of spanning screen (mirrored={mirrored}): {menu:?}");
+        assert!(screen.contains_rect(*menu), "Language menu should fit inside screen (mirrored={mirrored}): {menu:?}");
+        if mirrored {
+            assert!((menu.max.x - dropdown.max.x).abs() <= 2.0, "RTL Language menu {menu:?} should align to dropdown right {dropdown:?}");
+        } else {
+            assert!((menu.min.x - dropdown.min.x).abs() <= 2.0, "LTR Language menu {menu:?} should align to dropdown left {dropdown:?}");
+        }
+    }
+}
