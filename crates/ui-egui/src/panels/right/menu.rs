@@ -86,6 +86,11 @@ impl Menu {
         Self(self.0.close_behavior(behavior))
     }
 
+    /// Where the menu may go when its first placement doesn't fit, in order.
+    pub fn align_alternatives(self, alternatives: &'static [egui::RectAlign]) -> Self {
+        Self(self.0.align_alternatives(alternatives))
+    }
+
     /// Show the menu while it is open. Its rows `content` scroll with the wheel or the scroll bar
     /// once they were taller than the window last frame, as the main menu's do (#2217); a menu
     /// that fits is laid out as it is, so it still grows with its rows (a scroll area in a popup
