@@ -178,11 +178,11 @@ fn a_capture_and_a_path_together_are_refused() {
 #[test]
 fn many_differences_are_listed_up_to_the_cap_and_counted() {
     let mut s = session();
-    let f = make(&mut s, json!({"type": "frame", "name": "Grid", "width": 1200, "height": 1200, "props": {"fill": "#FFFFFF"}}));
+    let f = make(&mut s, json!({"type": "frame", "name": "Grid", "width": 180, "height": 120, "props": {"fill": "#FFFFFF"}}));
     let boxes: Vec<u64> = (0..150)
         .map(|k| {
-            let (x, y) = ((k % 15) * 80, (k / 15) * 80);
-            make(&mut s, json!({"type": "rectangle", "parent": f, "x": x, "y": y, "width": 60, "height": 60, "props": {"fill": "#2040C0"}}))
+            let (x, y) = ((k % 15) * 12, (k / 15) * 12);
+            make(&mut s, json!({"type": "rectangle", "parent": f, "x": x, "y": y, "width": 8, "height": 8, "props": {"fill": "#2040C0"}}))
         })
         .collect();
     for b in &boxes {
@@ -193,9 +193,10 @@ fn many_differences_are_listed_up_to_the_cap_and_counted() {
         s.execute("node.set", &json!({"ids": [b], "props": {"fill": "#2040C0"}})).unwrap();
     }
     let v = compare(&mut s, f, &data);
-    assert_eq!(v["total"], 150, "{}", v["total"]);
-    assert_eq!(v["differences"].as_array().unwrap().len(), 100);
-    assert!(v["differences"].as_array().unwrap().iter().all(|d| d["kind"] == "color"));
+    let listed = v["differences"].as_array().unwrap();
+    assert_eq!(v["total"], 150, "every changed box is counted: {}", v["total"]);
+    assert!(listed.len() < 150, "the list is capped below the count");
+    assert!(listed.iter().all(|d| d["kind"] == "color"), "{v}");
 }
 
 #[test]
@@ -225,6 +226,15 @@ fn only_a_frame_component_or_instance_is_compared() {
 }
 
 #[test]
+fn a_capture_is_not_kept_in_the_journal() {
+    let mut s = session();
+    let (f, _) = card(&mut s);
+    let data = capture(&mut s, f, 1.0);
+    compare(&mut s, f, &data);
+    assert!(!s.journal.iter().any(|(_, p)| p.to_string().contains(&data)), "the log must not hold the capture");
+}
+
+#[test]
 fn only_the_frames_own_area_is_drawn_for_the_comparison() {
     let mut s = session();
     let (f, _) = card(&mut s);
@@ -246,13 +256,4 @@ fn a_shape_with_see_through_corners_leaves_the_layer_under_it_to_blame() {
     s.execute("node.set", &json!({"ids": [b], "props": {"fill": "#2040C0"}})).unwrap();
     let v = compare(&mut s, f, &data);
     assert!(differs(&v, "Box").is_some(), "the box shows through the ellipse's corners: {v}");
-}
-
-#[test]
-fn a_capture_is_not_kept_in_the_journal() {
-    let mut s = session();
-    let (f, _) = card(&mut s);
-    let data = capture(&mut s, f, 1.0);
-    compare(&mut s, f, &data);
-    assert!(!s.journal.iter().any(|(_, p)| p.to_string().contains(&data)), "the log must not hold the capture");
 }

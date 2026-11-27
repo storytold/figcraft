@@ -496,7 +496,7 @@ computer through it.
    browser's viewport in CSS pixels. Each result repeats it as `viewport`.
 2. Size the browser to it and capture the page to a file, for example with Playwright:
    `await page.setViewportSize({width: 1440, height: 900}); await page.screenshot({path: "shot.png"})`.
-3. Call `compare_design {image: "shot.png"}` (absolute or relative to where the MCP server runs; the
+3. Call `compare_design {id: <the frame's id>, image: "shot.png"}` (absolute or relative to where the MCP server runs; the
    file is read like any other, inside the automation roots when they are set).
 4. Fix the layers in `differences` and repeat from step 2.
 
@@ -508,13 +508,16 @@ computer through it.
 | `total` | How many layers differ, listed or not |
 | `capture` | `width`, `height`, `density` (device pixels per CSS pixel, from the widths unless given), `sameSize`, `cssWidth`, `cssHeight`. A page that isn't the frame's size is the first thing to fix |
 | `changedPercent` | How much of the frame differs. Not a score: fonts and antialiasing always differ a little |
-| `truncated` | `{maxLayers}` when the frame has more than 5,000 visible layers: those past it weren't looked at |
+| `truncated` | `maxLayers` when the frame has more than 5,000 visible layers: those past it weren't looked at. `matchedByBox`: how many layers were matched by their whole box, not the shape they draw (past 300 drawn), so a see-through part of one may hide a difference of a layer under it |
 
 `tolerance` (default 24 of 255) is how different a pixel must be to count. Moves of more than 16
 compared pixels show as `content`. Only the area both images have is compared, so content scrolled
-out of the capture needs a full-page capture. A clean result means the layers match within the
-tolerance, not that the pages are identical. Images are compared at up to 2,000 pixels a side, the
-larger of the frame and the capture setting the scale.
+out of the capture needs a full-page capture. A clean result says only that, in the area compared
+and the layers looked at, nothing differs by more than the tolerance; it doesn't verify the rest of
+the frame (see `capture.sameSize` and `truncated`), and it isn't proof the pages are identical.
+Images are compared at up to 2,000 pixels a side, the larger of the frame and the capture setting
+the scale. Each layer claims the pixels it draws on, so a see-through part of a shape leaves a
+difference to the layer under it.
 
 ### Compact layer trees
 
