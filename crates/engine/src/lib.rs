@@ -62,6 +62,7 @@ pub use content::synthetic_ds;
 pub use content::templates;
 pub use content::textfit;
 pub use dev::annotations;
+pub use dev::asset_handoff;
 pub use dev::code_connect;
 pub use dev::codegen;
 pub use dev::component_codegen;
@@ -194,6 +195,8 @@ mod annotations_tests;
 mod arc_fields_tests;
 #[cfg(test)]
 mod arc_handles_tests;
+#[cfg(test)]
+mod asset_handoff_tests;
 #[cfg(test)]
 mod auto_layout_move_tests;
 #[cfg(test)]
