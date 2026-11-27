@@ -578,9 +578,16 @@ impl Session {
             self.tool.overlay.guides = guides;
             return Ok(());
         }
-        // Constrain proportions (Shift, or the node's lock).
-        let keep = ev.shift || r.single && ids.first().and_then(|i| self.doc().ok()?.node(*i).map(|n| n.constrain_proportions)).unwrap_or(false);
-        let (x0, y0, x1, y1) = resized_box(r.handle, q, w0, h0, keep, ev.alt);
+        let image_box = ids.first().filter(|_| ev.cmd && r.single).and_then(|i| self.image_box(*i));
+        // Constrain proportions (Shift, or the node's lock; cropping an image ignores the lock).
+        let locked =
+            r.single && image_box.is_none() && ids.first().and_then(|i| self.doc().ok()?.node(*i).map(|n| n.constrain_proportions)).unwrap_or(false);
+        let keep = ev.shift || locked;
+        let resized = resized_box(r.handle, q, w0, h0, keep, ev.alt);
+        let (x0, y0, x1, y1) = match image_box {
+            Some(image) => within_the_image(resized, image, (w0, h0), keep),
+            None => resized,
+        };
         let (flip_x, flip_y) = (x1 < x0, y1 < y0);
         let (nx0, ny0) = (x0.min(x1), y0.min(y1));
         let (nw, nh) = ((x1 - x0).abs(), (y1 - y0).abs());
@@ -592,46 +599,30 @@ impl Session {
         let keeps = |doc: &Document, id: NodeId| {
             doc.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Section { .. }) || (ev.cmd && single && n.kind.is_frame_like()))
         };
+        let dragged_box = |world: Affine, (ox, oy): (f64, f64)| {
+            let mut t = world * Affine::translate((ox, oy));
+            if flip_x {
+                t *= Affine::new([-1.0, 0.0, 0.0, 1.0, nw, 0.0]);
+            }
+            if flip_y {
+                t *= Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, nh]);
+            }
+            t
+        };
         self.preview(|doc, _| {
             if single {
                 let Some((id, world, _, _)) = nodes.first() else { return Ok(()) };
                 let kept = if keeps(doc, *id) { crate::cmd::props::children_worlds(doc, *id) } else { Vec::new() };
-                let mut t = *world * Affine::translate((nx0, ny0));
-                if flip_x {
-                    t *= Affine::new([-1.0, 0.0, 0.0, 1.0, nw, 0.0]);
-                }
-                if flip_y {
-                    t *= Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, nh]);
-                }
+                let t = dragged_box(*world, (nx0, ny0));
                 // Text reflow and auto layout can recompute this box after the preview (a size bound
-                // to a variable lets go of it: the resize is an explicit edit).
+                // to a variable lets go of it: the resize is an explicit edit). A text keeps its
+                // fills; any other layer's image is cropped again for the box layout leaves
+                // (`crop_to_the_laid_out_box`).
                 let n = doc.get(*id)?;
-                let crop_images = ev.cmd
-                    && !matches!(n.kind, NodeKind::Text(_))
-                    && !std::iter::once(*id).chain(doc.ancestors(*id)).any(|a| doc.node(a).is_some_and(|n| n.layout.is_some()));
-                if crop_images {
-                    // Crop the layer's image fills without moving their pixels on the page.
-                    // Work from the interaction snapshot, just like the geometry on every move.
-                    let (w, h) = (n.width.max(1e-6), n.height.max(1e-6));
-                    let to_old =
-                        Affine::scale_non_uniform(1.0 / w, 1.0 / h) * world.inverse() * t * Affine::scale_non_uniform(nw.max(0.01), nh.max(0.01));
-                    let mut fills = n.fills.clone();
-                    for paint in &mut fills {
-                        let PaintKind::Image(img) = &mut paint.kind else { continue };
-                        // A repeating image cannot be represented by a single Crop placement.
-                        if img.scale_mode == ImageScaleMode::Tile {
-                            continue;
-                        }
-                        let Some(data) = doc.images.get(&img.image) else { continue };
-                        let (iw, ih) = (f64::from(data.width), f64::from(data.height));
-                        // A degenerate (zero-scale) layer has no inverse: its image keeps its placement.
-                        let crop = (Affine::new(img.placement_crop(iw, ih, w, h)) * to_old).as_coeffs();
-                        if !crop.iter().all(|c| c.is_finite()) {
-                            continue;
-                        }
-                        img.crop = Some(crop);
-                        img.scale_mode = ImageScaleMode::Crop;
-                    }
+                // Crop the layer's image fills without moving their pixels on the page.
+                // Work from the interaction snapshot, just like the geometry on every move.
+                if ev.cmd && !matches!(n.kind, NodeKind::Text(_)) {
+                    let fills = cropped_image_fills(doc, n, *world, t, (nw, nh));
                     doc.get_mut(*id)?.fills = fills;
                 }
                 doc.set_world_transform(*id, t)?;
@@ -685,7 +676,64 @@ impl Session {
             }
             Ok(())
         })?;
+        if single
+            && ev.cmd
+            && let Some((id, world, _, _)) = nodes.first()
+        {
+            let laid_out_box = |(fw, fh): (f64, f64)| {
+                let origin = match image_box {
+                    Some((ix0, iy0, ix1, iy1)) => {
+                        (slid_onto_the_image(nx0, fw, flip_x, (ix0, ix1), w0), slid_onto_the_image(ny0, fh, flip_y, (iy0, iy1), h0))
+                    }
+                    None => (nx0, ny0),
+                };
+                dragged_box(*world, origin)
+            };
+            self.crop_to_the_laid_out_box(*id, *world, laid_out_box, (nw, nh))?;
+        }
         self.tool.overlay.guides = guides;
+        Ok(())
+    }
+
+    /// The box `(x0, y0, x1, y1)` of the first visible, untiled image fill of `id` in the layer's
+    /// own axes, as it was when the gesture began; `None` for a text or a layer without one.
+    fn image_box(&self, id: NodeId) -> Option<(f64, f64, f64, f64)> {
+        let snapshot = self.ds().ok()?.interaction.as_ref()?.doc.clone();
+        let n = snapshot.node(id)?;
+        if matches!(n.kind, NodeKind::Text(_)) {
+            return None;
+        }
+        n.fills.iter().filter(|p| p.visible).find_map(|p| match &p.kind {
+            PaintKind::Image(img) if img.scale_mode != ImageScaleMode::Tile => {
+                let data = snapshot.images.get(&img.image)?;
+                let crop = img.effective_crop(f64::from(data.width), f64::from(data.height), n.width, n.height);
+                let (x0, y0, x1, y1) = figcraft_doc::color::ImagePaint::crop_rect(crop);
+                Some((x0 * n.width, y0 * n.height, x1 * n.width, y1 * n.height))
+            }
+            _ => None,
+        })
+    }
+
+    /// After the preview's layout: when the layer didn't keep the dragged size `(nw, nh)` (a
+    /// minimum size, a Hug frame), crop its image fills again from the snapshot for the size it
+    /// has, the box placed by `laid_out_box` (given that size) in the layer's starting axes.
+    fn crop_to_the_laid_out_box(
+        &mut self,
+        id: NodeId,
+        world: Affine,
+        laid_out_box: impl Fn((f64, f64)) -> Affine,
+        (nw, nh): (f64, f64),
+    ) -> Result<()> {
+        let ds = self.ds_mut()?;
+        let Some(snapshot) = ds.interaction.as_ref().map(|it| it.doc.clone()) else { return Ok(()) };
+        let Some(before) = snapshot.node(id).filter(|n| !matches!(n.kind, NodeKind::Text(_))) else { return Ok(()) };
+        let Some((fw, fh)) = ds.doc.node(id).map(|n| (n.width, n.height)) else { return Ok(()) };
+        if (fw - nw.max(0.01)).abs() < 1e-9 && (fh - nh.max(0.01)).abs() < 1e-9 {
+            return Ok(());
+        }
+        let fills = cropped_image_fills(&snapshot, before, world, laid_out_box((fw, fh)), (fw, fh));
+        std::sync::Arc::make_mut(&mut ds.doc).get_mut(id)?.fills = fills;
+        ds.revision += 1;
         Ok(())
     }
 
@@ -761,4 +809,79 @@ fn only_shifted(doc: &Document, moving: &[NodeId]) -> bool {
         }
         !in_flow && !nested
     })
+}
+
+/// `before`'s fills (from the snapshot `doc`) with each image cropped to the box `dragged` (the
+/// layer's new transform, `nw` × `nh`), its pixels left where they were on the page (`world`:
+/// the layer's transform before the drag).
+fn cropped_image_fills(
+    doc: &Document,
+    before: &figcraft_doc::Node,
+    world: Affine,
+    dragged: Affine,
+    (nw, nh): (f64, f64),
+) -> Vec<figcraft_doc::color::Paint> {
+    let (w, h) = (before.width.max(1e-6), before.height.max(1e-6));
+    let to_before = Affine::scale_non_uniform(1.0 / w, 1.0 / h) * world.inverse() * dragged * Affine::scale_non_uniform(nw.max(0.01), nh.max(0.01));
+    let mut fills = before.fills.clone();
+    for paint in &mut fills {
+        let PaintKind::Image(img) = &mut paint.kind else { continue };
+        // A repeating image cannot be represented by a single Crop placement.
+        if img.scale_mode == ImageScaleMode::Tile {
+            continue;
+        }
+        let Some(data) = doc.images.get(&img.image) else { continue };
+        let (iw, ih) = (f64::from(data.width), f64::from(data.height));
+        // A degenerate (zero-scale) layer has no inverse: its image keeps its placement.
+        let crop = (Affine::new(img.placement_crop(iw, ih, w, h)) * to_before).as_coeffs();
+        if !crop.iter().all(|c| c.is_finite()) {
+            continue;
+        }
+        img.crop = Some(crop);
+        img.scale_mode = ImageScaleMode::Crop;
+    }
+    fills
+}
+
+/// The extent `lo..hi` an image of extent `image` lets a crop reach on one axis of a layer that
+/// started `len` long: the image's, or the layer's where that reaches further (a Fit image is
+/// smaller than its layer).
+fn crop_reach(image: (f64, f64), len: f64) -> (f64, f64) {
+    (image.0.min(image.1).min(0.0), image.0.max(image.1).max(len))
+}
+
+/// The dragged box `(x0, y0, x1, y1)` drawn back towards the starting box `(0, 0, w0, h0)` until
+/// its sides stop at the image's box `image` (see [`crop_reach`]). Both ends of an axis go back by
+/// the same fraction, so an Alt resize stays centred, and with `keep` (Shift) both axes do, so the
+/// ratio holds. A flipped axis stays as dragged.
+fn within_the_image((x0, y0, x1, y1): (f64, f64, f64, f64), image: (f64, f64, f64, f64), (w0, h0): (f64, f64), keep: bool) -> (f64, f64, f64, f64) {
+    let fraction = |a: f64, b: f64, image: (f64, f64), len: f64| {
+        if b < a {
+            return 1.0;
+        }
+        let (lo, hi) = crop_reach(image, len);
+        let mut t: f64 = 1.0;
+        if a < lo {
+            t = t.min(lo / a);
+        }
+        if b > hi {
+            t = t.min((hi - len) / (b - len));
+        }
+        if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 }
+    };
+    let (tx, ty) = (fraction(x0, x1, (image.0, image.2), w0), fraction(y0, y1, (image.1, image.3), h0));
+    let (tx, ty) = if keep { (tx.min(ty), tx.min(ty)) } else { (tx, ty) };
+    (x0 * tx, y0 * ty, w0 + (x1 - w0) * tx, h0 + (y1 - h0) * ty)
+}
+
+/// Where a crop box `len` long, placed at `start` on one axis, starts once it is slid back onto
+/// the image (see [`crop_reach`]): layout can make a layer longer than it was dragged (a minimum
+/// size), and the crop then moves along the image rather than past its edge. A flipped axis, or
+/// a box longer than the reach, stays where it is.
+fn slid_onto_the_image(start: f64, len: f64, flipped: bool, image: (f64, f64), len0: f64) -> f64 {
+    let (lo, hi) = crop_reach(image, len0);
+    if flipped || len.is_nan() || len > hi - lo {
+        return start;
+    }
+    start.max(lo).min(hi - len)
 }

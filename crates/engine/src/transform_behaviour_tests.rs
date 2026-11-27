@@ -360,41 +360,132 @@ fn command_crop_preserves_each_image_fill_and_leaves_tiles() {
 }
 
 #[test]
-fn command_resize_leaves_fills_when_text_or_auto_layout_recomputes_the_box() {
-    for case in ["text", "child", "frame"] {
+fn command_resize_leaves_a_texts_fills() {
+    let mut s = session();
+    let image = image_layer(&mut s);
+    let fills = s.doc().unwrap().node(image).unwrap().fills.clone();
+    let layer = id(&ex(
+        &mut s,
+        "text.create",
+        json!({"text": "hello world hello world hello world", "props": {
+            "width": 200, "height": 100, "fontSize": 24, "textAutoResize": "none", "fills": fills
+        }}),
+    ));
+    ex(&mut s, "select.set", json!({"ids": [layer]}));
+    let doc = s.doc().unwrap();
+    let world = doc.world_transform(layer);
+    let n = doc.node(layer).unwrap();
+    let (from, to) = (world * Point::new(n.width, n.height / 2.0), world * Point::new(10.0, n.height / 2.0));
+    drag(&mut s, from, to, CMD);
+    assert_eq!(s.doc().unwrap().node(layer).unwrap().fills, fills, "a text reflows: keep the existing resize behaviour");
+}
+
+fn image_units_per_layer_unit(s: &Session, layer: NodeId) -> (f64, f64, f64, f64) {
+    use figcraft_doc::color::PaintKind;
+    let doc = s.doc().unwrap();
+    let n = doc.node(layer).unwrap();
+    let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+    let data = doc.images.get(&img.image).unwrap();
+    let c = img.effective_crop(f64::from(data.width), f64::from(data.height), n.width, n.height);
+    (c[0] / n.width, c[3] / n.height, c[4], c[5])
+}
+
+#[test]
+fn command_resize_crops_in_auto_layout_against_the_box_layout_leaves() {
+    use figcraft_doc::color::{ImageScaleMode, PaintKind};
+    for case in ["child", "child with a minimum width", "auto layout frame"] {
         let mut s = session();
         let image = image_layer(&mut s);
         let fills = s.doc().unwrap().node(image).unwrap().fills.clone();
-        let layer = match case {
-            "text" => id(&ex(
-                &mut s,
-                "text.create",
-                json!({"text": "hello world hello world hello world", "props": {
-                    "width": 200, "height": 100, "fontSize": 24, "textAutoResize": "none", "fills": fills
-                }}),
-            )),
+        let frame = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 240, "height": 140})));
+        set(&mut s, &[frame], json!({"layout": "horizontal", "padding": 20}));
+        let (layer, to_x, width) = match case {
+            "auto layout frame" => {
+                set(&mut s, &[frame], json!({"fills": fills}));
+                (frame, 10.0, 40.0)
+            }
             _ => {
-                let frame = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 100})));
-                set(&mut s, &[frame], json!({"layout": "horizontal", "padding": 20}));
+                ex(&mut s, "node.reparent", json!({"ids": [image], "parent": frame}));
                 if case == "child" {
-                    ex(&mut s, "node.reparent", json!({"ids": [image], "parent": frame}));
-                    set(&mut s, &[image], json!({"minWidth": 150}));
-                    image
+                    (image, 150.0, 150.0)
                 } else {
-                    set(&mut s, &[frame], json!({"fills": fills}));
-                    frame
+                    set(&mut s, &[image], json!({"minWidth": 150}));
+                    (image, 10.0, 150.0)
                 }
             }
         };
         ex(&mut s, "select.set", json!({"ids": [layer]}));
+        let before = image_units_per_layer_unit(&s, layer);
         let doc = s.doc().unwrap();
         let world = doc.world_transform(layer);
         let n = doc.node(layer).unwrap();
-        let from = world * Point::new(n.width, n.height / 2.0);
-        let to = world * Point::new(10.0, n.height / 2.0);
+        let (from, to) = (world * Point::new(n.width, n.height / 2.0), world * Point::new(to_x, n.height / 2.0));
         drag(&mut s, from, to, CMD);
-        assert_eq!(s.doc().unwrap().node(layer).unwrap().fills, fills, "{case}: keep the existing resize behaviour");
+        let n = s.doc().unwrap().node(layer).unwrap().clone();
+        assert!(near(n.width, width), "{case}: {} wide, as auto layout leaves it", n.width);
+        let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+        assert_eq!(img.scale_mode, ImageScaleMode::Crop, "{case}: cropped");
+        let after = image_units_per_layer_unit(&s, layer);
+        assert!(near(after.0, before.0) && near(after.1, before.1), "{case}: the image keeps its scale, not stretched: {before:?} -> {after:?}");
+        assert!(near(after.2, before.2) && near(after.3, before.3), "{case}: its left edge stays where it was in the layer: {before:?} -> {after:?}");
     }
+}
+
+/// A minimum width can give a layer back the width its left side was dragged in by: the crop then
+/// slides back along the image instead of running past its right edge.
+#[test]
+fn command_crop_slides_back_onto_the_image_when_layout_widens_the_layer() {
+    use figcraft_doc::color::{ImagePaint, PaintKind};
+    let mut s = session();
+    let image = image_layer(&mut s);
+    let frame = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 240, "height": 140})));
+    set(&mut s, &[frame], json!({"layout": "horizontal", "padding": 20}));
+    ex(&mut s, "node.reparent", json!({"ids": [image], "parent": frame}));
+    set(&mut s, &[image], json!({"minWidth": 150}));
+    ex(&mut s, "select.set", json!({"ids": [image]}));
+    let before = image_units_per_layer_unit(&s, image);
+    let world = s.doc().unwrap().world_transform(image);
+    drag(&mut s, world * Point::new(0.0, 50.0), world * Point::new(190.0, 50.0), CMD);
+    let doc = s.doc().unwrap();
+    let n = doc.node(image).unwrap();
+    assert!(near(n.width, 150.0), "{} wide, as the minimum width leaves it", n.width);
+    let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+    let data = doc.images.get(&img.image).unwrap();
+    let crop = img.effective_crop(f64::from(data.width), f64::from(data.height), n.width, n.height);
+    let (x0, _, x1, _) = ImagePaint::crop_rect(crop);
+    assert!(x0 <= 1e-9 && x1 >= 1.0 - 1e-9, "the image covers the layer: {x0}..{x1}");
+    let after = image_units_per_layer_unit(&s, image);
+    assert!(near(after.0, before.0) && near(after.1, before.1), "the image keeps its scale: {before:?} -> {after:?}");
+}
+
+/// Where the image's edge stops a crop, Shift still keeps the ratio (both axes stop together) and
+/// Alt still keeps the box centred (both sides stop together).
+#[test]
+fn command_crop_stopped_by_the_image_keeps_the_ratio_with_shift_and_the_centre_with_alt() {
+    let mut s = session();
+    let layer = image_layer(&mut s);
+    ex(&mut s, "select.set", json!({"ids": [layer]}));
+    drag(&mut s, Point::new(200.0, 100.0), Point::new(150.0, 80.0), CMD);
+    assert_eq!(size(&s, layer), (150.0, 80.0));
+    drag(&mut s, Point::new(150.0, 80.0), Point::new(240.0, 128.0), Mods { shift: true, alt: false, cmd: true });
+    assert!(
+        near_rect(bounds(&s, layer), Rect::new(0.0, 0.0, 187.5, 100.0)),
+        "the bottom stops at the image, the right side with it: {:?}",
+        bounds(&s, layer)
+    );
+
+    let mut s = session();
+    let layer = image_layer(&mut s);
+    ex(&mut s, "select.set", json!({"ids": [layer]}));
+    drag(&mut s, Point::new(0.0, 50.0), Point::new(20.0, 50.0), CMD);
+    drag(&mut s, Point::new(200.0, 50.0), Point::new(150.0, 50.0), CMD);
+    assert!(near_rect(bounds(&s, layer), Rect::new(20.0, 0.0, 150.0, 100.0)), "{:?}", bounds(&s, layer));
+    drag(&mut s, Point::new(150.0, 50.0), Point::new(190.0, 50.0), Mods { shift: false, alt: true, cmd: true });
+    assert!(
+        near_rect(bounds(&s, layer), Rect::new(0.0, 0.0, 170.0, 100.0)),
+        "the left side stops at the image, the right side as far: {:?}",
+        bounds(&s, layer)
+    );
 }
 
 /// A resize is an explicit edit of the size: a size bound to a variable lets go of it (#809), so
@@ -1040,4 +1131,20 @@ fn the_transform_box_and_its_handles() {
     assert_eq!(bounds(&s, tiny), Rect::new(320.0, 10.0, 340.0, 30.0), "the corner handle just outside resizes it");
     // At a larger zoom the same layer is big enough on screen for its handles inside it.
     assert_eq!(handle_at(s.doc().unwrap(), &[tiny], Point::new(320.2, 10.2), 20.0), Some(Handle::Corner(0)));
+}
+
+#[test]
+fn command_crop_changes_a_locked_ratio_and_stops_at_the_images_edges() {
+    let mut s = session();
+    let layer = image_layer(&mut s);
+    set(&mut s, &[layer], json!({"constrainProportions": true}));
+    ex(&mut s, "select.set", json!({"ids": [layer]}));
+    drag(&mut s, Point::new(200.0, 50.0), Point::new(150.0, 50.0), CMD);
+    assert_eq!(size(&s, layer), (150.0, 100.0), "a side changes the ratio, lock or not");
+    drag(&mut s, Point::new(150.0, 50.0), Point::new(260.0, 50.0), CMD);
+    assert_eq!(size(&s, layer), (200.0, 100.0), "the side stops at the image's edge");
+    drag(&mut s, Point::new(100.0, 0.0), Point::new(100.0, -40.0), CMD);
+    assert!(near_rect(bounds(&s, layer), Rect::new(0.0, 0.0, 200.0, 100.0)), "the top stops at the image's top: {:?}", bounds(&s, layer));
+    drag(&mut s, Point::new(200.0, 50.0), Point::new(100.0, 50.0), Mods { shift: true, alt: false, cmd: true });
+    assert_eq!(size(&s, layer), (100.0, 50.0), "Shift keeps the ratio");
 }
