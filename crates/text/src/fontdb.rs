@@ -1515,6 +1515,8 @@ fn public_family(family: &str) -> Option<String> {
     match hidden {
         "SF Compact" | "SF Compact Rounded" => Some(hidden.to_string()),
         "SF NS Rounded" => Some("SF Pro Rounded".into()),
+        // Apple's serif, also published as a download; macOS installs it as `.New York`.
+        "New York" => Some(hidden.to_string()),
         _ => None,
     }
 }

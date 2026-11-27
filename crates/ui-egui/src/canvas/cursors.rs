@@ -130,6 +130,17 @@ impl Shown {
     }
 }
 
+pub fn sampled_swatch(ctx: &egui::Context, at: Pos2, color: Color32) {
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas_cursor_swatch")));
+    let centre = at + vec2(SWATCH_OFFSET, SWATCH_OFFSET);
+    painter.circle_filled(centre, SWATCH_RADIUS + 2.0, INK);
+    painter.circle_filled(centre, SWATCH_RADIUS + 1.0, EDGE);
+    painter.circle_filled(centre, SWATCH_RADIUS, color);
+}
+
+pub(crate) const SWATCH_OFFSET: f32 = 16.0;
+pub(crate) const SWATCH_RADIUS: f32 = 8.0;
+
 /// Dark lines over a light edge: readable on any page and artwork.
 pub(crate) const INK: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x1E);
 const EDGE: Color32 = Color32::WHITE;

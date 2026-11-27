@@ -173,6 +173,47 @@ fn a_zoom_out_previews_the_whole_view_then_refines_to_a_fresh_render() {
     assert!(same_pixels(&refined, &fresh), "the settled image is a render from scratch");
 }
 
+#[test]
+fn a_zoom_in_shows_the_kept_image_until_a_preview_would_be_sharper() {
+    let (s, _) = document();
+    let ds = s.ds().unwrap();
+    let at = |scale: f64| job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), scale, 400, 300));
+    let mut r = Renders::with_threshold(0.0);
+    r.refine(&at(1.0)).unwrap();
+    for scale in [1.08, 2.0, PREVIEW_FACTOR] {
+        assert!(r.preview(&at(scale)).is_none(), "{scale}x: the kept image, enlarged, is as sharp as a preview");
+        assert!(!r.wants_late_preview(&at(scale)), "{scale}x: no preview beside the render either");
+    }
+    assert!(r.preview(&at(PREVIEW_FACTOR * 1.5)).is_some(), "enlarged past a preview's sharpness");
+    assert!(r.preview(&at(0.5)).is_some(), "a zoom out");
+    let mut aside = at(2.0);
+    aside.view.origin.0 += 10_000.0;
+    assert!(r.preview(&aside).is_some(), "a zoom in where the kept image isn't");
+    r.refine(&at(2.0)).unwrap();
+    assert!(r.preview(&at(2.0 * PREVIEW_FACTOR)).is_none(), "measured from the image refined last");
+}
+
+#[test]
+fn a_zoom_in_after_an_unrefined_zoom_out_is_measured_from_the_preview_on_screen() {
+    let (s, _) = document();
+    let ds = s.ds().unwrap();
+    let at = |scale: f64| job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), scale, 400, 300));
+    let mut r = Renders::with_threshold(0.0);
+    r.refine(&at(1.0)).unwrap();
+    assert!(r.preview(&at(0.25)).is_some_and(|d| d.coarse), "a zoom out shows its preview");
+    assert!(r.preview(&at(2.0)).is_some(), "the preview on screen is coarser than this zoom's preview");
+    assert!(r.preview(&at(2.0)).is_none(), "the same zoom again: the preview on screen is as sharp as another");
+
+    let mut w = waiting(Duration::from_secs(3600));
+    w.submit(at(1.0));
+    assert!(refined(&mut w).is_some_and(|d| !d.coarse && d.view.scale == 1.0));
+    let now = Instant::now();
+    w.submit(at(0.25));
+    assert!(w.poll_at(now).is_some_and(|d| d.coarse), "the browser shows the zoom out's preview");
+    w.submit(at(2.0));
+    assert!(w.poll_at(now).is_some_and(|d| d.coarse && d.view.scale == 2.0 / PREVIEW_FACTOR), "and previews the zoom in that follows it");
+}
+
 /// Zoom, pan and edit with `r`; whether each step was previewed, and the pan's and the edit's
 /// images.
 fn zoom_pan_edit(r: &mut Renders) -> (Vec<bool>, Done, Done) {
@@ -241,7 +282,7 @@ fn previews_cover_the_view_for_any_zoom_and_density() {
     let (s, _) = document();
     let ds = s.ds().unwrap();
     let mut r = Renders::with_threshold(0.0);
-    r.refine(&job(&ds.doc, ds.page, ds.uid, view_at((0.0, 0.0), 0.37, 64, 64))).unwrap();
+    let kept = job(&ds.doc, ds.page, ds.uid, view_at((0.0, 0.0), 0.37, 64, 64));
     let mut n = 0;
     // Zooms from 2% to 6400% at 1x, 1.5x and 2x displays, odd sizes, centres off the pixel grid.
     for zoom in [0.02, 0.1, 0.333, 1.0, 2.5, 8.0, 64.0] {
@@ -250,6 +291,7 @@ fn previews_cover_the_view_for_any_zoom_and_density() {
                 let v = view_at((123.456, -78.9), zoom * ppp, w, h);
                 let c = coarse_view(&v);
                 assert!(covers(&c, &v), "coarse view of {v:?}");
+                r.refine(&kept).unwrap();
                 let p = r.preview(&job(&ds.doc, ds.page, ds.uid, v.clone())).expect("a preview");
                 assert!(covers(&p.view, &v), "preview of {v:?} shows {:?}", p.view);
                 n += 1;
@@ -343,7 +385,7 @@ fn renders_from_scratch_with_nothing_to_go_by_get_a_late_preview() {
     let first = at(&doc, page, uid, 1.0);
     assert!(r.wants_late_preview(&first) && r.preview(&first).is_none(), "the first render");
     r.refine(&first).unwrap();
-    assert!(r.wants_late_preview(&at(&doc, page, uid, 4.0)), "a zoom after quick renders");
+    assert!(r.wants_late_preview(&at(&doc, page, uid, 0.25)), "a zoom after quick renders");
     assert!(r.wants_late_preview(&at(&doc, page, uid + 1, 1.0)), "another file");
     let mut panned = first.clone();
     panned.view.origin.0 += 5.0;
@@ -357,7 +399,7 @@ fn renders_from_scratch_with_nothing_to_go_by_get_a_late_preview() {
     // Renders that have been slow: the preview comes first instead.
     let mut slow = Renders::with_threshold(0.0);
     slow.refine(&first).unwrap();
-    let zoom = at(&doc, page, uid, 4.0);
+    let zoom = at(&doc, page, uid, 0.25);
     assert!(!slow.wants_late_preview(&zoom) && slow.preview(&zoom).is_some());
 }
 
@@ -728,4 +770,58 @@ fn a_render_dropped_while_drawing_leaves_its_time_as_the_measure() {
     let mut r = Renders::with_threshold(1e-9);
     assert!(matches!(r.refine_for(&at(1.0), 0.0), Refined::More));
     assert!(r.preview(&at(2.0)).is_some(), "the zoom gets a preview by the dropped render's measure");
+}
+
+fn until_late_preview_of(w: &mut Worker, seq: u64) -> Vec<(u64, bool)> {
+    let start = std::time::Instant::now();
+    let mut got = vec![];
+    while !got.contains(&(seq, true)) {
+        assert!(start.elapsed() < Duration::from_secs(30), "no late preview of request {seq}: {got:?}");
+        got.extend(w.poll().map(|d| (d.seq, d.coarse)));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    got
+}
+
+fn until_idle(w: &mut Worker) -> Vec<(u64, bool)> {
+    let start = std::time::Instant::now();
+    let mut got = vec![];
+    while w.in_flight() {
+        assert!(start.elapsed() < Duration::from_secs(60), "the render never finished");
+        got.extend(w.poll().map(|d| (d.seq, d.coarse)));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    got.extend(w.poll().map(|d| (d.seq, d.coarse)));
+    got
+}
+
+#[test]
+fn a_zoom_in_after_a_late_preview_left_on_screen_is_measured_from_that_preview() {
+    let zoomed_out = view_at((300.0, 200.0), 0.5, 1200, 1200);
+    let zoomed_in = view_at((300.0, 200.0), 2.0, 200, 150);
+    let held = [zoomed_out.scale.to_bits(), zoomed_in.scale.to_bits()];
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = std::sync::Mutex::new(released);
+    let gate = Arc::new(move |job: &Job, done: Option<Done>| {
+        if !held.contains(&job.view.scale.to_bits()) {
+            return done;
+        }
+        let _ = released.lock().unwrap().recv_timeout(Duration::from_secs(60));
+        done.filter(|_| job.view.scale.to_bits() != held[0])
+    });
+    let (s, _) = document();
+    let ds = s.ds().unwrap();
+    let mut w = Worker::with_renders(egui::Context::default(), Renders::with_threshold(f64::INFINITY).with_refine_gate(gate));
+    w.submit(job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), 1.0, 120, 90)));
+    assert!(drain(&mut w).contains(&(1, false)), "a sharp image at 1x");
+    w.submit(job(&ds.doc, ds.page, ds.uid, zoomed_out));
+    let mut got = until_late_preview_of(&mut w, 2);
+    release.send(()).unwrap();
+    got.extend(until_idle(&mut w));
+    assert_eq!(got, [(2, true)], "the watchdog's preview, and no refined image after it");
+    w.submit(job(&ds.doc, ds.page, ds.uid, zoomed_in));
+    let mut got = until_late_preview_of(&mut w, 3);
+    release.send(()).unwrap();
+    got.extend(until_idle(&mut w));
+    assert_eq!(got, [(3, true), (3, false)], "the 1x image is gone from the screen: the zoom in gets its late preview");
 }
