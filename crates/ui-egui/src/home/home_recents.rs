@@ -130,7 +130,11 @@ impl Sort {
     /// The order the preferences keep (the default for anything they don't know).
     pub fn of(prefs: &Prefs) -> Sort {
         match SortKey::parse(&prefs.home_sort) {
-            Some(key) => Sort { key, descending: prefs.home_order != "asc" },
+            Some(key) => match prefs.home_order.as_str() {
+                "asc" => Sort { key, descending: false },
+                "desc" => Sort { key, descending: true },
+                _ => Sort::by(key),
+            },
             None => Sort::default(),
         }
     }

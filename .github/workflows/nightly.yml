@@ -1,0 +1,34 @@
+name: FigCraft unsigned nightly
+
+# Enabled for supervised manual runs by the reviewed manual actors only; no schedule yet.
+# A later explicit opt-in may add a cadence (and a completion dispatcher with it).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned:
+    # Actual context guards only; no inherited/platform secrets.
+    if: >-
+      github.repository == 'storytold/figcraft' &&
+      github.ref == 'refs/heads/main' && github.ref_type == 'branch' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    # Maximum for the reusable workflow. Its compiler narrows to contents/actions read;
+    # no OIDC, attestation write, release environment or platform secrets in compilation.
+    permissions:
+      contents: read
+      actions: read
+      attestations: write
+      id-token: write
+    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@be00e5ccd18b68e950c8a08532f2230e7c3d0cba
+    with:
+      tooling-revision: be00e5ccd18b68e950c8a08532f2230e7c3d0cba
+      app-name: figcraft
+      manual-actors: '["bflatastic","dylanmtaylor","echelon","FredApps","skylartaylor"]'
+      craft-fonts-ref: 37827adc41fd165f9a9234ac40f94dbad353aa69
+      # One producer run builds every listed platform for one all-or-nothing release. The pin is the
+      # craft-common-actions main commit that merged the exact-analysis admission (#371, after #370,
+      # #369 and #364).
+      platforms: '["windows-x86_64","linux-x86_64","macos-aarch64"]'

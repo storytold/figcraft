@@ -25,7 +25,7 @@ impl Harness {
             s.execute("file.new", &json!({"name": n})).unwrap();
             s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 200, "height": 120})).unwrap();
         }
-        Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0 }
+        Self { ctx: crate::framework::headless_context(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0 }
     }
 
     /// One frame with no input, 1/60 s after the last.
@@ -34,6 +34,7 @@ impl Harness {
         self.app.clock.set_test_now(Some(self.time));
         let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), ..Default::default() };
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
     }

@@ -763,7 +763,7 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
     // Escape clears the selection (unless a field has the keyboard).
     if !st.selected.is_empty()
         && st.rename.is_none()
-        && !ui.ctx().egui_wants_keyboard_input()
+        && !crate::a11y::field_focused(ui.ctx())
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         st.selected.clear();

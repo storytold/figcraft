@@ -573,6 +573,16 @@ fn composer(ui: &mut Ui, id: Id, text: &mut String, hint: &str, people: &[String
         }
         _ => {}
     }
+    // Tab inserts the picked name while the picker is open and moves on again when it closes. The
+    // TextEdit sets its own filter each pass, so this goes after it.
+    if pick.field == Some(id) && pick.active() {
+        let keeps = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: false };
+        ui.memory_mut(|m| {
+            if m.has_focus(id) {
+                m.set_focus_lock_filter(id, keeps);
+            }
+        });
+    }
     if pick.field == Some(id) && pick.active() {
         ui.add_space(4.0);
         let mut chosen = None;
