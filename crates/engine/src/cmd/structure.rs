@@ -238,6 +238,7 @@ fn wrap(s: &mut Session, p: &Value, cmd: &str, w: Wrap) -> Result<Value> {
     }
     if let Wrap::Frame = w {
         g.clip = true;
+        g.fills.clear();
     }
     // Insert the container where the topmost layer is.
     doc.insert(g, parent, index)?;

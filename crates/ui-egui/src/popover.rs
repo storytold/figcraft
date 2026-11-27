@@ -124,6 +124,11 @@ impl Popover {
         }
     }
 
+    /// The id of the header's drag handle: a drag there moves the panel, not a value in it.
+    pub fn header_drag_id(&self) -> Id {
+        self.id.with("drag")
+    }
+
     /// `width` points wide instead of [`WIDTH`].
     pub fn width(mut self, width: f32) -> Self {
         self.width = width.max(1.0);
