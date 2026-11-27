@@ -124,7 +124,10 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     }
     // Selection.
     let editing = ds.text_edit.clone();
-    if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() {
+    // While the colour picker is being used on the selection, hide its frame and handles so the
+    // colour being picked shows on the layer itself (a text's coloured selection would hide it
+    // too).
+    if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() && !app.picker_hides_selection(painter.ctx()) {
         size_label = selection_overlay(app, painter, ds, &doc, &sel, zoom);
     }
     if app.session.tool.tool == ToolId::ShapeBuilder
@@ -273,12 +276,16 @@ fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Do
     let preedit = app.preedit_view();
     let edoc: &Document = preedit.map(|p| &*p.doc).unwrap_or(doc);
     let Some(text) = TextOnScreen::of(edoc, te.id) else { return };
+    // While the colour picker is being used on this text, its frame and coloured selection hide
+    // too: the selection colour tinted the very characters whose colour is being chosen. The
+    // caret stays.
+    let picking = app.picker_hides_selection(painter.ctx());
     let layout = &text.layout;
-    if let Some(q) = node_quad(app, edoc, te.id) {
+    if !picking && let Some(q) = node_quad(app, edoc, te.id) {
         quad(painter, q, stroke(accent(painter), 1.0));
     }
     let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
-    if a != b && preedit.is_none() {
+    if a != b && preedit.is_none() && !picking {
         for q in text.selection(app, a, b) {
             painter.add(Shape::convex_polygon(q.to_vec(), accent(painter).gamma_multiply(0.3), Stroke::NONE));
         }
