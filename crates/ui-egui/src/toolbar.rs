@@ -186,6 +186,7 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
         mode_switcher(app, ui, x, cy, t);
     }
     ui.set_clip_rect(outer_clip);
+    crate::canvas::ink_bar::show(app, ui, rect);
     help_button(app, ui, canvas, rect, t);
 }
 
