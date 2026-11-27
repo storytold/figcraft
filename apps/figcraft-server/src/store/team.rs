@@ -20,17 +20,19 @@ fn label(access: Access) -> String {
     format!("Team ({})", access.id())
 }
 
-/// Whether `entry` is shared now: a link of its own has a join code.
-fn shared(entry: &Entry) -> bool {
-    entry.links.iter().any(|l| l.team.is_none() && l.code.is_some())
+/// Whether `entry` is shared now: a link of its own has a join code, or the operator lists every
+/// file (`team_files_all`, `all` here).
+fn shared(entry: &Entry, all: bool) -> bool {
+    all || entry.links.iter().any(|l| l.team.is_none() && l.code.is_some())
 }
 
 impl Store {
     /// The files shared now, most recently changed first (at most [`MAX_TEAM`]).
     pub(super) fn team(&self, open: &dyn Fn(&str) -> Option<OpenFile>) -> AdminReply {
         let Some(access) = self.cfg.hosting.team else { return AdminReply::Failed { reason: NO_TEAM.into() } };
+        let all = self.cfg.hosting.team_all;
         let mut files: Vec<TeamFile> =
-            self.files.iter().filter(|(_, e)| shared(e)).map(|(id, e)| TeamFile { file: self.info(id, e, open(id)), access }).collect();
+            self.files.iter().filter(|(_, e)| shared(e, all)).map(|(id, e)| TeamFile { file: self.info(id, e, open(id)), access }).collect();
         files.sort_by(|a, b| b.file.updated.cmp(&a.file.updated).then_with(|| a.file.name.cmp(&b.file.name)));
         files.truncate(MAX_TEAM);
         AdminReply::Team { web: self.cfg.hosting.web.clone(), files }
@@ -42,8 +44,9 @@ impl Store {
     pub(super) fn team_link(&mut self, file: &str) -> Result<NewLink, String> {
         let access = self.cfg.hosting.team.ok_or(NO_TEAM)?;
         let max = self.cfg.max_links;
+        let all = self.cfg.hosting.team_all;
         let path = self.dir(file).join(LINKS);
-        let entry = self.files.get_mut(file).filter(|e| shared(e)).ok_or(NOT_SHARED)?;
+        let entry = self.files.get_mut(file).filter(|e| shared(e, all)).ok_or(NOT_SHARED)?;
         let made = entry.links.iter().find_map(|l| match &l.team {
             Some(TeamToken(token)) if l.access == access => Some(NewLink { link: l.info(file), token: token.clone() }),
             _ => None,
@@ -93,8 +96,9 @@ impl Store {
     /// `file` stopped being shared (a link was revoked): revoke its team links too. The ids
     /// revoked (whoever joined with them is disconnected); none while it is still shared.
     pub(super) fn team_unshared(&mut self, file: &str) -> Vec<String> {
+        let all = self.cfg.hosting.team_all;
         let path = self.dir(file).join(LINKS);
-        let Some(entry) = self.files.get_mut(file).filter(|e| !shared(e)) else { return Vec::new() };
+        let Some(entry) = self.files.get_mut(file).filter(|e| !shared(e, all)) else { return Vec::new() };
         let gone: Vec<String> = entry.links.iter().filter(|l| l.team.is_some()).map(|l| l.id.clone()).collect();
         if gone.is_empty() {
             return gone;
@@ -114,6 +118,6 @@ impl Store {
 
 /// Whether link `at` of `entry` lets people in, on a server whose team list gives `team`: a team
 /// link only while the list is on with its access and the file is shared; any other link always.
-pub(super) fn team_admits(team: Option<Access>, entry: &Entry, at: usize) -> bool {
-    entry.links.get(at).is_some_and(|l| l.team.is_none() || (team == Some(l.access) && shared(entry)))
+pub(super) fn team_admits(team: Option<Access>, all: bool, entry: &Entry, at: usize) -> bool {
+    entry.links.get(at).is_some_and(|l| l.team.is_none() || (team == Some(l.access) && shared(entry, all)))
 }

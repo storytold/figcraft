@@ -154,6 +154,8 @@ pub struct HostingConfig {
     pub abuse: AbuseConfig,
     /// The team list (`team_files`): what its links let people do; `None`: no team list.
     pub team: Option<Access>,
+    /// `team_files_all`: the list holds every file, not only those shared with a join code.
+    pub team_all: bool,
     /// Where the browser build is served (`web_url`; empty: not said).
     pub web: String,
 }
@@ -171,6 +173,7 @@ impl Default for HostingConfig {
             max_bytes_per_ip: u64::MAX,
             abuse: AbuseConfig { open: false, connects_per_minute: 30, publishes_per_hour: 10, messages_per_second: 200 },
             team: None,
+            team_all: false,
             web: String::new(),
         }
     }

@@ -260,3 +260,27 @@ fn the_apps_online_files_list_the_team_list_and_open_its_files() {
     ex(&mut b, "pref.publishServer", json!({"url": format!("ws://{}/", off.addr())}));
     assert_eq!(ex(&mut b, "collab.files", json!({"refresh": true}))["team"]["state"], "none");
 }
+
+/// `team_files_all`: a file published with the key (no join code) is on the list and its team link
+/// joins; the setting needs the list, and an open server may not list everything.
+#[test]
+fn team_files_all_lists_files_that_were_only_published() {
+    let dir = TempDir::new("team-all");
+    let all = Config { open_publish: false, team_files_all: true, ..team(dir.path(), "view") };
+    assert!(all.check().is_ok());
+    assert!(Config { team_files: String::new(), ..all.clone() }.check().is_err(), "needs team_files");
+    assert!(Config { open_publish: true, ..all.clone() }.check().is_err(), "not on an open server");
+    let server = crate::start(&all).unwrap();
+    let addr = server.addr();
+    let mut c = session("Cy");
+    let published = publish(&mut c, dir.path(), addr).file;
+    let (_, files) = listed(addr);
+    assert!(files.iter().any(|f| f.file.id == published && f.access == Access::View), "the published file is listed");
+    assert!(team_link(addr, &published).is_ok(), "and its team link is handed out");
+    // Off by default: the same file stays off a list that only holds shared files.
+    let dir2 = TempDir::new("team-not-all");
+    let server2 = crate::start(&Config { open_publish: false, ..team(dir2.path(), "view") }).unwrap();
+    let mut d = session("Di");
+    let other = publish(&mut d, dir2.path(), server2.addr()).file;
+    assert!(listed(server2.addr()).1.iter().all(|f| f.file.id != other));
+}

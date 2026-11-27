@@ -77,6 +77,9 @@ pub struct Config {
     /// theirs has a join code) and opens them with this access, `"edit"`, `"comment"` or `"view"`.
     /// Empty (the default): no team list. Only for a server just your team reaches.
     pub team_files: String,
+    /// With `team_files`: list every file on the server, not only the ones shared with a join code,
+    /// so files published with the key need no Share ▸ Start sharing. Never on an open server.
+    pub team_files_all: bool,
     /// Where the browser build is served for this server (`https://figcraft.example.com/app/`): the
     /// team list's browser links point there. Empty: none.
     pub web_url: String,
@@ -112,6 +115,7 @@ impl Default for Config {
             publishes_per_hour: 10,
             messages_per_second: 200,
             team_files: String::new(),
+            team_files_all: false,
             web_url: String::new(),
         }
     }
@@ -226,7 +230,13 @@ impl Config {
         self.addr()?;
         self.public()?;
         self.proxy()?;
-        self.team()?;
+        let team = self.team()?;
+        if self.team_files_all && team.is_none() {
+            return Err("`team_files_all` needs `team_files` (what the list lets people do)".into());
+        }
+        if self.team_files_all && self.open_publish {
+            return Err("`team_files_all` lists every file to everyone who reaches the server: not with `open_publish`".into());
+        }
         self.web()?;
         if !self.idle_days.is_finite() || !(0.0..=3650.0).contains(&self.idle_days) {
             return Err("`idle_days` must be from 0 to 3650".into());
@@ -296,6 +306,7 @@ impl Config {
                 max_bytes_per_ip: mib(self.max_mb_per_ip),
                 // `check` refused anything else before the store is made.
                 team: self.team().ok().flatten(),
+                team_all: self.team_files_all,
                 web: self.web().unwrap_or_default(),
                 abuse: AbuseConfig {
                     open: self.open_publish,

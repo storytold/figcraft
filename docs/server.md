@@ -362,6 +362,7 @@ are errors):
 | `publishes_per_hour` | 10 | Open: files an address may publish without the key an hour |
 | `messages_per_second` | 200 | Open: messages an address may send a second (a burst of four seconds' worth) |
 | `team_files` | (none) | The [team list](#the-team-list): everyone who reaches the server sees the files shared from it now and opens them with this access, `edit`, `comment` or `view` |
+| `team_files_all` | `false` | With `team_files`: the list holds every file on the server, not only those shared with a join code, so files published with the key appear without Share ▸ Start sharing. Refused with `open_publish` |
 | `web_url` | (none) | Where your browser build is served (`https://figcraft.example.com/app/`): the team list's browser links point there |
 
 With `listen` on every interface (`0.0.0.0`) and no `public_url`, links name this machine's

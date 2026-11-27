@@ -38,9 +38,9 @@ impl Store {
 
 impl Backend for Store {
     fn admit(&mut self, file: &str, token: &str) -> Result<Admission, String> {
-        let team = self.cfg.hosting.team;
+        let (team, all) = (self.cfg.hosting.team, self.cfg.hosting.team_all);
         let entry = self.entry(file)?;
-        let link = Self::link_of(entry, token).filter(|&i| team_admits(team, entry, i)).and_then(|i| entry.links.get(i));
+        let link = Self::link_of(entry, token).filter(|&i| team_admits(team, all, entry, i)).and_then(|i| entry.links.get(i));
         link.map(|l| Admission { access: l.access, link: Some(l.id.clone()) })
             .ok_or_else(|| "this link isn't valid (it may have been revoked)".to_string())
     }
