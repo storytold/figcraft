@@ -409,6 +409,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
+| `export_assets {ids?, dir?, dryRun?}` | Write the selection's images and vectors into `dir` as files named by their content: see [Asset handoff](#asset-handoff). |
 | `component_mappings {ids?, unmapped?, root?}` | Which code component each design component is: `import`, `name`, `source` (and `sourceFound` under `root`, default the server's folder), a ready `snippet`, `properties` with variants, and `values` that need translating. |
 | `sync_mappings {direction, path?}` | Apply a code repository's `figcraft.connect.json` to the open design (`import`) or write the design's mappings to it (`export`); `path` defaults to that file in the server's folder. |
 | `select {ids}` | Replace the selection (`[]` deselects). |
@@ -456,6 +457,27 @@ Each layer in `nodes` has `id`, `name`, `type` and:
 
 Values are the file's own. Nothing is converted to CSS or guessed. Hidden layers are in the tree, with
 `visible: false` in `explicit`.
+
+### Asset handoff
+
+`export_assets` (the command `file.exportAssets`) hands a design's assets to a code project. It writes
+to `dir`, absolute or relative to where the MCP server runs, and only lists them with `dryRun`. The
+files the call writes are confined like any other (see Confining file access).
+
+- **Images** are the bytes the file holds, never re-encoded: `source: "original"`.
+- **Vectors** go through the SVG export: `source: "vector"`.
+- **Layers with export settings** go through those settings: `source: "rendered"`, or `vector` for
+  SVG. Their images are listed as originals too.
+
+Each file is named `<first 16 hex digits of its SHA-256>.<extension>`, so one asset has one file, used
+by every layer in `layers`. Exporting again rewrites nothing unless the file there differs
+(`written`, `reused`). `adjustments` lists what a layer does that isn't in the image's bytes (filters,
+crop, rotation, opacity), which code has to apply. `skipped` says why an asset couldn't be handed over,
+and hidden layers stay out. It reads what `inspect.assets` finds, up to 200 layers per call
+(`truncated` says so).
+
+Fonts are never exported. The file holds only family and style names, and `design_context` lists them
+under `fonts`. Their licences are for the project to check.
 
 ### Compact layer trees
 
@@ -550,7 +572,8 @@ one undo step and returns the ids it made:
 - `board.nextSticky {id?, side?: right|below|left|above, edit?}` → `{id, text}`: a sticky of the
   same colour beside the selected (or edited) one; with `edit: true` the app goes on typing in it
   (`Shift+Cmd/Ctrl+Enter` in the app does both). On a shape it does what `board.addConnected` does:
-  the next shape, joined to it by a connector (`{id, text, connector}`).
+  the next shape, joined to it by a connector (`{id, text, connector}`). On a mind map node it is
+  the node's next sibling, as `board.mindMapAdd {relation: sibling}`.
   On a code block it makes the next code block 128 units beside it (`side`, default right), as wide and
   in the same language, not joined (`{id, text, language}`).
 - `board.addConnected {id?, side?: right|below|left|above, edit?}` → `{id, text, connector}`: the
@@ -611,7 +634,8 @@ one undo step and returns the ids it made:
 - `board.ink {path | points, highlighter?, color?, select? (default true)}` → `{id}`: a marker (or
   wide, see-through highlighter) stroke.
 - `board.setColor {ids?, color}`: stickies and shapes take it as their fill, connectors and ink as
-  their line. `board.setStyle {ids?, shape?, fontSize?, style?: straight|elbow|curved, startCap?,
+  their line, mind map nodes as their text colour (a board colour in its deeper shade).
+  `board.setStyle {ids?, shape?, fontSize?, style?: straight|elbow|curved, startCap?,
   endCap?}`: a shape's outline and text size, a connector's routing and arrowheads.
 - `board.templates` → `[{id, name, description, width, height}]` lists the built-in templates:
   `retrospective brainstorm weeklyPlanner flowChart kanban`. `board.template {name, x?, y?}` →
@@ -626,7 +650,8 @@ one undo step and returns the ids it made:
   (default the last); `id` may be the table or any layer in it.
 - Tools for `pointer`: `tool.sticky {color?}`, `tool.shape {shape?}`, `tool.connector {style?: straight|elbow|curved}`
   (drag from one object to another), `tool.marker {color?}`, `tool.highlighter {color?}`,
-  `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`; Text and Section are the usual tools.
+  `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`, `tool.mindMap` (a click places a mind map, the first node's text starting
+  there, and types in it); Text and Section are the usual tools.
 
 ```json
 {"command": "file.newBoard", "params": {"name": "Retro"}}
@@ -715,8 +740,9 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
 - `doc.nextTab` / `doc.previousTab` (`Ctrl+Tab` / `Ctrl+Shift+Tab`): the next or previous open file.
 - Board tools (boards only): `tool.sticky` (`Q`), `tool.shape` (`B`), `tool.connector` (`X`),
   `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), and
-  `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky). Keys no design-file
-  shortcut uses; on a design file they refuse.
+  `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky; on a mind map node it
+  makes the node's next sibling) and `board.mindMapAdd` (`Cmd/Ctrl+Enter` on a mind map node, also
+  while typing in one). Keys no design-file shortcut uses; on a design file they refuse.
 - `view.pan {dx, dy, big?}`: the arrow keys with nothing selected (`key ArrowRight` does the same)
   pan the view by 64 screen pixels a step, 320 with `big` (Shift).
 - `view.multiplayerCursors {on?}` (`Alt+Cmd+\`): show or hide others' cursors in a live session.
@@ -2171,7 +2197,7 @@ turned off 0°.
   other than miter (`strokeJoin`) or a miter angle other than the default ~28.96° (`miterAngle`).
 - **Select**: `select.layersAt {x, y}` lists every layer under a page point, locked ones too, front-most first with its
   depth and a `locked` flag (true when the layer or an ancestor is locked; the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
-  / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab). With `pointer`, `cmd: true`
+  / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab; on a board, a mind map node's next or previous sibling). With `pointer`, `cmd: true`
   clicks select the nested layer, `cmd` drags from empty canvas select the nested layers they touch,
   and `shift` drags toggle what they touch. A press on the background of a top-level frame with
   layers in it (the frame not selected) starts a marquee, as on the canvas; an empty frame

@@ -101,6 +101,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "inspect_document",
     "get_node",
     "design_context",
+    "export_assets",
     "component_mappings",
     "sync_mappings",
     "select",
@@ -126,6 +127,7 @@ const DOCUMENT_TOOLS: &[&str] = &[
     "inspect_document",
     "get_node",
     "design_context",
+    "export_assets",
     "component_mappings",
     "sync_mappings",
     "select",
@@ -273,6 +275,20 @@ fn tools() -> Vec<Value> {
                 &[],
             ),
             true,
+        ),
+        tool(
+            "export_assets",
+            "Export assets",
+            "Write the selection's images and vectors into `dir` (relative to where this server runs) as files named by their content, and say where they went. Images are the file's original bytes, never re-encoded; each result says if it is `original`, `vector` or `rendered`, and lists `adjustments` a layer applies that aren't in the file. Exporting again writes nothing new. `dryRun` lists them without writing.",
+            obj(
+                json!({
+                    "ids": ids_schema("Layers (default the selection, else the page)"),
+                    "dir": string("Folder to write to, absolute or relative to where this server runs (required unless dryRun)"),
+                    "dryRun": boolean("List the files without writing them")
+                }),
+                &[],
+            ),
+            false,
         ),
         tool(
             "component_mappings",
@@ -487,6 +503,24 @@ fn design_context(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolRes
     }
 }
 
+/// `file.exportAssets` into `dir`, made absolute here: an attached app runs in another folder.
+fn export_assets(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let mut params = Map::new();
+    if let Some(ids) = a.get("ids") {
+        params.insert("ids".into(), ids.clone());
+    }
+    let dry = a.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
+    match (s_arg(a, "dir")?, dry) {
+        (Some(dir), false) => {
+            let dir = std::path::absolute(dir).map_err(|e| format!("dir: {e}"))?;
+            params.insert("dir".into(), json!(dir.to_string_lossy()));
+        }
+        (None, false) => return Err("pass `dir`, the folder to write to, or `dryRun` to list the assets".into()),
+        _ => {}
+    }
+    exec(b, "file.exportAssets", Value::Object(params)).map(|v| ToolResult::json(&v))
+}
+
 /// `codeConnect.list`, checking source files against `root`, else where this server runs.
 fn component_mappings(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
     let mut params = a.clone();
@@ -653,6 +687,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "inspect_document" => inspect_document(b, &a),
         "get_node" => get_node(b, &a),
         "design_context" => design_context(b, &a),
+        "export_assets" => export_assets(b, &a),
         "component_mappings" => component_mappings(b, &a),
         "sync_mappings" => sync_mappings(b, &a),
         "select" => select(b, &a),

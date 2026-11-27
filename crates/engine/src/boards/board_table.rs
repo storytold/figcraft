@@ -72,7 +72,7 @@ pub fn spreadsheet_cells(text: &str) -> Option<(Vec<Vec<String>>, bool)> {
         return None;
     }
     // A spreadsheet ends its copy with a line break: no empty row after the last.
-    let text = text.strip_suffix("\r\n").or_else(|| text.strip_suffix('\n')).unwrap_or(text);
+    let text = text.strip_suffix("\r\n").or_else(|| text.strip_suffix(['\n', '\r'])).unwrap_or(text);
     let (mut rows, mut row, mut cell) = (Vec::new(), Vec::new(), String::new());
     let (mut quoted, mut cell_start) = (false, true);
     let mut chars = text.chars().peekable();

@@ -31,7 +31,7 @@ fn frame_margins(ctx: &egui::Context) -> f32 {
 
 #[test]
 fn a_menu_is_as_wide_as_its_widest_row_and_does_not_wrap() {
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut t = 0.0;
     let items = [("Copy as code", "Cmd+Shift+C"), ("Paste", "Cmd+V"), ("A much longer menu item label", "")];
     let mut frame = |events: Vec<Event>| {
@@ -69,9 +69,10 @@ fn a_menu_is_as_wide_as_its_widest_row_and_does_not_wrap() {
 fn right_panel_dropdown_menus_fit_the_panel() {
     let mut app = FigApp::new(Session::new(), Box::new(NoServices));
     app.ui.right_tab = RightTab::Inspect;
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut t = 0.0;
     let mut frame = |app: &mut FigApp, events: Vec<Event>| {
+        app.before_input(&ctx);
         let mut out = ctx.run_ui(input(&mut t, events), |ui| app.ui(ui));
         out.textures_delta.clear();
     };
