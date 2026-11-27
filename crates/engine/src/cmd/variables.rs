@@ -68,9 +68,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// Props resolve an exact id first, then an unambiguous exact name or `Collection/name`. Compare
-/// whole names: both collection and variable names can contain `/`. Other commands keep their
-/// existing first-match lookup.
+/// Props, `variable.bind` and `variable.create` aliases resolve an exact id first, then an
+/// unambiguous exact name or `Collection/name`. Compare whole names: both collection and variable
+/// names can contain `/`. Other commands keep their existing first-match lookup.
 pub(crate) fn resolve_strict(cmd: &str, doc: &Document, name: &str) -> Result<VariableId> {
     let vars = &doc.variables;
     if let Some(v) = vars.variables.iter().find(|v| v.id == name) {

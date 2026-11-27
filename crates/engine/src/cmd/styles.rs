@@ -864,7 +864,7 @@ fn bind_field(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets(cmd, s, p)?;
     let doc = s.doc_mut()?;
     let vid = match &var {
-        Some(v) => Some(doc.variables.get(v).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such variable"))?),
+        Some(v) => Some(super::variables::resolve_strict(cmd, doc, v)?),
         None => None,
     };
     bind_variable(cmd, doc, &ids, &field, vid.as_deref())?;
@@ -1040,7 +1040,12 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
     // variable yet, so they can't loop).
     for val in values.values_mut() {
         if let VariableValue::Alias(a) = val {
-            let t = doc.variables.get(a).filter(|t| t.kind == kind).ok_or_else(|| bad(cmd, format!("no {} variable `{a}` to alias", kind.id())))?;
+            let id = super::variables::resolve_strict(cmd, doc, a)?;
+            let t = doc
+                .variables
+                .get_by_id(&id)
+                .filter(|t| t.kind == kind)
+                .ok_or_else(|| bad(cmd, format!("no {} variable `{a}` to alias", kind.id())))?;
             *a = t.id.clone();
         }
     }
