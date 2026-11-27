@@ -104,6 +104,11 @@ pub(super) fn select_sibling(s: &mut Session, dir: i64) -> Result<Value> {
         s.set_selection(first.into_iter().collect());
         return Ok(json!({"selection": s.selection()}));
     };
+    // A mind map node's siblings, in the map's order (#2226); every other layer keeps the layer order.
+    if let Some(next) = crate::board::mind_sibling(doc, cur, dir) {
+        s.set_selection(vec![next]);
+        return Ok(json!({"selection": [next]}));
+    }
     let parent = doc.get(cur)?.parent.ok_or_else(|| bad("select.next", "no parent"))?;
     let kids = &doc.get(parent)?.children;
     let idx = kids.iter().position(|c| *c == cur).unwrap_or(0) as i64;

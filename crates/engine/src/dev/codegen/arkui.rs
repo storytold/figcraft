@@ -216,7 +216,7 @@ fn arkui_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
         }
     }
     // Ellipses take their stroke as a shape attribute (above).
-    if !matches!(n.kind, NodeKind::Ellipse { .. })
+    if !matches!(n.kind, NodeKind::Ellipse { .. } | NodeKind::Vector { .. })
         && let Some(c) = stroke_color(n)
     {
         mods.push(format!(".border({{ width: {}, color: {} }})", num(n.stroke.weight), ark_color(c)));
