@@ -248,6 +248,7 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         {
             let instance = crate::components::create_instance(doc, *root, parent, 0.0, 0.0)?;
             doc.get_mut(instance)?.transform = doc.world_transform(parent).inverse() * shift * n.transform;
+            keep_a_cropped_images_proportions(doc, instance, parent);
             out.push(instance);
             continue;
         }
@@ -261,7 +262,9 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         if let Some(r) = nodes.first_mut() {
             r.transform = doc.world_transform(into).inverse() * shift * r.transform;
         }
-        out.push(doc.paste_nodes(&nodes, &map, *root, into, None)?);
+        let pasted = doc.paste_nodes(&nodes, &map, *root, into, None)?;
+        keep_a_cropped_images_proportions(doc, pasted, into);
+        out.push(pasted);
         all.extend(map);
     }
     // Board connectors pasted with what they join join the pasted copies.
@@ -273,6 +276,24 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
     }
     crate::library::count_inserted(doc, &out);
     Ok(out)
+}
+
+/// Lock the aspect ratio of a layer pasted into an auto layout frame when it shows an image cropped
+/// to it and fills one axis while fixed on the other, so layout can't squash the image.
+fn keep_a_cropped_images_proportions(doc: &mut Document, pasted: NodeId, parent: NodeId) {
+    use figcraft_doc::Sizing;
+    if doc.node(parent).is_none_or(|p| p.layout.is_none()) {
+        return;
+    }
+    let Ok(n) = doc.get_mut(pasted) else { return };
+    let cropped = n
+        .fills
+        .iter()
+        .any(|f| f.visible && matches!(&f.kind, figcraft_color::PaintKind::Image(i) if i.scale_mode == figcraft_color::ImageScaleMode::Crop));
+    let sizing = (n.child_layout.sizing_h, n.child_layout.sizing_v);
+    if cropped && matches!(sizing, (Sizing::Fill, Sizing::Fixed) | (Sizing::Fixed, Sizing::Fill)) {
+        n.constrain_proportions = true;
+    }
 }
 
 pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
@@ -295,6 +316,9 @@ pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
             })
             .filter(|i| !copy_local || !s.clipboard.copied_components.iter().any(|root| doc.is_ancestor(*root, *i)))
     });
+    // One layer selected that isn't a frame target: the copy joins its parent, just above it (#2355).
+    let sibling_of = if target.is_none() && id(p, "parent").is_none() { sibling_anchor(s, &sel, copy_local) } else { None };
+    let target = target.or_else(|| sibling_of.and_then(|i| doc.node(i).and_then(|n| n.parent)));
     let parent = target.unwrap_or(page);
     let at = match (num(p, "x"), num(p, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
@@ -321,8 +345,40 @@ pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let ids = paste_into(s, parent, at)?;
+    if let Some(sel) = sibling_of {
+        let above = s.doc()?.index_in_parent(sel).map(|ix| ix + 1);
+        move_above(s, &ids, parent, above)?;
+    }
     s.set_selection(ids.clone());
     Ok(json!({"ids": ids}))
+}
+
+/// The one selected layer a plain paste goes next to: not a page-level layer, not inside an instance
+/// (its children are fixed), not a board atom, a component set (a variant's parent) or inside a copied
+/// component. Else the page, as before.
+fn sibling_anchor(s: &Session, sel: &[NodeId], copy_local: bool) -> Option<NodeId> {
+    let [only] = sel else { return None };
+    let doc = s.doc().ok()?;
+    let parent = doc.node(*only)?.parent?;
+    let pn = doc.node(parent)?;
+    let ok = !pn.is_page()
+        && pn.kind.is_frame_like()
+        && !pn.is_board_atom()
+        && !crate::components::inside_instance(doc, *only)
+        && !matches!(pn.kind, NodeKind::Instance { .. } | NodeKind::ComponentSet { .. })
+        && (!copy_local || !s.clipboard.copied_components.iter().any(|root| doc.is_ancestor(*root, parent)));
+    ok.then_some(*only)
+}
+
+/// Move the pasted copies that landed in `parent` to `above` and after, in the copied order.
+fn move_above(s: &mut Session, ids: &[NodeId], parent: NodeId, above: Option<usize>) -> Result<()> {
+    let Some(above) = above else { return Ok(()) };
+    let doc = s.doc_mut()?;
+    for (k, i) in ids.iter().filter(|i| doc.node(**i).is_some_and(|n| n.parent == Some(parent))).copied().collect::<Vec<_>>().into_iter().enumerate()
+    {
+        doc.reorder(i, above + k)?;
+    }
+    Ok(())
 }
 
 pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
@@ -337,14 +393,7 @@ pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
         None => (page, None, None),
     };
     let ids = paste_into(s, parent, at)?;
-    if let Some(above) = above {
-        let doc = s.doc_mut()?;
-        for (k, i) in
-            ids.iter().filter(|i| doc.node(**i).is_some_and(|n| n.parent == Some(parent))).copied().collect::<Vec<_>>().into_iter().enumerate()
-        {
-            doc.reorder(i, above + k)?;
-        }
-    }
+    move_above(s, &ids, parent, above)?;
     s.set_selection(ids.clone());
     Ok(json!({"ids": ids}))
 }

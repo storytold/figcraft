@@ -214,9 +214,10 @@ whole bundle before keeping it, refuses a version that isn't newer than the one 
 the new version at once. `plugin.directory.unpublish` (or the operator's `figcraft-server plugins
 remove`) takes a version, or the whole plugin, down; installed copies keep working.
 
-**In the browser** the directory isn't available yet: the browser build's network link has no
-plugin directory requests (`plugin.directory.*` says so). Import plugins with `plugin.import
-{manifest, wasm}` there.
+**In the browser** Manage plugins browses a directory and installs from it as the desktop app
+does, but there is no folder to keep a plugin in, so it lasts as long as the page. Scripts through
+`window.figcraft` can't reach a directory (commands there don't wait for the server, and
+`plugin.directory.*` says so): import plugins with `plugin.import {manifest, wasm}` there.
 
 ## The manifest: `figcraft-plugin.json`
 
@@ -548,7 +549,7 @@ import what you need from `figcraft`.
 - Distribution: directories live on your own `figcraft-server`; there is no public catalogue,
   no publisher accounts or signatures (the server's key is the publisher), no ratings, reviews or
   install counts, and updates are found when you browse, not in the background. The browser build
-  can't use a directory yet.
+  keeps what it installs only as long as the page.
 - Plugins written for other apps (JavaScript plugins) don't run.
 - Widgets: clicks, field edits and menu items are their only events (no hover or timers), a field
   is plain text (no placeholder, length or single-line setting), and their layers are frames, text, rectangles, ellipses and images only (no

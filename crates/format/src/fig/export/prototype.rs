@@ -1,14 +1,16 @@
+use figcraft_doc::proto::{Expr, ExprOp, MAX_ACTION_DEPTH};
+use figcraft_doc::{VariableType, VariableValue};
+
 use super::common::key_codes;
 use super::{
-    Action, Direction, Easing, Exporter, Fields, Interaction, Kv, Node, NodeId, Overflow, OverlayPosition, ScrollPosition, Transition, Trigger, arr,
-    b, color, e, fl, int, o, position, s,
+    AUX, Action, Direction, Easing, Exporter, Fields, Interaction, Kv, LAYERS, Node, NodeId, Overflow, OverlayPosition, ScrollPosition, Transition,
+    Trigger, arr, b, color, e, fl, guid, int, o, position, s,
 };
 
 impl<'d> Exporter<'d> {
     /// Interactions, scrolling, flow starts and the overlay settings this layer is opened with.
     pub(super) fn prototype(&mut self, n: &Node, f: &mut Fields) {
-        self.trigger_size = [n.width, n.height];
-        let list: Vec<Kv> = n.interactions.iter().filter_map(|it| self.interaction(it)).collect();
+        let list = self.prototype_interactions(n, 0);
         if !list.is_empty() {
             f.push(("prototypeInteractions", arr(list)));
         }
@@ -43,7 +45,21 @@ impl<'d> Exporter<'d> {
         }
     }
 
-    fn interaction(&mut self, it: &Interaction) -> Option<Kv<'static>> {
+    /// Re-encode only interactions that differ from the main and will be written as overrides.
+    pub(super) fn bound_override_interactions(&mut self, n: &Node, fields: &mut Fields) {
+        if let Some((_, value)) = fields.iter_mut().find(|(key, _)| *key == "prototypeInteractions") {
+            // SymbolData and its override NodeChange add two Kiwi levels.
+            *value = arr(self.prototype_interactions(n, 2));
+        }
+    }
+
+    fn prototype_interactions(&mut self, n: &Node, extra_depth: usize) -> Vec<Kv<'static>> {
+        self.trigger_size = [n.width, n.height];
+        n.interactions.iter().filter_map(|it| self.interaction(it, extra_depth)).collect()
+    }
+
+    /// Encode the trigger and the actions that can be represented in the export.
+    fn interaction(&mut self, it: &Interaction, extra_depth: usize) -> Option<Kv<'static>> {
         let mut event: Fields = Vec::new();
         let ty = match &it.trigger {
             Trigger::OnClick => "ON_CLICK",
@@ -73,11 +89,21 @@ impl<'d> Exporter<'d> {
             event.push(("transitionTimeout", fl(it.delay_secs())));
         }
         event.insert(0, ("interactionType", e(ty)));
-        let actions: Vec<Kv> = it.actions.iter().filter_map(|a| self.action(a, it)).collect();
+        let actions: Vec<Kv> = it.actions.iter().filter_map(|a| self.action(a, it, 0, extra_depth)).collect();
         (!actions.is_empty()).then(|| o(vec![("event", o(event)), ("actions", arr(actions))]))
     }
 
-    fn action(&mut self, a: &Action, it: &Interaction) -> Option<Kv<'static>> {
+    /// Encode one action and warn when a variable or conditional action must be omitted.
+    fn action(&mut self, a: &Action, it: &Interaction, depth: usize, extra_depth: usize) -> Option<Kv<'static>> {
+        let encoded = self.encode_action(a, it, depth, extra_depth);
+        if encoded.is_none() && matches!(a, Action::SetVariable { .. } | Action::SetVariableMode { .. } | Action::Conditional { .. }) {
+            self.warn("variable or conditional prototype actions with unsupported values, references or nesting were left out");
+        }
+        encoded
+    }
+
+    /// Map an action to Kiwi, preserving branch order and bounding conditional recursion.
+    fn encode_action(&mut self, a: &Action, it: &Interaction, depth: usize, extra_depth: usize) -> Option<Kv<'static>> {
         let node = |x: &mut Self, dest: &NodeId, nav: &'static str| -> Option<Kv<'static>> {
             let Some(g) = x.guid_of(*dest) else {
                 x.warn("prototype actions whose destination isn't written were left out");
@@ -88,6 +114,10 @@ impl<'d> Exporter<'d> {
             Some(o(f))
         };
         let plain = |ty: &'static str| Some(o(vec![("connectionType", e(ty))]));
+        // Message → layer → interaction → action uses three Kiwi levels. Each
+        // conditional adds two, an expression operator adds three, and the deepest
+        // condition (an alias with a GUID) uses five levels below its action.
+        let expression_levels = (craft_fig::kiwi::MAX_DEPTH - 8 - extra_depth - 2 * depth) / 3;
         match a {
             Action::Navigate { dest, preserve_scroll } => {
                 let mut act = node(self, dest, "NAVIGATE")?;
@@ -120,11 +150,97 @@ impl<'d> Exporter<'d> {
             Action::Back => plain("BACK"),
             Action::CloseOverlay => plain("CLOSE"),
             Action::OpenUrl { url, .. } => Some(o(vec![("connectionType", e("URL")), ("connectionURL", s(url))])),
-            Action::SetVariable { .. } | Action::SetVariableMode { .. } | Action::Conditional { .. } => {
-                self.warn("variable and conditional prototype actions were left out");
-                None
+            Action::SetVariable { variable, value, expr } => {
+                let target = self.doc.variables.get_by_id(variable)?;
+                let id = self.var_ids.get(variable.as_str())?;
+                let data = match expr {
+                    Some(expr) => self.expression(expr, expression_levels)?,
+                    None => {
+                        let literal = match target.kind {
+                            VariableType::Boolean => VariableValue::Boolean(value.as_bool()?),
+                            VariableType::Number => VariableValue::Number(value.as_f64()?),
+                            VariableType::String => VariableValue::String(value.as_str()?.to_owned()),
+                            VariableType::Color => VariableValue::Color(super::Color::parse_css(value.as_str()?)?),
+                        };
+                        literal_data(&literal)?
+                    }
+                };
+                Some(o(vec![
+                    ("connectionType", e("SET_VARIABLE")),
+                    ("targetVariable", o(vec![("id", o(vec![("guid", guid(LAYERS, *id))]))])),
+                    ("targetVariableData", data),
+                ]))
             }
+            Action::SetVariableMode { collection, mode } => {
+                let set = self.set_ids.get(collection.as_str())?;
+                let mode = self.mode_ids.get(&(collection.as_str(), mode.as_str()))?;
+                Some(o(vec![
+                    ("connectionType", e("SET_VARIABLE_MODE")),
+                    ("targetVariableSetID", o(vec![("guid", guid(LAYERS, *set))])),
+                    ("targetVariableModeID", guid(AUX, *mode)),
+                ]))
+            }
+            Action::Conditional { blocks } if depth < MAX_ACTION_DEPTH => {
+                let mut encoded = Vec::new();
+                for block in blocks {
+                    // Dropping an unreadable condition would turn this branch into an else.
+                    let mut fields = Vec::new();
+                    if let Some(condition) = &block.condition {
+                        fields.push(("condition", self.expression(condition, expression_levels)?));
+                    }
+                    let actions = block.actions.iter().map(|action| self.action(action, it, depth + 1, extra_depth)).collect::<Option<Vec<_>>>()?;
+                    fields.push(("actions", arr(actions)));
+                    encoded.push(o(fields));
+                }
+                Some(o(vec![("connectionType", e("CONDITIONAL")), ("conditionalActions", arr(encoded))]))
+            }
+            Action::Conditional { .. } => None,
         }
+    }
+
+    /// Encode an expression within the remaining Kiwi operator nesting budget.
+    fn expression(&self, expr: &Expr, levels: usize) -> Option<Kv<'static>> {
+        match expr {
+            Expr::Value(VariableValue::Alias(id)) => self.expression_alias(id),
+            Expr::Value(literal) => literal_data(literal),
+            Expr::Op { op, args } if levels > 0 && (1..=64).contains(&args.len()) => {
+                let args = args.iter().map(|arg| self.expression(arg, levels - 1)).collect::<Option<Vec<_>>>()?;
+                let (function, resolved) = match op {
+                    ExprOp::Add => {
+                        let string = args.iter().any(|arg| arg.get("resolvedDataType").and_then(Kv::str) == Some("STRING"));
+                        ("ADDITION", if string { "STRING" } else { "FLOAT" })
+                    }
+                    ExprOp::Subtract => ("SUBTRACTION", "FLOAT"),
+                    ExprOp::Multiply => ("MULTIPLY", "FLOAT"),
+                    ExprOp::Divide => ("DIVIDE", "FLOAT"),
+                    ExprOp::Negate => ("NEGATE", "FLOAT"),
+                    ExprOp::Equals => ("EQUALS", "BOOLEAN"),
+                    ExprOp::NotEqual => ("NOT_EQUAL", "BOOLEAN"),
+                    ExprOp::Less => ("LESS_THAN", "BOOLEAN"),
+                    ExprOp::LessOrEqual => ("LESS_THAN_OR_EQUAL", "BOOLEAN"),
+                    ExprOp::Greater => ("GREATER_THAN", "BOOLEAN"),
+                    ExprOp::GreaterOrEqual => ("GREATER_THAN_OR_EQUAL", "BOOLEAN"),
+                    ExprOp::And => ("AND", "BOOLEAN"),
+                    ExprOp::Or => ("OR", "BOOLEAN"),
+                    ExprOp::Not => ("NOT", "BOOLEAN"),
+                };
+                Some(expression_data(function, resolved, args))
+            }
+            Expr::InMode { variable, mode } if levels > 0 => {
+                let var = self.doc.variables.get_by_id(variable)?;
+                let mode = self.mode_ids.get(&(var.collection.as_str(), mode.as_str()))?;
+                let args = vec![self.expression_alias(variable)?, variable_data("STRING", "STRING", ("textValue", s(&format!("{AUX}:{mode}"))))];
+                Some(expression_data("VAR_MODE_LOOKUP", super::common::resolved_type(var.kind), args))
+            }
+            Expr::Mode { .. } | Expr::Op { .. } | Expr::InMode { .. } => None,
+        }
+    }
+
+    /// Reference an exported variable by GUID and include its resolved type.
+    fn expression_alias(&self, variable: &str) -> Option<Kv<'static>> {
+        let var = self.doc.variables.get_by_id(variable)?;
+        let local = self.var_ids.get(variable)?;
+        Some(variable_data("ALIAS", super::common::resolved_type(var.kind), ("alias", o(vec![("guid", guid(LAYERS, *local))]))))
     }
 
     /// An interaction's transition on one of its actions.
@@ -174,4 +290,26 @@ impl<'d> Exporter<'d> {
             f.push(("easingFunction", arr(vec![fl(x1), fl(y1), fl(x2), fl(y2)])));
         }
     }
+}
+
+/// Wrap a literal, alias or expression in the Kiwi variable-data record.
+fn variable_data(kind: &'static str, resolved: &'static str, value: (&'static str, Kv<'static>)) -> Kv<'static> {
+    o(vec![("dataType", e(kind)), ("resolvedDataType", e(resolved)), ("value", o(vec![value]))])
+}
+
+/// Encode a finite, typed literal without variable references.
+fn literal_data(value: &VariableValue) -> Option<Kv<'static>> {
+    let (kind, field) = match value {
+        VariableValue::Boolean(v) => ("BOOLEAN", ("boolValue", b(*v))),
+        VariableValue::Number(v) if v.is_finite() => ("FLOAT", ("floatValue", fl(*v))),
+        VariableValue::String(v) => ("STRING", ("textValue", s(&v.replace('\0', "")))),
+        VariableValue::Color(v) => ("COLOR", ("colorValue", color(*v))),
+        _ => return None,
+    };
+    Some(variable_data(kind, kind, field))
+}
+
+/// Encode an operator and its ordered arguments with their result type.
+fn expression_data(function: &'static str, resolved: &'static str, args: Vec<Kv<'static>>) -> Kv<'static> {
+    variable_data("EXPRESSION", resolved, ("expressionValue", o(vec![("expressionFunction", e(function)), ("expressionArguments", arr(args))])))
 }

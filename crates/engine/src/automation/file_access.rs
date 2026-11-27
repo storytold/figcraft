@@ -127,6 +127,10 @@ const MAX_LINKS: u8 = 40;
 /// on the share of one of `roots` goes on to the usual check. A path that can't be made absolute
 /// is refused as well, rather than left to what comes next.
 fn refused_unresolved(path: &Path, roots: &[PathBuf]) -> Option<Unresolved> {
+    // Win32 lookups trim a trailing period or space from a name, but not always from one in the middle of a path: refused as given.
+    if has_trimmed_name(path) {
+        return Some(Unresolved::Linked);
+    }
     // Made absolute without looking at the disk (on Windows `GetFullPathNameW`, which also turns a
     // bare device name such as `NUL` into `\\.\NUL`, as opening it would). Like opening, it takes
     // `..` by name, so `link\..\x` is `x` and never goes through the link.
@@ -180,6 +184,10 @@ fn nothing_there(e: &std::io::Error) -> bool {
 ///   the way is opened in turn while the path is resolved, and the device behind a name such as
 ///   `LPT1` can be a printer on another computer.
 fn refused_spelling(p: &str, roots: &[PathBuf]) -> Option<Refused> {
+    // A native NT name (`\Device\Mup\server\share`) has no prefix for `std` or `craft_docpath`, yet the system follows it to wherever it names.
+    if is_native_name(Path::new(p)) {
+        return Some(Refused::Device);
+    }
     match craft_docpath::resolve(p, None) {
         // With a root passed as the document path (what a link would be relative to), a path on
         // that root's share is allowed.
@@ -199,7 +207,11 @@ fn is_volume(p: &str) -> bool {
     let (Some(""), Some(""), Some("?" | "."), Some(volume)) = (names.next(), names.next(), names.next(), names.next()) else {
         return false;
     };
-    volume.get(..7).is_some_and(|v| v.eq_ignore_ascii_case("Volume{")) && volume.ends_with('}')
+    let bytes = volume.as_bytes();
+    bytes.len() == 44
+        && volume.get(..7).is_some_and(|v| v.eq_ignore_ascii_case("Volume{"))
+        && volume.ends_with('}')
+        && bytes[7..43].iter().enumerate().all(|(i, b)| if matches!(i, 8 | 13 | 18 | 23) { *b == b'-' } else { b.is_ascii_hexdigit() })
 }
 
 /// Whether a link on the way to `abs` (an absolute path) leads to a path [`refused_spelling`]
@@ -224,11 +236,36 @@ fn link_refused(abs: &Path, roots: &[PathBuf], links: u8, look: &dyn Fn(&Path) -
             Entry::Link(target) => target,
         };
         let (Some(links), Some(target)) = (links.checked_sub(1), target) else { return true };
+        // Judged as written too: joined onto the link's folder, a rooted target such as `\Device\Mup\x` would keep that folder's drive,
+        // and Win32 trims a trailing period or space that the kernel follows as it is.
+        if refused_spelling(&target.to_string_lossy(), roots).is_some() || is_rooted_without_drive(&target) || has_trimmed_name(&target) {
+            return true;
+        }
         // A relative target is relative to the link's folder; an absolute one replaces it.
         let next = lexical(&at.parent().unwrap_or(&at).join(target).join(rest.as_path()));
         return refused_spelling(&next.to_string_lossy(), roots).is_some() || link_refused(&next, roots, links, look);
     }
     false
+}
+
+/// Whether `path` is a native NT name (`\Device\…`, `\DosDevices\…`, `\GLOBAL??\…`, `\??\…`, `\Sessions\…`, `\GLOBALROOT\…`), which a link
+/// may hold: no prefix for `std`, yet the system follows it to wherever it names.
+fn is_native_name(path: &Path) -> bool {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    [&br"\Device\"[..], &br"\DosDevices\"[..], &br"\GLOBAL??\"[..], &br"\??\"[..], &br"\Sessions\"[..], &br"\GLOBALROOT\"[..]].iter().any(|p| {
+        bytes.get(..p.len() - 1).is_some_and(|b| b.eq_ignore_ascii_case(&p[..p.len() - 1])) && matches!(bytes.get(p.len() - 1), None | Some(b'\\'))
+    })
+}
+
+/// Whether a link's target starts with one separator and no drive (`\RPC Control\x`, `\BaseNamedObjects\x`, `\work`): `std` sees no
+/// prefix in it, yet the system reads it in its own object namespace or on the link's drive, and may follow it to wherever it names.
+fn is_rooted_without_drive(path: &Path) -> bool {
+    matches!(path.as_os_str().as_encoded_bytes(), [b'\\', rest @ ..] if rest.first() != Some(&b'\\'))
+}
+
+/// Whether any plain name in `path` ends in a period or a space, which Win32 path handling trims before it looks the name up.
+fn has_trimmed_name(path: &Path) -> bool {
+    path.components().any(|c| matches!(c, Component::Normal(n) if n.as_encoded_bytes().last().is_some_and(|b| matches!(b, b'.' | b' '))))
 }
 
 /// `p` with its `.` and `..` taken by name, as Windows takes them.
@@ -273,9 +310,24 @@ pub(crate) fn within_app_folder(path: &Path, folder: &Path) -> bool {
     matches!((std::fs::canonicalize(path), std::fs::canonicalize(folder)), (Ok(p), Ok(f)) if p.starts_with(&f))
 }
 
+/// Whether `a` and `b` are the same file. Comparing opens both, so while roots confine this thread a
+/// path that resolving would not be allowed to open (on another computer, or a device: see
+/// [`refused_unresolved`]) is never opened. Whether it is the same file can't then be told, and the
+/// callers guard against overwriting a file through another name for it, so it counts as the same:
+/// the guard keeps asking (a path like that can't be written anyway). A local path outside the
+/// roots is compared.
 pub fn same_file(a: impl AsRef<Path>, b: impl AsRef<Path>) -> bool {
     let (a, b) = (a.as_ref(), b.as_ref());
-    a == b || same_file::is_same_file(a, b).unwrap_or(false)
+    if a == b {
+        return true;
+    }
+    if let Some(scope) = current() {
+        let roots = [scope.read.as_slice(), scope.write.as_slice()].concat();
+        if cfg!(windows) && [a, b].into_iter().any(|p| refused_unresolved(p, &roots).is_some()) {
+            return true;
+        }
+    }
+    same_file::is_same_file(a, b).unwrap_or(false)
 }
 
 /// `p` without Windows' `\\?\` prefix, for messages.
@@ -343,6 +395,12 @@ fn device_name(n: &str) -> bool {
         || ((stem.starts_with("COM") || stem.starts_with("LPT"))
             && stem.chars().count() == 4
             && stem.chars().last().is_some_and(|c| c.is_ascii_digit() || matches!(c, '¹' | '²' | '³')))
+}
+
+/// Prefix Windows device-name components of a generated export path with `_`.
+/// Apply after character filtering and suffix construction, so a safe suffix stays unchanged.
+pub fn escape_device_names(path: &str) -> String {
+    path.split('/').map(|name| if device_name(name) { format!("_{name}") } else { name.to_string() }).collect::<Vec<_>>().join("/")
 }
 
 thread_local! {

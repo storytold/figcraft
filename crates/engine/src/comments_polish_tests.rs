@@ -274,6 +274,21 @@ fn links_open_and_zoom_to_a_thread() {
 }
 
 #[test]
+fn zoom_to_spread_out_comments_keeps_both_pins_in_view() {
+    let mut s = Session::new();
+    let a = add(&mut s, 0.0, 0.0, "Left", "Sam");
+    let b = add(&mut s, 800.0, 0.0, "Right", "Sam");
+    s.execute("view.set", &json!({"zoom": 1, "cx": 400, "cy": 0, "vw": 1200, "vh": 800})).unwrap();
+
+    s.execute("comment.zoom", &json!({"ids": [a, b]})).unwrap();
+
+    let v = &s.ds().unwrap().view;
+    let (left, _) = v.origin();
+    let right = left + v.vw / v.zoom;
+    assert!(left <= 0.0 && right >= 800.0, "both pins should fit in the visible range {left}..{right}");
+}
+
+#[test]
 fn next_steps_through_the_list_across_pages() {
     let mut s = Session::new();
     let a = add(&mut s, 0.0, 0.0, "One", "Sam");
