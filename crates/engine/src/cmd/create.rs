@@ -266,6 +266,38 @@ fn vector_scale(width: Option<f64>, height: Option<f64>, bw: f64, bh: f64, what:
     })
 }
 
+/// A fixed-size text (auto-resize `none`/`truncate` in `props`) is measured as auto-height
+/// before `props` are applied, so the measured height overwrites the top-level `height`. Put
+/// the top-level `height` back through the normal command path, unless `props` set a height
+/// of their own (which wins).
+fn keep_fixed_text_height(cmd: &str, doc: &mut Document, nid: NodeId, p: &Value) -> Result<()> {
+    if let Some(h) = num(p, "height")
+        && get(p, "props").and_then(Value::as_object).is_none_or(|o| !o.contains_key("height") && !o.contains_key("h"))
+        && doc
+            .node(nid)
+            .is_some_and(|n| matches!(&n.kind, NodeKind::Text(t) if matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate)))
+    {
+        let mut fixed = serde_json::Map::new();
+        fixed.insert("height".into(), json!(h));
+        // With the proportions locked, `apply` would treat a lone height as a linked resize and
+        // rescale the width; pin the current width so the box keeps it. The width key does not
+        // change a fixed text's mode (`fix_size` leaves None/Truncate alone).
+        if let Some(n) = doc.node(nid)
+            && n.constrain_proportions
+            && n.width.is_finite()
+        {
+            fixed.insert("width".into(), json!(n.width));
+        }
+        // The width pin also re-fixes the horizontal sizing; keep what the props asked for.
+        let sizing_h = doc.node(nid).map(|n| n.child_layout.sizing_h);
+        super::props::apply(cmd, doc, nid, &fixed)?;
+        if let Some(sizing_h) = sizing_h {
+            doc.get_mut(nid)?.child_layout.sizing_h = sizing_h;
+        }
+    }
+    Ok(())
+}
+
 pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "node.create";
     let t = string(p, "type").ok_or_else(|| bad(cmd, "`type` is required"))?;
@@ -392,6 +424,7 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    keep_fixed_text_height(cmd, doc, nid, p)?;
     // A `fontStyle` the family lacks draws in its nearest face, the same as `node.set` says.
     let warnings = match get(p, "props") {
         Some(Value::Object(props)) if doc.node(nid).is_some_and(|n| n.kind.text().is_some()) => super::edit::font_style_warnings(doc, &[nid], props),
