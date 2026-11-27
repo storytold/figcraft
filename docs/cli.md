@@ -160,6 +160,10 @@ page 1 "Screens": 380 nodes, 4 top-level
   `K = 1 − max(R, G, B)`, `C = (1 − R − K) / (1 − K)` (M and Y alike): DeviceCMYK without an
   output intent (no CMYK profile ships with FigCraft), so proof against your printer's profile.
 
+For `--node`, a layer ID can refer to any page. For a layer name, the CLI looks for a
+case-sensitive exact match on the chosen page, then an exact match elsewhere in the document.
+If neither exists, it uses the first case-insensitive substring match on the chosen page.
+
 ```sh
 figcraft-cli export app.figcraft -o exports/ --scale 2
 figcraft-cli export app.figcraft -o hero.svg --node "Hero"
