@@ -336,7 +336,7 @@ pub fn shortcut(id: &str) -> Option<&'static str> {
 pub const HEADLESS: &[(&str, &str, &str, &str)] = &[
     ("edit.copyAsSvg", "partial", "os", "`file.exportSvg` writes the same SVG to a file; the clipboard is the OS's"),
     ("edit.copyAsPng", "partial", "os", "`file.export` writes the PNG to a file; the clipboard is the OS's"),
-    ("edit.copyAsCss", "no", "engine-gap", "the CSS comes from the engine's codegen, which no command exposes yet"),
+    ("edit.copyAsCss", "partial", "os", "`inspect.code` with `language: css` returns the same CSS; the clipboard is the OS's"),
     ("edit.copyAsText", "no", "os", "puts the selected layers' text on the OS clipboard"),
     ("edit.copyLink", "no", "os", "puts a `figcraft://` link on the OS clipboard"),
 ];
