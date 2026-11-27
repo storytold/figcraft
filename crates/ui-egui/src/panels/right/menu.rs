@@ -44,22 +44,92 @@ pub(crate) fn preview_blend(app: &mut FigApp, ctx: &egui::Context, ids: &[NodeId
 /// (else its 600 px default area width) and keeps the size measured; rows ([`menu_row`]) take the
 /// larger of that width and their content, so the menu fits its content. Chain `.width(w)` for a
 /// menu at least `w` wide.
-pub fn menu_popup(anchor: &egui::Response) -> egui::Popup<'static> {
-    egui::Popup::menu(anchor).width(anchor.rect.width().max(MENU_MIN_W)).style(menu_style)
+pub fn menu_popup(anchor: &egui::Response) -> Menu {
+    Menu(egui::Popup::menu(anchor).width(anchor.rect.width().max(MENU_MIN_W)).style(menu_style))
 }
 
 /// A context menu (secondary click on `resp`) sized like [`menu_popup`].
-pub fn context_popup(resp: &egui::Response) -> egui::Popup<'static> {
-    egui::Popup::context_menu(resp).width(MENU_MIN_W).style(menu_style)
+pub fn context_popup(resp: &egui::Response) -> Menu {
+    Menu(egui::Popup::context_menu(resp).width(MENU_MIN_W).style(menu_style))
 }
 
 /// A context menu for a property row: a secondary click anywhere over `rect` opens it, even over
 /// the row's fields (which would otherwise take the click), like the incumbent's row menus.
-pub(super) fn row_context_menu(ui: &Ui, rect: Rect, id: Id) -> egui::Popup<'static> {
+pub(super) fn row_context_menu(ui: &Ui, rect: Rect, id: Id) -> Menu {
     let resp = ui.interact(rect, id, Sense::hover());
     let open = ui.rect_contains_pointer(rect) && ui.input(|i| i.pointer.secondary_clicked());
     let at_pointer = egui::Popup::menu(&resp).width(MENU_MIN_W).style(menu_style).at_pointer_fixed();
-    at_pointer.open_memory(open.then_some(egui::SetOpenCommand::Bool(true)))
+    Menu(at_pointer.open_memory(open.then_some(egui::SetOpenCommand::Bool(true))))
+}
+
+/// The gap a menu taller than the window keeps from the window's top and bottom edges.
+const MENU_WINDOW_GAP: f32 = 8.0;
+
+/// A popup menu ([`menu_popup`], [`context_popup`]) whose rows scroll when it would be taller
+/// than the window. egui keeps a popup inside the window by moving it, but one taller than the
+/// window runs off its edge, and rows past it can't be reached.
+#[must_use]
+pub struct Menu(egui::Popup<'static>);
+
+impl Menu {
+    /// At least `width` wide.
+    pub fn width(self, width: f32) -> Self {
+        Self(self.0.width(width))
+    }
+
+    /// Open and closed under `id` instead of the anchor's.
+    pub fn id(self, id: Id) -> Self {
+        Self(self.0.id(id))
+    }
+
+    pub fn close_behavior(self, behavior: egui::PopupCloseBehavior) -> Self {
+        Self(self.0.close_behavior(behavior))
+    }
+
+    /// Where the menu may go when its first placement doesn't fit, in order.
+    pub fn align_alternatives(self, alternatives: &'static [egui::RectAlign]) -> Self {
+        Self(self.0.align_alternatives(alternatives))
+    }
+
+    /// Show the menu while it is open. Its rows `content` scroll with the wheel or the scroll bar
+    /// once they were taller than the window last frame, as the main menu's do (#2217); a menu
+    /// that fits is laid out as it is, so it still grows with its rows (a scroll area in a popup
+    /// would keep the popup's last height). A click on the scroll bar scrolls and leaves the menu
+    /// open. The rows have the same ids scrolling or not, so the row the keyboard is on keeps it
+    /// when the window's height changes which of the two the menu does.
+    pub fn show<R>(self, content: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
+        let rows = self.0.get_id().with("menu_rows");
+        let bar_key = rows.with("scroll_bar");
+        let ctx = self.0.ctx().clone();
+        let bar_clicked = ctx.data(|d| d.get_temp::<Id>(bar_key)).is_some_and(|bar| ctx.interaction_snapshot(|i| i.clicked == Some(bar)));
+        let popup = if bar_clicked { self.0.close_behavior(egui::PopupCloseBehavior::IgnoreClicks) } else { self.0 };
+        let rows_ui = egui::UiBuilder::new().scope_id(rows);
+        popup.show(|ui| {
+            let window = ui.ctx().content_rect().height();
+            let max_height = (window - ui.style().spacing.menu_margin.sum().y - 2.0 * MENU_WINDOW_GAP).max(0.0);
+            let rows_height = ui.scope_id().with("menu_rows_height");
+            let last = ui.data(|d| d.get_temp::<f32>(rows_height)).unwrap_or(0.0);
+            let (inner, height) = if last > max_height {
+                let out = egui::ScrollArea::vertical()
+                    .id_salt("menu_rows")
+                    .max_height(max_height)
+                    .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::SCROLL_BAR)
+                    .show(ui, |ui| ui.scope_builder(rows_ui, content).inner);
+                // egui's id for a scroll area's vertical bar (a test in `menu_scroll_tests` clicks it).
+                ui.data_mut(|d| d.insert_temp(bar_key, out.id.with(1_usize)));
+                (out.inner, out.content_size.y)
+            } else {
+                let inner = ui.scope_builder(rows_ui, content).inner;
+                let height = ui.min_rect().height();
+                if height > max_height {
+                    ui.ctx().request_repaint();
+                }
+                (inner, height)
+            };
+            ui.data_mut(|d| d.insert_temp(rows_height, height));
+            inner
+        })
+    }
 }
 
 pub fn menu_item(ui: &mut Ui, label: &str, shortcut: &str) -> bool {

@@ -1,6 +1,7 @@
-//! Arrow keys in the layers panel once a row has been clicked: up/down through the rows (Shift
-//! extends), left/right to collapse, expand, and go to the parent or first child; a press on the
-//! canvas gives arrows back to nudging. Delete after a click in the Pages list deletes the page.
+//! Arrow keys in the layers panel once F6 has put the keyboard on its rows: up/down through the
+//! rows (Shift extends), left/right to collapse, expand, and go to the parent or first child. After
+//! a click on a row the arrows nudge the layer, as on the canvas. Delete after a click in the Pages
+//! list deletes the page.
 
 use egui::{Event, Key, Modifiers, Pos2, pos2, vec2};
 use figcraft_doc::NodeId;
@@ -46,10 +47,29 @@ fn click_row(u: &mut Ui, id: NodeId) {
     assert_eq!(sel(u), vec![id]);
 }
 
+/// Presses F6 until the keyboard is on the layers panel, as a keyboard user gets there.
+fn keyboard_into_the_layers(u: &mut Ui) {
+    for _ in 0..crate::a11y::Region::ALL.len() {
+        key(u, Key::F6, false);
+        u.frame(vec![]);
+        if u.app.ui.nav.region == crate::a11y::Region::Layers {
+            return;
+        }
+    }
+    panic!("F6 never reached the layers panel");
+}
+
+/// Selects `id` and moves the keyboard onto its row with F6.
+fn keyboard_to_the_row(u: &mut Ui, id: NodeId) {
+    u.app.run("select.set", json!({"ids": [id]}));
+    u.frame(vec![]);
+    keyboard_into_the_layers(u);
+}
+
 #[test]
 fn up_and_down_walk_the_rows_and_shift_extends() {
     let (mut u, a, frame, _, c) = setup();
-    click_row(&mut u, c);
+    keyboard_to_the_row(&mut u, c);
     key(&mut u, Key::ArrowDown, false);
     assert_eq!(sel(&u), vec![frame]);
     key(&mut u, Key::ArrowDown, false);
@@ -103,6 +123,7 @@ fn a_keyboard_shift_range_keeps_an_anchor_covered_by_a_selected_frame() {
     let mut want = vec![rect4, frame1];
     want.sort();
     assert_eq!(got, want, "the pointer range keeps the frame");
+    keyboard_into_the_layers(&mut u);
     // Rows: Frame 2, Rect 4, Frame 1, Rect 3, Rect 2. Shift+Down runs from Rect 2 (the anchor).
     key(&mut u, Key::ArrowDown, true);
     let mut got = sel(&u);
@@ -115,7 +136,7 @@ fn a_keyboard_shift_range_keeps_an_anchor_covered_by_a_selected_frame() {
 #[test]
 fn left_and_right_open_close_and_move_between_levels() {
     let (mut u, _, frame, child, _) = setup();
-    click_row(&mut u, frame);
+    keyboard_to_the_row(&mut u, frame);
     key(&mut u, Key::ArrowRight, false);
     assert!(u.app.ui.expanded.contains(&frame), "Right opens a closed row");
     assert_eq!(sel(&u), vec![frame]);
@@ -129,19 +150,36 @@ fn left_and_right_open_close_and_move_between_levels() {
 }
 
 #[test]
-fn a_canvas_press_gives_arrows_back_to_nudging() {
+fn a_clicked_row_leaves_the_arrows_to_the_canvas() {
     let (mut u, _, _, _, c) = setup();
     click_row(&mut u, c);
-    assert!(u.app.ui.layers_focus);
-    // Press on empty canvas (deselects), then select c from the canvas side and nudge it.
-    let p = pos2(900.0, 700.0);
-    u.button(p, true);
-    u.button(p, false);
-    assert!(!u.app.ui.layers_focus);
-    u.app.run("select.set", json!({"ids": [c]}));
     key(&mut u, Key::ArrowRight, false);
+    assert_eq!(sel(&u), vec![c]);
     let doc = u.app.session.doc().unwrap();
     assert_eq!(doc.node(c).unwrap().transform.translation().x, 201.0);
+}
+
+#[test]
+fn down_on_a_clicked_row_moves_it_one_place_in_a_vertical_auto_layout() {
+    let mut s = Session::new();
+    let column = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 200, "name": "Column"})).unwrap());
+    let rows: Vec<NodeId> = (0..3)
+        .map(|i| id(s.execute("shape.rectangle", &json!({"x": 0, "y": i * 30, "width": 80, "height": 20, "parent": column})).unwrap()))
+        .collect();
+    s.execute("layout.add", &json!({"ids": [column], "direction": "vertical"})).unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.insert(column);
+    u.frame(vec![]);
+    click_row(&mut u, rows[1]);
+    key(&mut u, Key::ArrowDown, false);
+    let order = u.app.session.doc().unwrap().node(column).unwrap().children.clone();
+    assert_eq!(order, [rows[0], rows[2], rows[1]]);
+    assert_eq!(sel(&u), vec![rows[1]]);
+    key(&mut u, Key::ArrowUp, false);
+    key(&mut u, Key::ArrowUp, false);
+    let order = u.app.session.doc().unwrap().node(column).unwrap().children.clone();
+    assert_eq!(order, [rows[1], rows[0], rows[2]]);
 }
 
 /// The middle of `page`'s row in the Pages list, found by clicking down the list until it opens;

@@ -404,7 +404,8 @@ pub fn playground_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: Nod
                 widgets::label(ui, name, t.text_secondary);
                 let preferred: Vec<NodeId> = p["preferred"].as_array().into_iter().flatten().filter_map(figcraft_engine::params::id_of).collect();
                 let w = ui.available_width().max(60.0);
-                if let Some(c) = crate::component_panel::swap_dropdown(ui, doc, figcraft_engine::params::id_of(value), &preferred, &comps, w, name).1
+                if let Some(c) =
+                    crate::component_panel::swap_dropdown(ui, doc, figcraft_engine::params::id_of(value), false, &preferred, &comps, w, name).1
                 {
                     set = Some((name.to_string(), json!(c.0)));
                 }

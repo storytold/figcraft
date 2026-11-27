@@ -819,9 +819,10 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   it is larger; the choice is kept. In the browser the interface always follows the browser's zoom.
 - `pref.autoSave {on?}`: files that have a path save themselves a few seconds after they change
   (off by default; the desktop app's timer does it, so scripts still call `file.save`).
-- `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of in a new file
-  (off by default; files named on the command line still open, and `--control` starts in a new
-  file anyway, so control callers have a document).
+- `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of reopening the
+  files open when it last quit (off by default; with nothing to reopen it starts on the Home screen
+  too; files named on the command line still open, and with nothing open `--control` starts in a new
+  file, so control callers have a document).
 - `pref.language {language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|sv|vi|zh-Hans|zh-Hant|…}`: the app's interface language, applied live ("system":
   the OS or browser language; a language without a catalog shows English). Command ids, labels and
   every result stay English.
@@ -1086,6 +1087,8 @@ name and sets them this way);
   same library, components the other file publishes as a library are used from it (and that
   library is enabled when the other file is saved), and other mains stay behind: the instance shows
   a missing main (`component.restoreMain` makes it a main here).
+  A main component copied from a file that publishes it as a library pastes as an instance of
+  it from that library (enabled the same way); a main that library doesn't offer pastes as a copy.
 
 ### Team libraries
 
@@ -1138,7 +1141,8 @@ most when it can't be reached).
   the instance itself (its layers follow the main's constraints) or edit the main.
 - **Variants**: `instance.setProperties {ids?, properties}` switching variants keeps an override
   where the layer's name path matches and both variants had the same value for that property;
-  text layers keep all theirs. The default variant (`instance.create` with a set, the Assets
+  text layers keep all theirs, and a text layer the other variant nests elsewhere is matched by
+  its name when one layer on each side has it. The default variant (`instance.create` with a set, the Assets
   thumbnail) is the one in the set's top-left corner; `component.editProperty {name, default}`
   moves the chosen variant there, `{name, index}` reorders variant properties (the variants'
   names follow). `component.properties` on a set reports `conflicts`: variants sharing one
@@ -2224,7 +2228,8 @@ turned off 0°.
   `cmd` while resizing a frame ignores its children's constraints (they stay where they are) and,
   as in every drag, turns snapping off. Moves snap to edges, centres and equal spacing (the gaps
   show in `tool.overlay.guides` with labels); with the pixel grid on, moves and resizes land on
-  whole pixels.
+  whole pixels. Frames, sections, components and instances always land on whole pixels of their
+  parent, with the pixel grid off too and after a snap to a layer off the grid.
 
 Tool failures come back as results with `isError: true` and a message; protocol problems (unknown
 tool, malformed JSON, wrong parameter types) are JSON-RPC errors. Nothing crashes the server.

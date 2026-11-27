@@ -107,6 +107,7 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     ds.on_disk = on_disk.filter(|_| native);
     s.docs.push(ds);
     s.active = s.docs.len() - 1;
+    s.restore_view();
     let mut out = json!({"index": s.active, "summary": summary});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
     Ok(out)

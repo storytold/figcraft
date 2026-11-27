@@ -344,6 +344,14 @@ fn main() -> eframe::Result {
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
     session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
+    // The preferences first: a file named on the command line opens where it was left and goes to
+    // the top of the recent files, and they hold the online files a recovered document may be one of.
+    let recovery = recovery::Shared::default();
+    let svc = services::Desktop::load(recovery.clone());
+    svc.follow_system_dark(wake(&ctx_slot));
+    if let Some(prefs) = svc.prefs.clone() {
+        session.prefs = prefs;
+    }
     // A file that won't open is said in the window too: it may have been double-clicked.
     let mut failed_open = None;
     for f in &args.files {
@@ -353,16 +361,9 @@ fn main() -> eframe::Result {
             failed_open = Some(format!("{name}: {e}"));
         }
     }
-    let opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
+    let mut opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
     // Documents a crashed or killed run left unsaved come back; this run keeps its own copies.
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
-    // The preferences first: they hold the online files a recovered document may be one of.
-    let recovery = recovery::Shared::default();
-    let svc = services::Desktop::load(recovery.clone());
-    svc.follow_system_dark(wake(&ctx_slot));
-    if let Some(prefs) = svc.prefs.clone() {
-        session.prefs = prefs;
-    }
     let recovered = recovery_root.as_deref().map(|r| recovery::recover_all(r, &mut session)).unwrap_or_default();
     let mut copies = recovery_root.as_deref().and_then(recovery::Recovery::start);
     // Copies of online files stay until their files arrive from their servers.
@@ -380,7 +381,20 @@ fn main() -> eframe::Result {
         session.invite_links_startup();
     }
     let first_run = svc.prefs.is_none() && args.join.is_none();
-    if session.docs.is_empty() && opens_new_file(first_run, session.prefs.start_on_home, port.is_some()) {
+    if reopens_files(first_run, session.prefs.start_on_home) {
+        let before: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
+        for (path, e) in session.reopen_files() {
+            log::error!("{path}: {e}");
+            let name = std::path::Path::new(&path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+            failed_open = Some(format!("{name}: {e}"));
+        }
+        // A file named on the command line stays in front.
+        if let Some(i) = opened.last().and_then(|uid| session.docs.iter().position(|d| d.uid == *uid)) {
+            session.active = i;
+        }
+        opened.extend(session.docs.iter().map(|d| d.uid).filter(|u| !before.contains(u)));
+    }
+    if session.docs.is_empty() && opens_new_file(first_run, port.is_some()) {
         let _ = session.execute("file.new", &json!({}));
     }
     // The interface language from the first frame on, and for the message when the window can't
@@ -395,7 +409,8 @@ fn main() -> eframe::Result {
     }
     fig.automation_roots = roots;
     fig.ui.home = false;
-    // Files named on the command line are the user's too: their missing fonts are listed.
+    // Files named on the command line or reopened are the user's too: their missing fonts are
+    // listed.
     fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
     if let Some(message) = failed_open {
@@ -516,12 +531,17 @@ fn main() -> eframe::Result {
     graphics.finish(result, frames, port.is_some())
 }
 
-/// With nothing to open, whether the window starts in a new file rather than on the home screen.
-/// A first run (no settings kept yet) shows the home screen's tips and templates, and later runs
-/// start in a new file unless the preference asks for Home, which `--control` overrides: its
-/// callers expect a document to act on.
-fn opens_new_file(first_run: bool, start_on_home: bool, control: bool) -> bool {
-    !first_run && (!start_on_home || control)
+/// Whether the files open when the app last quit open again: not on a first run (no settings kept
+/// yet), nor when the preference asks for the Home screen.
+fn reopens_files(first_run: bool, start_on_home: bool) -> bool {
+    !first_run && !start_on_home
+}
+
+/// With nothing open, whether the window starts in a new file rather than on the home screen: only
+/// with a control port open (`--control`), whose callers expect a document to act on. A first run
+/// shows the home screen's tips and templates whatever the port.
+fn opens_new_file(first_run: bool, control: bool) -> bool {
+    !first_run && control
 }
 
 /// The title bar FigCraft starts with, decided by the shared craft-window crate so every Craft app
@@ -617,14 +637,20 @@ mod title_bar_tests {
 
 #[cfg(test)]
 mod start_tests {
-    use super::opens_new_file;
+    use super::{opens_new_file, reopens_files};
 
     #[test]
-    fn the_home_preference_starts_on_home_except_for_control_callers() {
-        assert!(opens_new_file(false, false, false), "a new file by default");
-        assert!(!opens_new_file(false, true, false), "Home when the preference asks");
-        assert!(opens_new_file(false, true, true), "--control still starts with a document");
-        assert!(!opens_new_file(true, false, false), "a first run shows the home screen");
+    fn the_last_files_reopen_unless_the_home_preference_asks_or_on_a_first_run() {
+        assert!(reopens_files(false, false), "by default");
+        assert!(!reopens_files(false, true), "Home when the preference asks");
+        assert!(!reopens_files(true, false), "a first run has nothing to reopen");
+    }
+
+    #[test]
+    fn with_nothing_open_only_control_callers_start_in_a_new_file() {
+        assert!(!opens_new_file(false, false), "the home screen, not an empty file");
+        assert!(opens_new_file(false, true), "--control starts with a document");
+        assert!(!opens_new_file(true, true), "a first run shows the home screen");
     }
 }
 
