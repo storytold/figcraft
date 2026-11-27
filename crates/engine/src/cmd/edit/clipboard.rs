@@ -258,6 +258,7 @@ fn paste_layers(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>, as_vari
         {
             let instance = crate::components::create_instance(doc, *root, parent, 0.0, 0.0)?;
             doc.get_mut(instance)?.transform = doc.world_transform(parent).inverse() * shift * n.transform;
+            keep_a_cropped_images_proportions(doc, instance, parent);
             out.push(instance);
             continue;
         }
@@ -271,7 +272,9 @@ fn paste_layers(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>, as_vari
         if let Some(r) = nodes.first_mut() {
             r.transform = doc.world_transform(into).inverse() * shift * r.transform;
         }
-        out.push(doc.paste_nodes(&nodes, &map, *root, into, None)?);
+        let pasted = doc.paste_nodes(&nodes, &map, *root, into, None)?;
+        keep_a_cropped_images_proportions(doc, pasted, into);
+        out.push(pasted);
         all.extend(map);
     }
     if into_set {
@@ -286,6 +289,24 @@ fn paste_layers(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>, as_vari
     }
     crate::library::count_inserted(doc, &out);
     Ok(out)
+}
+
+/// Lock the aspect ratio of a layer pasted into an auto layout frame when it shows an image cropped
+/// to it and fills one axis while fixed on the other, so layout can't squash the image.
+fn keep_a_cropped_images_proportions(doc: &mut Document, pasted: NodeId, parent: NodeId) {
+    use figcraft_doc::Sizing;
+    if doc.node(parent).is_none_or(|p| p.layout.is_none()) {
+        return;
+    }
+    let Ok(n) = doc.get_mut(pasted) else { return };
+    let cropped = n
+        .fills
+        .iter()
+        .any(|f| f.visible && matches!(&f.kind, figcraft_color::PaintKind::Image(i) if i.scale_mode == figcraft_color::ImageScaleMode::Crop));
+    let sizing = (n.child_layout.sizing_h, n.child_layout.sizing_v);
+    if cropped && matches!(sizing, (Sizing::Fill, Sizing::Fixed) | (Sizing::Fixed, Sizing::Fill)) {
+        n.constrain_proportions = true;
+    }
 }
 
 pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
