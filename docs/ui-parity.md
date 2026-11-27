@@ -148,7 +148,7 @@ in the table. `crates/ui-egui/src/shortcut_keys_tests.rs` drives the keys a look
 | Bound on other keys (documented conflict) | 1 | Run last plugin: the documentation also gives Ctrl+Alt+P to pixel preview on Windows; the plugin takes Ctrl+Alt+Shift+P there |
 | Missing | 0 | moving the rotation origin (Alt+R, `transform.rotationOrigin`) and placing an object with Enter after choosing its tool (`tool.place`) were the last two |
 | Documented keys a platform keeps | 2 | Ctrl+Space (Windows/Linux keyboard box selection) switches some CJK input methods; F6 goes to a browser's address bar in the web build |
-| Undocumented bindings pinned | 58 | of which Cmd/Ctrl+W, Cmd/Ctrl+N and Ctrl+Tab are taken by browsers (web build) and Ctrl+Alt+T / Ctrl+Alt+L by some Linux desktops |
+| Undocumented bindings pinned | 59 | of which Cmd/Ctrl+W, Cmd/Ctrl+N and Ctrl+Tab are taken by browsers (web build) and Ctrl+Alt+T / Ctrl+Alt+L by some Linux desktops |
 
 - **Newly bound:** A for the Frame tool, Shift+' for the pixel grid (Cmd+' kept: the articles
   disagree), Alt+Cmd+\ / Ctrl+Alt+\ for others' cursors (`view.multiplayerCursors`, new), Ctrl+F6
