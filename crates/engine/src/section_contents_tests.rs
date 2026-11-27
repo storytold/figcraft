@@ -61,6 +61,26 @@ fn hidden_contents_skip_rendering_and_hit_testing() {
 }
 
 #[test]
+fn hiding_nested_sections_selects_the_outermost_target() {
+    let mut s = Session::new();
+    let outer = section(&mut s, 0.0, 0.0, 200.0, 200.0);
+    let inner = section(&mut s, 0.0, 0.0, 100.0, 100.0);
+    s.execute("node.reparent", &json!({"ids": [inner], "parent": outer})).unwrap();
+    let child = id(s.execute("shape.rectangle", &json!({"x": 20, "y": 20, "width": 30, "height": 30, "parent": inner})).unwrap());
+
+    s.execute("section.toggleContents", &json!({"ids": [outer], "hidden": true})).unwrap();
+    s.execute("select.set", &json!({"ids": [child]})).unwrap();
+    s.execute("section.toggleContents", &json!({"ids": [inner], "hidden": true})).unwrap();
+    assert_eq!(s.selection(), vec![inner], "the outer section was outside this hide request");
+
+    s.execute("section.toggleContents", &json!({"ids": [outer, inner], "hidden": false})).unwrap();
+    s.execute("select.set", &json!({"ids": [child]})).unwrap();
+    s.execute("section.toggleContents", &json!({"ids": [inner, outer], "hidden": true})).unwrap();
+    assert_eq!(s.selection(), vec![outer]);
+    assert!([inner, outer].iter().all(|id| s.doc().unwrap().node(*id).unwrap().hides_contents()));
+}
+
+#[test]
 fn wrap_in_new_section() {
     let mut s = Session::new();
     let a = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());

@@ -23,7 +23,7 @@ struct Ui {
 impl Ui {
     fn new() -> Self {
         let app = FigApp::new(Session::new(), Box::new(NoServices));
-        let mut u = Self { ctx: egui::Context::default(), app, time: 0.0 };
+        let mut u = Self { ctx: crate::framework::headless_context(), app, time: 0.0 };
         for _ in 0..3 {
             u.frame(vec![]);
         }
@@ -34,6 +34,7 @@ impl Ui {
         self.time += 1.0 / 60.0;
         let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
     }

@@ -120,6 +120,37 @@ fn image_presets_apply_combine_and_reset() {
 }
 
 #[test]
+fn image_adjust_edits_the_shared_character_fill() {
+    let mut s = Session::new();
+    let text = id_of(&s.execute("text.create", &json!({"text": "Hello", "x": 0, "y": 0})).unwrap()["id"]).unwrap();
+    s.execute("fill.set", &json!({"ids": [text], "color": "#FF0000"})).unwrap();
+    s.execute("fill.add", &json!({"ids": [text], "paint": {"type": "image", "image": "layer-image"}})).unwrap();
+    s.execute("text.style", &json!({"id": text, "start": 0, "end": 5, "textFills": [{"type": "image", "image": "character-image"}]})).unwrap();
+
+    let before = s.doc().unwrap().clone();
+    let result = s.execute("image.adjust", &json!({"ids": [text], "index": 0, "preset": "Black & white"})).unwrap();
+    assert_eq!(result["changed"], 1);
+    let fills = crate::cmd::lists::character_fills(s.doc().unwrap().node(text).unwrap()).unwrap();
+    let [figcraft_color::Paint { kind: figcraft_color::PaintKind::Image(image), .. }] = fills.as_slice() else {
+        panic!("expected one image fill");
+    };
+    assert_eq!(image.image, "character-image");
+    assert_eq!(image.filters.saturation, -1.0);
+    s.undo().unwrap();
+    assert_eq!(s.doc().unwrap(), &before);
+
+    let rect = image_rect(&mut s);
+    let result = s.execute("image.adjust", &json!({"ids": [text, rect], "index": 1, "preset": "vivid"})).unwrap();
+    assert_eq!(result["changed"], 1);
+    assert_eq!(s.doc().unwrap().node(text), before.node(text));
+
+    s.execute("text.style", &json!({"id": text, "start": 1, "end": 5, "textFills": ["#00FF00"]})).unwrap();
+    let mixed = s.doc().unwrap().clone();
+    assert!(s.execute("image.adjust", &json!({"ids": [text], "index": 1, "preset": "vivid"})).is_err());
+    assert_eq!(s.doc().unwrap(), &mixed);
+}
+
+#[test]
 fn image_adjust_refuses_what_it_cannot_do() {
     let mut s = Session::new();
     let plain = red_rect(&mut s);
