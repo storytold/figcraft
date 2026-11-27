@@ -2210,7 +2210,8 @@ turned off 0°.
   `cmd` while resizing a frame ignores its children's constraints (they stay where they are) and,
   as in every drag, turns snapping off. Moves snap to edges, centres and equal spacing (the gaps
   show in `tool.overlay.guides` with labels); with the pixel grid on, moves and resizes land on
-  whole pixels.
+  whole pixels. Frames, sections, components and instances always land on whole pixels of their
+  parent, with the pixel grid off too and after a snap to a layer off the grid.
 
 Tool failures come back as results with `isError: true` and a message; protocol problems (unknown
 tool, malformed JSON, wrong parameter types) are JSON-RPC errors. Nothing crashes the server.
