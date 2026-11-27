@@ -125,3 +125,36 @@ fn a_frame_descriptor_bigger_than_the_canvas_is_refused_before_it_is_allocated()
     assert!(images::decode_frames(&bytes).is_none());
     assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
 }
+
+#[test]
+fn animated_gif_preserves_alpha_and_converts_to_display_p3() {
+    let bytes = gif(&[([0, 0, 0, 0], 100), (RED, 100)], 4, 4);
+    let frames = images::decode_frames(&bytes).unwrap();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0].0.pixel(2, 2).unwrap().alpha(), 0);
+    assert_eq!(frames[1].0.pixel(2, 2).unwrap().alpha(), 255);
+
+    let anim = images::animation("gif-alpha-p3", Some(&data(bytes)), &ImageFilters::default(), ColorProfile::DisplayP3).unwrap();
+    assert_eq!(anim.len(), 2);
+    let mut d = Document::new("t");
+    d.color_profile = ColorProfile::DisplayP3;
+    let page = d.add_page("Page 1");
+    let id = d.create(page, NodeKind::Rectangle, "GIF", 0.0, 0.0, 4.0, 4.0).unwrap();
+    let p3_bytes = gif(&[([0, 0, 0, 0], 100), (RED, 100)], 4, 4);
+    d.images.insert("gif-alpha-p3-doc".to_string(), data(p3_bytes));
+    d.get_mut(id).unwrap().fills = vec![Paint::image("gif-alpha-p3-doc", ImageScaleMode::Fill)];
+    let f0 = crate::render_node(&d, id, 1.0).unwrap();
+    assert_eq!(f0.pixel(2, 2).unwrap().alpha(), 0);
+    let f1 = crate::render_node_at(&d, id, 1.0, 0.15).unwrap();
+    let px = f1.pixel(2, 2).unwrap();
+    assert!(px.red() < 250 && px.green() > 30 && px.alpha() == 255, "converted to P3: {px:?}");
+}
+
+#[test]
+fn zero_size_gif_is_refused() {
+    let mut bytes = gif(&[(RED, 100), (GREEN, 100)], 4, 4);
+    bytes[6..10].copy_from_slice(&[0, 0, 0, 0]);
+    assert!(images::dimensions(&bytes).is_none());
+    assert!(images::decode(&bytes).is_none());
+    assert!(images::decode_frames(&bytes).is_none());
+}

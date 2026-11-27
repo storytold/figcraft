@@ -123,8 +123,9 @@ with craft-fonts include Noto Sans Arabic by default and offer Arabic. This fall
 and Arabic text readable; matching Iran Sans exactly still requires that installed font. In a
 browser that supports local font access, choose “Use fonts installed on this computer…” in the
 Design panel's font menu and grant the browser's permission. No font is added to this repository.
-The window mirrors (the panels swap sides), but rows inside the panels keep their left-to-right
-order. Native review and representative in-app checks remain required.
+The window mirrors (the panels swap sides), and so do the Design panel's rows and the layers; the
+Assets panel, Dev Mode, the toolbar and the tab bar keep their left-to-right order. Native review
+and representative in-app checks remain required.
 
 ## Tamil draft
 

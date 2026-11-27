@@ -6,8 +6,8 @@ use std::io::Write;
 use base64::Engine as _;
 use figcraft_doc::Document;
 
-use super::budget::Limits;
 use super::{import_svg, import_within};
+use craft_svg::tree::Limits;
 
 fn gzip(data: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -51,14 +51,14 @@ fn an_svgz_is_unpacked_and_imported() {
 
 #[test]
 fn an_svgz_that_expands_past_the_budget_is_refused_early() {
-    let limits = Limits { document: 4096, ..Limits::default() };
+    let limits = Limits { bytes: 4096, ..Limits::default() };
     // Tiny compressed, far past 4 KiB expanded.
     let z = gzip(svg(&" ".repeat(1 << 20)).as_bytes());
     assert!(z.len() < 4096, "the bomb is small: {}", z.len());
     let e = layers(&z, limits).unwrap_err();
-    assert!(e.contains("expands past"), "{e}");
+    assert!(e.contains("larger than the 4096 byte limit"), "{e}");
     // The same document is fine within a bigger budget.
-    assert!(layers(&z, Limits { document: 2 << 20, ..Limits::default() }).is_ok());
+    assert!(layers(&z, Limits { bytes: 2 << 20, ..Limits::default() }).is_ok());
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn a_compressed_document_is_checked_for_nesting_once_unpacked() {
 fn embedded_svgs_nest_up_to_the_depth_budget_and_no_further() {
     let data = nested(4).into_bytes();
     let full = layers(&data, Limits::default()).unwrap();
-    let shallow = layers(&data, Limits { depth: 1, ..Limits::default() }).unwrap();
+    let shallow = layers(&data, Limits { embedded_depth: 1, ..Limits::default() }).unwrap();
     assert!(shallow < full, "depth 1 drops the inner documents: {shallow} < {full}");
     // Far deeper than the budget: still imports, bounded.
     let deep = nested(40).into_bytes();
@@ -85,7 +85,7 @@ fn embedded_svgs_share_one_byte_budget() {
     let one = format!(r##"<image width="10" height="10" xlink:href="{}"/>"##, uri(inner.as_bytes()));
     let data = svg(&one.repeat(8)).into_bytes();
     let all = layers(&data, Limits::default()).unwrap();
-    let limits = Limits { embedded: inner.len() * 3, ..Limits::default() };
+    let limits = Limits { embedded_bytes: inner.len() * 3, ..Limits::default() };
     let some = layers(&data, limits).unwrap();
     assert!(some < all, "the budget runs out part way: {some} < {all}");
 }
@@ -98,7 +98,7 @@ fn an_embedded_compressed_bomb_is_dropped_not_expanded() {
         base64::engine::general_purpose::STANDARD.encode(&bomb)
     ))
     .into_bytes();
-    let limits = Limits { embedded: 4096, ..Limits::default() };
+    let limits = Limits { embedded_bytes: 4096, ..Limits::default() };
     let with_bomb = layers(&data, limits).unwrap();
     let empty = layers(svg("").as_bytes(), limits).unwrap();
     assert_eq!(with_bomb, empty, "the oversized embedded document left nothing behind");
@@ -116,7 +116,7 @@ fn linked_files_and_other_mime_types_stay_unresolved() {
 fn a_document_compressed_twice_is_refused_not_unpacked_again() {
     // One gzip layer is unpacked within the budget; usvg would unpack a second one without any.
     let twice = gzip(&gzip(svg(&" ".repeat(1 << 20)).as_bytes()));
-    let e = layers(&twice, Limits { document: 4 << 20, ..Limits::default() }).unwrap_err();
+    let e = layers(&twice, Limits { bytes: 4 << 20, ..Limits::default() }).unwrap_err();
     assert!(e.contains("another compressed file"), "{e}");
     // Embedded, the same is dropped.
     let inner = svg(r##"<rect width="10" height="10"/>"##);
@@ -135,7 +135,7 @@ fn a_refused_embedded_bomb_uses_up_the_budget_for_the_images_after_it() {
     let image = |href: String| format!(r##"<image width="10" height="10" xlink:href="{href}"/>"##);
     let bomb_uri = format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(&bomb));
     let data = svg(&format!("{}{}", image(bomb_uri).repeat(8), image(uri(inner.as_bytes())))).into_bytes();
-    let limits = Limits { embedded: 4096, ..Limits::default() };
+    let limits = Limits { embedded_bytes: 4096, ..Limits::default() };
     let empty = layers(svg("").as_bytes(), limits).unwrap();
     assert_eq!(layers(&data, limits).unwrap(), empty, "the first bomb spends the allowance; nothing after it unpacks");
 }

@@ -16,6 +16,7 @@ mod canvas;
 pub mod catalog;
 pub mod cmd;
 mod content;
+mod design;
 mod dev;
 pub mod events;
 mod extensions;
@@ -62,9 +63,11 @@ pub use content::synthetic_ds;
 pub use content::templates;
 pub use content::textfit;
 pub use dev::annotations;
+pub use dev::asset_handoff;
 pub use dev::code_connect;
 pub use dev::codegen;
 pub use dev::component_codegen;
+pub use dev::design_context;
 pub use dev::dev_measurements;
 pub use dev::dev_resources;
 pub use dev::devcompare;
@@ -194,6 +197,8 @@ mod arc_fields_tests;
 #[cfg(test)]
 mod arc_handles_tests;
 #[cfg(test)]
+mod asset_handoff_tests;
+#[cfg(test)]
 mod auto_layout_move_tests;
 #[cfg(test)]
 mod autosave_tests;
@@ -285,6 +290,8 @@ mod dash_cap_tests;
 mod datafill_tests;
 #[cfg(test)]
 mod default_props_tests;
+#[cfg(test)]
+mod design_context_tests;
 #[cfg(test)]
 mod design_paste_tests;
 #[cfg(test)]
@@ -414,6 +421,8 @@ mod library_path_tests;
 #[cfg(test)]
 mod library_range_styles_tests;
 #[cfg(test)]
+mod library_style_hops_tests;
+#[cfg(test)]
 mod library_variables_tests;
 #[cfg(test)]
 mod line_endings_tests;
@@ -431,6 +440,8 @@ mod live_signal_tests;
 mod live_tests;
 #[cfg(test)]
 mod lock_behaviour_tests;
+#[cfg(test)]
+mod locked_ratio_layout_tests;
 #[cfg(test)]
 mod marquee_behaviour_tests;
 #[cfg(test)]
@@ -492,6 +503,8 @@ mod pen_undo_tests;
 #[cfg(test)]
 mod pen_vector_edit_tests;
 #[cfg(test)]
+mod pencil_shift_tests;
+#[cfg(test)]
 mod penpot_export_tests;
 #[cfg(test)]
 mod pixel_preview_tests;
@@ -549,6 +562,8 @@ mod rotation_origin_tests;
 mod save_disk_changes_tests;
 #[cfg(test)]
 mod save_format_tests;
+#[cfg(test)]
+mod scale_bound_values_tests;
 #[cfg(test)]
 mod scale_tool_tests;
 #[cfg(test)]
@@ -660,6 +675,8 @@ mod version_preview_tests;
 #[cfg(test)]
 mod version_tests;
 #[cfg(test)]
+mod view_autopan_tests;
+#[cfg(test)]
 mod view_behaviour_tests;
 #[cfg(test)]
 mod vote_history_tests;
@@ -676,6 +693,8 @@ mod widget_shapes_tests;
 #[cfg(test)]
 mod widgets_tests;
 
+#[cfg(test)]
+mod export_bounds_tests;
 #[cfg(test)]
 mod page_view_tests;
 #[cfg(test)]

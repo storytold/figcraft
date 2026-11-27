@@ -210,3 +210,21 @@ fn invalid_compact_options_fail_in_tools_and_headless_control() {
         }
     }
 }
+
+#[test]
+fn design_context_tool_reads_the_selection_and_fits_the_clients_limit() {
+    let mut c = Client::new();
+    let f = c.ok("create_node", json!({"type": "frame", "width": 400, "height": 400, "name": "Page"}));
+    let id = f["id"].clone();
+    for _ in 0..200 {
+        c.ok("create_node", json!({"type": "rectangle", "parent": id, "width": 4, "height": 4}));
+    }
+    c.ok("select", json!({"ids": [id]}));
+    let whole = c.ok("design_context", json!({}));
+    assert_eq!(whole["target"]["source"], "selection");
+    assert_eq!(whole["target"]["layers"], 201);
+    // Fewer layers come back rather than a message the client can't read.
+    let small = c.ok("design_context", json!({"maxBytes": 16384}));
+    assert!(small["target"]["layers"].as_u64().unwrap() < 201);
+    assert!(small["truncated"]["layersLeftOut"].as_u64().unwrap() > 0);
+}
