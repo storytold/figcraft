@@ -235,6 +235,7 @@ pub struct Renders {
     preview: Retained,
     /// The last full render's document, page and scale.
     last: Option<(u64, NodeId, f64)>,
+    last_shown: Option<(u64, NodeId, View)>,
     /// How long the last render from scratch took.
     full_ms: f64,
     /// Previews come first only when renders from scratch take at least this long.
@@ -242,7 +243,12 @@ pub struct Renders {
     /// A full render being drawn band by band (the browser): the job it was started for, the
     /// font generation then, the bands and the time they took so far.
     steps: Option<Stepping>,
+    #[cfg(test)]
+    refine_gate: Option<RefineGate>,
 }
+
+#[cfg(test)]
+pub(crate) type RefineGate = Arc<dyn Fn(&Job, Option<Done>) -> Option<Done> + Send + Sync>;
 
 /// A full render drawn in steps and what it is of: a newer job of the same file, page, zoom, size
 /// and render options keeps it going (its image is then patched to the job, as a pan or an edit
@@ -300,7 +306,48 @@ impl Default for Renders {
 impl Renders {
     /// Previews when renders from scratch take at least `ms` (tests: 0, always).
     pub fn with_threshold(ms: f64) -> Self {
-        Self { full: Retained::default(), preview: Retained::default(), last: None, full_ms: 0.0, preview_after_ms: ms, steps: None }
+        Self {
+            full: Retained::default(),
+            preview: Retained::default(),
+            last: None,
+            last_shown: None,
+            full_ms: 0.0,
+            preview_after_ms: ms,
+            steps: None,
+            #[cfg(test)]
+            refine_gate: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_refine_gate(self, gate: RefineGate) -> Self {
+        Self { refine_gate: Some(gate), ..self }
+    }
+
+    fn keep(&mut self, job: &Job, d: &Done) {
+        self.last = Some((job.uid, job.page, job.view.scale));
+        self.handed_over(d);
+    }
+
+    fn handed_over(&mut self, d: &Done) {
+        self.late_preview_stayed(d.uid, d.page, d.view.clone());
+    }
+
+    pub fn late_preview_stayed(&mut self, uid: u64, page: NodeId, view: View) {
+        self.last_shown = Some((uid, page, view));
+    }
+
+    fn kept_image_is_as_sharp_as_a_preview(&self, job: &Job) -> bool {
+        let Some((uid, page, kept)) = &self.last_shown else { return false };
+        let (outer, inner) = (kept.page_rect(), job.view.page_rect());
+        *uid == job.uid
+            && *page == job.page
+            && job.view.scale >= kept.scale
+            && job.view.scale <= kept.scale * PREVIEW_FACTOR
+            && outer.x0 <= inner.x0
+            && outer.y0 <= inner.y0
+            && outer.x1 >= inner.x1
+            && outer.y1 >= inner.y1
     }
 
     /// Whether `job` is a render from scratch: the kept image is of another zoom, page or file, or
@@ -312,7 +359,11 @@ impl Renders {
     /// Whether `job` gets a preview first: it renders from scratch and those have been slow on a
     /// page already drawn (the first render has no measure).
     fn wants_preview(&self, job: &Job) -> bool {
-        job.zoom_preview && self.last.is_some() && self.full_ms_so_far() >= self.preview_after_ms && self.starts_over(job)
+        job.zoom_preview
+            && self.last.is_some()
+            && self.full_ms_so_far() >= self.preview_after_ms
+            && self.starts_over(job)
+            && !self.kept_image_is_as_sharp_as_a_preview(job)
     }
 
     /// How long the last render from scratch took, or what the one being drawn in steps has taken
@@ -323,7 +374,7 @@ impl Renders {
 
     /// Whether `job` should get a preview should its render run long: from scratch, with none first.
     pub fn wants_late_preview(&self, job: &Job) -> bool {
-        job.zoom_preview && self.starts_over(job) && !self.wants_preview(job)
+        job.zoom_preview && self.starts_over(job) && !self.wants_preview(job) && !self.kept_image_is_as_sharp_as_a_preview(job)
     }
 
     /// The coarse preview of the whole of `job`'s view, when one should come first.
@@ -331,14 +382,23 @@ impl Renders {
         if !self.wants_preview(job) {
             return None;
         }
-        preview_with(job, &mut self.preview)
+        let done = preview_with(job, &mut self.preview);
+        if let Some(d) = &done {
+            self.handed_over(d);
+        }
+        done
     }
 
     /// The image of `job`'s view, built on the kept one where it can be.
     pub fn refine(&mut self, job: &Job) -> Option<Done> {
         let done = guarded(&mut self.full, |r| run(job, &job.view, r, false));
+        #[cfg(test)]
+        let done = match &self.refine_gate {
+            Some(gate) => gate(job, done),
+            None => done,
+        };
         if let Some(d) = &done {
-            self.last = Some((job.uid, job.page, job.view.scale));
+            self.keep(job, d);
             if d.work == Work::Full {
                 self.full_ms = d.ms;
             }
@@ -421,7 +481,10 @@ impl Renders {
                 // A pan or an edit at this zoom builds on this render: no preview for it.
                 self.last = Some((job.uid, job.page, job.view.scale));
                 self.steps = Some(Stepping { job: job.clone(), fonts: figcraft_text::layout_generation(), steps, spent: 0.0 });
-                drawn.map(Refined::Shown)
+                drawn.map(|d| {
+                    self.handed_over(&d);
+                    Refined::Shown(d)
+                })
             }
             Ok(Err(d)) => Some(Refined::Done(self.finished(job, *d))),
             Err(_) => {
@@ -434,7 +497,7 @@ impl Renders {
     /// Record a render done at once in [`Self::refine_for`].
     fn finished(&mut self, job: &Job, d: Option<Done>) -> Option<Done> {
         if let Some(d) = &d {
-            self.last = Some((job.uid, job.page, job.view.scale));
+            self.keep(job, d);
             if d.work == Work::Full {
                 self.full_ms = d.ms;
             }
@@ -501,6 +564,10 @@ pub struct Worker {
 #[cfg(not(target_arch = "wasm32"))]
 impl Worker {
     pub fn new(ctx: egui::Context) -> Self {
+        Self::with_renders(ctx, Renders::default())
+    }
+
+    pub(crate) fn with_renders(ctx: egui::Context, mut renders: Renders) -> Self {
         let (tx, jobs) = std::sync::mpsc::channel::<(u64, Job)>();
         let (done_tx, rx) = std::sync::mpsc::channel::<Done>();
         let finished = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -514,6 +581,8 @@ impl Worker {
         let refined_seen = refined.clone();
         let previewing = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let busy = previewing.clone();
+        let watchdog_busy = previewing.clone();
+        let (late_tx, late_rx) = std::sync::mpsc::channel::<(u64, u64, NodeId, View)>();
         let (preview_tx, preview_ctx) = (done_tx.clone(), ctx.clone());
         let watchdog =
             std::thread::Builder::new().name("figcraft-render-preview".into()).stack_size(figcraft_render::RENDER_STACK).spawn(move || {
@@ -538,6 +607,7 @@ impl Worker {
                         && let Some(d) = preview_with(&job, &mut retained)
                         && still_rendering()
                     {
+                        let _ = late_tx.send((seq, d.uid, d.page, d.view.clone()));
                         sent = preview_tx.send(answering(d, seq)).is_ok();
                         preview_ctx.request_repaint_of(viewport);
                     }
@@ -578,7 +648,6 @@ impl Worker {
             log::error!("render surround thread: {e}");
         }
         let spawned = std::thread::Builder::new().name("figcraft-render".into()).stack_size(figcraft_render::RENDER_STACK).spawn(move || {
-            let mut renders = Renders::default();
             let mut next = None;
             loop {
                 let Some((mut seq, mut job)) = next.take().or_else(|| jobs.recv().ok()) else { break };
@@ -612,6 +681,16 @@ impl Worker {
                 }
                 let done = renders.refine(&job);
                 refined.store(seq, std::sync::atomic::Ordering::SeqCst);
+                if done.is_none() {
+                    while watchdog_busy.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }
+                for (shown_for, uid, page, view) in late_rx.try_iter() {
+                    if shown_for == seq && done.is_none() {
+                        renders.late_preview_stayed(uid, page, view);
+                    }
+                }
                 let refined_job = done.is_some();
                 if let Some(d) = done
                     && done_tx.send(answering(d, seq)).is_err()
