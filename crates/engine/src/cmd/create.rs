@@ -394,9 +394,7 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // A `fontStyle` the family lacks draws in its nearest face, the same as `node.set` says.
     let warnings = match get(p, "props") {
-        Some(Value::Object(props)) if doc.node(nid).is_some_and(|n| n.kind.text().is_some()) => {
-            super::edit::font_style_warnings(doc, &[nid], props)
-        }
+        Some(Value::Object(props)) if doc.node(nid).is_some_and(|n| n.kind.text().is_some()) => super::edit::font_style_warnings(doc, &[nid], props),
         _ => Vec::new(),
     };
     if boolean(p, "select").unwrap_or(true) {

@@ -105,11 +105,8 @@ fn creating_text_in_a_font_style_the_family_lacks_says_so_as_node_set_does() {
     let w = out["warnings"][0].as_str().unwrap();
     assert!(w.contains(&family) && w.contains("`Black`") && w.contains("nearest"), "{w}");
     // So does a `command.batch` step, at the step that creates the text.
-    let out = ex(
-        &mut s,
-        "command.batch",
-        json!({"commands": [{"command": "node.create", "params": {"type": "text", "text": "Hi", "props": asked()}}]}),
-    );
+    let out =
+        ex(&mut s, "command.batch", json!({"commands": [{"command": "node.create", "params": {"type": "text", "text": "Hi", "props": asked()}}]}));
     let w = out[0]["warnings"][0].as_str().unwrap();
     assert!(w.contains(&family) && w.contains("`Black`") && w.contains("nearest"), "{w}");
     // A style the family has says nothing, and the result is `{id}` alone as before.
