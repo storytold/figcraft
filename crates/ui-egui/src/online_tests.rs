@@ -481,6 +481,23 @@ fn the_team_list_of_the_preferences_server_shows_and_a_row_joins_its_file() {
     assert_eq!(script.lock().unwrap().joined, [format!("figcraft://join?server={SERVER}&file=t1&team=1")]);
 }
 
+/// The home search covers the team list too, so a file that is only on the server can be found by
+/// name; the query stays here (only the list is asked).
+#[test]
+fn the_home_search_finds_files_of_the_team_list() {
+    let files = vec![team_file("t1", "Homepage", 2, Access::Edit), team_file("t2", "Pricing", 0, Access::Edit)];
+    let (mut h, script) = team_harness(Some(("https://share.example/app/".into(), files)));
+    h.app.ui.home = true;
+    h.app.ui.home_view.file_query = "pric".into();
+    h.frames(3);
+    let shapes = h.frames(2);
+    assert!(has_text(&shapes, "Pricing") && !has_text(&shapes, "Homepage"), "only the match is listed");
+    assert!(script.lock().unwrap().asked.iter().all(|(_, req)| *req == Some(Admin::Team)), "nothing but the team list is asked");
+    h.app.ui.home_view.file_query = "zzz".into();
+    let shapes = h.frames(2);
+    assert!(!has_text(&shapes, "Pricing"));
+}
+
 #[test]
 fn a_server_without_a_team_list_shows_none_and_the_shipped_public_server_isnt_asked() {
     let (mut h, script) = team_harness(None);

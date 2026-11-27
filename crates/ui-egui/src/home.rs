@@ -313,6 +313,7 @@ fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
             }
         }
     }
+    count += crate::online::search_team(app, ui, t, &query);
     let templates: Vec<&Template> = TEMPLATES.iter().filter(|template| matches(template, &query, None)).collect();
     if !templates.is_empty() {
         subheading(ui, t, tr("Templates"));
