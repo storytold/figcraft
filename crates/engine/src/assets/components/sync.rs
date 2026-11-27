@@ -443,6 +443,8 @@ fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, compon
     fresh.locked = root.locked;
     fresh.visible = root.visible;
     fresh.var_modes = root.var_modes.clone();
+    // The scale an instance was given (a nested copy's own factor comes from its main layer).
+    fresh.scale_factor = root.scale_factor;
     fresh.is_mask = root.is_mask;
     fresh.exposed = root.exposed;
     fresh.guides = root.guides.clone();
@@ -575,8 +577,14 @@ pub fn keep_text_overrides(doc: &mut Document, inst: NodeId) {
 /// Where auto layout places and sizes a rebuilt copy `n` of main layer `orig`, keep the old
 /// copy's `o` values (an instance's auto layout re-flows from its own content, so they usually
 /// differ from the main's): unchanged layers then stay unchanged, and auto layout re-flows wherever
-/// something that sizes or places layers did change.
+/// something that sizes or places layers did change. Only when `o` mirrored `orig` itself: a layer
+/// matched to another variant's layer (or a new one) takes its geometry from it, so the re-flow
+/// starts from the new main's consistent state instead of re-applying the resize to children that
+/// already hold new-main sizes (which stretched them twice).
 fn keep_laid_out(doc: &Document, orig: &Node, o: &Node, n: &mut Node) {
+    if o.source != Some(orig.id) {
+        return;
+    }
     if o.parent != n.parent || o.overrides.contains("size") || o.overrides.contains("position") {
         return;
     }
