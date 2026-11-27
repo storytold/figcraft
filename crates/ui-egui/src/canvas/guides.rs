@@ -229,13 +229,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
                 d.remove::<GuideDrag>(drag_id());
                 d.remove::<Placed>(preview_id());
             });
-            // Released over its own ruler (the left one for a guide running down the screen): no
-            // guide (a moved one is removed).
-            let down = at.map_or(vertical, |g| {
-                let [a, b] = segment(app, &g, r);
-                (b.y - a.y).abs() >= (b.x - a.x).abs()
-            });
-            let on_ruler = if down { pos.x < r.min.x + RULER } else { pos.y < r.min.y + RULER };
+            let on_ruler = on_own_ruler(app, at, vertical, pos);
             let page = app.session.ds().map(|d| d.page).ok();
             let before = app.session.doc().ok().and_then(|d| match drag {
                 GuideDrag::Move { owner, index, .. } => d.node(owner).and_then(|n| n.guides().get(index)).map(|g| g.offset),
@@ -297,17 +291,45 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
     false
 }
 
+/// Whether `pos` is over the ruler a guide comes back to, or past it: the left ruler for a guide
+/// running down the screen, the top one otherwise. `at` is where the guide would land, if anywhere.
+fn on_own_ruler(app: &FigApp, at: Option<Placed>, vertical: bool, pos: Pos2) -> bool {
+    let r = app.canvas.rect;
+    let down = at.map_or(vertical, |g| {
+        let [a, b] = segment(app, &g, r);
+        (b.y - a.y).abs() >= (b.x - a.x).abs()
+    });
+    if down { pos.x < r.min.x + RULER } else { pos.y < r.min.y + RULER }
+}
+
 /// Ends a guide drag whose button is up by the end of the frame without [`input`] taking the
 /// release (released off the canvas, or over something on it): the gesture is dropped, so a later
-/// click doesn't add or move a guide.
-pub fn end_released(ctx: &egui::Context) {
+/// click doesn't add or move a guide. A moved guide released past its own ruler is removed, as on
+/// the ruler: the ruler is thin, and a drag back onto it often overshoots onto the panel beside it.
+pub fn end_released(app: &mut FigApp, ctx: &egui::Context) {
     if ctx.input(|i| i.pointer.primary_down()) {
         return;
     }
-    ctx.data_mut(|d| {
+    let (drag, at) = ctx.data_mut(|d| {
+        let taken = (d.get_temp::<GuideDrag>(drag_id()), d.get_temp::<Placed>(preview_id()));
         d.remove::<GuideDrag>(drag_id());
         d.remove::<Placed>(preview_id());
+        taken
     });
+    let Some(GuideDrag::Move { owner, index, vertical, copy: false, .. }) = drag else { return };
+    // Where the button came up: a later move in the same frame, or a touch's end clearing the
+    // pointer, doesn't change it.
+    let released_at = ctx.input(|i| {
+        i.events.iter().rev().find_map(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } => Some(*pos),
+            _ => None,
+        })
+    });
+    let Some(pos) = released_at else { return };
+    if rulers_on(app) && on_own_ruler(app, at, vertical, pos) {
+        let page = app.session.ds().map(|d| d.page).ok();
+        app.run("guide.remove", owned(owner, page, json!({"index": index})));
+    }
 }
 
 /// Draw the page's and its frames' guides (under the rulers) and the one being dragged with its
