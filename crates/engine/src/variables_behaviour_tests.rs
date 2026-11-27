@@ -148,11 +148,20 @@ fn aliases_same_type_chains_and_no_cycles() {
     run(&mut s, "variable.createCollection", json!({"name": "Primitive"}));
     let white = vid(run(&mut s, "variable.create", json!({"collection": "Primitive", "name": "white", "type": "color", "value": "#FFFFFF"})));
     run(&mut s, "variable.create", json!({"collection": "Brand", "name": "white", "type": "color", "value": "#EEEEEE"}));
-    let surface =
-        vid(run(&mut s, "variable.create", json!({"collection": "Theme", "name": "surface", "type": "color", "value": {"alias": "Primitive/white"}})));
+    let surface = vid(run(
+        &mut s,
+        "variable.create",
+        json!({"collection": "Theme", "name": "surface", "type": "color", "value": {"alias": "Primitive/white"}}),
+    ));
     let stored = s.doc().unwrap().variables.get_by_id(&surface).unwrap().clone();
-    assert!(!stored.values.is_empty() && stored.values.values().all(|v| *v == VariableValue::Alias(white.clone())), "stores the qualified target's id");
-    let e = s.execute("variable.create", &json!({"collection": "Theme", "name": "dup", "type": "color", "value": {"alias": "white"}})).unwrap_err().to_string();
+    assert!(
+        !stored.values.is_empty() && stored.values.values().all(|v| *v == VariableValue::Alias(white.clone())),
+        "stores the qualified target's id"
+    );
+    let e = s
+        .execute("variable.create", &json!({"collection": "Theme", "name": "dup", "type": "color", "value": {"alias": "white"}}))
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("ambiguous variable `white`"), "{e}");
     assert!(s.doc().unwrap().variables.get("dup").is_none(), "a refused alias leaves nothing behind");
     let refused: [(&str, Value, &str); 5] = [
