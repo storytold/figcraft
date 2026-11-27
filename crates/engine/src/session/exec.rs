@@ -3,10 +3,11 @@ use super::{
     components, events, find_command, guard, library, normalize, params, textpreview,
 };
 
-/// Whether a command, or a batch wrapping one, imports a file passed as Base64 `data`.
+/// Whether a command, or a batch wrapping one, passes a file as Base64 `data`: an import, or a
+/// capture to compare with the design.
 fn command_carries_import_bytes(id: &str, params: &Value) -> bool {
     match id {
-        "file.import" | "image.replace" => params::get(params, "data").is_some(),
+        "file.import" | "image.replace" | "inspect.compare" => params::get(params, "data").is_some(),
         "command.batch" => params.get("commands").and_then(Value::as_array).is_some_and(|commands| {
             commands.iter().any(|c| {
                 c.get("command").and_then(Value::as_str).zip(c.get("params")).is_some_and(|(id, params)| command_carries_import_bytes(id, params))
@@ -122,8 +123,8 @@ impl Session {
                 if spec.history && id != "edit.repeat" {
                     self.last_command = Some((id.to_string(), params.clone()));
                 }
-                // Imported bytes already live in the document: a Base64 copy in the log would stay
-                // for the whole session.
+                // Imported bytes already live in the document, and a capture is only read: a
+                // Base64 copy in the log would stay for the whole session.
                 if !command_carries_import_bytes(id, params) {
                     self.journal.push((id.to_string(), params.clone()));
                     if self.journal.len() > 5000 {

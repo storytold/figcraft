@@ -247,3 +247,12 @@ fn a_shape_with_see_through_corners_leaves_the_layer_under_it_to_blame() {
     let v = compare(&mut s, f, &data);
     assert!(differs(&v, "Box").is_some(), "the box shows through the ellipse's corners: {v}");
 }
+
+#[test]
+fn a_capture_is_not_kept_in_the_journal() {
+    let mut s = session();
+    let (f, _) = card(&mut s);
+    let data = capture(&mut s, f, 1.0);
+    compare(&mut s, f, &data);
+    assert!(!s.journal.iter().any(|(_, p)| p.to_string().contains(&data)), "the log must not hold the capture");
+}
