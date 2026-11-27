@@ -10,6 +10,9 @@ use super::{
 /// How long a closing connection waits for the peer to hang up.
 const LINGER: Duration = Duration::from_secs(2);
 
+/// How long the non-blocking accept loop sleeps when no connection is queued.
+const ACCEPT_POLL: Duration = Duration::from_millis(20);
+
 /// Signals (cursor chat, spotlight) a client may send per second on average, and in a burst;
 /// beyond that they are dropped.
 pub const SIGNAL_RATE: f64 = 20.0;
@@ -91,12 +94,14 @@ pub(super) struct Shared {
 
 pub(super) fn accept(listener: &TcpListener, hub: &Sender<HubIn>, stop: &AtomicBool, open: &Arc<AtomicUsize>, limits: NetLimits, shared: Shared) {
     let mut next = 0u64;
-    for stream in listener.incoming() {
-        if stop.load(Ordering::SeqCst) {
-            break;
-        }
-        let stream = match stream {
-            Ok(s) => s,
+    while !stop.load(Ordering::SeqCst) {
+        let stream = match listener.accept() {
+            Ok((s, _)) => s,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(ACCEPT_POLL);
+                continue;
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
                 // Out of sockets or similar: don't spin.
                 log::warn!("live session: accept failed: {e}");
@@ -104,6 +109,15 @@ pub(super) fn accept(listener: &TcpListener, hub: &Sender<HubIn>, stop: &AtomicB
                 continue;
             }
         };
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        // Accepted sockets inherit O_NONBLOCK from the listener on BSD/macOS; `serve` uses
+        // blocking reads and writes with explicit timeouts.
+        if let Err(e) = stream.set_nonblocking(false) {
+            log::warn!("live session: can't set accepted socket blocking: {e}");
+            continue;
+        }
         if open.load(Ordering::Relaxed) >= limits.max_connections {
             log::info!("live session: too many connections; refusing one");
             continue;
