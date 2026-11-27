@@ -372,3 +372,172 @@ fn a_gradient_drag_whose_gesture_closes_under_the_held_button_stops_editing() {
         u.button(u.app.to_screen(180.0, 200.0), false);
     }
 }
+
+/// Whether `shape` is painted in `col`, as a fill or a stroke.
+fn painted_in(shape: &egui::Shape, col: egui::Color32) -> bool {
+    use egui::epaint::ColorMode;
+    match shape {
+        egui::Shape::Path(p) => p.fill == col || matches!(p.stroke.color, ColorMode::Solid(c) if c == col),
+        egui::Shape::Rect(r) => r.fill == col || r.stroke.color == col,
+        egui::Shape::LineSegment { stroke, .. } => stroke.color == col,
+        egui::Shape::Circle(c) => c.fill == col || c.stroke.color == col,
+        egui::Shape::Vec(v) => v.iter().any(|s| painted_in(s, col)),
+        _ => false,
+    }
+}
+
+/// How many shapes painted in `col` this frame draws inside `area`. On the page those are the
+/// selection's frame, its handles and a text's coloured selection.
+fn painted_around(out: &egui::FullOutput, area: egui::Rect, col: egui::Color32) -> usize {
+    out.shapes.iter().filter(|c| painted_in(&c.shape, col) && c.shape.visual_bounding_rect().intersects(area)).count()
+}
+
+/// A text layer's box on screen, with room for its handles.
+fn text_area(u: &Ui, id: NodeId) -> egui::Rect {
+    let b = u.app.session.doc().unwrap().world_bounds(id).unwrap();
+    egui::Rect::from_two_pos(u.app.to_screen(b.x0, b.y0), u.app.to_screen(b.x1, b.y1)).expand(20.0)
+}
+
+fn selected_text(s: &mut Session) -> NodeId {
+    let id =
+        NodeId(s.execute("text.create", &json!({"text": "Hello", "x": 300, "y": 200, "props": {"fontSize": 48}})).unwrap()["id"].as_u64().unwrap());
+    s.execute("select.set", &json!({"ids": [id]})).unwrap();
+    id
+}
+
+// The colour picker only hides the selection while it is being used: opening it leaves the frame in
+// view, and the press/drag on its controls hides it. A text makes this matter: its frame runs
+// through the glyphs and its selection is tinted.
+#[test]
+fn a_selected_texts_frame_hides_only_while_its_colour_picker_is_used() {
+    let mut s = Session::new();
+    let text = selected_text(&mut s);
+    let mut u = Ui::new(s);
+    let area = text_area(&u, text);
+    let accent = crate::theme::canvas_accent(&u.ctx);
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "the selected text's frame shows");
+
+    let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![text] };
+    u.app.open_picker(target.clone(), None);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "the picker is open");
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "an open picker alone leaves the frame in view");
+
+    // A press alone changes nothing; dragging the saturation/value square uses the picker.
+    let square = u.ctx.read_response(egui::Id::unique("cp_sv")).expect("the saturation/value square").rect;
+    let from = square.center();
+    let to = from + egui::vec2(12.0, 8.0);
+    u.button(from, true);
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "holding the palette still leaves the frame");
+    u.frame(vec![egui::Event::PointerMoved(to)]);
+    assert_eq!(painted_around(&u.frame_output(vec![]), area, accent), 0, "dragging the palette hides the frame");
+    u.button(to, false);
+    assert_eq!(u.app.ui.picker, Some(target), "releasing does not close the picker");
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "releasing brings the frame back");
+
+    // A button in the picker (the blend dropdown) is a click, not a value drag.
+    let button = egui::pos2(square.center().x, square.min.y - 30.0);
+    u.button(button, true);
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "holding a picker button leaves the frame");
+    u.button(button, false);
+}
+
+// The picker's header is its drag handle: moving the card is not choosing a colour.
+#[test]
+fn dragging_the_picker_by_its_header_does_not_hide_the_selection() {
+    let mut s = Session::new();
+    let text = selected_text(&mut s);
+    let mut u = Ui::new(s);
+    let area = text_area(&u, text);
+    let accent = crate::theme::canvas_accent(&u.ctx);
+    u.app.open_picker(PickerTarget::Paint { fills: true, index: 0, ids: vec![text] }, None);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let header = u.app.ui.picker_popover.as_ref().expect("the picker is open").header.center();
+    let before = u.app.ui.picker_popover.as_ref().unwrap().rect;
+    u.button(header, true);
+    for k in 1..=5 {
+        u.frame(vec![egui::Event::PointerMoved(header - egui::vec2(0.0, 6.0 * k as f32))]);
+    }
+    assert!(u.app.ui.picker_popover.as_ref().unwrap().rect.min.y < before.min.y - 10.0, "the header drag moved the picker");
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "moving the picker leaves the frame in view");
+    u.button(header - egui::vec2(0.0, 30.0), false);
+}
+
+#[test]
+fn a_texts_coloured_selection_hides_only_while_its_colour_picker_is_used() {
+    let mut s = Session::new();
+    let text = selected_text(&mut s);
+    // Select all of it: the selection highlight the colour picker's own layer would otherwise wear.
+    figcraft_engine::textedit::begin(&mut s, text, None, false).unwrap();
+    let mut u = Ui::new(s);
+    let area = text_area(&u, text);
+    let tint = crate::theme::canvas_accent(&u.ctx).gamma_multiply(0.3);
+    assert!(painted_around(&u.frame_output(vec![]), area, tint) > 0, "the text selection is tinted");
+
+    u.app.open_picker(PickerTarget::Paint { fills: true, index: 0, ids: vec![text] }, None);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert!(painted_around(&u.frame_output(vec![]), area, tint) > 0, "an open picker alone leaves it tinted");
+
+    let square = u.ctx.read_response(egui::Id::unique("cp_sv")).expect("the saturation/value square").rect;
+    let from = square.center();
+    let to = from + egui::vec2(10.0, 6.0);
+    u.button(from, true);
+    assert!(painted_around(&u.frame_output(vec![]), area, tint) > 0, "holding the palette still leaves the tint");
+    u.frame(vec![egui::Event::PointerMoved(to)]);
+    assert_eq!(painted_around(&u.frame_output(vec![]), area, tint), 0, "dragging the palette hides the tint");
+    u.button(to, false);
+    assert!(painted_around(&u.frame_output(vec![]), area, tint) > 0, "releasing brings the tint back");
+}
+
+// Typing a colour value counts as using the picker even when no mouse button is down.
+#[test]
+fn a_focused_colour_field_hides_the_selection_while_it_is_edited() {
+    let mut s = Session::new();
+    let text = selected_text(&mut s);
+    let mut u = Ui::new(s);
+    let area = text_area(&u, text);
+    let accent = crate::theme::canvas_accent(&u.ctx);
+    u.app.open_picker(PickerTarget::Paint { fills: true, index: 0, ids: vec![text] }, None);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "the frame shows while the picker is idle");
+
+    let hex = u.ctx.read_response(egui::Id::unique("cp_hex").with("click")).expect("the Hex field").rect;
+    u.button(hex.center(), true);
+    u.button(hex.center(), false);
+    for _ in 0..2 {
+        u.frame(vec![]);
+    }
+    assert_eq!(painted_around(&u.frame_output(vec![]), area, accent), 0, "a focused value field hides the frame");
+    u.frame(vec![egui::Event::Text("0".into())]);
+    assert_eq!(painted_around(&u.frame_output(vec![]), area, accent), 0, "and typing in it keeps the frame hidden");
+}
+
+// egui gives every clicked control the keyboard, a palette square and a swatch included. Only a
+// text field means the picker is being used: a square that keeps focus must not keep the
+// selection hidden after its drag ends.
+#[test]
+fn a_focused_palette_square_does_not_hide_the_selection() {
+    let mut s = Session::new();
+    let text = selected_text(&mut s);
+    let mut u = Ui::new(s);
+    let area = text_area(&u, text);
+    let accent = crate::theme::canvas_accent(&u.ctx);
+    u.app.open_picker(PickerTarget::Paint { fills: true, index: 0, ids: vec![text] }, None);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    // What egui does to a clicked square.
+    u.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("cp_sv")));
+    for _ in 0..2 {
+        u.frame(vec![]);
+    }
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "focus on a palette square leaves the frame in view");
+}
