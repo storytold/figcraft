@@ -401,6 +401,94 @@ pub fn list_indent(s: &mut Session, out: bool) -> Result<bool> {
     Ok(text_of(s, id)? != before)
 }
 
+/// Whether Tab in text layer `id` moves between text layers: not in a board object's text (a
+/// sticky's note, a table cell, a code block) or a widget's field, where it types as before.
+fn tabs_between_texts(doc: &Document, id: NodeId) -> bool {
+    !in_board_object(doc, id) && crate::widgets::field_of(doc, id).is_none()
+}
+
+fn in_board_object(doc: &Document, id: NodeId) -> bool {
+    std::iter::once(id).chain(doc.ancestors(id)).any(|a| doc.node(a).is_some_and(|n| n.board.is_some()))
+}
+
+/// Tab (Shift+Tab: `back`) while editing text layer `from`: editing it ends as Escape ends it, and
+/// the next (previous) text layer in reading order is edited with all of its text selected. At the
+/// last (first) one nothing happens.
+fn tab_to_next_text(s: &mut Session, from: NodeId, back: bool) -> Result<()> {
+    let order = reading_order(s.doc()?, tab_stops(s.doc()?, from));
+    let Some(at) = order.iter().position(|t| *t == from) else { return Ok(()) };
+    let next = if back { at.checked_sub(1).and_then(|i| order.get(i)) } else { order.get(at + 1) };
+    let Some(&next) = next else { return Ok(()) };
+    end(s)?;
+    begin(s, next, None, false)
+}
+
+/// The text layers Tab moves between from text layer `from`: those in the top-level layer holding
+/// it (the frame or group on the page or in a section), at any depth and inside instances, that are
+/// visible and unlocked with every layer around them and not in a board object; for a text on the
+/// page or in a section itself, the text layers beside it there. `from` is always one of them.
+fn tab_stops(doc: &Document, from: NodeId) -> Vec<NodeId> {
+    let is_section = |id: &NodeId| doc.node(*id).is_some_and(|n| matches!(n.kind, NodeKind::Section { .. }));
+    let chain: Vec<NodeId> = std::iter::once(from).chain(doc.ancestors(from)).collect();
+    let Some(page_at) = chain.iter().position(|c| doc.node(*c).is_some_and(|n| n.is_page())) else { return vec![from] };
+    let top = chain.get(..page_at).and_then(|below| below.iter().rev().copied().find(|c| !is_section(c)));
+    let stop = |n: &figcraft_doc::Node| n.visible && !n.locked && n.board.is_none();
+    let mut out = Vec::new();
+    match top {
+        Some(top) if top != from => {
+            let mut stack = vec![top];
+            let mut seen = 0usize;
+            while let Some(id) = stack.pop() {
+                seen += 1;
+                if seen > 1_000_000 {
+                    break;
+                }
+                let Some(n) = doc.node(id).filter(|n| stop(n)) else { continue };
+                if matches!(n.kind, NodeKind::Text(_)) {
+                    out.push(id);
+                }
+                stack.extend(n.children.iter().copied());
+            }
+        }
+        _ => {
+            let beside = doc.node(from).and_then(|n| n.parent).and_then(|p| doc.node(p)).map(|p| p.children.clone()).unwrap_or_default();
+            out.extend(beside.into_iter().filter(|c| doc.node(*c).is_some_and(|n| stop(n) && matches!(n.kind, NodeKind::Text(_)))));
+        }
+    }
+    if !out.contains(&from) {
+        out.push(from);
+    }
+    out
+}
+
+/// `ids` in reading order by their boxes on the page: rows top to bottom, each row left to right.
+/// Rows are made from the top down: a layer joins the row of the topmost layer before it when the
+/// two overlap vertically by more than nothing and by at least half the height of the shorter one,
+/// else it starts the next row. Layers without bounds are left out.
+fn reading_order(doc: &Document, ids: Vec<NodeId>) -> Vec<NodeId> {
+    let mut boxes: Vec<(NodeId, figcraft_geom::Rect)> = ids.into_iter().filter_map(|i| Some((i, doc.world_bounds(i)?))).collect();
+    boxes.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0).then(a.1.x0.total_cmp(&b.1.x0)));
+    let mut rows: Vec<Vec<(NodeId, figcraft_geom::Rect)>> = Vec::new();
+    for (id, b) in boxes {
+        let joins = |row: &Vec<(NodeId, figcraft_geom::Rect)>| {
+            row.first().is_some_and(|(_, a)| {
+                let overlap = a.y1.min(b.y1) - a.y0.max(b.y0);
+                overlap > 0.0 && overlap >= 0.5 * a.height().min(b.height())
+            })
+        };
+        match rows.last_mut() {
+            Some(row) if joins(row) => row.push((id, b)),
+            _ => rows.push(vec![(id, b)]),
+        }
+    }
+    rows.into_iter()
+        .flat_map(|mut row| {
+            row.sort_by(|a, b| a.1.x0.total_cmp(&b.1.x0).then(a.1.y0.total_cmp(&b.1.y0)));
+            row.into_iter().map(|(id, _)| id)
+        })
+        .collect()
+}
+
 /// The kind of word char `i` belongs to: 0 for spaces and punctuation, else its script, so a word
 /// ends where the script changes (Han, hiragana, katakana and Hangul runs are words of their own in
 /// text without spaces). Combining marks and voicing marks belong to the char before them.
@@ -459,7 +547,9 @@ fn word_right(chars: &[char], mut i: usize) -> usize {
     i
 }
 
-/// A named key: Backspace, Delete, Left, Right, Up, Down, Home, End, Enter, Escape, SelectAll.
+/// A named key: Backspace, Delete, Left, Right, Up, Down, Home, End, Enter, Tab, Escape, SelectAll.
+/// Tab and Shift+Tab outside a list, a code block, a board object and a widget's field edit the
+/// next or previous text layer ([`tab_to_next_text`]).
 /// `word` moves or deletes by word, `line` to the line's ends (Up/Down, Home/End: the text's ends);
 /// [`crate::keymap::text_motion`] gives them for the platform's keys. `ArrowLeft` etc. also work.
 pub fn key(s: &mut Session, key: &str, shift: bool, word: bool, line: bool) -> Result<()> {
@@ -484,6 +574,7 @@ pub fn key(s: &mut Session, key: &str, shift: bool, word: bool, line: bool) -> R
     match key {
         "Escape" => return end(s),
         "Enter" => return insert(s, "\n"),
+        "Tab" if !word && !line && tabs_between_texts(s.doc()?, te.id) => return tab_to_next_text(s, te.id, shift),
         "Tab" => return insert(s, "\t"),
         "Backspace" | "Delete" => {
             return edit(s, |t, te| {

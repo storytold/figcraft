@@ -1422,25 +1422,7 @@ pub fn adopt_pasted(doc: &mut Document, src: &Document, src_path: Option<&str>, 
         remote.extend(merge_components(doc, src, &BTreeMap::new(), Some(&foreign))?);
     }
     // Components `src` publishes: from its library.
-    if let Some(lib) = src.published.as_ref().filter(|l| own.as_deref() != Some(l.manifest.id.as_str())) {
-        let keys: Vec<NodeId> =
-            roots.iter().copied().filter(|r| !src.is_remote(*r) && lib.manifest.component(*r).is_some() && lib.doc.contains(*r)).collect();
-        if !keys.is_empty() {
-            remote.extend(import(doc, lib, &keys, false)?);
-            let m = &lib.manifest;
-            if doc.libraries.link(&m.id).is_none()
-                && let Some(path) = src_path
-            {
-                doc.libraries_mut().enabled.push(LibraryLink {
-                    id: m.id.clone(),
-                    name: m.name.clone(),
-                    path: path.to_string(),
-                    version: m.version,
-                    relative: String::new(),
-                });
-            }
-        }
-    }
+    remote.extend(from_published(doc, src, src_path, &roots)?);
     // Point the pasted layers at those mains; what stays behind gets ids of its own.
     let mut behind: BTreeMap<NodeId, NodeId> = BTreeMap::new();
     let mut follow = |doc: &mut Document, id: NodeId| -> NodeId {
@@ -1477,6 +1459,45 @@ pub fn adopt_pasted(doc: &mut Document, src: &Document, src_path: Option<&str>, 
         }
     }
     Ok(())
+}
+
+/// `doc`'s copies of the components among `roots` (assets of `src`) that `src` publishes as a
+/// library (`src`'s ids → `doc`'s), taken from that library, which gets enabled in `doc` when `src`
+/// is saved at `src_path`. Empty when `src` publishes no library, or publishes `doc`'s own.
+fn from_published(doc: &mut Document, src: &Document, src_path: Option<&str>, roots: &[NodeId]) -> Result<BTreeMap<NodeId, NodeId>> {
+    let own = doc.published.as_ref().map(|p| p.manifest.id.as_str());
+    let Some(lib) = src.published.as_ref().filter(|l| own != Some(l.manifest.id.as_str())) else { return Ok(BTreeMap::new()) };
+    let keys: Vec<NodeId> =
+        roots.iter().copied().filter(|r| !src.is_remote(*r) && lib.manifest.component(*r).is_some() && lib.doc.contains(*r)).collect();
+    if keys.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let remote = import(doc, lib, &keys, false)?;
+    let m = &lib.manifest;
+    if doc.libraries.link(&m.id).is_none()
+        && let Some(path) = src_path
+    {
+        doc.libraries_mut().enabled.push(LibraryLink {
+            id: m.id.clone(),
+            name: m.name.clone(),
+            path: path.to_string(),
+            version: m.version,
+            relative: String::new(),
+        });
+    }
+    Ok(remote)
+}
+
+/// The main in `doc` that pasting main component `main`, copied from another document `src`,
+/// makes an instance of: `doc`'s copy of it from the library `src` publishes, as
+/// [`adopt_pasted`] uses for instances. `None` when `src` doesn't offer it, so the paste copies
+/// the main itself: also when the library holds it only because an offered component uses it.
+pub fn published_main(doc: &mut Document, src: &Document, src_path: Option<&str>, main: NodeId) -> Result<Option<NodeId>> {
+    let Some(root) = asset_root(src, main) else { return Ok(None) };
+    if !src.published.as_ref().and_then(|l| l.manifest.component(root)).is_some_and(|a| a.published) {
+        return Ok(None);
+    }
+    Ok(from_published(doc, src, src_path, &[root])?.get(&main).copied())
 }
 
 /// Refuse edits of library copies, except by library commands (and imports of other files,

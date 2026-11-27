@@ -249,7 +249,11 @@ impl Session {
                 let raw = d;
                 let snap_on = self.ds().map(|ds| ds.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl;
                 let mut guides = Vec::new();
-                if self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
+                let boards = {
+                    let doc = self.doc()?;
+                    ids.iter().all(|i| doc.node(*i).is_some_and(crate::snap::always_on_pixels))
+                };
+                if boards || self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
                     // Keep the box's origin on whole pixels (a rotated parent frame's, inside one);
                     // snapping to layers comes after, so it wins on the axes it snaps.
                     d = targets.round_move(d);
@@ -258,6 +262,11 @@ impl Session {
                     let (c, g2) = targets.snap_move(d, SNAP_PX / ev.zoom.max(1e-6));
                     d += c;
                     guides = g2;
+                }
+                if boards {
+                    // Frames, sections and components stay on whole pixels even where a layer
+                    // they snap to doesn't.
+                    d = targets.round_move(d);
                 }
                 let ids = ids.clone();
                 let dup = *duplicate;
@@ -343,6 +352,9 @@ impl Session {
                             doc.reparent(*m, page, None)?;
                         }
                         move_world(doc, *m, d.x, d.y)?;
+                        if doc.node(*m).is_some_and(crate::snap::always_on_pixels) {
+                            shifted &= !crate::snap::settle_on_pixels(doc, *m)?;
+                        }
                     }
                     drop_target = (flow && target != page).then_some(target);
                     Ok(())
@@ -521,7 +533,13 @@ impl Session {
         // The pixel grid: an upright box's dragged sides land on whole pixels (the Scale tool
         // scales by the factor as dragged). Snapping to layers comes after, so it wins on the axes
         // it snaps.
-        if !scale_tool && self.ds().map(|d| d.view.snap_pixel).unwrap_or(true) && crate::guides::axis_aligned(frame) {
+        // Frames, sections and components land on whole pixels whatever the setting, also where a
+        // layer they snap to doesn't.
+        let boards = {
+            let doc = self.doc()?;
+            !scale_tool && crate::guides::axis_aligned(frame) && ids.iter().all(|i| doc.node(*i).is_some_and(crate::snap::always_on_pixels))
+        };
+        if boards || !scale_tool && self.ds().map(|d| d.view.snap_pixel).unwrap_or(true) && crate::guides::axis_aligned(frame) {
             p = Point::new(p.x.round(), p.y.round());
         }
         if let Some(t) = &targets {
@@ -529,6 +547,9 @@ impl Session {
             p.x += dx;
             p.y += dy;
             guides = g;
+        }
+        if boards {
+            p = Point::new(p.x.round(), p.y.round());
         }
         let q = frame.inverse() * p;
         let is_line = r.single && ids.first().and_then(|i| self.doc().ok()?.node(*i).map(|n| matches!(n.kind, NodeKind::Line))).unwrap_or(false);
@@ -650,8 +671,16 @@ impl Session {
                 let lin = (mirror * local).with_translation(Vec2::ZERO);
                 let origin = Point::new(x0 + center.x * sx, y0 + center.y * sy) - lin * Point::new(w2 / 2.0, h2 / 2.0);
                 let kept = if keeps(doc, *id) { crate::cmd::props::children_worlds(doc, *id) } else { Vec::new() };
-                doc.set_world_transform(*id, frame * lin.with_translation(origin))?;
+                let (t, w2, h2) = if boards {
+                    on_whole_pixels(doc, *id, frame * lin.with_translation(origin), w2, h2)
+                } else {
+                    (frame * lin.with_translation(origin), w2, h2)
+                };
+                doc.set_world_transform(*id, t)?;
                 crate::cmd::props::resize_node(doc, *id, w2, h2)?;
+                if boards {
+                    crate::snap::settle_on_pixels(doc, *id)?;
+                }
                 crate::cmd::props::restore_worlds(doc, &kept)?;
             }
             Ok(())
@@ -695,6 +724,25 @@ impl Session {
         self.tool.overlay.guides = guides;
         Ok(())
     }
+}
+
+/// `world` and the size `w` x `h` a layer of a resized selection takes, moved so its box in its
+/// parent has its edges on whole pixels, each on the nearest one and the box at least a pixel
+/// wide: a frame resized with others lands on whole pixels as one resized alone does. A layer
+/// turned or scaled in its parent keeps them.
+fn on_whole_pixels(doc: &Document, id: NodeId, world: Affine, w: f64, h: f64) -> (Affine, f64, f64) {
+    let pw = doc.node(id).and_then(|n| n.parent).map_or(Affine::IDENTITY, |p| doc.world_transform(p));
+    let local = pw.inverse() * world;
+    let [a, b, c, d, e, f] = local.as_coeffs();
+    if !crate::guides::axis_aligned(local) || (a.abs() - 1.0).abs() > 1e-9 || (d.abs() - 1.0).abs() > 1e-9 {
+        return (world, w, h);
+    }
+    let edges = |at: f64, flip: bool, len: f64| if flip { (at - len, at) } else { (at, at + len) };
+    let ((x0, x1), (y0, y1)) = (edges(e, a < 0.0, w), edges(f, d < 0.0, h));
+    let (x0, y0) = (x0.round(), y0.round());
+    let (w, h) = ((x1.round() - x0).max(1.0), (y1.round() - y0).max(1.0));
+    let (e, f) = (if a < 0.0 { x0 + w } else { x0 }, if d < 0.0 { y0 + h } else { y0 });
+    (pw * Affine::new([a, b, c, d, e, f]), w, h)
 }
 
 /// Moving `moving` by the same offset moves nothing else and changes nothing about them but where
