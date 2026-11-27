@@ -203,6 +203,8 @@ mod menu_input_tests;
 #[cfg(test)]
 mod menu_overflow_tests;
 #[cfg(test)]
+mod menu_scroll_tests;
+#[cfg(test)]
 mod mirror_tests;
 #[cfg(test)]
 mod missing_fonts_tests;
@@ -231,6 +233,8 @@ mod paste_image_tests;
 mod pen_mode_tests;
 #[cfg(test)]
 mod perf_tests;
+#[cfg(test)]
+mod pixel_grid_tests;
 #[cfg(test)]
 mod plugin_panel_tests;
 #[cfg(test)]
@@ -560,8 +564,9 @@ pub struct UiState {
     pub layer_search: bool,
     pub layer_filter: String,
     pub layer_anchor: Option<NodeId>,
-    /// The layers panel has the keyboard: arrow keys move through its rows instead of nudging
-    /// (set by a click on a row, cleared by a press on the canvas).
+    /// A layer row was clicked last: Shift+F10 opens the context menu at its row (set by a click on
+    /// a row, cleared by a press on the canvas). Arrow keys still nudge; they move through the rows
+    /// only once F6 has put the keyboard on the layers panel.
     pub layers_focus: bool,
     /// The file (its `uid`) whose pages list has the keyboard: Delete with no layers selected deletes
     /// its current page (set by a click on a page row or the add-page button, cleared by a click on a
