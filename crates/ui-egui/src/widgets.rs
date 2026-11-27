@@ -334,8 +334,8 @@ fn number_field_impl(
     let alt_now = ui.input(|i| i.modifiers.alt);
     let scrubbing_id = id.with("altscrub");
     let scrubbing = ui.data(|d| d.get_temp::<bool>(scrubbing_id)).unwrap_or(false);
-    let field_sense = if editing.is_none() && (alt_now || scrubbing) { Sense::click_and_drag() } else { Sense::click() };
-    let field_resp = ui.interact(edit_rect, field_id, field_sense);
+    let sense = if editing.is_none() && (alt_now || scrubbing) { Sense::click_and_drag() } else { field_sense(editing.is_some()) };
+    let field_resp = ui.interact(edit_rect, field_id, sense);
     let alt_scrub = editing.is_none() && if field_resp.drag_started() { alt_now } else { scrubbing };
     ui.data_mut(|d| d.insert_temp(scrubbing_id, alt_scrub && field_resp.dragged() && !field_resp.drag_stopped()));
     a11y::number(&field_resp, lead.name(), value, suffix, empty.text());
@@ -351,7 +351,8 @@ fn number_field_impl(
     }
     match lead {
         Lead::Text(s) => {
-            let galley = crate::bidi::name_galley(ui.painter(), s, regular(11.0), t.text_secondary, lead_w - 12.0);
+            // Whole points: egui rounds wrap width to GUI_ROUNDING, which wraps a fractional label column.
+            let galley = crate::bidi::name_galley(ui.painter(), s, regular(11.0), t.text_secondary, (lead_w - 12.0).ceil());
             // A label cut short shows whole on hover.
             if galley.elided {
                 lead_resp.clone().on_hover_text(s);
@@ -683,7 +684,7 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
     let t = Tokens::get(ui.ctx());
     let editing_id = id.with("editing");
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
-    let resp = ui.interact(rect, id.with("click"), Sense::click());
+    let resp = ui.interact(rect, id.with("click"), field_sense(editing.is_some()));
     let shown = if secret { std::borrow::Cow::Owned("•".repeat(value.chars().count())) } else { std::borrow::Cow::Borrowed(value) };
     a11y::text(&resp, name, &shown);
     ui.painter().rect_filled(rect, CornerRadius::same(5), t.field);
@@ -781,6 +782,12 @@ pub fn text_input(ui: &mut Ui, id: Id, text: &mut String, width: f32, hint: &str
         ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, t.field_hover_border), StrokeKind::Inside);
     }
     r
+}
+
+/// What a field that opens an editor on a click senses itself. While the editor is open, the
+/// editor is the field's one Tab stop.
+pub(crate) fn field_sense(editing: bool) -> Sense {
+    if editing { Sense::CLICK } else { Sense::click() }
 }
 
 /// Focus for a field's editor that appears on the click that starts editing: egui takes focus
@@ -1417,7 +1424,7 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
     let buf_id = id.with("buf");
     let focused = ui.memory(|m| m.has_focus(te_id));
     let mut buf: Option<String> = ui.data(|d| d.get_temp(buf_id));
-    let resp = ui.interact(rect, id.with("click"), Sense::click());
+    let resp = ui.interact(rect, id.with("click"), field_sense(buf.is_some() || focused));
     a11y::text(&resp, tr("Name"), value);
     let started = buf.is_none() && (focused || resp.clicked());
     if started {

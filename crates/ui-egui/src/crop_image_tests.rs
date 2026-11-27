@@ -141,11 +141,11 @@ fn choose_mode(u: &mut Ui, shown: &str, item: &str) {
     u.frame(vec![]);
 }
 
-/// Crop chosen as the image fill's mode in the colour picker enters crop mode, as Crop image does
-/// (#2150): the picker closes, the picture keeps its place, and a corner handle then crops it
-/// with the layer still selected. The other modes only set the mode.
+/// Crop chosen as the image fill's mode in the colour picker sets the mode with a placement crop
+/// (#2499): the picker stays open, crop mode on the canvas does not start, and dragging a corner
+/// handle without Cmd resizes the layer and morphs/squishes the image.
 #[test]
-fn crop_chosen_in_the_colour_picker_enters_crop_mode() {
+fn crop_chosen_in_the_colour_picker_sets_mode_and_morphs_on_resize() {
     let (mut u, layer, _) = setup();
     u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![layer] });
     for _ in 0..4 {
@@ -155,8 +155,8 @@ fn crop_chosen_in_the_colour_picker_enters_crop_mode() {
     assert_eq!(mode(&u, layer), (ImageScaleMode::Fit, None));
     assert!(u.app.ui.picker.is_some() && u.app.ui.crop.is_none(), "Fit is only a mode");
     choose_mode(&mut u, "Fit", "Crop");
-    assert_eq!(u.app.ui.crop, Some((layer, 0)), "crop mode on the image fill");
-    assert!(u.app.ui.picker.is_none(), "crop mode takes the canvas from the picker");
+    assert_eq!(u.app.ui.crop, None, "Crop in picker does not enter canvas crop mode");
+    assert!(u.app.ui.picker.is_some(), "picker stays open");
     // The picture keeps its place: the crop is the one Crop image makes of the fitted image.
     let (m, Some(before)) = mode(&u, layer) else { panic!("a crop where the picture was") };
     assert_eq!(m, ImageScaleMode::Crop);
@@ -169,29 +169,18 @@ fn crop_chosen_in_the_colour_picker_enters_crop_mode() {
     assert_eq!(mode(&menu, other), (ImageScaleMode::Fit, None));
     menu.app.run("image.crop", json!({}));
     assert_eq!(mode(&menu, other), (ImageScaleMode::Crop, Some(before)));
-    // The bottom right corner, dragged in, crops the picture to the top left 3/4 of the layer.
+    // Close the picker to drag the canvas resize handles.
+    u.app.ui.picker = None;
+    u.frame(vec![]);
+    // Dragging the bottom right corner without Cmd resizes the layer to 150x75 and morphs/squishes the image.
     let (from, to) = (u.app.to_screen(200.0, 100.0), u.app.to_screen(150.0, 75.0));
     u.drag_to(from, to);
     u.button(to, false);
     assert_eq!(u.app.session.selection(), vec![layer], "the layer stays selected");
-    assert_eq!(u.app.ui.crop, Some((layer, 0)), "still cropping");
     let n = u.app.session.doc().unwrap().node(layer).unwrap().clone();
     assert!((n.width - 150.0).abs() < 1e-6 && (n.height - 75.0).abs() < 1e-6, "{} x {}", n.width, n.height);
     let (_, Some(after)) = mode(&u, layer) else { panic!("a crop") };
-    assert!((after[0] - before[0] * 0.75).abs() < 1e-9 && (after[3] - before[3] * 0.75).abs() < 1e-9, "{before:?} -> {after:?}");
-    assert!((after[4] - before[4]).abs() < 1e-9 && (after[5] - before[5]).abs() < 1e-9, "the top left stays: {before:?} -> {after:?}");
-    // The picture's own corner, now outside the layer at (200, 100), scales the picture inside the
-    // layer, which keeps its size and its selection.
-    let (from, to) = (u.app.to_screen(200.0, 100.0), u.app.to_screen(240.0, 120.0));
-    u.drag_to(from, to);
-    u.button(to, false);
-    assert_eq!(u.app.session.selection(), vec![layer], "the layer stays selected");
-    assert_eq!(u.app.ui.crop, Some((layer, 0)), "still cropping");
-    let n = u.app.session.doc().unwrap().node(layer).unwrap().clone();
-    assert!((n.width - 150.0).abs() < 1e-6 && (n.height - 75.0).abs() < 1e-6, "the layer keeps its size: {} x {}", n.width, n.height);
-    let (_, Some(scaled)) = mode(&u, layer) else { panic!("a crop") };
-    // The picture grew from 200 x 100 to 240 x 120: the layer shows 5/6 of what it showed.
-    assert!((scaled[0] - after[0] * 5.0 / 6.0).abs() < 1e-6 && (scaled[3] - after[3] * 5.0 / 6.0).abs() < 1e-6, "{after:?} -> {scaled:?}");
+    assert_eq!(after, before, "normal resize without Cmd leaves crop transform unchanged to morph/squish");
 }
 
 /// The reporter's sequence (#2307): the colour picker open on an image fill held in Crop mode
@@ -206,12 +195,7 @@ fn crop_from_the_colour_picker_then_a_drag_on_the_image_moves_the_crop_not_the_l
         u.frame(vec![]);
     }
     choose_mode(&mut u, "Fill", "Crop");
-    // Crop mode on the canvas ended (a click away from the image); the picker opens on the Crop fill.
-    u.app.ui.crop = None;
-    u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![layer] });
-    for _ in 0..4 {
-        u.frame(vec![]);
-    }
+    assert!(u.app.ui.picker.is_some());
     let (_, Some(before)) = mode(&u, layer) else { panic!("a crop") };
     let at = u.app.session.doc().unwrap().node(layer).unwrap().transform.as_coeffs();
     let from = u.app.to_screen(100.0, 50.0);
@@ -267,7 +251,7 @@ fn image_at(u: &Ui, id: NodeId, fills: bool, region: Option<usize>) -> figcraft_
 /// fill have nothing for Crop image to crop either.
 #[test]
 fn crop_in_the_colour_picker_only_sets_the_mode_where_crop_image_does_not_apply() {
-    use crate::colorpicker::{PickerTarget, crop_on_canvas};
+    use crate::colorpicker::PickerTarget;
     let picture = |u: &Ui, id: NodeId| u.app.session.doc().unwrap().node(id).unwrap().fills[0].clone();
     // Opens the picker on `target`, chooses Crop and checks crop mode stays off.
     let crop_only_sets_the_mode = |u: &mut Ui, target: PickerTarget, what: &str| {
@@ -288,7 +272,7 @@ fn crop_in_the_colour_picker_only_sets_the_mode_where_crop_image_does_not_apply(
     assert_eq!(image_at(&u, layer, false, None).scale_mode, ImageScaleMode::Crop);
     assert_eq!(mode(&u, layer), (ImageScaleMode::Fill, None), "the fill is untouched");
 
-    // Two image layers at once: both take the mode.
+    // Two image layers at once: both take the mode, with each layer's crop sized to its own dimensions.
     let (mut u, layer, rect) = setup();
     let paint = picture(&u, layer);
     u.app.run("fill.set", json!({"ids": [rect], "index": 0, "paint": paint}));
@@ -296,6 +280,8 @@ fn crop_in_the_colour_picker_only_sets_the_mode_where_crop_image_does_not_apply(
     crop_only_sets_the_mode(&mut u, PickerTarget::Paint { fills: true, index: 0, ids: vec![layer, rect] }, "two layers");
     assert_eq!(mode(&u, layer).0, ImageScaleMode::Crop);
     assert_eq!(mode(&u, rect).0, ImageScaleMode::Crop);
+    let (crop1, crop2) = (mode(&u, layer).1.unwrap(), mode(&u, rect).1.unwrap());
+    assert_ne!(crop1, crop2, "differently sized layers must have distinct placement crops without stretching");
 
     // A region's own image fill in vector edit mode: the region's mode is set, the layer's image
     // fill is untouched.
@@ -313,12 +299,4 @@ fn crop_in_the_colour_picker_only_sets_the_mode_where_crop_image_does_not_apply(
     crop_only_sets_the_mode(&mut u, PickerTarget::Paint { fills: true, index: 0, ids: vec![vector] }, "a region");
     assert_eq!(image_at(&u, vector, true, Some(1)).scale_mode, ImageScaleMode::Crop);
     assert_eq!(u.app.session.doc().unwrap().node(vector).unwrap().fills, layer_fills, "the layer's fills are untouched");
-
-    // A fill that isn't an image, and targets that aren't a layer's paint, have no crop on the canvas.
-    let (u, layer, rect) = setup();
-    assert_eq!(crop_on_canvas(&u.app, &PickerTarget::Paint { fills: true, index: 0, ids: vec![layer] }), Some((layer, 0)));
-    assert_eq!(crop_on_canvas(&u.app, &PickerTarget::Paint { fills: true, index: 0, ids: vec![rect] }), None, "a solid fill");
-    assert_eq!(crop_on_canvas(&u.app, &PickerTarget::Paint { fills: true, index: 1, ids: vec![layer] }), None, "no fill there");
-    assert_eq!(crop_on_canvas(&u.app, &PickerTarget::PageBackground), None);
-    assert_eq!(crop_on_canvas(&u.app, &PickerTarget::Style { id: "S:1".into(), index: 0 }), None);
 }

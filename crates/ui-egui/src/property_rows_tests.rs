@@ -489,9 +489,10 @@ fn a_property_copied_in_one_window_pastes_in_another_and_the_highlight_stays_in_
     s.execute("file.new", &json!({"name": "B"})).unwrap();
     let b = rect(&mut s, 0.0, "#00FF00");
     let clip = Rc::new(RefCell::new(None));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.set_embed_viewports(false);
     let mut app = crate::FigApp::new(s, Box::new(Clip(clip.clone())));
+    app.before_input(&ctx);
     ctx.run_ui(egui::RawInput::default(), |ui| app.ui(ui)).textures_delta.clear();
     // File A goes to a window of its own; the main window shows B.
     let w = crate::control::handle(&mut app, &ctx, "window.new", &json!({"index": 0})).unwrap()["window"].as_u64().unwrap();
