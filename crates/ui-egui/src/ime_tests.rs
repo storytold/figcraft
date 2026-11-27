@@ -164,10 +164,12 @@ fn a_caret_click_rejects_the_stale_delete_and_commit_in_the_same_input_batch() {
         let t = text_layer(&mut s, "abcdef");
         let mut u = Ui::new(s);
         figcraft_engine::textedit::begin(&mut u.app.session, t, Some(6), false).unwrap();
+        // The editor publishes its IME context for a frame before the platform composes.
+        u.frame(vec![]);
         ime(&mut u, vec![preedit("z")]);
         let p = u.app.to_screen(42.0, 45.0);
         // Real canvas pointer handling moves the caret and cancels preedit before text_keys.
-        ime(
+        let press = ime_descriptor(
             &mut u,
             vec![
                 Event::PointerMoved(p),
@@ -176,11 +178,15 @@ fn a_caret_click_rejects_the_stale_delete_and_commit_in_the_same_input_batch() {
                 Event::Ime(ImeEvent::Commit("Q".into())),
             ],
         );
+        let request_id = press.reset_request.expect("the click asks the platform to reset the composition");
         let edit = u.app.session.ds().unwrap().text_edit.as_ref().unwrap();
         assert!(edit.caret < 6, "the production canvas click actually moved the caret");
         assert!(edit.preedit.is_none(), "the click ended the composition");
         assert_eq!(text(&u, t), "abcdef", "neither stale deletion nor its Commit may mutate the clicked caret");
-        u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        u.frame(vec![
+            Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+            Event::ImeResetCompleted { request_id },
+        ]);
         // A later direct commit without an active composition is legitimate.
         let caret = u.app.session.ds().unwrap().text_edit.as_ref().unwrap().caret;
         ime(&mut u, vec![Event::Ime(ImeEvent::Commit("X".into()))]);

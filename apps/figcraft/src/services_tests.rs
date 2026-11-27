@@ -43,6 +43,7 @@ fn start(dir: &std::path::Path) -> FigApp {
 /// Draw two frames (the first only sets the fonts up).
 fn frames(fig: &mut FigApp, ctx: &egui::Context) {
     for _ in 0..2 {
+        fig.before_input(ctx);
         ctx.run_ui(egui::RawInput::default(), |ui| fig.ui(ui)).textures_delta.clear();
     }
 }
@@ -51,7 +52,7 @@ fn frames(fig: &mut FigApp, ctx: &egui::Context) {
 fn plugins_are_kept_when_the_app_is_killed() {
     let dir = root("killed");
     let folder = plugin(&dir);
-    let ctx = egui::Context::default();
+    let ctx = figcraft_ui_egui::framework::headless_context();
     let mut fig = start(&dir);
     assert!(fig.run("plugin.import", json!({"path": folder.to_string_lossy()})).is_some());
     frames(&mut fig, &ctx);

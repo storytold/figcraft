@@ -1,10 +1,10 @@
 use super::backend::Backend;
 use super::conn::{Shared, accept};
-use super::limits::{PerAddress, loopback};
+use super::limits::PerAddress;
 use super::queue::{Blocks, HubIn, InFlight};
 use super::{
     Arc, AtomicBool, AtomicUsize, ClientMsg, Duration, HashMap, Hub, Inbox, Instant, JoinHandle, MAX_NAME, NetLimits, Ordering, Presence, Readers,
-    Room, Sender, Server, SocketAddr, TcpListener, TcpStream, channel, io,
+    Room, Sender, Server, SocketAddr, TcpListener, channel, io,
 };
 
 /// The person hosting an app session: in the file's session without a socket.
@@ -48,6 +48,7 @@ impl Hosting {
 
     pub(crate) fn start<B: Backend>(listener: TcpListener, backend: B, limits: NetLimits, local: Option<Local>) -> io::Result<Hosting> {
         let addr = listener.local_addr()?;
+        listener.set_nonblocking(true)?;
         let in_flight = InFlight(Arc::default());
         let mut hub = Hub {
             backend,
@@ -169,15 +170,8 @@ impl Hosting {
         if let Some(t) = self.hub_thread.take() {
             let _ = t.join();
         }
-        // The accept loop checks the flag after each connection: wake it with one.
-        let wake = if self.addr.ip().is_unspecified() { SocketAddr::new(loopback(self.addr), self.addr.port()) } else { self.addr };
-        let woke = TcpStream::connect_timeout(&wake, Duration::from_secs(1)).is_ok();
         if let Some(t) = self.accept_thread.take() {
-            if woke {
-                let _ = t.join();
-            } else {
-                log::warn!("live session: couldn't wake the accept loop; it ends with the next connection");
-            }
+            let _ = t.join();
         }
         // Readers end once their writers have closed the sockets.
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -200,5 +194,55 @@ pub(super) struct Open(pub(super) Arc<AtomicUsize>);
 impl Drop for Open {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hub::{Admission, Closing};
+
+    struct Noop;
+
+    impl Backend for Noop {
+        fn admit(&mut self, _file: &str, _token: &str) -> Result<Admission, String> {
+            Err("no".into())
+        }
+
+        fn open(&mut self, _file: &str) -> Result<Server, String> {
+            Err("no".into())
+        }
+
+        fn closing(&self) -> Closing {
+            Closing::Ended
+        }
+    }
+
+    /// Stopping a wildcard (`0.0.0.0`) host must return even when another listener already holds
+    /// `127.0.0.1` on the same port (allowed on BSD/macOS under `SO_REUSEADDR`), and must not
+    /// connect to that loopback listener.
+    #[test]
+    fn stopping_a_wildcard_host_returns_when_loopback_shares_the_port() {
+        let shadow = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = shadow.local_addr().unwrap().port();
+        let (wildcard, shadowed) = match TcpListener::bind(("0.0.0.0", port)) {
+            Ok(l) => (l, true),
+            Err(_) if !cfg!(any(target_os = "freebsd", target_os = "macos")) => (TcpListener::bind("0.0.0.0:0").unwrap(), false),
+            Err(e) => panic!("expected BSD dual-bind on 0.0.0.0:{port} alongside 127.0.0.1:{port}: {e}"),
+        };
+        let mut hosting = Hosting::serve(wildcard, Noop, NetLimits::default()).unwrap();
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            hosting.stop();
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok(), "Hosting::stop() hung with a loopback listener on port {port}");
+        if shadowed {
+            shadow.set_nonblocking(true).unwrap();
+            assert!(
+                shadow.accept().is_err_and(|e| e.kind() == io::ErrorKind::WouldBlock),
+                "Hosting::stop() must not poke another listener on 127.0.0.1:{port}"
+            );
+        }
     }
 }

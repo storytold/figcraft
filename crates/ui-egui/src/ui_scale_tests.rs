@@ -108,7 +108,7 @@ fn every_window_size_system_scale_and_interface_size_lays_out_inside_the_window(
                 let case = format!("{w}x{h} pt at {native}x, {want}");
                 let mut app = FigApp::new(Session::new(), Box::new(NoServices));
                 assert!(app.run("pref.uiScale", json!({"scale": want})).is_some(), "{case}");
-                let ctx = egui::Context::default();
+                let ctx = crate::framework::headless_context();
                 let mut time = 0.0;
                 let mut seen = Vec::new();
                 for _ in 0..8 {
@@ -116,6 +116,7 @@ fn every_window_size_system_scale_and_interface_size_lays_out_inside_the_window(
                     let ppp = ctx.pixels_per_point();
                     let mut raw = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, px / ppp)), time: Some(time), ..Default::default() };
                     raw.viewports.insert(ViewportId::ROOT, ViewportInfo { native_pixels_per_point: Some(native), ..Default::default() });
+                    app.before_input(&ctx);
                     let mut out = ctx.run_ui(raw, |ui| app.ui(ui));
                     out.textures_delta.clear();
                     seen.push((ctx.pixels_per_point(), ctx.content_rect().size()));
