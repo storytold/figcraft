@@ -116,6 +116,7 @@ fn empty_options_keep_the_main_tree_and_document_output() {
                                 "fontFamily": "Synthetic",
                                 "fontSize": 18.0,
                                 "fontStyle": "Bold",
+                                "fontWeight": 700,
                                 "height": 24.0,
                                 "id": 3,
                                 "letterSpacing": "1",

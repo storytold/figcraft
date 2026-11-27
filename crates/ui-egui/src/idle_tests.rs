@@ -30,7 +30,7 @@ impl Harness {
         // again: scanned here, before the first frame, rather than by whichever test happens to
         // run first while this one waits for idle (#333).
         figcraft_text::scan_system_fonts();
-        Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0 }
+        Self { ctx: crate::framework::headless_context(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0 }
     }
 
     /// One frame with `events`, 1/60 s after the last; returns the repaint delay it asked for.
@@ -40,6 +40,7 @@ impl Harness {
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
         out.viewport_output.get(&ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay)
@@ -549,6 +550,7 @@ fn a_discarded_sizing_pass_sets_up_and_counts_one_frame_only() {
         RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(h.time + 1.0 / 60.0), ..Default::default() };
     let mut passes = 0;
     let app = &mut h.app;
+    app.before_input(&h.ctx);
     let mut out = h.ctx.run_ui(input, |ui| {
         passes += 1;
         app.ui(ui);
