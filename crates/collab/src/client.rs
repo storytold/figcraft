@@ -464,9 +464,13 @@ impl Client {
             }
             // Cursor chat, spotlights and what a server says about its hosting are the app's (the
             // transport hands them over).
-            ServerMsg::Pong | ServerMsg::Signal { .. } | ServerMsg::Hosting(_) | ServerMsg::Reported { .. } | ServerMsg::Resolved { .. } => {
-                Ok(Vec::new())
-            }
+            ServerMsg::Pong
+            | ServerMsg::Signal { .. }
+            | ServerMsg::Hosting(_)
+            | ServerMsg::Reported { .. }
+            | ServerMsg::Resolved { .. }
+            | ServerMsg::Branches(_)
+            | ServerMsg::Branch(_) => Ok(Vec::new()),
             ServerMsg::Welcome { .. } if self.online => Err(Error::Protocol("already joined".into())),
             ServerMsg::Welcome { session, client_id, seq, catch_up, processed, peers, access, secret } => {
                 if session != self.session || client_id != self.id {

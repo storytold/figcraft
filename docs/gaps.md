@@ -30,7 +30,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 14 | Variables: extended collections checked on real libraries (the tail landed 2026-10-12) | Feature | 0–1 | [components-parity](components-parity.md) |
 | 15 | Prototyping: media triggers and actions; controllers on macOS, Linux and FreeBSD (controller buttons on key/gamepad triggers, widgets in prototypes landed) | Feature | 2–5 | [prototyping-parity](prototyping-parity.md) |
 | 16 | Dev Mode: renaming the file in Dev Mode to check; the editor extension is left to the MCP server (publishing mappings from the code repository landed 2026-10-30) | Feature | 1–2 | [dev-mode-parity](dev-mode-parity.md) |
-| 17 | Branching: text runs merged whole, branches only their author sees in a live session (branches in live sessions, export settings and guides item by item, and history entries for creation and updates landed 2026-10-24) | Feature | 1–2 | [collaboration-parity](collaboration-parity.md) |
+| 17 | Branching: text runs merged whole, branch version history stays local (shared branches in live sessions landed 2026-11-26; live branches, export settings and guides item by item, and history entries for creation and updates landed 2026-10-24) | Feature | 1–2 | [collaboration-parity](collaboration-parity.md) |
 | 18 | Display P3 on screen: blocked upstream (egui-wgpu picks an 8-bit sRGB surface); gamut warning and soft-proof sRGB landed, as did several windows | Hardware | 4–8 | [hardware-parity](hardware-parity.md) |
 | 19 | AI features | AI | 30–60 | [target-app-parity](target-app-parity.md) |
 | 20 | Mobile apps (view, mirror, comment) | Platforms | 20–40 | [hardware-parity](hardware-parity.md) |
@@ -551,10 +551,15 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   entries for its creation and each update from main. Engine tests through a session server with
   several people, a fuzz test with random real commands (export settings and guides included,
   offline and live) and a junk-parameter sweep of the branch commands in a session.
+- **Landed (2026-11-26):** shared branches in live sessions: branch creation, edits, updates from
+  main, and merge/archive state sync across everyone in a session (capability-gated on `branches`,
+  capped at 64 branches, persisted in `figcraft-server` snapshots and logs with fallback decoding
+  for existing snapshots). Any editor can open, co-edit, review, archive and merge a peer's branch;
+  remote merges and archives close open branch tabs on peers; view and comment links cannot mutate
+  shared branches; older clients and servers fall back to local-only branches.
 - **Missing:** text runs still conflict as a whole (runs are character ranges into the text, so
-  lining them up item by item would need a text diff, not positions); branches in a live session
-  are their author's only (others can't see or open them: that needs the server to keep them);
-  a branch made offline that adds layers merges only outside a session.
+  lining them up item by item would need a text diff, not positions); a branch's own version history
+  stays local; a branch made offline that adds layers merges only outside a session.
 - **Estimate:** 1–2 h.
 
 ### 18. Display P3 on screen (several windows landed)
