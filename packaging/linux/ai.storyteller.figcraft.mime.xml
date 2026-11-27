@@ -5,12 +5,14 @@
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-figcraft">
     <comment>FigCraft document</comment>
+    <comment xml:lang="ru">Документ FigCraft</comment>
     <icon name="ai.storyteller.figcraft"/>
     <glob pattern="*.figcraft"/>
   </mime-type>
   <!-- Sketch 48 and newer save a zip of JSON. -->
   <mime-type type="application/x-sketch">
     <comment>Sketch document</comment>
+    <comment xml:lang="ru">Документ Sketch</comment>
     <sub-class-of type="application/zip"/>
     <glob pattern="*.sketch"/>
   </mime-type>
