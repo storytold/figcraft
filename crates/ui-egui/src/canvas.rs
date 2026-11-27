@@ -53,6 +53,7 @@ pub mod widget_bar;
 pub struct CanvasState {
     pub rect: Rect,
     texture: Option<egui::TextureHandle>,
+    tex_pixels: Option<Arc<egui::ColorImage>>,
     tex_view: Option<figcraft_render::View>,
     /// The file ([`figcraft_engine::DocState::uid`]) and page the texture shows: it is drawn only
     /// on them.
@@ -146,6 +147,7 @@ impl Default for CanvasState {
         Self {
             rect: Rect::NOTHING,
             texture: None,
+            tex_pixels: None,
             tex_view: None,
             tex_of: None,
             tex_coarse: false,
@@ -196,6 +198,7 @@ impl CanvasState {
     fn switch_texture(&mut self, shown: Option<(u64, NodeId)>, open: impl Fn(u64) -> bool) {
         if shown.is_some() && self.tex_of != shown {
             let back = self.kept.iter().position(|k| Some(k.of) == shown).map(|i| self.kept.remove(i));
+            self.tex_pixels = None;
             let (texture, view, of) = (self.texture.take(), self.tex_view.take(), self.tex_of.take());
             // An image without the dragged layers isn't the page's complete one: not kept.
             if let (Some(texture), Some(view), Some(of), false, false) = (texture, view, of, self.tex_coarse, self.tex_skipped) {
@@ -215,6 +218,23 @@ impl CanvasState {
     /// this too: the canvas isn't shown there, and closing the last file leads to it.
     pub(crate) fn drop_closed(&mut self, open: impl Fn(u64) -> bool) {
         self.kept.retain(|k| open(k.of.0));
+    }
+
+    pub(crate) fn pixel_under(&self, p: Point, of: Option<(u64, NodeId)>, page: Color32) -> Option<Color32> {
+        let (image, v) = (self.tex_pixels.as_ref()?, self.tex_view.as_ref()?);
+        if of.is_none() || self.tex_of != of {
+            return None;
+        }
+        let x = ((p.x - v.origin.0) * v.scale).floor();
+        let y = ((p.y - v.origin.1) * v.scale).floor();
+        let [w, h] = image.size;
+        if !(x >= 0.0 && y >= 0.0 && x < w as f64 && y < h as f64) {
+            return None;
+        }
+        let c = *image.pixels.get(y as usize * w + x as usize)?;
+        let under = 255 - u16::from(c.a());
+        let over = |a: u8, b: u8| (u16::from(a) + (u16::from(b) * under + 127) / 255).min(255) as u8;
+        Some(Color32::from_rgb(over(c.r(), page.r()), over(c.g(), page.g()), over(c.b(), page.b())))
     }
 }
 
@@ -388,10 +408,12 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         } else {
             egui::TextureOptions::LINEAR
         };
+        let pixels = Arc::new(done.image);
         match &mut app.canvas.texture {
-            Some(t) => t.set(done.image, filter),
-            None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", done.image, filter)),
+            Some(t) => t.set(Arc::clone(&pixels), filter),
+            None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", Arc::clone(&pixels), filter)),
         }
+        app.canvas.tex_pixels = Some(pixels);
         let done_at = done.at;
         let latency = Some(done.at.elapsed().as_secs_f64() * 1000.0);
         if done.coarse {
@@ -485,6 +507,11 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         let panning = app.canvas.space_pan || app.canvas.middle_pan.is_some();
         let shown = crate::cursors::on_canvas(panning, ctx.input(|i| i.pointer.any_down()), app.canvas.zoom_tool, app.session.tool.overlay.cursor);
         shown.show(&ctx, at);
+        if shown == crate::cursors::Shown::Drawn(crate::cursors::Glyph::Eyedropper)
+            && let Some(c) = app.canvas.pixel_under(app.to_page(at), app.session.ds().ok().map(|ds| (ds.uid, ds.page)), bg)
+        {
+            crate::cursors::sampled_swatch(&ctx, at, c);
+        }
         app.canvas.cursor = Some(shown);
     }
 }
