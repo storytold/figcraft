@@ -94,8 +94,14 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   (writing through it would create its target, wherever that is). A path outside the roots gets
   the same refusal whatever exists there, so a refusal doesn't tell what is outside. Folders are
   compared by whole names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
-  inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
-  and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+  inside `C:\work`), `\\?\C:\…` paths are resolved like drive-letter ones, and
+  new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+  A path on another computer (`\\server\share\…`, `\\?\UNC\…`, WebDAV's `\\host@SSL\share\…`) or a device
+  path (`\\.\pipe\…`, `\\?\GLOBALROOT\…`) is refused by its spelling before anything looks it up, since looking
+  it up would contact that host, unless a root is on the same share; a link whose target is one of those is
+  refused too. A local volume's `\\?\Volume{…}\` path is let through. A link whose text is a native NT name
+  (`\Device\…`, `\??\…`, `\GLOBAL??\…`) is refused as a device path, and so is a name that ends in a period or a space, in a
+  path or as a link's target, since Windows trims it where it looks a name up.
 - **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
   document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
   `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
@@ -182,13 +188,29 @@ Or in a project's `.mcp.json`:
   leaves its contents where they are, and so does resizing a frame with `cmd` held (constraints
   ignored); a layer a mask hides can't be clicked there, and a mask group's box and exports are
   the mask's (plus any layers under the mask).
+- Repeated UI (buttons, inputs, cards, list rows, tab bars, icons) is a component and its copies
+  are instances: make it once with `component.create` (or `create_node` type `component`) and place
+  each other copy with `instance.create {component, parent?, x?, y?}` rather than duplicating the
+  layers, so every copy follows the main. States and sizes are variants of one set: name the mains
+  `Property=value` (`State=Default`, `State=Hover`) and run `component.combineVariants` on them;
+  `component.addVariant {id}` adds one more. What changes per copy is a component property:
+  `component.addProperty {id, name, type: text|boolean|instanceSwap, layer}` on the component, or
+  on the set once its variants are combined, then `component.bindProperty {layer, property}` for
+  each other variant's layer (a property added to one variant before combining stays that
+  variant's, so an instance switched to another variant loses it); `instance.setProperties {ids,
+  properties}` sets it on each copy. The server's `initialize` instructions say this too, since
+  agents otherwise tend to copy layers.
 - Children of an auto-layout frame are positioned by the layout: set `layout`, `gap`, `padding`,
   `mainAlign`, `crossAlign`, `sizingH`/`sizingV` instead of x/y. In one call, `layout` applies
   before the keys that tune it, so `{"layout": {"mode": "vertical"}, "gap": 8}` keeps the gap;
   auto layout keys beside a `layout` of `null` or `"none"` are refused. More auto layout props:
   - `sizingH` / `sizingV`: `fixed`, `hug` (auto layout frames and text) or `fill` (children in an
-    auto layout flow). A child can't fill an axis its parent hugs: setting `fill` turns the parent
-    `fixed` on that axis, and a parent set to `hug` turns the children that filled it `fixed`. A
+    auto layout flow). A child can't fill the axis its parent hugs along the flow: setting `fill`
+    turns the parent `fixed` on that axis (the session notice reads "Width set to Fixed for <name>"),
+    and a parent set to `hug` turns the children that filled it `fixed`. Across the flow the parent keeps
+    hugging and the child takes the line's cross size (the largest sibling that doesn't fill, its min
+    counted, padding outside); the parent turns `fixed` ("Height set to Fixed for <name>") only when no
+    such sibling is left, and `fill` across a wrapping row that hugs that axis is refused. A
     layer moved out of auto layout (or whose frame loses it) keeps its size as `fixed`. Fill
     children share the space like CSS flexbox, within their min/max.
   - `minWidth` / `maxWidth` / `minHeight` / `maxHeight` (px, `null` removes) bound Hug, Fill and
@@ -386,6 +408,10 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
+| `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
+| `export_assets {ids?, dir?, dryRun?}` | Write the selection's images and vectors into `dir` as files named by their content: see [Asset handoff](#asset-handoff). |
+| `component_mappings {ids?, unmapped?, root?}` | Which code component each design component is: `import`, `name`, `source` (and `sourceFound` under `root`, default the server's folder), a ready `snippet`, `properties` with variants, and `values` that need translating. |
+| `sync_mappings {direction, path?}` | Apply a code repository's `figcraft.connect.json` to the open design (`import`) or write the design's mappings to it (`export`); `path` defaults to that file in the server's folder. |
 | `select {ids}` | Replace the selection (`[]` deselects). |
 | `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (PNG: `sRGB` chunk, or ICC and `cICP` for Display P3; JPG: ICC profile; WebP: ICC profile for Display P3, none for sRGB) (SVG, XML and RGB PDF output are always sRGB; PDF with `cmyk` is DeviceCMYK). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
@@ -396,6 +422,62 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `type_text {text, id?}` | Type into the text being edited, or replace the contents of text layer `id`. |
 | `inspect_ui {}` | Tool, view and status (and panels, timings and the app's `windows` when attached). |
 | `wait_for_changes {after?, timeoutMs?, topics?, limit?}` | Wait for new comment events in the attached app; returns pending events at once, else waits up to `timeoutMs` (default 20 s, max 25 s). Pass the returned `cursor` back to keep watching. Headless returns immediately. |
+
+### Design context
+
+`design_context` (the command `inspect.designContext`) reads the selection, or `ids`, or `scope`
+(`selection`, `page`, `document`; with nothing selected, the page). The result is one JSON object:
+
+| Key | What it holds |
+|---|---|
+| `version` | The format's version; fields can be added without changing it |
+| `document` | `name`, `page`, `colorProfile` |
+| `target` | `source` (`selection`, `ids`, `page`, `document`), `ids`, `layers` in the tree |
+| `nodes` | The tree, below |
+| `variables` | By id: `name`, `collection`, `type`, `codeSyntax`, and `modes` with each `mode`'s stored `value` and `resolved` value. The tree's layers and shared styles bind them, or another one reads them as an alias or in a colour calculation |
+| `styles` | By id: the shared styles the tree uses |
+| `components` | By id: `name`, `type`, `properties` with variants, `codeLinks` |
+| `fonts` | `family`, `styles`, and whether it's `installed` |
+| `assets` | What `inspect.assets` lists, for the layers in the tree |
+| `missing` | `{what, why}`: what the design doesn't specify. Always says that the file stores no breakpoints |
+| `truncated` | When `depth` or `maxNodes` cut the tree, or `maxBytes` made the tool ask for fewer layers: `layersLeftOut`, `assetsLeftOut`, `depth`, `maxNodes`; and `variables` when aliases went deeper than the 10,000 variables followed |
+
+Each layer in `nodes` has `id`, `name`, `type` and:
+
+- `explicit`: what the designer set, with the keys of `get_node`.
+- `derived`: what the file worked out: `absoluteBounds`, `rotation`, `gridCell`, a position in an auto
+  layout flow, and a size that Hug, Fill or auto-sizing text decides.
+- `tokens`: bound variables by field, and shared styles as `style.fill`, `style.text[0..5]` and so on,
+  with the `name` of each. `explicit` holds the value they resolved to.
+- `unsupported`: `{property, why}` for what has no direct CSS equivalent. The value stays in `explicit`.
+- `code`: for a component or instance connected to code, per language, `{language, importPath, name,
+  source?, notes?, code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
+  says what it holds, and `get_node` reads it.
+- `children`, or `childCount` where the tree stops.
+
+Values are the file's own. Nothing is converted to CSS or guessed. Hidden layers are in the tree, with
+`visible: false` in `explicit`.
+
+### Asset handoff
+
+`export_assets` (the command `file.exportAssets`) hands a design's assets to a code project. It writes
+to `dir`, absolute or relative to where the MCP server runs, and only lists them with `dryRun`. The
+files the call writes are confined like any other (see Confining file access).
+
+- **Images** are the bytes the file holds, never re-encoded: `source: "original"`.
+- **Vectors** go through the SVG export: `source: "vector"`.
+- **Layers with export settings** go through those settings: `source: "rendered"`, or `vector` for
+  SVG. Their images are listed as originals too.
+
+Each file is named `<first 16 hex digits of its SHA-256>.<extension>`, so one asset has one file, used
+by every layer in `layers`. Exporting again rewrites nothing unless the file there differs
+(`written`, `reused`). `adjustments` lists what a layer does that isn't in the image's bytes (filters,
+crop, rotation, opacity), which code has to apply. `skipped` says why an asset couldn't be handed over,
+and hidden layers stay out. It reads what `inspect.assets` finds, up to 200 layers per call
+(`truncated` says so).
+
+Fonts are never exported. The file holds only family and style names, and `design_context` lists them
+under `fonts`. Their licences are for the project to check.
 
 ### Compact layer trees
 
@@ -477,7 +559,7 @@ Returns `{fitted: [{id, fontSize, lines, fits, orphan}]}`. Use case: a carousel 
 
 A board is a file of its own kind for thinking together: `file.newBoard {name?}` opens one (its
 page is light; `inspect_document` says `kind: "board"`). Board objects are ordinary layers with a
-`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode, …}`; a connector may say
+`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode|codeBlock, …}`; a connector may say
 `branch: true`), so the usual
 commands move, resize, recolour, copy, delete and undo them. On a design file the board commands
 refuse; on a board `proto.*`, `dev.*`, `view.prototype` and `view.devMode` refuse. Each of these is
@@ -490,7 +572,10 @@ one undo step and returns the ids it made:
 - `board.nextSticky {id?, side?: right|below|left|above, edit?}` → `{id, text}`: a sticky of the
   same colour beside the selected (or edited) one; with `edit: true` the app goes on typing in it
   (`Shift+Cmd/Ctrl+Enter` in the app does both). On a shape it does what `board.addConnected` does:
-  the next shape, joined to it by a connector (`{id, text, connector}`).
+  the next shape, joined to it by a connector (`{id, text, connector}`). On a mind map node it is
+  the node's next sibling, as `board.mindMapAdd {relation: sibling}`.
+  On a code block it makes the next code block 128 units beside it (`side`, default right), as wide and
+  in the same language, not joined (`{id, text, language}`).
 - `board.addConnected {id?, side?: right|below|left|above, edit?}` → `{id, text, connector}`: the
   next sticky or shape of the same kind, size and colour on that side of the selected (or edited)
   one, 80 units away, joined to it by a connector the way the Connector tool makes one; one undo
@@ -511,6 +596,17 @@ one undo step and returns the ids it made:
   of the map that the given (or selected, or edited) one belongs to: a child below its other
   children, or a sibling right after it (the first node has none); the map lays itself out again.
   One undo step. With `edit: true` the app goes on typing in it.
+- `board.codeBlock {x?, y?, language?, text?, width?, parent?, edit?}` → `{id, text, language}`: a code
+  block (`codeBlock` with its `language`): a dark panel holding monospace text (Liberation Mono 16 on a
+  24 line where it is embedded or installed). `language` is `bash cpp css go graphql html javascript json
+  kotlin plainText python ruby rust sql swift typescript` (default `typescript`); `width` is 210 to 100000
+  (default 576); `x`/`y` are its top-left corner, by default the view's centre less half the width and less 64 (half the
+  smallest height, 128), so a block of more lines reaches further down. Its height is its lines: 32 + 24 a visual line,
+  never under four lines, so only its width can be changed (a set or dragged height is not kept). In its
+  text Tab types two spaces, Enter keeps the line's indent, and lists, links and styled ranges do not stick.
+  One undo step.
+- `board.setLanguage {id?, ids?, language}` → `{ids}`: the language of the given (or selected, or edited)
+  code blocks, by id or name (`cpp` or `C++`).
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
   wrapping text: `rectangle roundedRectangle ellipse diamond triangle triangleDown parallelogramRight parallelogramLeft trapezoid pentagon hexagon octagon star plus arrowLeft arrowRight chevron speechBubble database document predefinedProcess manualInput internalStorage`.
 - `board.connector {from, to, fromSide?, toSide?, fromAt?, toAt?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
@@ -538,7 +634,8 @@ one undo step and returns the ids it made:
 - `board.ink {path | points, highlighter?, color?, select? (default true)}` → `{id}`: a marker (or
   wide, see-through highlighter) stroke.
 - `board.setColor {ids?, color}`: stickies and shapes take it as their fill, connectors and ink as
-  their line. `board.setStyle {ids?, shape?, fontSize?, style?: straight|elbow|curved, startCap?,
+  their line, mind map nodes as their text colour (a board colour in its deeper shade).
+  `board.setStyle {ids?, shape?, fontSize?, style?: straight|elbow|curved, startCap?,
   endCap?}`: a shape's outline and text size, a connector's routing and arrowheads.
 - `board.templates` → `[{id, name, description, width, height}]` lists the built-in templates:
   `retrospective brainstorm weeklyPlanner flowChart kanban`. `board.template {name, x?, y?}` →
@@ -553,7 +650,8 @@ one undo step and returns the ids it made:
   (default the last); `id` may be the table or any layer in it.
 - Tools for `pointer`: `tool.sticky {color?}`, `tool.shape {shape?}`, `tool.connector {style?: straight|elbow|curved}`
   (drag from one object to another), `tool.marker {color?}`, `tool.highlighter {color?}`,
-  `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`; Text and Section are the usual tools.
+  `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`, `tool.mindMap` (a click places a mind map, the first node's text starting
+  there, and types in it); Text and Section are the usual tools.
 
 ```json
 {"command": "file.newBoard", "params": {"name": "Retro"}}
@@ -642,8 +740,9 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
 - `doc.nextTab` / `doc.previousTab` (`Ctrl+Tab` / `Ctrl+Shift+Tab`): the next or previous open file.
 - Board tools (boards only): `tool.sticky` (`Q`), `tool.shape` (`B`), `tool.connector` (`X`),
   `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), and
-  `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky). Keys no design-file
-  shortcut uses; on a design file they refuse.
+  `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky; on a mind map node it
+  makes the node's next sibling) and `board.mindMapAdd` (`Cmd/Ctrl+Enter` on a mind map node, also
+  while typing in one). Keys no design-file shortcut uses; on a design file they refuse.
 - `view.pan {dx, dy, big?}`: the arrow keys with nothing selected (`key ArrowRight` does the same)
   pan the view by 64 screen pixels a step, 320 with `big` (Shift).
 - `view.multiplayerCursors {on?}` (`Alt+Cmd+\`): show or hide others' cursors in a live session.
@@ -719,9 +818,10 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   it is larger; the choice is kept. In the browser the interface always follows the browser's zoom.
 - `pref.autoSave {on?}`: files that have a path save themselves a few seconds after they change
   (off by default; the desktop app's timer does it, so scripts still call `file.save`).
-- `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of in a new file
-  (off by default; files named on the command line still open, and `--control` starts in a new
-  file anyway, so control callers have a document).
+- `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of reopening the
+  files open when it last quit (off by default; with nothing to reopen it starts on the Home screen
+  too; files named on the command line still open, and with nothing open `--control` starts in a new
+  file, so control callers have a document).
 - `pref.language {language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|sv|vi|zh-Hans|zh-Hant|…}`: the app's interface language, applied live ("system":
   the OS or browser language; a language without a catalog shows English). Command ids, labels and
   every result stay English.
@@ -986,6 +1086,8 @@ name and sets them this way);
   same library, components the other file publishes as a library are used from it (and that
   library is enabled when the other file is saved), and other mains stay behind: the instance shows
   a missing main (`component.restoreMain` makes it a main here).
+  A main component copied from a file that publishes it as a library pastes as an instance of
+  it from that library (enabled the same way); a main that library doesn't offer pastes as a copy.
 
 ### Team libraries
 
@@ -1006,7 +1108,7 @@ most when it can't be reached).
   `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
   team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
   so opening a file that names another one contacts nothing (#1097).
-- `library.usage {library?, days?}` → `{id, name, assetsKnown, styles [{id, name, type, layers, files}], variables [{id, name, collection, layers, files}], instances, detached, detachesKnown, days,
+- `library.usage {library?, days?}` → `{id, name, assetsKnown, assetActionsKnown, styles [{id, name, type, layers, files, insertions, detachments}], variables [{id, name, collection, layers, files, insertions, detachments}], instances, detached, detachesKnown, days,
   insertions, detachments, actionsKnown, weeks: [{week, insertions, detachments}], files: [{name,
   updated, instances, detached}], components: [{id, name, instances, files, detached, insertions,
   detachments}]}`: what the files using it reported (each fetch reports the asking document's name
@@ -1038,7 +1140,8 @@ most when it can't be reached).
   the instance itself (its layers follow the main's constraints) or edit the main.
 - **Variants**: `instance.setProperties {ids?, properties}` switching variants keeps an override
   where the layer's name path matches and both variants had the same value for that property;
-  text layers keep all theirs. The default variant (`instance.create` with a set, the Assets
+  text layers keep all theirs, and a text layer the other variant nests elsewhere is matched by
+  its name when one layer on each side has it. The default variant (`instance.create` with a set, the Assets
   thumbnail) is the one in the set's top-left corner; `component.editProperty {name, default}`
   moves the chosen variant there, `{name, index}` reorders variant properties (the variants'
   names follow). `component.properties` on a set reports `conflicts`: variants sharing one
@@ -1184,8 +1287,8 @@ layer; text on one `<textPath>` as text on a path, with its start offset and anc
 image fills, and SVG images imported in place. CSS, `<use>`/`<symbol>`, units
 and `viewBox`/`preserveAspectRatio` are resolved. The result's `warnings` list what was left out
 (filters that aren't shadows or blurs, rotated repeating patterns, a clip path's own clip path).
-Linked files are never read, only data URIs; documents nested more than 512 elements deep are
-refused.
+Linked files are never read, only data URIs; documents nested more than 256 elements deep
+(references followed) are refused.
 
 ### Importing `.fig` files
 
@@ -1789,11 +1892,20 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   `@acme/ui` gives `import { Button } from "@acme/ui";` then `<Button variant="primary" icon="none">{"Buy
   now"}</Button>`. `codeConnect.remove {id?, language?}` (no language: all). `codeConnect.export
   {path?}` → `{text, links}` (or writes the file): `{version: 1, links: [{component, language,
-  importPath, name, template}]}`, sorted, meant to live in the code repository as
-  `figcraft.connect.json`; `codeConnect.import {json | path}` → `{linked, warnings}` links each
+  importPath, name, template, source?, values?, notes?}]}`, sorted, meant to live in the code
+  repository as `figcraft.connect.json` (writing a file that's there keeps its other top-level keys
+  and the links of components this design doesn't have, so several designs can share one file; a
+  file there that isn't a connect file it can read is left alone and the export refused); `codeConnect.import {json | path}` → `{linked, warnings}` links each
   entry to every component or set with that name (one undo step; at most 5,000 links and 4 MB;
-  templates up to 4,000 characters, names 100, import paths 300; invalid entries are skipped with a
-  warning). `get_node` lists a component's links as `codeLinks`. In the app, the Inspect tab's
+  templates up to 4,000 characters, names 100, import paths 300; invalid entries, a malformed `values`
+  among them, are skipped with a warning). A link can also say where the code component lives (`source`, a path inside the
+  repository), what a property's design values are called in code (`values`:
+  `{"Variant": {"Primary": "primary"}}`, so `{Variant}` renders `primary`; a value without an entry
+  keeps its design name; `{Variant ? "a" : "b"}` still reads the design's value) and `notes`, through `codeConnect.set`, the file and the Inspect tab.
+  `codeConnect.list {ids?, unmapped?, root?}` → `{components: [{id, name, type, mapped, properties,
+  links: [{language, importPath, import, name, template, snippet, source?, sourceFound?, values?,
+  notes?}]}], mapped, unmapped}` answers which code component each design component is; with `root`
+  it says whether each `source` exists there. `get_node` lists a component's links as `codeLinks`. In the app, the Inspect tab's
   Connect to code section edits them in the Code section's language, with a live preview and a
   Connected badge. An editor extension isn't needed: agents and editors read the same snippets
   through this server. Plugins whose manifest asks only for `read` also run from the Inspect tab,
@@ -2089,7 +2201,7 @@ turned off 0°.
   other than miter (`strokeJoin`) or a miter angle other than the default ~28.96° (`miterAngle`).
 - **Select**: `select.layersAt {x, y}` lists every layer under a page point, locked ones too, front-most first with its
   depth and a `locked` flag (true when the layer or an ancestor is locked; the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
-  / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab). With `pointer`, `cmd: true`
+  / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab; on a board, a mind map node's next or previous sibling). With `pointer`, `cmd: true`
   clicks select the nested layer, `cmd` drags from empty canvas select the nested layers they touch,
   and `shift` drags toggle what they touch. A press on the background of a top-level frame with
   layers in it (the frame not selected) starts a marquee, as on the canvas; an empty frame
@@ -2102,7 +2214,8 @@ turned off 0°.
   `cmd` while resizing a frame ignores its children's constraints (they stay where they are) and,
   as in every drag, turns snapping off. Moves snap to edges, centres and equal spacing (the gaps
   show in `tool.overlay.guides` with labels); with the pixel grid on, moves and resizes land on
-  whole pixels.
+  whole pixels. Frames, sections, components and instances always land on whole pixels of their
+  parent, with the pixel grid off too and after a snap to a layer off the grid.
 
 Tool failures come back as results with `isError: true` and a message; protocol problems (unknown
 tool, malformed JSON, wrong parameter types) are JSON-RPC errors. Nothing crashes the server.

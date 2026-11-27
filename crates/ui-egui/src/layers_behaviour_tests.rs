@@ -4,11 +4,14 @@
 //! list (dragging pages, dividers). Rows the documentation is silent on say so and pin today's
 //! behaviour. What the gestures do to the document is in the engine's `panels_behaviour_tests`.
 
+use std::sync::{Arc, Mutex};
+
 use egui::{Event, Id, Modifiers, Pos2};
 use figcraft_doc::NodeId;
 use figcraft_engine::Session;
 use serde_json::json;
 
+use crate::Services;
 use crate::layers_drag_tests::Ui;
 
 fn id(v: serde_json::Value) -> NodeId {
@@ -687,6 +690,68 @@ fn the_page_menu_sets_the_opening_page_and_not_on_dividers() {
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
 }
 
+/// Right-clicks `at` in the pages list and returns the menu's "Copy link to page" item, if shown.
+fn copy_link_item(u: &mut Ui, at: Pos2) -> Option<Pos2> {
+    u.frame(vec![
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+    let shapes: Vec<egui::Shape> = u.frame_output(vec![]).shapes.into_iter().map(|c| c.shape).collect();
+    crate::live_tests::has_text(&shapes, "Copy link to page").then(|| crate::live_tests::text_center(&shapes, "Copy link to page"))
+}
+
+/// The pages list's menu offers "Copy link to page" on a page and not on a divider, and using it
+/// copies the page's node link to the clipboard and shows a toast without moving the viewer's page (#2379).
+#[test]
+fn the_page_menu_copies_link_to_page_and_not_on_dividers() {
+    let mut s = Session::new();
+    let p1 = s.page().unwrap();
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    let div = id(s.execute("page.add", &json!({"name": "-"})).unwrap());
+    s.execute("page.move", &json!({"id": div, "index": 1})).unwrap();
+    s.execute("page.select", &json!({"id": p1})).unwrap();
+    let mut u = Ui::new(s);
+    let copied = Arc::new(Mutex::new(Vec::new()));
+    struct Clip(Arc<Mutex<Vec<String>>>);
+    impl Services for Clip {
+        fn clipboard_set_text(&mut self, s: &str) {
+            self.0.lock().unwrap().push(s.to_string());
+        }
+    }
+    u.app.services = Box::new(Clip(copied.clone()));
+    let (r1, r2) = (page_row(&mut u, p1, p2), page_row(&mut u, p2, p1));
+    let mid = Pos2::new(r1.x, (r1.y + r2.y) / 2.0);
+    u.app.session.execute("page.select", &json!({"id": p1})).unwrap();
+    u.frame(vec![]);
+
+    // A divider has no "Copy link to page" menu item.
+    assert_eq!(copy_link_item(&mut u, mid), None, "a divider has no such item");
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+
+    // A normal page has "Copy link to page".
+    let item = copy_link_item(&mut u, r2).expect("a page has the item (and its menu is open)");
+    u.frame(vec![Event::PointerMoved(item)]);
+    u.button(item, true);
+    u.button(item, false);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+
+    // Checks:
+    // 1. Link format is `figcraft://node/<p2_id>`
+    assert_eq!(*copied.lock().unwrap(), vec![format!("figcraft://node/{}", p2.0)]);
+    // 2. Toast "Link copied" is shown
+    assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Link copied"));
+    // 3. Document opening page and viewer's current page are unaffected
+    assert_ne!(u.app.session.doc().unwrap().current_page, Some(p2));
+    assert_eq!(u.app.session.page().unwrap(), p1);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
 /// The y of the line between the pages and the layers, above the layers' row at `layer` (found by
 /// the resize cursor it shows when hovered).
 fn pages_edge_at(u: &mut Ui, layer: f32) -> f32 {
@@ -884,6 +949,64 @@ fn search_fields_keep_their_text_in_the_middle() {
     u.app.ui.left_tab = crate::LeftTab::Assets;
     let off = off_centre(&mut u, "Search assets");
     assert!(off < 1.0, "Search assets is {off} points off the middle");
+}
+
+#[test]
+fn a_shift_range_across_frames_keeps_a_frame_and_not_its_covered_children() {
+    let mut s = Session::new();
+    let frame1 = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Frame 1"})).unwrap());
+    let rect2 = rect(&mut s, "Rect 2", 0.0, Some(frame1));
+    let rect3 = rect(&mut s, "Rect 3", 30.0, Some(frame1));
+    let frame2 = id(s.execute("frame.create", &json!({"x": 200, "y": 0, "width": 100, "height": 100, "name": "Frame 2"})).unwrap());
+    let rect4 = rect(&mut s, "Rect 4", 0.0, Some(frame2));
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame1, frame2]);
+    u.frame(vec![]);
+    let (row4, row2) = (u.row_at(rect4), u.row_at(rect2));
+    click(&mut u, row4, Modifiers::NONE);
+    click(&mut u, row2, SHIFT);
+    assert_eq!(
+        sorted(u.app.session.selection()),
+        sorted(vec![rect4, frame1]),
+        "the range keeps Frame 1 and drops its covered children {rect3:?} and {rect2:?}"
+    );
+}
+
+#[test]
+fn a_second_shift_click_after_a_reverse_cross_frame_range_extends_the_range() {
+    let mut s = Session::new();
+    let frame1 = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Frame 1"})).unwrap());
+    let rect2 = rect(&mut s, "Rect 2", 0.0, Some(frame1));
+    let rect3 = rect(&mut s, "Rect 3", 30.0, Some(frame1));
+    let frame2 = id(s.execute("frame.create", &json!({"x": 200, "y": 0, "width": 100, "height": 100, "name": "Frame 2"})).unwrap());
+    let rect4 = rect(&mut s, "Rect 4", 0.0, Some(frame2));
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame1, frame2]);
+    u.frame(vec![]);
+    let (row2, row4, row3) = (u.row_at(rect2), u.row_at(rect4), u.row_at(rect3));
+    click(&mut u, row2, Modifiers::NONE);
+    click(&mut u, row4, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![rect4, frame1]));
+    // Rows run Frame 2, Rect 4, Frame 1, Rect 3, Rect 2: the range from Rect 2 to Rect 3 is those two.
+    click(&mut u, row3, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![rect3, rect2]), "the range still runs from Rect 2, not a toggle");
+}
+
+#[test]
+fn a_shift_range_inside_one_frame_is_unchanged() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "F"})).unwrap());
+    let kids = [0.0, 30.0, 60.0].map(|x| rect(&mut s, "k", x, Some(frame)));
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.insert(frame);
+    u.frame(vec![]);
+    let (first, last) = (u.row_at(kids[0]), u.row_at(kids[2]));
+    click(&mut u, first, Modifiers::NONE);
+    click(&mut u, last, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(kids.to_vec()));
 }
 
 /// The centre of `id`'s icon, a top-level row: the row's left edge is the first point from the

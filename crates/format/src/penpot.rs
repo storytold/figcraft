@@ -413,7 +413,6 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
     let mut warnings = Vec::new();
     embedded_fonts::report(&mut z, &mut warnings, &mut inflate_budget);
     inflate_budget.check()?;
-    let mut image_keys: BTreeMap<String, String> = BTreeMap::new();
     let mut layer_count = 0;
     let mut image_bytes = 0usize;
     let mut svg_bytes = 0usize;
@@ -425,6 +424,8 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
             return Err(corrupt("invalid file UUID"));
         };
         let base = format!("files/{file_id}");
+        // Media records are scoped to this file, even when UUIDs repeat across files.
+        let mut image_keys = BTreeMap::new();
         let (masters, variant_names, component_sources) = component_masters(&mut z, &base, &mut inflate_budget);
         let file_header = json(&mut z, &format!("{base}.json"), &mut inflate_budget)
             .ok()
@@ -4791,6 +4792,52 @@ mod tests {
         assert!(matches!(node.fills.first().map(|p| &p.kind), Some(PaintKind::Image(img))
             if img.scale_mode == ImageScaleMode::Crop && img.crop == Some([1.0,0.0,0.0,1.0,0.0,0.0])));
         assert!(doc.validate().is_empty());
+    }
+
+    #[test]
+    fn image_fills_resolve_media_ids_within_each_penpot_file() {
+        use image::ImageEncoder;
+        use serde_json::json;
+
+        let page = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let shape = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let media = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        let first = "11111111-1111-1111-1111-111111111111";
+        let second = "22222222-2222-2222-2222-222222222222";
+        let mut writer = craft_penpot::Writer::new();
+        let manifest = craft_penpot::manifest("test", &[(first, "First", Value::Null), (second, "Second", Value::Null)]);
+        writer.add("manifest.json", &serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let mut expected = Vec::new();
+        for (file, name, object, rgb) in [
+            (first, "Red image", "33333333-3333-3333-3333-333333333333", [255, 0, 0]),
+            (second, "Blue image", "44444444-4444-4444-4444-444444444444", [0, 0, 255]),
+        ] {
+            let base = format!("files/{file}");
+            for (path, data) in [
+                (format!("{base}/pages/{page}.json"), json!({"id":page,"name":name,"index":0})),
+                (format!("{base}/pages/{page}/{ROOT_ID}.json"), json!({"id":ROOT_ID,"type":"frame","shapes":[shape]})),
+                (
+                    format!("{base}/pages/{page}/{shape}.json"),
+                    json!({"id":shape,"type":"image","name":name,"width":1,"height":1,"metadata":{"id":media}}),
+                ),
+                (format!("{base}/media/{media}.json"), json!({"id":media,"mtype":"image/png","mediaId":object})),
+            ] {
+                writer.add(&path, &serde_json::to_vec(&data).unwrap()).unwrap();
+            }
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png).write_image(&rgb, 1, 1, image::ExtendedColorType::Rgb8).unwrap();
+            writer.add(&format!("objects/{object}.png"), &png).unwrap();
+            expected.push((name, png));
+        }
+        let (doc, warnings) = import(&writer.finish().unwrap()).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        for (name, bytes) in expected {
+            let layer = doc.nodes().find(|n| n.name == name && !n.fills.is_empty()).unwrap();
+            let PaintKind::Image(image) = &layer.fills[0].kind else {
+                panic!("expected an image fill for {name}");
+            };
+            assert_eq!(doc.images[&image.image].bytes.as_slice(), bytes.as_slice(), "{name} should use its own file's image");
+        }
     }
 
     #[test]

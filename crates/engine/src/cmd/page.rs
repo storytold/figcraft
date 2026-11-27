@@ -5,7 +5,7 @@ use figcraft_doc::{Document, Guide, NodeId, NodeKind};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::{boolean, color, id, req_index, req_num, req_string, string};
+use crate::params::{boolean, color, id, req_id, req_index, req_num, req_string, string};
 use crate::{Session, bad, spec};
 
 /// After a page edit: the file keeps a page that isn't a divider, and the canvas shows one (the
@@ -26,7 +26,10 @@ fn settle(s: &mut Session, cmd: &str) -> crate::Result<()> {
 
 /// The page a command targets: the explicit `id` (which must be a page) or the open page.
 fn page_target(s: &Session, cmd: &str, p: &Value) -> crate::Result<NodeId> {
-    let Some(target) = id(p, "id") else { return s.page() };
+    let target = match p.get("id") {
+        None | Some(Value::Null) => s.page()?,
+        Some(_) => req_id(cmd, p, "id")?,
+    };
     if !s.doc()?.pages.contains(&target) {
         return Err(bad(cmd, format!("{target} is not a page")));
     }
@@ -53,9 +56,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Ok(json!({"id": id, "divider": true}));
             }
             let ds = s.ds_mut()?;
-            ds.page = id;
+            ds.open_page(id);
             ds.selection.clear();
-            ds.zoom_to_fit();
             Ok(json!({"id": id}))
         }),
         spec!("page.select", "Go to page", "{id | index}", false, |s, p| {
@@ -74,10 +76,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Err(bad("page.select", "a divider isn't a page to open"));
             }
             let ds = s.ds_mut()?;
-            ds.page = id;
+            ds.open_page(id);
             ds.selection.clear();
             ds.text_edit = None;
-            ds.zoom_to_fit();
             ok()
         }),
         spec!("page.rename", "Rename page", "{id?, name} (an empty page named with a leading hyphen becomes a divider)", true, |s, p| {
@@ -128,12 +129,9 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"id": np}))
         }),
         spec!("page.move", "Move page", "{id?, index}", true, |s, p| {
-            let id = id(p, "id").unwrap_or(s.page()?);
             let k = req_index("page.move", p, "index")?;
+            let id = page_target(s, "page.move", p)?;
             let doc = s.doc_mut()?;
-            if !doc.pages.contains(&id) {
-                return Err(bad("page.move", format!("{id} is not a page")));
-            }
             doc.pages.retain(|x| *x != id);
             let k = k.min(doc.pages.len());
             doc.pages.insert(k, id);

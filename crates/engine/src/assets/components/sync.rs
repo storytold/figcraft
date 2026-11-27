@@ -115,7 +115,63 @@ fn match_layers(
         }
         m.map.insert(*s, nid);
     }
+    match_text_by_name(doc, inst, component, src, old, &mut m);
     m
+}
+
+/// Main text layers nothing matched take the unmatched old text layer of the same name, when
+/// exactly one of each has it: text typed into an instance stays when it switches to a variant that
+/// nests the same text layer in other frames (its name path differs). Only layers outside nested
+/// instances, which rebuild from their own mains. Names are counted over all those text layers,
+/// matched ones too, so a name two layers share on either side never pairs by elimination.
+fn match_text_by_name(
+    doc: &Document,
+    inst: NodeId,
+    component: NodeId,
+    src: &[NodeId],
+    old: &BTreeMap<NodeId, std::sync::Arc<Node>>,
+    m: &mut Matched,
+) {
+    fn unique<K: Ord>(pairs: impl Iterator<Item = (K, NodeId)>) -> BTreeMap<K, NodeId> {
+        let mut seen: BTreeMap<K, Option<NodeId>> = BTreeMap::new();
+        for (k, id) in pairs {
+            seen.entry(k).and_modify(|e| *e = None).or_insert(Some(id));
+        }
+        seen.into_iter().filter_map(|(k, id)| Some((k, id?))).collect()
+    }
+    let text = |n: &Node| matches!(n.kind, NodeKind::Text(_));
+    let mut mains =
+        unique(src.iter().filter_map(|s| doc.node(*s)).filter(|s| text(s) && outside_nested(doc, s.id, component)).map(|s| (s.name.clone(), s.id)));
+    mains.retain(|_, s| m.fresh.contains(s));
+    if mains.is_empty() {
+        return;
+    }
+    let olds = unique(
+        old.iter()
+            .filter(|(id, o)| text(o) && outside_nested(doc, **id, inst))
+            .map(|(id, o)| (o.source.and_then(|s| doc.node(s)).map_or(&o.name, |s| &s.name).clone(), *id)),
+    );
+    for (name, s) in mains {
+        if let Some(o) = olds.get(&name).filter(|o| !m.used.contains(*o)) {
+            m.used.insert(*o);
+            m.map.insert(s, *o);
+            m.fresh.retain(|f| *f != s);
+        }
+    }
+}
+
+/// Whether layer `id` is below `root` with no instance between them.
+fn outside_nested(doc: &Document, id: NodeId, root: NodeId) -> bool {
+    let mut cur = doc.node(id).and_then(|n| n.parent);
+    for _ in 0..=1_000_000 {
+        match cur.and_then(|c| doc.node(c)) {
+            Some(n) if n.id == root => return true,
+            Some(n) if matches!(n.kind, NodeKind::Instance { .. }) => return false,
+            Some(n) => cur = n.parent,
+            None => return false,
+        }
+    }
+    false
 }
 
 /// A rebuild's copies of the main's layers, pre-order (parents first).
@@ -336,6 +392,28 @@ fn index_old_layers(doc: &Document, inst: NodeId, spare: BTreeMap<NodeId, std::s
     (old, by_source, by_src)
 }
 
+/// The `ChildLayout` of an instance's rebuilt root. Its placement is its own (absolute position,
+/// grid cell, min and max). `sizing_h` / `sizing_v` serve two roles: how a frame sizes its own
+/// content (Hug, Fixed), which follows the main unless the instance overrides its size (measured in
+/// Figma: a plain instance turns Fixed when its main does and back to Hug with it; a typed width
+/// stays), and Fill in an auto layout parent, which is the instance's own and is kept.
+fn instance_child_layout(doc: &Document, root: &Node, comp: &Node) -> figcraft_doc::ChildLayout {
+    let mut cl = root.child_layout.clone();
+    // One "size" override covers both axes, as in Figma ("Reset size"): it keeps both.
+    if root.overrides.contains("size") || root.overrides.contains("resizing") {
+        return cl;
+    }
+    let in_flow = root.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some());
+    let take = |own: &mut figcraft_doc::Sizing, main: figcraft_doc::Sizing| {
+        if !(in_flow && *own == figcraft_doc::Sizing::Fill) && main != figcraft_doc::Sizing::Fill {
+            *own = main;
+        }
+    };
+    take(&mut cl.sizing_h, comp.child_layout.sizing_h);
+    take(&mut cl.sizing_v, comp.child_layout.sizing_v);
+    cl
+}
+
 /// The rebuilt root of instance `inst` of `comp`.
 fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, component: NodeId, map: &BTreeMap<NodeId, NodeId>) -> Node {
     // Root: follows the main except its own placement, name, size and overrides.
@@ -351,7 +429,7 @@ fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, compon
     let nested_copy = inside_instance(doc, inst);
     fresh.source = if nested_copy { root.source } else { Some(component) };
     fresh.constraints = root.constraints;
-    fresh.child_layout = root.child_layout.clone();
+    fresh.child_layout = instance_child_layout(doc, root, comp);
     fresh.interactions = root.interactions.clone();
     fresh.exports = root.exports.clone();
     fresh.prop_refs = root.prop_refs.clone();
@@ -365,6 +443,8 @@ fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, compon
     fresh.locked = root.locked;
     fresh.visible = root.visible;
     fresh.var_modes = root.var_modes.clone();
+    // The scale an instance was given (a nested copy's own factor comes from its main layer).
+    fresh.scale_factor = root.scale_factor;
     fresh.is_mask = root.is_mask;
     fresh.exposed = root.exposed;
     fresh.guides = root.guides.clone();
@@ -497,8 +577,14 @@ pub fn keep_text_overrides(doc: &mut Document, inst: NodeId) {
 /// Where auto layout places and sizes a rebuilt copy `n` of main layer `orig`, keep the old
 /// copy's `o` values (an instance's auto layout re-flows from its own content, so they usually
 /// differ from the main's): unchanged layers then stay unchanged, and auto layout re-flows wherever
-/// something that sizes or places layers did change.
+/// something that sizes or places layers did change. Only when `o` mirrored `orig` itself: a layer
+/// matched to another variant's layer (or a new one) takes its geometry from it, so the re-flow
+/// starts from the new main's consistent state instead of re-applying the resize to children that
+/// already hold new-main sizes (which stretched them twice).
 fn keep_laid_out(doc: &Document, orig: &Node, o: &Node, n: &mut Node) {
+    if o.source != Some(orig.id) {
+        return;
+    }
     if o.parent != n.parent || o.overrides.contains("size") || o.overrides.contains("position") {
         return;
     }

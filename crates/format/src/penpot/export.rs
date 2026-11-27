@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Cursor, Write};
 
 use figcraft_doc::color::{BlendMode, Color, Gradient, GradientKind, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::geom::kurbo::PathEl;
@@ -13,7 +12,7 @@ use figcraft_doc::{
 use serde_json::{Map, Value, json};
 
 use super::{ROOT_ID, fingerprint, layout_fingerprint, strokes_fingerprint, text_fingerprint, tokens_fingerprint, uuid};
-use crate::{FormatError, io_err, json_options};
+use crate::{FormatError, io_err};
 
 const DEFAULT_FEATURES: &[&str] = &["fdata/path-data", "design-tokens/v1", "variants/v1", "layout/grid", "components/v2", "fdata/shape-data-type"];
 
@@ -565,27 +564,19 @@ impl<'a> Exporter<'a> {
             "files": [{"id": self.file_id, "name": name, "features": file.get("features").cloned().unwrap_or(Value::Null)}],
             "relations": [],
         });
-        let mut buf = Cursor::new(Vec::new());
-        {
-            let mut z = zip::ZipWriter::new(&mut buf);
-            let mut put = |path: &str, bytes: &[u8]| -> Result<(), FormatError> {
-                z.start_file(path, json_options()).map_err(io_err)?;
-                z.write_all(bytes).map_err(io_err)
-            };
-            put("manifest.json", &serde_json::to_vec_pretty(&manifest).map_err(io_err)?)?;
-            put(&format!("{base}.json"), &serde_json::to_vec_pretty(&file).map_err(io_err)?)?;
-            if let Some(tokens) = tokens {
-                put(&format!("{base}/tokens.json"), tokens.as_bytes())?;
-            }
-            for (path, value) in &entries {
-                put(path, &serde_json::to_vec_pretty(value).map_err(io_err)?)?;
-            }
-            for (path, bytes) in &blobs {
-                put(path, bytes)?;
-            }
-            z.finish().map_err(io_err)?;
+        let mut writer = craft_penpot::Writer::new();
+        writer.add("manifest.json", &serde_json::to_vec_pretty(&manifest).map_err(io_err)?).map_err(io_err)?;
+        writer.add(&format!("{base}.json"), &serde_json::to_vec_pretty(&file).map_err(io_err)?).map_err(io_err)?;
+        if let Some(tokens) = tokens {
+            writer.add(&format!("{base}/tokens.json"), tokens.as_bytes()).map_err(io_err)?;
         }
-        Ok((buf.into_inner(), self.warnings))
+        for (path, value) in &entries {
+            writer.add(path, &serde_json::to_vec_pretty(value).map_err(io_err)?).map_err(io_err)?;
+        }
+        for (path, bytes) in &blobs {
+            writer.add(path, bytes).map_err(io_err)?;
+        }
+        Ok((writer.finish().map_err(io_err)?, self.warnings))
     }
 
     fn page_json(&self, page: NodeId, page_id: &str, index: usize, background: Color) -> Value {
@@ -904,16 +895,21 @@ impl<'a> Exporter<'a> {
     fn image_fill(&mut self, hash: &str, keep_aspect: bool) -> Option<Value> {
         if !self.media.contains_key(hash) {
             let data = self.doc.images.get(hash)?;
-            let (mtype, ext, bytes) = match image::guess_format(&data.bytes) {
-                Ok(image::ImageFormat::Png) => ("image/png", "png", data.bytes.to_vec()),
-                Ok(image::ImageFormat::Jpeg) => ("image/jpeg", "jpg", data.bytes.to_vec()),
-                Ok(image::ImageFormat::WebP) => ("image/webp", "webp", data.bytes.to_vec()),
-                Ok(image::ImageFormat::Gif) => ("image/gif", "gif", data.bytes.to_vec()),
+            let (mtype, ext, bytes) = match craft_image_codecs::detect(&data.bytes) {
+                Some(craft_image_codecs::Format::Png) => ("image/png", "png", data.bytes.to_vec()),
+                Some(craft_image_codecs::Format::Jpeg) => ("image/jpeg", "jpg", data.bytes.to_vec()),
+                Some(craft_image_codecs::Format::WebP) => ("image/webp", "webp", data.bytes.to_vec()),
+                Some(craft_image_codecs::Format::Gif) => ("image/gif", "gif", data.bytes.to_vec()),
                 _ => {
-                    let decoded = image::load_from_memory(&data.bytes).ok()?;
-                    let mut out = Cursor::new(Vec::new());
-                    decoded.write_to(&mut out, image::ImageFormat::Png).ok()?;
-                    ("image/png", "png", out.into_inner())
+                    let decoded = craft_image_codecs::decode_with(
+                        &data.bytes,
+                        &craft_image_codecs::DecodeOptions { keep_orientation: true, ..Default::default() },
+                    )
+                    .ok()?;
+                    let rgba = decoded.converted(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
+                    let png =
+                        craft_image_codecs::encode(&rgba, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).ok()?;
+                    ("image/png", "png", png)
                 }
             };
             self.media.insert(

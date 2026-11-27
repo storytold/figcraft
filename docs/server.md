@@ -254,8 +254,9 @@ which other files use without anyone copying the library file around.
   layers use each of the library's styles and variables. **Show usage** in the library file
   (`library.usage`) lists the files and the instances and detaches of each component, the
   insertions and detachments of the past 30 days, 90 days or year, and, by its Type choice, the
-  layers and files using each style and variable. Layers inside instances count for their
-  component. Files are
+  layers and files using each style and variable with their insertions and detachments. Applying
+  a style or variable, or copying or duplicating content that uses it, inserts it, and the Detach
+  button detaches it. Layers inside instances count for their component. Files are
   told apart by their names; a file's report changes only when its usage does. The server counts
   what a file's totals grow past their highest in the week it hears of it, keeps a year of weeks,
   and counts an undo and a redo once. A server from before these counts refuses the reports
@@ -268,7 +269,10 @@ send their requests on a thread of their own, show that they're on their way (wi
 finish when the answer arrives, acting on the file they started in. Scripts, the CLI and the MCP
 server run the same commands and wait for the answer.
 
-The browser build can't use team libraries yet (it has no library support of its own).
+The browser build uses team libraries through the same panel: adding one by its link, its styles
+and components, publishing a file that is on the server, Show usage and the reports a file sends.
+A browser can't keep a library file, and scripts through `window.figcraft` can't reach a server
+(commands there don't wait for it), so those stay with the desktop app, the CLI and MCP.
 
 ## Plugin directory
 

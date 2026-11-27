@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use craft_image_codecs::{ChannelLayout, SampleType};
 use figcraft_color::{ColorProfile, ImageFilters, PaintKind};
 use figcraft_doc::{Document, ImageData, NodeId};
 use tiny_skia::Pixmap;
@@ -117,28 +118,167 @@ fn decode_in(bytes: &[u8], target: ColorProfile) -> Option<(Pixmap, bool)> {
 /// from their header, before any pixels are decoded), scaled down to at most `max_side` wide and
 /// tall.
 pub(crate) fn decode_within(bytes: &[u8], target: ColorProfile, max_side: u32, max_bytes: u64) -> Option<(Pixmap, bool)> {
-    use image::ImageDecoder;
     if figcraft_format::jpeg::finer_than_first(bytes) {
         return None;
     }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(max_bytes);
-    reader.limits(limits);
-    let mut dec = reader.into_decoder().ok()?;
-    if dec.total_bytes() > max_bytes {
+    let opts = craft_image_codecs::DecodeOptions {
+        limits: craft_image_codecs::Limits::new(u32::MAX, u32::MAX, u64::MAX, max_bytes),
+        keep_orientation: true,
+    };
+    let img = craft_image_codecs::decode_with(bytes, &opts).ok()?;
+    let source = crate::image_profile::Source::from_decoded(bytes, img.icc.as_deref());
+    let is_gray = source.is_gray() && img.layout().is_gray();
+    let layout = if is_gray { ChannelLayout::GrayA } else { ChannelLayout::Rgba };
+    let original = img.dimensions();
+    let (w, h) = thumbnail_size(original.0, original.1, max_side)?;
+    let pixels =
+        if original != (w, h) && matches!(img.layout(), ChannelLayout::Gray | ChannelLayout::GrayA | ChannelLayout::Rgb | ChannelLayout::Rgba) {
+            match img.sample_type() {
+                SampleType::U16 => {
+                    let thumbnail = thumbnail_u16(&img, w, h)?;
+                    drop(img);
+                    thumbnail.convert(layout, SampleType::U8).into_data()
+                }
+                SampleType::F16 | SampleType::F32 => {
+                    let f32_img = (img.sample_type() == SampleType::F16).then(|| img.converted(img.layout(), SampleType::F32).into_owned());
+                    let src = f32_img.as_ref().unwrap_or(&img);
+                    let thumbnail = thumbnail_f32(src, w, h)?;
+                    drop(f32_img);
+                    drop(img);
+                    thumbnail.convert(layout, SampleType::U8).into_data()
+                }
+                SampleType::U8 => {
+                    let converted = img.converted(layout, SampleType::U8);
+                    thumbnail_u8(original, (w, h), is_gray, converted.into_owned().into_data())?
+                }
+            }
+        } else {
+            let converted = img.converted(layout, SampleType::U8);
+            thumbnail_u8(original, (w, h), is_gray, converted.into_owned().into_data())?
+        };
+    if is_gray {
+        let rgba = source.convert_u8(w, h, true, &pixels, target)?;
+        return Some((premultiplied_rgba(w, h, &rgba)?, false));
+    }
+    match source.convert_u8(w, h, false, &pixels, target) {
+        Some(rgba) => Some((premultiplied_rgba(w, h, &rgba)?, false)),
+        None => Some((premultiplied_rgba(w, h, &pixels)?, true)),
+    }
+}
+
+/// Dimensions of a nonempty, aspect-fit thumbnail within the requested side limit.
+fn thumbnail_size(w: u32, h: u32, max_side: u32) -> Option<(u32, u32)> {
+    if w == 0 || h == 0 {
         return None;
     }
-    let source = crate::image_profile::Source::read(bytes, &mut dec);
-    let mut img = image::DynamicImage::from_decoder(dec).ok()?;
-    if img.width() > max_side || img.height() > max_side {
-        // `thumbnail` keeps the aspect ratio and works in integers (no float copy of the pixels).
-        img = img.thumbnail(max_side, max_side);
+    if w <= max_side && h <= max_side {
+        return Some((w, h));
     }
-    match source.convert(&img, target) {
-        Some(rgba) => Some((premultiplied(&rgba)?, false)),
-        None => Some((premultiplied(&img.to_rgba8())?, true)),
+    let ratio = (f64::from(max_side) / f64::from(w)).min(f64::from(max_side) / f64::from(h));
+    let nw = (f64::from(w) * ratio).round().max(1.0) as u32;
+    let nh = (f64::from(h) * ratio).round().max(1.0) as u32;
+    Some((nw, nh))
+}
+
+/// Scale `pixels` in GrayA or RGBA layout.
+fn thumbnail_u8((w, h): (u32, u32), (nw, nh): (u32, u32), is_gray: bool, pixels: Vec<u8>) -> Option<Vec<u8>> {
+    if (w, h) == (nw, nh) {
+        return Some(pixels);
     }
+    if is_gray {
+        let buf = image::ImageBuffer::<image::LumaA<u8>, _>::from_raw(w, h, pixels)?;
+        Some(image::imageops::thumbnail(&buf, nw, nh).into_raw())
+    } else {
+        let buf = image::RgbaImage::from_raw(w, h, pixels)?;
+        Some(image::imageops::thumbnail(&buf, nw, nh).into_raw())
+    }
+}
+
+/// Keep the old thumbnail's floating-point box boundaries. Every axis scales down, so
+/// a rounding edge case still needs at least one source sample.
+fn source_span(index: u32, input: u32, ratio: f32) -> std::ops::Range<usize> {
+    let offset = index as f32 * ratio;
+    let start = (offset.ceil() as u32).min(input - 1);
+    let end = ((offset + ratio).ceil() as u32).clamp(start + 1, input);
+    start as usize..end as usize
+}
+
+/// Average native samples within each thumbnail pixel's source rectangle. Use wide sums
+/// because a large reduction can overflow the image crate's U16 thumbnail accumulator.
+fn thumbnail_u16(img: &craft_image_codecs::Image, nw: u32, nh: u32) -> Option<craft_image_codecs::Image> {
+    let (w, h) = img.dimensions();
+    let layout = img.layout();
+    let channels = layout.channels();
+    let pixel_bytes = channels * 2;
+    let row_bytes = (w as usize).checked_mul(pixel_bytes)?;
+    let output_bytes = (nw as usize).checked_mul(nh as usize)?.checked_mul(pixel_bytes)?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(output_bytes).ok()?;
+    let rows = img.data().chunks_exact(row_bytes);
+    let x_ratio = w as f32 / nw as f32;
+    let y_ratio = h as f32 / nh as f32;
+    for y in 0..nh {
+        let y_span = source_span(y, h, y_ratio);
+        let band = rows.clone().skip(y_span.start).take(y_span.len());
+        for x in 0..nw {
+            let x_span = source_span(x, w, x_ratio);
+            let bytes = x_span.start * pixel_bytes..x_span.end * pixel_bytes;
+            let count = x_span.len() as u64 * y_span.len() as u64;
+            let mut sums = [0_u64; 4];
+            for row in band.clone() {
+                for pixel in row.get(bytes.clone())?.chunks_exact(pixel_bytes) {
+                    for (sum, sample) in sums.iter_mut().zip(pixel.as_chunks::<2>().0) {
+                        *sum += u64::from(u16::from_ne_bytes(*sample));
+                    }
+                }
+            }
+            for sum in sums.iter().take(channels) {
+                let sample = ((sum + count / 2) / count) as u16;
+                data.extend_from_slice(&sample.to_ne_bytes());
+            }
+        }
+    }
+    craft_image_codecs::Image::from_raw(nw, nh, layout, SampleType::U16, data).ok()
+}
+
+/// Average native `f32` samples within each thumbnail pixel's source rectangle before
+/// quantizing to 8-bit, clamping non-finite and out-of-range samples to `[0, 1]` like full-size
+/// decode so `NaN` or cancelling infinities cannot poison a block.
+fn thumbnail_f32(img: &craft_image_codecs::Image, nw: u32, nh: u32) -> Option<craft_image_codecs::Image> {
+    let (w, h) = img.dimensions();
+    let layout = img.layout();
+    let channels = layout.channels();
+    let pixel_bytes = channels * 4;
+    let row_bytes = (w as usize).checked_mul(pixel_bytes)?;
+    let output_bytes = (nw as usize).checked_mul(nh as usize)?.checked_mul(pixel_bytes)?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(output_bytes).ok()?;
+    let rows = img.data().chunks_exact(row_bytes);
+    let x_ratio = w as f32 / nw as f32;
+    let y_ratio = h as f32 / nh as f32;
+    for y in 0..nh {
+        let y_span = source_span(y, h, y_ratio);
+        let band = rows.clone().skip(y_span.start).take(y_span.len());
+        for x in 0..nw {
+            let x_span = source_span(x, w, x_ratio);
+            let bytes = x_span.start * pixel_bytes..x_span.end * pixel_bytes;
+            let count = (x_span.len() * y_span.len()) as f64;
+            let mut sums = [0.0_f64; 4];
+            for row in band.clone() {
+                for pixel in row.get(bytes.clone())?.chunks_exact(pixel_bytes) {
+                    for (sum, sample) in sums.iter_mut().zip(pixel.as_chunks::<4>().0) {
+                        let v = f32::from_ne_bytes(*sample);
+                        *sum += if v.is_nan() { 0.0 } else { f64::from(v.clamp(0.0, 1.0)) };
+                    }
+                }
+            }
+            for sum in sums.iter().take(channels) {
+                let sample = (sum / count) as f32;
+                data.extend_from_slice(&sample.to_ne_bytes());
+            }
+        }
+    }
+    craft_image_codecs::Image::from_raw(nw, nh, layout, SampleType::F32, data).ok()
 }
 
 /// Whether image `hash`, decoded as `pm`, has no transparent pixels (filters and colour profiles
@@ -178,14 +318,13 @@ pub fn profile_name(hash: &str, data: Option<&ImageData>) -> Option<String> {
     name
 }
 
-/// Straight RGBA → a premultiplied pixmap (max 16k per side).
-fn premultiplied(rgba: &image::RgbaImage) -> Option<Pixmap> {
-    let (w, h) = rgba.dimensions();
+/// Straight RGBA8 → a premultiplied pixmap (max 16k per side).
+fn premultiplied_rgba(w: u32, h: u32, rgba: &[u8]) -> Option<Pixmap> {
     if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
         return None;
     }
     let mut p = Pixmap::new(w, h)?;
-    for (dst, src) in p.data_mut().as_chunks_mut::<4>().0.iter_mut().zip(rgba.as_raw().chunks_exact(4)) {
+    for (dst, src) in p.data_mut().as_chunks_mut::<4>().0.iter_mut().zip(rgba.chunks_exact(4)) {
         let a = u32::from(src.get(3).copied().unwrap_or(255));
         let pm = |c: u8| ((u32::from(c) * a + 127) / 255) as u8;
         dst.copy_from_slice(&[
@@ -289,33 +428,20 @@ pub fn frame_secs(numer: u32, denom: u32) -> f64 {
 /// big for one frame within [`MAX_ANIMATION_BYTES`]. A damaged frame ends the animation there.
 /// shortcut: GIFs always loop (their repeat count is ignored); read it if a one-shot GIF matters.
 pub fn decode_frames(bytes: &[u8]) -> Option<Vec<(Pixmap, f64)>> {
-    use image::{AnimationDecoder, ImageDecoder};
-    if image::guess_format(bytes).ok()? != image::ImageFormat::Gif {
+    let mut limits = craft_gif::frames::FrameLimits::default();
+    limits.max_frames = MAX_FRAMES;
+    limits.max_bytes = MAX_ANIMATION_BYTES;
+    limits.max_canvas_bytes = MAX_ANIMATION_BYTES;
+    let anim = craft_gif::frames::read_frames(bytes, &limits).ok()?;
+    if anim.frames.len() <= 1 || anim.width > MAX_SIDE || anim.height > MAX_SIDE {
         return None;
     }
-    let mut dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).ok()?;
-    let (w, h) = dec.dimensions();
-    let frame_bytes = u64::from(w) * u64::from(h) * 4;
-    if frame_bytes == 0 || w > MAX_SIDE || h > MAX_SIDE {
-        return None;
+    let mut out = Vec::with_capacity(anim.frames.len());
+    for f in anim.frames {
+        let pm = premultiplied_rgba(anim.width, anim.height, &f.rgba)?;
+        out.push((pm, frame_secs(f.delay_ms, 1)));
     }
-    // A frame's own descriptor can ask for a far larger buffer than the canvas: the decoder
-    // reserves each frame and canvas buffer against these limits before allocating it.
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_SIDE);
-    limits.max_image_height = Some(MAX_SIDE);
-    // The decoder charges its canvas, its composited output and the partial frame against this
-    // together, besides the frames kept (capped by `most` below): one frame of working room.
-    limits.max_alloc = Some(MAX_ANIMATION_BYTES.saturating_add(frame_bytes));
-    dec.set_limits(limits).ok()?;
-    let most = (MAX_ANIMATION_BYTES / frame_bytes).min(MAX_FRAMES as u64) as usize;
-    let mut out = Vec::new();
-    for f in dec.into_frames().take(most) {
-        let Ok(f) = f else { break };
-        let (n, d) = f.delay().numer_denom_ms();
-        out.push((premultiplied(f.buffer())?, frame_secs(n, d)));
-    }
-    (out.len() > 1).then_some(out)
+    Some(out)
 }
 
 type AnimKey = (String, [i32; 7], ColorProfile);
@@ -432,8 +558,7 @@ pub fn apply_filters(p: &mut Pixmap, f: &ImageFilters) {
 
 /// Read an image's pixel size without keeping the decode.
 pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    let reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
-    reader.into_dimensions().ok()
+    craft_image_codecs::probe_size(bytes).ok()
 }
 
 /// `pm` with a transparent 1-pixel border.

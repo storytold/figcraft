@@ -4,8 +4,8 @@ use super::handles::{
 };
 use super::{
     Affine, ArcHandle, ArcHint, Cursor, Document, Gesture, Guide, Handle, ImageScaleMode, LayoutMode, NodeId, NodeKind, PaintKind, Point,
-    PointerEvent, Rect, ResizeStart, Result, ScaleHint, Session, Sizing, Targets, TextAutoResize, ToolId, Vec2, move_world, roots, select_target,
-    textedit, within_slop,
+    PointerEvent, Rect, ResizeStart, Result, ScaleHint, Session, Sizing, Targets, TextAutoResize, ToolId, Vec2, move_world, pencil_add, roots,
+    select_target, textedit, within_slop,
 };
 
 impl Session {
@@ -77,33 +77,50 @@ impl Session {
         }
         // A frame's name label picks the frame itself. The background of a top-level frame with
         // layers in it is like the canvas (a press starts a marquee inside it) unless the frame is
-        // selected; an empty frame (or a widget, or a board object such as a sticky) is picked and
-        // dragged.
+        // selected; stepping out from a selected descendant is handled by the marquee below.
+        // An empty frame (or a widget, or a board object such as a sticky) is picked and dragged.
+        let in_section = |n: &figcraft_doc::Node| n.parent.and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::Section { .. }));
         let board_background = |leaf: NodeId| {
-            !sel.contains(&leaf)
+            (ev.cmd || !sel.contains(&leaf))
                 && doc.node(leaf).is_some_and(|n| {
-                    n.parent == Some(page) && n.kind.is_frame_like() && !n.children.is_empty() && !crate::widgets::is_widget(n) && !n.is_board_atom()
+                    let board = match n.kind {
+                        NodeKind::Section { contents_hidden } => !contents_hidden,
+                        ref k => k.is_frame_like() && (n.parent == Some(page) || in_section(n)),
+                    };
+                    board && !n.children.is_empty() && !crate::widgets::is_widget(n) && !n.is_board_atom()
                 })
         };
         let label = label_at(&doc, page, &self.tool.labels, ev.p());
-        let target = label.or_else(|| {
-            self.hit(&doc, page, ev.p(), ev.tol() * 2.0)
-                .filter(|leaf| ev.cmd || !board_background(*leaf))
-                .map(|leaf| select_target(&doc, leaf, &sel, ev.cmd))
-        });
+        let leaf = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+        let hit = label.or(leaf);
+        let background_under_cmd = leaf.filter(|l| ev.cmd && label.is_none() && board_background(*l));
+        let target = label.or_else(|| leaf.filter(|leaf| !board_background(*leaf)).map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
         // A press inside the selection's box that reaches nothing above it (an unfilled shape's
         // inside, the frame or canvas behind it, or a layer stacked below the selected layer the
         // press is in) drags the selection. In a gap between selected layers, what's there is hit.
         let in_own_box = |s: NodeId| selection_box(&doc, &[s]).is_some_and(|q| in_quad(&q, ev.p()));
+        // A press on a layer inside a selected one (a child of a selected frame) drags the
+        // selection too, and a click selects that layer; Cmd/Ctrl keeps the deep pick.
+        let in_selected = |t: NodeId| sel.iter().any(|s| *s != t && doc.is_ancestor(*s, t));
         let behind_sel = |t: Option<NodeId>| {
-            t.is_none_or(|t| sel.iter().any(|s| *s != t && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s)))))
+            t.is_none_or(|t| {
+                (!ev.cmd && in_selected(t))
+                    || sel.iter().any(|s| *s != t && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s))))
+            })
         };
         // What the press hit (a label or a painted layer): a click that doesn't become a drag
         // selects just it. A press that reaches nothing above the selection uses the selection as
         // its drag target instead; that fallback is not a clicked layer.
         let clicked = target;
+        let marks_out_a_selected_board = background_under_cmd.is_some_and(|b| sel.contains(&b));
         let target = match sel.iter().copied().find(|s| !locked_in(&doc, *s)) {
-            Some(first) if label.is_none() && !ev.shift && behind_sel(target) && selection_box(&doc, &sel).is_some_and(|q| in_quad(&q, ev.p())) => {
+            Some(first)
+                if label.is_none()
+                    && !ev.shift
+                    && !marks_out_a_selected_board
+                    && behind_sel(target)
+                    && selection_box(&doc, &sel).is_some_and(|q| in_quad(&q, ev.p())) =>
+            {
                 Some(first)
             }
             _ => target,
@@ -119,8 +136,12 @@ impl Session {
                 let without_target = || sel.iter().copied().filter(|x| *x != target).collect::<Vec<_>>();
                 // A release without a drag narrows the selection to the layer the press hit. A
                 // selected frame's name label sits outside the selection bounds, so it counts too.
-                let keep = clicked
-                    .filter(|c| (label.is_some() || in_sel_box) && !ev.cmd && (sel.contains(c) || sel.iter().any(|s| doc.is_ancestor(*s, *c))));
+                // A layer inside a selected one counts as well: the press drags the selection, and
+                // a click selects that layer.
+                let keep = clicked.filter(|c| {
+                    !ev.cmd
+                        && (((label.is_some() || in_sel_box) && (sel.contains(c) || sel.iter().any(|s| doc.is_ancestor(*s, *c)))) || in_selected(*c))
+                });
                 let new_sel = if keep.is_some() {
                     sel.clone()
                 } else if ev.shift && deselect.is_none() {
@@ -138,7 +159,7 @@ impl Session {
                 if !edits {
                     if deselect.is_some() {
                         self.set_selection(without_target());
-                    } else if let Some(k) = keep.filter(|_| sel.len() > 1) {
+                    } else if let Some(k) = keep.filter(|k| sel.as_slice() != [*k]) {
                         self.set_selection(vec![k]);
                     }
                     return Ok(());
@@ -172,10 +193,22 @@ impl Session {
             }
             None => {
                 let within = self.marquee_within(ev.p())?;
-                if !ev.shift {
-                    self.set_selection(vec![]);
+                // Clicking the background of the frame containing the current selection steps
+                // out to that frame. Keep the marquee gesture (without a Move interaction), so
+                // dragging here still selects its contents and cannot leave a stale snapshot.
+                let parent = hit.filter(|f| !ev.shift && !ev.cmd && within == Some(*f) && sel.iter().any(|s| doc.is_ancestor(*f, *s)));
+                if let Some(f) = parent {
+                    self.set_selection(vec![f]);
+                } else if !ev.shift {
+                    self.set_selection(background_under_cmd.into_iter().collect());
                 }
-                self.tool.gesture = Gesture::Marquee { start: ev.p(), additive: ev.shift, base: if ev.shift { sel } else { vec![] }, within };
+                self.tool.gesture = Gesture::Marquee {
+                    start: ev.p(),
+                    additive: ev.shift,
+                    base: if ev.shift { sel } else { vec![] },
+                    within,
+                    pending_click: parent.is_some(),
+                };
             }
         }
         Ok(())
@@ -196,9 +229,18 @@ impl Session {
                 it.label = if ev.alt { "Duplicate" } else { "Move" }.into();
             }
         }
+        if let Gesture::Marquee { start, pending_click, .. } = &mut g
+            && *pending_click
+        {
+            if within_slop(ev, *start) {
+                self.tool.gesture = g;
+                return Ok(());
+            }
+            *pending_click = false;
+        }
         let res = match &g {
             Gesture::None => return self.hover(ev),
-            Gesture::Marquee { start, additive, base, within } => {
+            Gesture::Marquee { start, additive, base, within, .. } => {
                 let r = Rect::from_points(*start, ev.p());
                 self.tool.overlay.marquee = Some([r.x0, r.y0, r.x1, r.y1]);
                 // Cmd/Ctrl: the nested layers it touches.
@@ -221,7 +263,11 @@ impl Session {
                 let raw = d;
                 let snap_on = self.ds().map(|ds| ds.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl;
                 let mut guides = Vec::new();
-                if self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
+                let boards = {
+                    let doc = self.doc()?;
+                    ids.iter().all(|i| doc.node(*i).is_some_and(crate::snap::always_on_pixels))
+                };
+                if boards || self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
                     // Keep the box's origin on whole pixels (a rotated parent frame's, inside one);
                     // snapping to layers comes after, so it wins on the axes it snaps.
                     d = targets.round_move(d);
@@ -230,6 +276,11 @@ impl Session {
                     let (c, g2) = targets.snap_move(d, SNAP_PX / ev.zoom.max(1e-6));
                     d += c;
                     guides = g2;
+                }
+                if boards {
+                    // Frames, sections and components stay on whole pixels even where a layer
+                    // they snap to doesn't.
+                    d = targets.round_move(d);
                 }
                 let ids = ids.clone();
                 let dup = *duplicate;
@@ -315,6 +366,9 @@ impl Session {
                             doc.reparent(*m, page, None)?;
                         }
                         move_world(doc, *m, d.x, d.y)?;
+                        if doc.node(*m).is_some_and(crate::snap::always_on_pixels) {
+                            shifted &= !crate::snap::settle_on_pixels(doc, *m)?;
+                        }
                     }
                     drop_target = (flow && target != page).then_some(target);
                     Ok(())
@@ -416,10 +470,7 @@ impl Session {
             }
             Gesture::Pencil { points, pressure } => {
                 let (mut pts, mut pressure) = (points.clone(), pressure.clone());
-                if pts.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
-                    pts.push(ev.p());
-                    pressure.push(ev.pressure);
-                }
+                pencil_add(&mut pts, &mut pressure, ev);
                 self.tool.overlay.pen = pts.iter().map(|p| [p.x, p.y]).collect();
                 self.tool.gesture = Gesture::Pencil { points: pts, pressure };
                 if let Ok(ds) = self.ds_mut() {
@@ -496,7 +547,13 @@ impl Session {
         // The pixel grid: an upright box's dragged sides land on whole pixels (the Scale tool
         // scales by the factor as dragged). Snapping to layers comes after, so it wins on the axes
         // it snaps.
-        if !scale_tool && self.ds().map(|d| d.view.snap_pixel).unwrap_or(true) && crate::guides::axis_aligned(frame) {
+        // Frames, sections and components land on whole pixels whatever the setting, also where a
+        // layer they snap to doesn't.
+        let boards = {
+            let doc = self.doc()?;
+            !scale_tool && crate::guides::axis_aligned(frame) && ids.iter().all(|i| doc.node(*i).is_some_and(crate::snap::always_on_pixels))
+        };
+        if boards || !scale_tool && self.ds().map(|d| d.view.snap_pixel).unwrap_or(true) && crate::guides::axis_aligned(frame) {
             p = Point::new(p.x.round(), p.y.round());
         }
         if let Some(t) = &targets {
@@ -504,6 +561,9 @@ impl Session {
             p.x += dx;
             p.y += dy;
             guides = g;
+        }
+        if boards {
+            p = Point::new(p.x.round(), p.y.round());
         }
         let q = frame.inverse() * p;
         let is_line = r.single && ids.first().and_then(|i| self.doc().ok()?.node(*i).map(|n| matches!(n.kind, NodeKind::Line))).unwrap_or(false);
@@ -532,9 +592,16 @@ impl Session {
             self.tool.overlay.guides = guides;
             return Ok(());
         }
-        // Constrain proportions (Shift, or the node's lock).
-        let keep = ev.shift || r.single && ids.first().and_then(|i| self.doc().ok()?.node(*i).map(|n| n.constrain_proportions)).unwrap_or(false);
-        let (x0, y0, x1, y1) = resized_box(r.handle, q, w0, h0, keep, ev.alt);
+        let image_box = ids.first().filter(|_| ev.cmd && r.single).and_then(|i| self.image_box(*i));
+        // Constrain proportions (Shift, or the node's lock; cropping an image ignores the lock).
+        let locked =
+            r.single && image_box.is_none() && ids.first().and_then(|i| self.doc().ok()?.node(*i).map(|n| n.constrain_proportions)).unwrap_or(false);
+        let keep = ev.shift || locked;
+        let resized = resized_box(r.handle, q, w0, h0, keep, ev.alt);
+        let (x0, y0, x1, y1) = match image_box {
+            Some(image) => within_the_image(resized, image, (w0, h0), keep),
+            None => resized,
+        };
         let (flip_x, flip_y) = (x1 < x0, y1 < y0);
         let (nx0, ny0) = (x0.min(x1), y0.min(y1));
         let (nw, nh) = ((x1 - x0).abs(), (y1 - y0).abs());
@@ -546,46 +613,30 @@ impl Session {
         let keeps = |doc: &Document, id: NodeId| {
             doc.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Section { .. }) || (ev.cmd && single && n.kind.is_frame_like()))
         };
+        let dragged_box = |world: Affine, (ox, oy): (f64, f64)| {
+            let mut t = world * Affine::translate((ox, oy));
+            if flip_x {
+                t *= Affine::new([-1.0, 0.0, 0.0, 1.0, nw, 0.0]);
+            }
+            if flip_y {
+                t *= Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, nh]);
+            }
+            t
+        };
         self.preview(|doc, _| {
             if single {
                 let Some((id, world, _, _)) = nodes.first() else { return Ok(()) };
                 let kept = if keeps(doc, *id) { crate::cmd::props::children_worlds(doc, *id) } else { Vec::new() };
-                let mut t = *world * Affine::translate((nx0, ny0));
-                if flip_x {
-                    t *= Affine::new([-1.0, 0.0, 0.0, 1.0, nw, 0.0]);
-                }
-                if flip_y {
-                    t *= Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, nh]);
-                }
+                let t = dragged_box(*world, (nx0, ny0));
                 // Text reflow and auto layout can recompute this box after the preview (a size bound
-                // to a variable lets go of it: the resize is an explicit edit).
+                // to a variable lets go of it: the resize is an explicit edit). A text keeps its
+                // fills; any other layer's image is cropped again for the box layout leaves
+                // (`crop_to_the_laid_out_box`).
                 let n = doc.get(*id)?;
-                let crop_images = ev.cmd
-                    && !matches!(n.kind, NodeKind::Text(_))
-                    && !std::iter::once(*id).chain(doc.ancestors(*id)).any(|a| doc.node(a).is_some_and(|n| n.layout.is_some()));
-                if crop_images {
-                    // Crop the layer's image fills without moving their pixels on the page.
-                    // Work from the interaction snapshot, just like the geometry on every move.
-                    let (w, h) = (n.width.max(1e-6), n.height.max(1e-6));
-                    let to_old =
-                        Affine::scale_non_uniform(1.0 / w, 1.0 / h) * world.inverse() * t * Affine::scale_non_uniform(nw.max(0.01), nh.max(0.01));
-                    let mut fills = n.fills.clone();
-                    for paint in &mut fills {
-                        let PaintKind::Image(img) = &mut paint.kind else { continue };
-                        // A repeating image cannot be represented by a single Crop placement.
-                        if img.scale_mode == ImageScaleMode::Tile {
-                            continue;
-                        }
-                        let Some(data) = doc.images.get(&img.image) else { continue };
-                        let (iw, ih) = (f64::from(data.width), f64::from(data.height));
-                        // A degenerate (zero-scale) layer has no inverse: its image keeps its placement.
-                        let crop = (Affine::new(img.placement_crop(iw, ih, w, h)) * to_old).as_coeffs();
-                        if !crop.iter().all(|c| c.is_finite()) {
-                            continue;
-                        }
-                        img.crop = Some(crop);
-                        img.scale_mode = ImageScaleMode::Crop;
-                    }
+                // Crop the layer's image fills without moving their pixels on the page.
+                // Work from the interaction snapshot, just like the geometry on every move.
+                if ev.cmd && !matches!(n.kind, NodeKind::Text(_)) {
+                    let fills = cropped_image_fills(doc, n, *world, t, (nw, nh));
                     doc.get_mut(*id)?.fills = fills;
                 }
                 doc.set_world_transform(*id, t)?;
@@ -625,13 +676,78 @@ impl Session {
                 let lin = (mirror * local).with_translation(Vec2::ZERO);
                 let origin = Point::new(x0 + center.x * sx, y0 + center.y * sy) - lin * Point::new(w2 / 2.0, h2 / 2.0);
                 let kept = if keeps(doc, *id) { crate::cmd::props::children_worlds(doc, *id) } else { Vec::new() };
-                doc.set_world_transform(*id, frame * lin.with_translation(origin))?;
+                let (t, w2, h2) = if boards {
+                    on_whole_pixels(doc, *id, frame * lin.with_translation(origin), w2, h2)
+                } else {
+                    (frame * lin.with_translation(origin), w2, h2)
+                };
+                doc.set_world_transform(*id, t)?;
                 crate::cmd::props::resize_node(doc, *id, w2, h2)?;
+                if boards {
+                    crate::snap::settle_on_pixels(doc, *id)?;
+                }
                 crate::cmd::props::restore_worlds(doc, &kept)?;
             }
             Ok(())
         })?;
+        if single
+            && ev.cmd
+            && let Some((id, world, _, _)) = nodes.first()
+        {
+            let laid_out_box = |(fw, fh): (f64, f64)| {
+                let origin = match image_box {
+                    Some((ix0, iy0, ix1, iy1)) => {
+                        (slid_onto_the_image(nx0, fw, flip_x, (ix0, ix1), w0), slid_onto_the_image(ny0, fh, flip_y, (iy0, iy1), h0))
+                    }
+                    None => (nx0, ny0),
+                };
+                dragged_box(*world, origin)
+            };
+            self.crop_to_the_laid_out_box(*id, *world, laid_out_box, (nw, nh))?;
+        }
         self.tool.overlay.guides = guides;
+        Ok(())
+    }
+
+    /// The box `(x0, y0, x1, y1)` of the first visible, untiled image fill of `id` in the layer's
+    /// own axes, as it was when the gesture began; `None` for a text or a layer without one.
+    fn image_box(&self, id: NodeId) -> Option<(f64, f64, f64, f64)> {
+        let snapshot = self.ds().ok()?.interaction.as_ref()?.doc.clone();
+        let n = snapshot.node(id)?;
+        if matches!(n.kind, NodeKind::Text(_)) {
+            return None;
+        }
+        n.fills.iter().filter(|p| p.visible).find_map(|p| match &p.kind {
+            PaintKind::Image(img) if img.scale_mode != ImageScaleMode::Tile => {
+                let data = snapshot.images.get(&img.image)?;
+                let crop = img.effective_crop(f64::from(data.width), f64::from(data.height), n.width, n.height);
+                let (x0, y0, x1, y1) = figcraft_doc::color::ImagePaint::crop_rect(crop);
+                Some((x0 * n.width, y0 * n.height, x1 * n.width, y1 * n.height))
+            }
+            _ => None,
+        })
+    }
+
+    /// After the preview's layout: when the layer didn't keep the dragged size `(nw, nh)` (a
+    /// minimum size, a Hug frame), crop its image fills again from the snapshot for the size it
+    /// has, the box placed by `laid_out_box` (given that size) in the layer's starting axes.
+    fn crop_to_the_laid_out_box(
+        &mut self,
+        id: NodeId,
+        world: Affine,
+        laid_out_box: impl Fn((f64, f64)) -> Affine,
+        (nw, nh): (f64, f64),
+    ) -> Result<()> {
+        let ds = self.ds_mut()?;
+        let Some(snapshot) = ds.interaction.as_ref().map(|it| it.doc.clone()) else { return Ok(()) };
+        let Some(before) = snapshot.node(id).filter(|n| !matches!(n.kind, NodeKind::Text(_))) else { return Ok(()) };
+        let Some((fw, fh)) = ds.doc.node(id).map(|n| (n.width, n.height)) else { return Ok(()) };
+        if (fw - nw.max(0.01)).abs() < 1e-9 && (fh - nh.max(0.01)).abs() < 1e-9 {
+            return Ok(());
+        }
+        let fills = cropped_image_fills(&snapshot, before, world, laid_out_box((fw, fh)), (fw, fh));
+        std::sync::Arc::make_mut(&mut ds.doc).get_mut(id)?.fills = fills;
+        ds.revision += 1;
         Ok(())
     }
 
@@ -646,19 +762,49 @@ impl Session {
         // A layer's place in the box scales about the pivot; a negative factor turns it over.
         let about = frame * Affine::translate(pivot.to_vec2() * (1.0 - k));
         let sign = k.signum();
-        self.preview(|doc, _| {
+        // A factor an instance can't follow (its scale factor would leave 0.001 to 1000) is not
+        // applied: the drag keeps the last frame that fit.
+        let mut refused = false;
+        let shown = self.preview(|doc, _| {
+            if !nodes.iter().all(|(id, ..)| crate::cmd::arrange::scale_fits(doc, *id, k.abs())) {
+                refused = true;
+                return Err(crate::error::bad("transform.scale", "past the scale range"));
+            }
             for (id, world, _, _) in &nodes {
                 let c = (inv * *world).as_coeffs();
                 doc.set_world_transform(*id, about * Affine::new([sign * c[0], sign * c[1], sign * c[2], sign * c[3], k * c[4], k * c[5]]))?;
                 crate::cmd::arrange::scale_node(doc, *id, k.abs())?;
             }
             Ok(())
-        })?;
+        });
+        if refused {
+            return Ok(());
+        }
+        shown?;
         let p = frame * pivot;
         self.tool.overlay.scale = Some(ScaleHint { factor: k, pivot: [p.x, p.y] });
         self.tool.overlay.guides = guides;
         Ok(())
     }
+}
+
+/// `world` and the size `w` x `h` a layer of a resized selection takes, moved so its box in its
+/// parent has its edges on whole pixels, each on the nearest one and the box at least a pixel
+/// wide: a frame resized with others lands on whole pixels as one resized alone does. A layer
+/// turned or scaled in its parent keeps them.
+fn on_whole_pixels(doc: &Document, id: NodeId, world: Affine, w: f64, h: f64) -> (Affine, f64, f64) {
+    let pw = doc.node(id).and_then(|n| n.parent).map_or(Affine::IDENTITY, |p| doc.world_transform(p));
+    let local = pw.inverse() * world;
+    let [a, b, c, d, e, f] = local.as_coeffs();
+    if !crate::guides::axis_aligned(local) || (a.abs() - 1.0).abs() > 1e-9 || (d.abs() - 1.0).abs() > 1e-9 {
+        return (world, w, h);
+    }
+    let edges = |at: f64, flip: bool, len: f64| if flip { (at - len, at) } else { (at, at + len) };
+    let ((x0, x1), (y0, y1)) = (edges(e, a < 0.0, w), edges(f, d < 0.0, h));
+    let (x0, y0) = (x0.round(), y0.round());
+    let (w, h) = ((x1.round() - x0).max(1.0), (y1.round() - y0).max(1.0));
+    let (e, f) = (if a < 0.0 { x0 + w } else { x0 }, if d < 0.0 { y0 + h } else { y0 });
+    (pw * Affine::new([a, b, c, d, e, f]), w, h)
 }
 
 /// Moving `moving` by the same offset moves nothing else and changes nothing about them but where
@@ -677,4 +823,79 @@ fn only_shifted(doc: &Document, moving: &[NodeId]) -> bool {
         }
         !in_flow && !nested
     })
+}
+
+/// `before`'s fills (from the snapshot `doc`) with each image cropped to the box `dragged` (the
+/// layer's new transform, `nw` × `nh`), its pixels left where they were on the page (`world`:
+/// the layer's transform before the drag).
+fn cropped_image_fills(
+    doc: &Document,
+    before: &figcraft_doc::Node,
+    world: Affine,
+    dragged: Affine,
+    (nw, nh): (f64, f64),
+) -> Vec<figcraft_doc::color::Paint> {
+    let (w, h) = (before.width.max(1e-6), before.height.max(1e-6));
+    let to_before = Affine::scale_non_uniform(1.0 / w, 1.0 / h) * world.inverse() * dragged * Affine::scale_non_uniform(nw.max(0.01), nh.max(0.01));
+    let mut fills = before.fills.clone();
+    for paint in &mut fills {
+        let PaintKind::Image(img) = &mut paint.kind else { continue };
+        // A repeating image cannot be represented by a single Crop placement.
+        if img.scale_mode == ImageScaleMode::Tile {
+            continue;
+        }
+        let Some(data) = doc.images.get(&img.image) else { continue };
+        let (iw, ih) = (f64::from(data.width), f64::from(data.height));
+        // A degenerate (zero-scale) layer has no inverse: its image keeps its placement.
+        let crop = (Affine::new(img.placement_crop(iw, ih, w, h)) * to_before).as_coeffs();
+        if !crop.iter().all(|c| c.is_finite()) {
+            continue;
+        }
+        img.crop = Some(crop);
+        img.scale_mode = ImageScaleMode::Crop;
+    }
+    fills
+}
+
+/// The extent `lo..hi` an image of extent `image` lets a crop reach on one axis of a layer that
+/// started `len` long: the image's, or the layer's where that reaches further (a Fit image is
+/// smaller than its layer).
+fn crop_reach(image: (f64, f64), len: f64) -> (f64, f64) {
+    (image.0.min(image.1).min(0.0), image.0.max(image.1).max(len))
+}
+
+/// The dragged box `(x0, y0, x1, y1)` drawn back towards the starting box `(0, 0, w0, h0)` until
+/// its sides stop at the image's box `image` (see [`crop_reach`]). Both ends of an axis go back by
+/// the same fraction, so an Alt resize stays centred, and with `keep` (Shift) both axes do, so the
+/// ratio holds. A flipped axis stays as dragged.
+fn within_the_image((x0, y0, x1, y1): (f64, f64, f64, f64), image: (f64, f64, f64, f64), (w0, h0): (f64, f64), keep: bool) -> (f64, f64, f64, f64) {
+    let fraction = |a: f64, b: f64, image: (f64, f64), len: f64| {
+        if b < a {
+            return 1.0;
+        }
+        let (lo, hi) = crop_reach(image, len);
+        let mut t: f64 = 1.0;
+        if a < lo {
+            t = t.min(lo / a);
+        }
+        if b > hi {
+            t = t.min((hi - len) / (b - len));
+        }
+        if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 }
+    };
+    let (tx, ty) = (fraction(x0, x1, (image.0, image.2), w0), fraction(y0, y1, (image.1, image.3), h0));
+    let (tx, ty) = if keep { (tx.min(ty), tx.min(ty)) } else { (tx, ty) };
+    (x0 * tx, y0 * ty, w0 + (x1 - w0) * tx, h0 + (y1 - h0) * ty)
+}
+
+/// Where a crop box `len` long, placed at `start` on one axis, starts once it is slid back onto
+/// the image (see [`crop_reach`]): layout can make a layer longer than it was dragged (a minimum
+/// size), and the crop then moves along the image rather than past its edge. A flipped axis, or
+/// a box longer than the reach, stays where it is.
+fn slid_onto_the_image(start: f64, len: f64, flipped: bool, image: (f64, f64), len0: f64) -> f64 {
+    let (lo, hi) = crop_reach(image, len0);
+    if flipped || len.is_nan() || len > hi - lo {
+        return start;
+    }
+    start.max(lo).min(hi - len)
 }

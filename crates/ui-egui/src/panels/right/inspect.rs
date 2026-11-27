@@ -10,7 +10,9 @@ pub(crate) fn inspect_section(app: &mut FigApp, ui: &mut Ui, s: &figcraft_engine
     let t = Tokens::get(ui.ctx());
     widgets::separator(ui);
     let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
-    ui.painter().text(pos2(hr.min.x + PAD, hr.center().y), Align2::LEFT_CENTER, tr(s.title), semibold(11.0), t.text);
+    let rtl = widgets::rtl(ui);
+    let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    ui.painter().text(pos2(widgets::flip_x(rtl, hr, hr.min.x + PAD), hr.center().y), align, tr(s.title), semibold(11.0), t.text);
     for p in &s.rows {
         prop_row(app, ui, p);
     }
