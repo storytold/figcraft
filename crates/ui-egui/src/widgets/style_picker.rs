@@ -160,6 +160,30 @@ pub struct Picker {
     y: f32,
     query: String,
     edit: Option<Editing>,
+    /// Whose styles the list shows (the source menu over the list).
+    source: Source,
+}
+
+/// The source menu's choice: every source, this file's styles, or one enabled library's (by
+/// manifest id).
+#[derive(Clone, Debug, Default, PartialEq)]
+enum Source {
+    #[default]
+    All,
+    ThisFile,
+    Library(String),
+}
+
+impl Source {
+    /// Whether the styles of `lib` (`None`: this file) are listed.
+    fn shows(&self, lib: Option<&PublishedLibrary>) -> bool {
+        match (self, lib) {
+            (Source::All, _) => true,
+            (Source::ThisFile, None) => true,
+            (Source::Library(id), Some(l)) => l.manifest.id == *id,
+            _ => false,
+        }
+    }
 }
 
 impl Picker {
@@ -174,7 +198,7 @@ pub fn open(app: &mut FigApp, ui: &Ui, ids: &[NodeId], slot: StyleSlot) {
     // Opening the style picker closes the colour picker (it would linger beside it).
     crate::colorpicker::close(app);
     app.ui.style_picker_popover = None;
-    app.ui.style_picker = Some(Picker { slot, ids: ids.to_vec(), y, query: String::new(), edit: None });
+    app.ui.style_picker = Some(Picker { slot, ids: ids.to_vec(), y, query: String::new(), edit: None, source: Source::All });
 }
 
 /// Open the picker for `slot` of the selection (the control channel), optionally editing `style`.
@@ -183,7 +207,7 @@ pub fn open_for_selection(app: &mut FigApp, slot: StyleSlot, style: Option<&str>
     let edit = style.and_then(|s| app.session.doc().ok()?.style(s).map(editing));
     crate::colorpicker::close(app);
     app.ui.style_picker_popover = None;
-    app.ui.style_picker = Some(Picker { slot, ids, y: 140.0, query: String::new(), edit });
+    app.ui.style_picker = Some(Picker { slot, ids, y: 140.0, query: String::new(), edit, source: Source::All });
 }
 
 fn editing(s: &Style) -> Editing {
@@ -522,6 +546,28 @@ fn offered<'a>(doc: &'a Document, lib: Option<&'a PublishedLibrary>, slot: Style
     }
 }
 
+/// The source menu over the style list (shown when the file has libraries): All libraries, This
+/// file, then each library by name, the chosen one ticked.
+fn source_menu(ui: &mut Ui, libs: &[std::sync::Arc<PublishedLibrary>], source: &mut Source) {
+    let label = match source {
+        Source::All => tr("All libraries").to_string(),
+        Source::ThisFile => tr("This file").to_string(),
+        Source::Library(id) => libs.iter().find(|l| l.manifest.id == *id).map(|l| l.manifest.name.clone()).unwrap_or_default(),
+    };
+    let resp = widgets::dropdown(ui, &label, W, None);
+    crate::right::menu_popup(&resp).width(W).show(|ui| {
+        let mut choices = vec![(Source::All, tr("All libraries").to_string()), (Source::ThisFile, tr("This file").to_string())];
+        choices.extend(libs.iter().map(|l| (Source::Library(l.manifest.id.clone()), l.manifest.name.clone())));
+        for (choice, name) in choices {
+            let mark = if *source == choice { "✓ " } else { "   " };
+            if crate::right::menu_item(ui, &format!("{mark}{name}"), "") {
+                *source = choice;
+                ui.close();
+            }
+        }
+    });
+}
+
 /// The style list: header, search, this file's and the libraries' styles by folder, and (colour
 /// slots) colour variables.
 fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
@@ -560,8 +606,20 @@ fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut 
     ui.add_space(4.0);
     let q = p.query.trim().to_lowercase();
     let libs = crate::variable_ui::libraries(app, doc);
-    let mut sources: Vec<(Option<&PublishedLibrary>, Vec<&Style>)> = vec![(None, offered(doc, None, slot, &q))];
-    for l in &libs {
+    if !libs.is_empty() {
+        source_menu(ui, &libs, &mut p.source);
+        ui.add_space(4.0);
+    }
+    if let Source::Library(id) = &p.source
+        && !libs.iter().any(|l| l.manifest.id == *id)
+    {
+        p.source = Source::All;
+    }
+    let mut sources: Vec<(Option<&PublishedLibrary>, Vec<&Style>)> = Vec::new();
+    if p.source.shows(None) {
+        sources.push((None, offered(doc, None, slot, &q)));
+    }
+    for l in libs.iter().filter(|l| p.source.shows(Some(l))) {
         let list = offered(doc, Some(l), slot, &q);
         if !list.is_empty() {
             sources.push((Some(l.as_ref()), list));
@@ -1246,7 +1304,7 @@ fn edit_local(app: &mut FigApp, ui: &Ui, slot: StyleSlot, id: &str) {
     let edit = app.session.doc().ok().and_then(|d| d.style(id).map(editing));
     crate::colorpicker::close(app);
     app.ui.style_picker_popover = None;
-    app.ui.style_picker = Some(Picker { slot, ids: app.session.selection(), y, query: String::new(), edit });
+    app.ui.style_picker = Some(Picker { slot, ids: app.session.selection(), y, query: String::new(), edit, source: Source::All });
 }
 
 /// `style.move` for the shown style `from` dropped at shown position `to` (`shown` in display
