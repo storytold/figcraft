@@ -161,7 +161,7 @@ pub static KEYS: &[Binding] = &[
     // Essential
     k(Essential, "app.actions", &["Cmd+K", "Cmd+/"]).label("Actions…"),
     k(Essential, "help.shortcuts", &["Ctrl+Shift+?"]).both(),
-    k(Essential, "view.toggleUi", &["Cmd+\\"]),
+    k(Essential, "view.toggleUi", &["Cmd+\\", "Cmd+."]),
     k(Essential, "view.fullscreen", &["Ctrl+Cmd+F"]).win(&["F11"]),
     k(Essential, "edit.pickColor", &["I", "Ctrl+C"]).win(&["I"]),
     k(Essential, "app.preferences", &["Cmd+,"]),
