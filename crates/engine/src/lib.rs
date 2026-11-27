@@ -578,6 +578,8 @@ mod scaled_instance_tests;
 #[cfg(test)]
 mod section_contents_tests;
 #[cfg(test)]
+mod section_marquee_tests;
+#[cfg(test)]
 mod section_tests;
 #[cfg(test)]
 mod select_area_tests;
