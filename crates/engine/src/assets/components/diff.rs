@@ -1,5 +1,8 @@
 use super::instances::PROP_BINDING;
-use super::{Document, Node, NodeId, NodeKind, PropDef, Sizing, TextAutoResize, TextData, inside_instance, owning_component, variant_set};
+use super::{
+    Document, Node, NodeId, NodeKind, PropDef, Sizing, TextAutoResize, TextData, Value, inside_instance, owning_component, prop_default_value,
+    variant_set,
+};
 
 /// The property groups whose value layer `n` takes from the same variables as its main layer
 /// `src` (they differ only where the two resolve in different variable modes).
@@ -201,6 +204,12 @@ pub fn property_owners(doc: &Document, c: NodeId) -> Vec<NodeId> {
     }
 }
 
+/// The layers of main component `c` itself (not those of instances nested in it, which follow
+/// their mains).
+pub(super) fn own_layers(doc: &Document, c: NodeId) -> Vec<NodeId> {
+    doc.subtree(c).into_iter().filter(|d| *d != c && !inside_instance(doc, *d)).collect()
+}
+
 /// Make `value` the default of boolean property `name` on components `comps`, showing or hiding
 /// their layers bound to it: on a main component, a boolean property's value is the visibility of
 /// its layers. Returns the components and layers it changed.
@@ -215,11 +224,8 @@ pub fn set_boolean_default(doc: &mut Document, comps: &[NodeId], name: &str, val
             props.insert(name.to_string(), PropDef::Boolean { default: value });
             out.push(c);
         }
-        // The main's own layers (not those of instances nested in it, which follow their mains).
-        let layers: Vec<NodeId> = doc
-            .subtree(c)
+        let layers: Vec<NodeId> = own_layers(doc, c)
             .into_iter()
-            .filter(|d| *d != c && !inside_instance(doc, *d))
             .filter(|d| doc.node(*d).is_some_and(|n| n.visible != value && n.prop_refs.get("visible").map(String::as_str) == Some(name)))
             .collect();
         for d in layers {
@@ -246,6 +252,106 @@ pub(super) fn follow_boolean_defaults(doc: &mut Document, before: &Document, cha
         let visible = n.visible;
         let Some(c) = owning_component(doc, id).filter(|c| *c != id) else { continue };
         out.extend(set_boolean_default(doc, &property_owners(doc, c), &name, visible));
+    }
+    out
+}
+
+/// The fields a text or instance swap property binds.
+pub(super) const VALUE_FIELDS: [&str; 2] = ["characters", "mainComponent"];
+
+/// The value main layer `n` shows for its `field` bound to a text or instance swap property: its
+/// text (none when a variable sets it: the variable, not the layer, says what it shows), or the
+/// main component its nested instance shows.
+pub(super) fn shown_value(doc: &Document, n: &Node, field: &str) -> Option<Value> {
+    match (field, &n.kind) {
+        ("characters", NodeKind::Text(t)) if !n.bound.contains_key("characters") => Some(Value::String(t.characters.clone())),
+        ("mainComponent", NodeKind::Instance { component, .. })
+            if doc.node(*component).is_some_and(|m| matches!(m.kind, NodeKind::Component { .. })) =>
+        {
+            Some(Value::from(component.0))
+        }
+        _ => None,
+    }
+}
+
+/// Make `value` the default of text or instance swap property `name` on component `c`. Returns
+/// whether it changed.
+fn set_value_def(doc: &mut Document, c: NodeId, name: &str, value: &Value) -> bool {
+    let Some(NodeKind::Component { props, .. }) = doc.node(c).map(|n| &n.kind) else { return false };
+    let def = match (props.get(name), value) {
+        (Some(PropDef::Text { default }), Value::String(v)) if default != v => PropDef::Text { default: v.clone() },
+        (Some(PropDef::InstanceSwap { default, preferred }), v) => match crate::params::id_of(v) {
+            Some(id) if id != *default => PropDef::InstanceSwap { default: id, preferred: preferred.clone() },
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let Some(NodeKind::Component { props, .. }) = doc.node_mut(c).map(|n| &mut n.kind) else { return false };
+    props.insert(name.to_string(), def);
+    true
+}
+
+/// Make `value` the default of text or instance swap property `name` on components `comps`, and
+/// show it in their own layers bound to it, as [`set_boolean_default`] does: on a main component,
+/// the property's value is what those layers show. In a set, a variant's layer showing its own
+/// value instead of the old default keeps it: the variants share the default, but each can show
+/// its own text or icon. Fails when a bound instance can't show `value` (it would contain itself).
+pub fn set_value_default(doc: &mut Document, comps: &[NodeId], name: &str, value: &Value) -> Result<(), String> {
+    for &c in comps {
+        let Some(NodeKind::Component { props, .. }) = doc.node(c).map(|n| &n.kind) else { continue };
+        let Some(was) = props.get(name).map(prop_default_value) else { continue };
+        set_value_def(doc, c, name, value);
+        for d in own_layers(doc, c) {
+            let Some(n) = doc.node(d) else { continue };
+            let Some(field) = VALUE_FIELDS.into_iter().find(|f| n.prop_refs.get(*f).map(String::as_str) == Some(name)) else { continue };
+            let Some(shown) = shown_value(doc, n, field) else { continue };
+            if shown == *value || (comps.len() > 1 && shown != was) {
+                continue;
+            }
+            match (field, value) {
+                ("mainComponent", v) => {
+                    let main = crate::params::id_of(v).ok_or_else(|| format!("`{name}` takes a component id"))?;
+                    crate::cmd::component::swap_instance(doc, d, main)?;
+                }
+                (_, Value::String(text)) => {
+                    if let Some(NodeKind::Text(t)) = doc.node_mut(d).map(|n| &mut n.kind) {
+                        let len = t.char_count();
+                        t.replace_range(0, len, &crate::cmd::props::normalize_line_endings(text));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A lone main component's layer bound to a text or instance swap property changed its text, or
+/// the component its nested instance shows: that is the property's new default, so new instances
+/// look like the main. Not in a set: its variants share the default while each variant's layer
+/// can show its own value (new instances of a variant start from it), so one variant's edit is not
+/// the others' default. Returns the components that changed.
+pub(super) fn follow_value_defaults(doc: &mut Document, before: &Document, changed: &[NodeId]) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    for &id in changed {
+        let (Some(n), Some(b)) = (doc.node(id), before.node(id)) else { continue };
+        if inside_instance(doc, id) {
+            continue;
+        }
+        let Some(c) = owning_component(doc, id).filter(|c| *c != id) else { continue };
+        if property_owners(doc, c) != [c] {
+            continue;
+        }
+        let followed = VALUE_FIELDS.into_iter().find_map(|f| {
+            let name = n.prop_refs.get(f)?;
+            shown_value(doc, n, f).filter(|v| shown_value(before, b, f).as_ref() != Some(v)).map(|v| (name.clone(), v))
+        });
+        if let Some((name, value)) = followed
+            && set_value_def(doc, c, &name, &value)
+            && !out.contains(&c)
+        {
+            out.push(c);
+        }
     }
     out
 }

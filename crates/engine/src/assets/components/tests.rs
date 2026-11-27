@@ -569,6 +569,145 @@ fn boolean_property_default_follows_across_variants() {
     healthy(&s);
 }
 
+/// The default of text or instance swap property `name` on component `c`.
+fn value_default(s: &Session, c: NodeId, name: &str) -> Value {
+    match &node(s, c).kind {
+        NodeKind::Component { props, .. } => props.get(name).map(prop_default_value).unwrap_or_default(),
+        _ => Value::Null,
+    }
+}
+
+/// The main component instance `id` shows.
+fn shows(s: &Session, id: NodeId) -> Option<NodeId> {
+    match node(s, id).kind {
+        NodeKind::Instance { component, .. } => Some(component),
+        _ => None,
+    }
+}
+
+/// A 16x16 component named `name`.
+fn icon(s: &mut Session, x: f64, name: &str) -> NodeId {
+    let f = idv(&ex(s, "frame.create", json!({"x": x, "y": 300, "width": 16, "height": 16, "name": name})));
+    idv(&ex(s, "component.create", json!({"ids": [f]})))
+}
+
+#[test]
+fn text_property_default_is_the_mains_text() {
+    // #2179: as a boolean property's default is its bound layers' visibility on the main (#993),
+    // a text property's default is its bound layer's text there, in both directions.
+    let mut s = Session::new();
+    let (c, _bg, title, _dot) = card(&mut s);
+    ex(&mut s, "component.addProperty", json!({"id": c, "name": "Title", "type": "text", "layer": title}));
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": c, "x": 300, "y": 0})));
+    let before = chars(&s, copy_of(&s, i, title));
+    ex(&mut s, "node.set", json!({"id": title, "props": {"characters": "Submit"}}));
+    assert_eq!(value_default(&s, c, "Title"), json!(chars(&s, title)));
+    let j = idv(&ex(&mut s, "instance.create", json!({"component": c, "x": 600, "y": 0})));
+    assert_eq!(chars(&s, copy_of(&s, j, title)), chars(&s, title), "a new instance shows what its main shows");
+    assert_eq!(chars(&s, copy_of(&s, i, title)), before, "an existing instance keeps its value");
+    ex(&mut s, "component.editProperty", json!({"id": c, "name": "Title", "default": "Send"}));
+    assert_eq!(json!(chars(&s, title)), value_default(&s, c, "Title"), "a new default shows on the main");
+    let k = idv(&ex(&mut s, "instance.create", json!({"component": c, "x": 900, "y": 0})));
+    assert_eq!(chars(&s, copy_of(&s, k, title)), chars(&s, title));
+    // Editing the text inside an instance is that instance's value, not a new default.
+    let kt = copy_of(&s, k, title);
+    ex(&mut s, "node.set", json!({"id": kt, "props": {"characters": "Mine"}}));
+    assert_eq!(json!(chars(&s, title)), value_default(&s, c, "Title"));
+    assert_ne!(chars(&s, title), chars(&s, kt));
+    // One undo step each puts the default and the main's text back together.
+    s.undo().unwrap();
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(chars(&s, title), "Submit");
+    assert_eq!(value_default(&s, c, "Title"), json!("Submit"));
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(value_default(&s, c, "Title"), json!(chars(&s, title)));
+    assert_eq!(chars(&s, title), before);
+    healthy(&s);
+}
+
+#[test]
+fn instance_swap_property_default_is_what_the_main_shows() {
+    let mut s = Session::new();
+    let (a, b) = (icon(&mut s, 0.0, "IconA"), icon(&mut s, 40.0, "IconB"));
+    let (c, _bg, _title, _dot) = card(&mut s);
+    let nested = idv(&ex(&mut s, "instance.create", json!({"component": a, "parent": c, "x": 10, "y": 60})));
+    ex(&mut s, "component.addProperty", json!({"id": c, "name": "Icon", "type": "instanceSwap", "layer": nested}));
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": c, "x": 300, "y": 0})));
+    ex(&mut s, "instance.swap", json!({"ids": [nested], "component": b}));
+    assert_eq!(value_default(&s, c, "Icon"), json!(b.0));
+    let j = idv(&ex(&mut s, "instance.create", json!({"component": c, "x": 600, "y": 0})));
+    assert_eq!(shows(&s, copy_of(&s, j, nested)), shows(&s, nested), "a new instance shows what its main shows");
+    assert_eq!(shows(&s, copy_of(&s, i, nested)), Some(a), "an existing instance keeps its value");
+    ex(&mut s, "component.editProperty", json!({"id": c, "name": "Icon", "default": a}));
+    assert_eq!(shows(&s, nested), Some(a), "a new default shows on the main");
+    // Swapping inside an instance is that instance's value, not a new default.
+    let jn = copy_of(&s, j, nested);
+    ex(&mut s, "instance.swap", json!({"ids": [jn], "component": b}));
+    assert_eq!(value_default(&s, c, "Icon"), json!(a.0));
+    assert_eq!(shows(&s, nested), Some(a));
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(shows(&s, nested), Some(b));
+    assert_eq!(value_default(&s, c, "Icon"), json!(b.0));
+    healthy(&s);
+}
+
+#[test]
+fn text_and_instance_swap_defaults_in_a_set_keep_each_variants_value() {
+    // The variants of a set share one default, but each variant's bound layers show its own text
+    // and icon: a new instance of a variant shows that variant, and editing one variant on the main
+    // changes neither the shared default nor the other variant.
+    let mut s = Session::new();
+    let (a, b, c) = (icon(&mut s, 0.0, "IconA"), icon(&mut s, 40.0, "IconB"), icon(&mut s, 80.0, "IconC"));
+    let (mut variants, mut labels, mut icons) = (Vec::new(), Vec::new(), Vec::new());
+    for (k, (state, main)) in [("A", a), ("B", b)].into_iter().enumerate() {
+        let f =
+            idv(&ex(&mut s, "frame.create", json!({"x": k as f64 * 150.0, "y": 0, "width": 120, "height": 40, "name": format!("State={state}")})));
+        labels.push(idv(&ex(&mut s, "text.create", json!({"text": state, "x": 30, "y": 10, "parent": f, "props": {"name": "Label"}}))));
+        icons.push(idv(&ex(&mut s, "instance.create", json!({"component": main, "parent": f, "x": 4, "y": 10}))));
+        variants.push(idv(&ex(&mut s, "component.create", json!({"ids": [f]}))));
+    }
+    let set = idv(&ex(&mut s, "component.combineVariants", json!({"ids": variants.clone()})));
+    ex(&mut s, "component.addProperty", json!({"id": set, "name": "Label", "type": "text", "layer": labels[0]}));
+    ex(&mut s, "component.bindProperty", json!({"layer": labels[1], "property": "Label"}));
+    ex(&mut s, "component.addProperty", json!({"id": set, "name": "Icon", "type": "instanceSwap", "layer": icons[0]}));
+    ex(&mut s, "component.bindProperty", json!({"layer": icons[1], "property": "Icon"}));
+    let defaults = |s: &Session| variants.iter().map(|v| (value_default(s, *v, "Label"), value_default(s, *v, "Icon"))).collect::<Vec<_>>();
+    // Each new instance of a variant looks like that variant's main.
+    let looks_like_main = |s: &mut Session| {
+        for k in 0..2 {
+            let i = idv(&ex(s, "instance.create", json!({"component": variants[k], "x": 0, "y": 200})));
+            assert_eq!(chars(s, copy_of(s, i, labels[k])), chars(s, labels[k]));
+            assert_eq!(shows(s, copy_of(s, i, icons[k])), shows(s, icons[k]));
+        }
+    };
+    looks_like_main(&mut s);
+    let ia = idv(&ex(&mut s, "instance.create", json!({"component": variants[0], "x": 300, "y": 200})));
+    let (shared, a_label) = (defaults(&s), chars(&s, labels[0]));
+    ex(&mut s, "node.set", json!({"id": labels[1], "props": {"characters": "B 2"}}));
+    ex(&mut s, "instance.swap", json!({"ids": [icons[1]], "component": c}));
+    assert_eq!(defaults(&s), shared, "one variant's edit is not the set's default");
+    assert_eq!((chars(&s, labels[0]), shows(&s, icons[0])), (a_label.clone(), Some(a)), "nor the other variant's value");
+    looks_like_main(&mut s);
+    ex(&mut s, "component.resetInstance", json!({"ids": [ia]}));
+    assert_eq!(chars(&s, copy_of(&s, ia, labels[0])), a_label);
+    // A new default shows in the variants that showed the old one; a variant's own value stays.
+    ex(&mut s, "component.editProperty", json!({"id": set, "name": "Label", "default": "Send"}));
+    ex(&mut s, "component.editProperty", json!({"id": set, "name": "Icon", "default": b}));
+    assert_eq!((chars(&s, labels[0]), shows(&s, icons[0])), ("Send".to_string(), Some(b)));
+    assert_eq!((chars(&s, labels[1]), shows(&s, icons[1])), ("B 2".to_string(), Some(c)));
+    looks_like_main(&mut s);
+    // Undo the two new instances, then each new default with its layers.
+    for _ in 0..4 {
+        s.undo().unwrap();
+    }
+    assert_eq!((chars(&s, labels[0]), shows(&s, icons[0])), (a_label, Some(a)));
+    assert_eq!(defaults(&s), shared);
+    healthy(&s);
+}
+
 #[test]
 fn push_changes_to_main() {
     let mut s = Session::new();

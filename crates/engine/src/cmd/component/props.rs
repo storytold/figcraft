@@ -5,8 +5,8 @@ use super::variants::{fit_set, wrap_in_set};
 use super::{
     BTreeMap, Document, NodeId, NodeKind, PROP_BINDING, PropDef, Result, SLOT, Session, Value, VariableType, VariableValue, bad, boolean,
     default_variant, find_variant, get, id, id_of, inside_instance, instances_of, json, main_of, ok, owning_component, prop_default_value,
-    req_string, req_targets, set_boolean_default, slot_edited, slots_of, string, takes_value, targets, variant_conflicts, variant_name,
-    variant_options, variant_props, variant_set,
+    req_string, req_targets, set_boolean_default, set_value_default, slot_edited, slots_of, string, takes_value, targets, variant_conflicts,
+    variant_name, variant_options, variant_props, variant_set,
 };
 use crate::components::{instance_prop_list, prop_list};
 
@@ -546,6 +546,11 @@ pub(super) fn edit_prop(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if let (Some(list), PropDef::Slot { preferred } | PropDef::InstanceSwap { preferred, .. }) = (preferred, &mut new_def) {
         *preferred = list;
+    }
+    // The main's bound layers show a new text or instance swap default (before a rename, under the
+    // name they're bound to now).
+    if get(p, "default").is_some() && matches!(new_def, PropDef::Text { .. } | PropDef::InstanceSwap { .. }) {
+        set_value_default(doc, &comps, &name, &prop_default_value(&new_def)).map_err(|m| bad(cmd, m))?;
     }
     for c in &comps {
         let had = prop_defs(doc, *c).contains_key(&name);

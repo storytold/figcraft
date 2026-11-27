@@ -51,7 +51,7 @@ mod variants;
 pub use cycles::{
     break_component_cycles, check_component_cycles, component_cycle, contains_itself_error, cycle_text, new_cycle, would_contain_itself,
 };
-pub use diff::{diff_groups, property_owners, set_boolean_default, variable_groups};
+pub use diff::{diff_groups, property_owners, set_boolean_default, set_value_default, variable_groups};
 pub use guard::{check_override_edit, check_structure_edit, refused_override, unlink_layers};
 pub(crate) use instances::copy_group;
 pub use instances::{PROP_BINDING, copy_in_file, create_instance, create_instance_at, sync_instance};
