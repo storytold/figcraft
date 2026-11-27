@@ -39,6 +39,7 @@ fn frame(ctx: &egui::Context, app: &mut FigApp, t: &mut f64) {
 fn frame_with(ctx: &egui::Context, app: &mut FigApp, t: &mut f64, events: Vec<egui::Event>) {
     *t += 1.0 / 60.0;
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(*t), events, ..Default::default() };
+    app.before_input(ctx);
     let mut out = ctx.run_ui(input, |ui| app.ui(ui));
     out.textures_delta.clear();
 }
@@ -53,7 +54,7 @@ fn picker_draws_every_view_and_commits_a_typed_name_on_close() {
     s.execute("select.set", &json!({"ids": [r]})).unwrap();
     s.execute("style.apply", &json!({"ids": [r], "style": "Brand/Primary", "target": "fill"})).unwrap();
     let mut app = FigApp::new(s, Box::new(NoServices));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut t = 0.0;
     for slot in [StyleSlot::Fill, StyleSlot::Stroke, StyleSlot::Effect, StyleSlot::Grid, StyleSlot::Text] {
         open_for_selection(&mut app, slot, None);
@@ -101,7 +102,7 @@ fn text_session() -> (Session, figcraft_doc::NodeId) {
 fn text_styles_preview_on_hover_and_apply_on_click() {
     let (s, t) = text_session();
     let mut app = FigApp::new(s, Box::new(NoServices));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut time = 0.0;
     open_for_selection(&mut app, StyleSlot::Text, None);
     for _ in 0..3 {
@@ -157,7 +158,7 @@ fn chars_linked_to_several_styles_show_mixed() {
     assert_eq!(text_link(&app, &doc, &[t]), Some(doc.style("Type/Heading").map(|s| s.id.clone())));
     // The panel draws the chip ("Mixed" when the edit spans both).
     figcraft_engine::textedit::set_caret(&mut app.session, 4, true).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut time = 0.0;
     for _ in 0..3 {
         frame(&ctx, &mut app, &mut time);
@@ -285,7 +286,7 @@ fn local_styles_list_draws_by_type_and_folder() {
         s.execute("style.create", &json!({"type": ty, "name": name, "value": value})).unwrap();
     }
     let mut app = FigApp::new(s, Box::new(NoServices));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut t = 0.0;
     // Nothing selected: the Design panel shows the page, with Local styles; a folder rename in
     // progress draws its field.
@@ -307,7 +308,7 @@ fn edit_local_for_test(app: &mut FigApp, ctx: &egui::Context) {
 /// Commits `typed` in the text style editor's field `field` ("ts_lh" / "ts_ls") with Enter and
 /// returns the redefined style, if any.
 fn commit_text_field(def: &TextStyle, field: &str, typed: &str) -> Option<TextStyle> {
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.data_mut(|d| d.insert_temp(Id::unique((field, "S")).with("editing"), typed.to_string()));
     let enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events: vec![enter], ..Default::default() };

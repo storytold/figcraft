@@ -289,12 +289,13 @@ fn the_smallest_window_keeps_its_canvas_whatever_the_widths() {
     for asked in [(240.0, 240.0), (450.0, 500.0), (450.0, 240.0), (240.0, 500.0)] {
         let mut s = Session::new();
         s.prefs.panel_widths = asked;
-        let ctx = egui::Context::default();
+        let ctx = crate::framework::headless_context();
         let mut app = FigApp::new(s, Box::new(NoServices));
         // The desktop window's minimum inner size.
         let screen = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 500.0));
         for k in 0..5 {
             let input = RawInput { screen_rect: Some(screen), time: Some(f64::from(k) / 60.0), ..Default::default() };
+            app.before_input(&ctx);
             ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
         }
         let canvas = app.canvas.rect;
@@ -311,13 +312,14 @@ fn the_smallest_window_keeps_its_canvas_whatever_the_widths() {
 #[test]
 fn a_narrow_window_keeps_its_panel_buttons_while_minimized() {
     use crate::MobilePanel;
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut app = FigApp::new(Session::new(), Box::new(NoServices));
     let mut k = 0.0;
     let mut canvas_width = |app: &mut FigApp, size: egui::Vec2| {
         for _ in 0..4 {
             k += 1.0 / 60.0;
             let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), time: Some(k), ..Default::default() };
+            app.before_input(&ctx);
             ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
         }
         app.canvas.rect.width()
@@ -341,13 +343,14 @@ fn a_narrow_window_keeps_its_panel_buttons_while_minimized() {
 #[test]
 fn a_narrow_window_shows_one_side_panel_at_a_time() {
     use crate::MobilePanel;
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut app = FigApp::new(Session::new(), Box::new(NoServices));
     let mut k = 0.0;
     let mut canvas_width = |app: &mut FigApp, size: egui::Vec2| {
         for _ in 0..4 {
             k += 1.0 / 60.0;
             let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), time: Some(k), ..Default::default() };
+            app.before_input(&ctx);
             ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
         }
         app.canvas.rect.width()

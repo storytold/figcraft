@@ -16,6 +16,61 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     out
 }
 
+fn asymmetric_jpeg() -> Vec<u8> {
+    let img = image::RgbImage::from_fn(24, 16, |x, y| {
+        image::Rgb(match (x < 12, y < 8) {
+            (true, true) => [220, 30, 40],
+            (false, true) => [20, 190, 50],
+            (true, false) => [30, 60, 210],
+            (false, false) => [230, 200, 20],
+        })
+    });
+    let mut out = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg).unwrap();
+    out
+}
+
+/// Add one EXIF orientation tag without changing the JPEG's compressed pixels.
+fn jpeg_with_orientation(jpeg: &[u8], orientation: u16) -> Vec<u8> {
+    assert_eq!(&jpeg[..2], &[0xff, 0xd8]);
+    // EXIF header, little-endian TIFF header, and an IFD containing one SHORT orientation.
+    let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+    exif.extend_from_slice(&orientation.to_le_bytes());
+    exif.extend_from_slice(&[0; 6]); // Inline value padding, then no next IFD.
+    let mut out = jpeg[..2].to_vec();
+    out.extend_from_slice(&[0xff, 0xe1]);
+    out.extend_from_slice(&u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
+    out.extend_from_slice(&exif);
+    out.extend_from_slice(&jpeg[2..]);
+    out
+}
+
+fn assert_jpeg_keeps_stored_pixels(orientation: u16) {
+    let jpeg = asymmetric_jpeg();
+    let oriented = jpeg_with_orientation(&jpeg, orientation);
+    let expected = images::decode(&jpeg).unwrap();
+    let actual = images::decode(&oriented).unwrap();
+    assert_eq!((expected.width(), expected.height()), (24, 16));
+    assert_eq!((actual.width(), actual.height()), (expected.width(), expected.height()));
+    assert_eq!(actual.data(), expected.data(), "EXIF orientation {orientation} must leave stored pixels in place");
+
+    let (expected, _) = images::decode_within(&jpeg, ColorProfile::Srgb, 12, u64::MAX).unwrap();
+    let (actual, _) = images::decode_within(&oriented, ColorProfile::Srgb, 12, u64::MAX).unwrap();
+    assert_eq!((expected.width(), expected.height()), (12, 8));
+    assert_eq!((actual.width(), actual.height()), (expected.width(), expected.height()));
+    assert_eq!(actual.data(), expected.data(), "thumbnail must keep stored pixels for EXIF orientation {orientation}");
+}
+
+#[test]
+fn a_jpeg_with_exif_rotation_keeps_its_stored_pixels() {
+    assert_jpeg_keeps_stored_pixels(6);
+}
+
+#[test]
+fn a_jpeg_with_exif_mirroring_keeps_its_stored_pixels() {
+    assert_jpeg_keeps_stored_pixels(2);
+}
+
 /// A PNG whose header claims `w` × `h` but which holds no pixel data at all.
 fn png_header_only(w: u32, h: u32) -> Vec<u8> {
     let mut ihdr = Vec::new();
@@ -135,5 +190,33 @@ fn filter_and_profile_variants_count_against_one_budget() {
             c.insert(("img".to_string(), [f, 0, 0, 0, 0, 0, i as i32], profile, 0), pixmap(10), 1000);
             assert!(c.bytes() <= 1000, "{} bytes held", c.bytes());
         }
+    }
+}
+
+#[test]
+fn zero_size_and_corrupt_inputs_are_refused() {
+    let corrupt: [&[u8]; 6] = [b"", b"not an image", b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff\xe0", b"RIFF\x00\x00\x00\x00WEBP", b"GIF89a"];
+    for bytes in corrupt {
+        assert!(images::dimensions(bytes).is_none());
+        assert!(images::decode(bytes).is_none());
+        assert!(images::decode_within(bytes, ColorProfile::Srgb, 256, u64::MAX).is_none());
+        assert!(crate::image_profile::Source::of(bytes).name.is_none());
+    }
+    for (w, h) in [(0, 0), (0, 4), (4, 0)] {
+        let bad_png = png_header_only(w, h);
+        assert!(images::dimensions(&bad_png).is_none(), "{w}x{h}");
+        assert!(images::decode(&bad_png).is_none(), "{w}x{h}");
+        assert!(images::decode_within(&bad_png, ColorProfile::Srgb, 256, u64::MAX).is_none(), "{w}x{h}");
+    }
+}
+
+#[test]
+fn dimensions_reads_valid_formats() {
+    let p = Pixmap::new(12, 7).unwrap();
+    let png_bytes = crate::encode_png(&p).unwrap();
+    let jpg_bytes = crate::encode_jpeg(&p, figcraft_color::Color::WHITE, 85).unwrap();
+    let webp_bytes = crate::encode_webp(&p).unwrap();
+    for bytes in [png_bytes, jpg_bytes, webp_bytes] {
+        assert_eq!(images::dimensions(&bytes), Some((12, 7)));
     }
 }
