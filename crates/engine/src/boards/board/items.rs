@@ -381,7 +381,9 @@ pub(super) fn ink_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     require(s, cmd)?;
     let high = boolean(p, "highlighter").unwrap_or(false);
     let color = color_param(cmd, p)?.unwrap_or(if high { s.tool.board.highlighter } else { s.tool.board.marker });
-    let (weight, opacity) = if high { HIGHLIGHTER } else { MARKER };
+    let opacity = if high { HIGHLIGHTER.1 } else { MARKER.1 };
+    let b = &s.tool.board;
+    let weight = super::weight_param(cmd, p)?.unwrap_or(if high { b.highlighter_weight } else { b.marker_weight });
     if get(p, "path").is_none() && get(p, "points").is_none() {
         return Err(bad(cmd, "`path` or `points` is required"));
     }

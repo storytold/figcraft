@@ -66,9 +66,10 @@ pub(crate) fn choices(options: Options, board: &BoardTool, current: ToolId) -> V
     }
 }
 
-/// A board colour's name as the UI says it.
-fn color_label(name: &str) -> &'static str {
+/// A board or ink colour's name as the UI says it.
+pub(crate) fn color_label(name: &str) -> &'static str {
     match name {
+        "black" => tr_noop("Black"),
         "yellow" => tr_noop("Yellow"),
         "orange" => tr_noop("Orange"),
         "red" => tr_noop("Red"),
@@ -188,8 +189,8 @@ fn has(app: &FigApp) -> Option<Has> {
 }
 
 const CELL: f32 = 28.0;
-const SWATCH: f32 = 20.0;
-const GAP: f32 = 4.0;
+pub(crate) const SWATCH: f32 = 20.0;
+pub(crate) const GAP: f32 = 4.0;
 /// The room each part takes after its controls (the divider and the gap around it).
 const PART_END: f32 = 8.0;
 /// The sticky size menu's width: its name ("Extra large") and the chevron.
@@ -252,12 +253,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let at = place(sel, size, app.canvas.rect);
     let t = Tokens::get(ctx);
     egui::Area::new(egui::Id::unique("board_bar")).fixed_pos(at).order(egui::Order::Middle).show(ctx, |ui| {
-        let (rect, _) = ui.allocate_exact_size(size, Sense::click());
-        a11y::container_bounds(ui, rect);
-        let p = ui.painter();
-        p.rect_filled(rect.expand(2.0).translate(vec2(0.0, 1.0)), CornerRadius::same(12), Color32::from_black_alpha(18));
-        p.rect_filled(rect, CornerRadius::same(10), t.panel);
-        p.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, t.border), StrokeKind::Inside);
+        let rect = bar(ui, size, &t);
         let cy = rect.center().y;
         let mut x = rect.min.x + 8.0;
         if h.color {
@@ -279,6 +275,17 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             line_part(app, ui, line, pos2(x, cy), &t);
         }
     });
+}
+
+/// A floating bar `size` big where `ui` starts (its shadow, panel and border); its rect.
+pub(crate) fn bar(ui: &mut Ui, size: egui::Vec2, t: &Tokens) -> Rect {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::click());
+    a11y::container_bounds(ui, rect);
+    let p = ui.painter();
+    p.rect_filled(rect.expand(2.0).translate(vec2(0.0, 1.0)), CornerRadius::same(12), Color32::from_black_alpha(18));
+    p.rect_filled(rect, CornerRadius::same(10), t.panel);
+    p.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    rect
 }
 
 /// The board colours from `x` (`board.setColor`), and for connectors `lines` any colour in the
@@ -312,7 +319,7 @@ fn color_part(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens, li
 }
 
 /// A small colour wheel: the button for any colour.
-fn paint_wheel(p: &egui::Painter, c: Pos2, r: f32) {
+pub(crate) fn paint_wheel(p: &egui::Painter, c: Pos2, r: f32) {
     const STEPS: usize = 12;
     let at = |i: usize| {
         let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;

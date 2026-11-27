@@ -43,6 +43,7 @@ pub mod frame_labels;
 pub mod frame_stats;
 pub mod guides;
 pub mod handles;
+pub(crate) mod ink_bar;
 pub mod live_text;
 pub mod measure_overlay;
 pub mod proto_canvas;
