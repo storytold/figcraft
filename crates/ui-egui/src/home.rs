@@ -102,9 +102,6 @@ pub(crate) fn file_row(ui: &Ui, t: &Tokens, r: Rect, resp: &Response, row: &File
     if resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
     }
-    if let Some((icon, tint)) = row.mark {
-        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, tint);
-    }
     let (name_font, detail_font) = (regular(12.0), regular(row.detail_size));
     let width = |s: &str, font: &egui::FontId| ui.painter().layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x;
     let room = (r.width() - 40.0).max(0.0);
@@ -120,8 +117,19 @@ pub(crate) fn file_row(ui: &Ui, t: &Tokens, r: Rect, resp: &Response, row: &File
         widgets::elide_start_font(ui, row.detail, detail_room, detail_font.clone())
     };
     let cut = name != row.name || detail != row.detail;
-    ui.painter().text(pos2(r.min.x + 32.0, r.center().y), Align2::LEFT_CENTER, name, name_font, row.ink);
-    ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, detail, detail_font, row.detail_ink);
+    if crate::i18n::right_to_left() {
+        if let Some((icon, tint)) = row.mark {
+            icons::paint(ui.painter(), Rect::from_min_size(pos2(r.max.x - 24.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, tint);
+        }
+        ui.painter().text(pos2(r.max.x - 32.0, r.center().y), Align2::RIGHT_CENTER, name, name_font, row.ink);
+        ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, detail, detail_font, row.detail_ink);
+    } else {
+        if let Some((icon, tint)) = row.mark {
+            icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, tint);
+        }
+        ui.painter().text(pos2(r.min.x + 32.0, r.center().y), Align2::LEFT_CENTER, name, name_font, row.ink);
+        ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, detail, detail_font, row.detail_ink);
+    }
     cut
 }
 
@@ -144,30 +152,40 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     dropped(app, ui.ctx());
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
         let rect = ui.max_rect();
-        let left = Rect::from_min_size(rect.min, vec2(SIDEBAR, rect.height()));
-        ui.painter().line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.border));
-        sidebar(app, ui, &t, left);
+        let rtl = crate::i18n::right_to_left();
+        let side = if rtl {
+            Rect::from_min_size(pos2(rect.max.x - SIDEBAR, rect.min.y), vec2(SIDEBAR, rect.height()))
+        } else {
+            Rect::from_min_size(rect.min, vec2(SIDEBAR, rect.height()))
+        };
+        let border_x = if rtl { side.left() } else { side.right() };
+        ui.painter().line_segment([pos2(border_x, side.top()), pos2(border_x, side.bottom())], Stroke::new(1.0, t.border));
+        sidebar(app, ui, &t, side);
+        let main =
+            if rtl { Rect::from_min_max(rect.min, pos2(side.min.x, rect.max.y)) } else { Rect::from_min_max(pos2(side.max.x, rect.min.y), rect.max) };
         if app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == Section::Online {
             // Your online files lay themselves out in the area (and scroll their own list).
-            let area = Rect::from_min_max(pos2(left.max.x + 40.0, rect.min.y + 24.0), rect.max - vec2(40.0, 24.0));
+            let area = main.shrink2(vec2(40.0, 24.0));
             crate::online::section(app, ui, area, &t);
             opened_join(app);
             return;
         }
-        let main = Rect::from_min_max(pos2(left.max.x, rect.min.y), rect.max);
         ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
             egui::ScrollArea::vertical().id_salt("home").auto_shrink([false, false]).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 24)).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
-                    if app.ui.home_view.file_query.trim().is_empty() {
-                        match app.ui.home_view.section {
-                            Section::Templates => templates(app, ui, &t),
-                            _ => recents(app, ui, &t),
+                    let align = if rtl { egui::Align::Max } else { egui::Align::Min };
+                    ui.with_layout(egui::Layout::top_down(align), |ui| {
+                        ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
+                        if app.ui.home_view.file_query.trim().is_empty() {
+                            match app.ui.home_view.section {
+                                Section::Templates => templates(app, ui, &t),
+                                _ => recents(app, ui, &t),
+                            }
+                        } else {
+                            search_results(app, ui, &t);
+                            opened_join(app);
                         }
-                    } else {
-                        search_results(app, ui, &t);
-                        opened_join(app);
-                    }
+                    });
                 });
             });
         });
@@ -221,8 +239,13 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
             ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
         }
         focus_ring(ui, t, r, &resp, 5);
-        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, t.icon);
-        ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr(label), regular(12.0), t.text);
+        if crate::i18n::right_to_left() {
+            icons::paint(ui.painter(), Rect::from_min_size(pos2(r.max.x - 26.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, t.icon);
+            ui.painter().text(pos2(r.max.x - 36.0, r.center().y), Align2::RIGHT_CENTER, tr(label), regular(12.0), t.text);
+        } else {
+            icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, t.icon);
+            ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr(label), regular(12.0), t.text);
+        }
         if resp.clicked() {
             app.ui.home_view.section = section;
             app.ui.home_view.file_query.clear();
@@ -241,10 +264,16 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
         ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
     }
     focus_ring(ui, t, r, &resp, 5);
-    icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Adjust, t.icon);
-    ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr("Preferences"), regular(12.0), t.text);
     let key_label = figcraft_engine::keymap::display("Cmd+,", crate::shortcuts::platform());
-    ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, &key_label, regular(11.0), t.text_secondary);
+    if crate::i18n::right_to_left() {
+        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.max.x - 26.0, r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Adjust, t.icon);
+        ui.painter().text(pos2(r.max.x - 36.0, r.center().y), Align2::RIGHT_CENTER, tr("Preferences"), regular(12.0), t.text);
+        ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, &key_label, regular(11.0), t.text_secondary);
+    } else {
+        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Adjust, t.icon);
+        ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr("Preferences"), regular(12.0), t.text);
+        ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, &key_label, regular(11.0), t.text_secondary);
+    }
     resp = resp.on_hover_text(format!("{} ({})", tr("Preferences"), key_label));
     if resp.clicked() {
         app.ui.preferences = !app.ui.preferences;
