@@ -203,6 +203,8 @@ mod menu_input_tests;
 #[cfg(test)]
 mod menu_overflow_tests;
 #[cfg(test)]
+mod menu_scroll_tests;
+#[cfg(test)]
 mod mirror_tests;
 #[cfg(test)]
 mod missing_fonts_tests;
