@@ -83,10 +83,12 @@ pub fn normalize(doc: &mut Document, before: &Document) {
             && ((w - n.width).abs() > 1e-6 || (h - n.height).abs() > 1e-6)
         {
             let dw = w - n.width;
-            let anchor_right = keeps_right_edge(doc, before, n);
+            let left_share = share_of_growth_to_the_left(doc, before, n);
             figcraft_layout::set_size(doc, id, w, h);
-            if anchor_right && let Some(n) = doc.node_mut(id) {
-                n.transform *= figcraft_geom::kurbo::Affine::translate((-dw, 0.0));
+            if left_share > 0.0
+                && let Some(n) = doc.node_mut(id)
+            {
+                n.transform *= figcraft_geom::kurbo::Affine::translate((-dw * left_share, 0.0));
             }
         }
     }
@@ -218,13 +220,23 @@ pub(crate) fn only_moved_layers(doc: &mut Document, before: &Document, touched: 
     out
 }
 
-/// Whether auto-width text `n` keeps its right edge when its width changes: it was already
-/// right-aligned auto-width text before the edit and no auto layout flow places it.
-fn keeps_right_edge(doc: &Document, before: &Document, n: &Node) -> bool {
+/// How much of a width change auto-width text `n` takes on its left: all of it when right
+/// aligned (it keeps its right edge), half when centred (it keeps its middle), none otherwise.
+/// Only when it had the same alignment as auto-width text before the edit and no auto layout
+/// flow places it.
+fn share_of_growth_to_the_left(doc: &Document, before: &Document, n: &Node) -> f64 {
     use figcraft_doc::{TextAlignH, TextAutoResize};
-    let right_auto = |n: &Node| n.kind.text().is_some_and(|t| t.align_h == TextAlignH::Right && t.auto_resize == TextAutoResize::WidthAndHeight);
+    let auto_width_align = |n: &Node| n.kind.text().filter(|t| t.auto_resize == TextAutoResize::WidthAndHeight).map(|t| t.align_h);
     let in_flow = !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some() && p.kind.is_frame_like());
-    right_auto(n) && before.node(n.id).is_some_and(right_auto) && !in_flow
+    let align = auto_width_align(n);
+    if in_flow || align != before.node(n.id).and_then(auto_width_align) {
+        return 0.0;
+    }
+    match align {
+        Some(TextAlignH::Right) => 1.0,
+        Some(TextAlignH::Center) => 0.5,
+        _ => 0.0,
+    }
 }
 
 /// Whether layer `id` changed (since `before`) in a way that can move or resize layers in an auto
