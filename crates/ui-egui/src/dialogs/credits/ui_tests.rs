@@ -42,7 +42,7 @@ struct Ui {
 
 impl Ui {
     fn new() -> Self {
-        let ctx = egui::Context::default();
+        let ctx = crate::framework::headless_context();
         crate::theme::install_fonts(&ctx, false, 0);
         crate::theme::apply(&ctx, Tokens::light());
         let mut u = Self { ctx, time: 0.0 };
@@ -250,7 +250,7 @@ fn the_models_table_is_as_tall_as_its_rows() {
 #[test]
 fn the_about_window_draws_every_tab() {
     // The whole app, with the compiled-in credits (whatever contributors.json held, or none).
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut app = crate::FigApp::new(figcraft_engine::Session::new(), Box::new(crate::NoServices));
     app.ui.about = true;
     for (i, tab) in crate::dialogs::AboutTab::ALL.into_iter().enumerate() {
@@ -261,6 +261,7 @@ fn the_about_window_draws_every_tab() {
                 time: Some((i * 3 + f) as f64 / 60.0),
                 ..Default::default()
             };
+            app.before_input(&ctx);
             ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
         }
         assert!(app.ui.about, "{tab:?}: the About window closed");
@@ -312,7 +313,7 @@ fn settled_frame(ctx: &egui::Context) -> Vec<Rect> {
 
 /// A new context with the table open and settled, and the rects of its header cells.
 fn opened_table() -> (egui::Context, Vec<Rect>) {
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     settled_frame(&ctx);
     let cells = settled_frame(&ctx);
     (ctx, cells)

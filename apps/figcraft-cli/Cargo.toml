@@ -6,6 +6,10 @@ license.workspace = true
 publish = false
 description = "FigCraft command line: info, export, convert, render, scripted commands, MCP server, perf"
 
+[lib]
+name = "figcraft_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "figcraft-cli"
 path = "src/main.rs"
