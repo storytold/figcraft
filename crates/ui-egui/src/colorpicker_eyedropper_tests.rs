@@ -88,3 +88,49 @@ fn closing_the_picker_drops_its_eyedropper() {
     assert_eq!(u.app.session.tool.tool, ToolId::Move);
     assert_eq!(u.app.session.tool.picked, None, "a colour sampled for a closed picker is dropped");
 }
+
+#[test]
+fn the_pick_color_key_with_a_picker_open_colours_the_pickers_paint() {
+    let mut s = Session::new();
+    s.execute("page.setBackground", &json!({"color": "#FFFFFF"})).unwrap();
+    rect(&mut s, 0.0, json!({"fill": "#FF0000"}));
+    let b = rect(&mut s, 200.0, json!({"fill": "#00FF00", "stroke": "#0000FF"}));
+    s.execute("select.set", &json!({"ids": [b]})).unwrap();
+    let target = PickerTarget::Paint { fills: false, index: 0, ids: vec![b] };
+    let mut u = Ui::new(s);
+    u.app.ui.picker = Some(target.clone());
+    u.frame(vec![]);
+    let key = |pressed| Event::Key { key: egui::Key::I, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    u.frame(vec![key(true), key(false)]);
+    assert_eq!((u.app.session.tool.tool, u.app.session.tool.pick_only), (ToolId::Eyedropper, true));
+    let on_red = u.app.to_screen(30.0, 30.0);
+    click(&mut u, on_red);
+    let n = u.app.session.doc().unwrap().node(b).unwrap().clone();
+    let hex = |p: &figcraft_color::Paint| p.solid_color().map(|c| c.to_hex()).unwrap_or_default();
+    assert_eq!((hex(&n.strokes[0]), hex(&n.fills[0])), ("FF0000".to_string(), "00FF00".to_string()));
+    assert_eq!(u.app.ui.picker, Some(target), "the picker stays open on its paint");
+}
+
+#[test]
+fn the_eyedropper_shows_the_colour_under_it_from_the_canvas_image() {
+    let mut s = Session::new();
+    s.execute("page.setBackground", &json!({"color": "#FFFFFF"})).unwrap();
+    rect(&mut s, 0.0, json!({"fill": "#FF0000"}));
+    let mut u = Ui::new(s);
+    u.app.session.execute("edit.pickColor", &json!({})).unwrap();
+    let of = u.app.session.ds().ok().map(|ds| (ds.uid, ds.page));
+    let under = |u: &Ui, x: f64| u.app.canvas.pixel_under(figcraft_geom::Point::new(x, 30.0), of, egui::Color32::WHITE);
+    let mut seen = None;
+    for _ in 0..500 {
+        let p = u.app.to_screen(30.0, 30.0);
+        u.frame(vec![Event::PointerMoved(p)]);
+        seen = under(&u, 30.0);
+        if seen.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(4));
+    }
+    assert_eq!(seen, Some(egui::Color32::from_rgb(255, 0, 0)));
+    assert_eq!(under(&u, 130.0), Some(egui::Color32::WHITE), "the page around it");
+    assert_eq!(u.app.canvas.cursor.map(|c| c.name()).as_deref(), Some("eyedropper"));
+}
