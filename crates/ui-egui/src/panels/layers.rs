@@ -780,6 +780,15 @@ fn rename_field(app: &mut FigApp, ui: &mut Ui, id: NodeId, depth: usize, name: &
     let rect = crate::widgets::flip_rect(crate::widgets::rtl(ui), rr, rect);
     let start = app.ui.rename.is_some_and(|x| x.start);
     let (out, open) = crate::widgets::rename_field(ui, rename_id(id), name, rect, regular(11.0), start);
+    // Tab and Shift+Tab are the rename's own: they go on to the next and previous rows' names. The
+    // filter holds from the pass the field takes the keyboard, which `TextEdit::lock_focus` doesn't.
+    let editor = rename_id(id).with("te");
+    let keeps = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: false };
+    ui.memory_mut(|m| {
+        if m.has_focus(editor) {
+            m.request_focus_with_filter(editor, keeps);
+        }
+    });
     app.ui.rename = open.then_some(Rename { id, start: false });
     out
 }

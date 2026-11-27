@@ -17,8 +17,9 @@ fn frame(ctx: &egui::Context, app: &mut FigApp, close: bool) -> Vec<egui::Viewpo
     if close {
         input.viewports.insert(ViewportId::ROOT, ViewportInfo { events: vec![ViewportEvent::Close], ..Default::default() });
     }
+    app.before_input(ctx);
     let mut out = ctx.run_ui(input, |ui| {
-        crate::windows::on_close_request(app, ui.ctx());
+        app.close_path(ui.ctx());
         app.ui(ui);
     });
     out.textures_delta.clear();
@@ -52,7 +53,7 @@ fn names(app: &FigApp) -> Vec<String> {
 fn closing_a_window_in_the_presenter_shows_the_unsaved_changes_dialog() {
     let mut session = Session::new();
     let frame_id = session.execute("node.create", &json!({"type": "frame", "width": 402, "height": 874})).unwrap()["id"].clone();
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut app = FigApp::new(session, Box::new(NoServices));
     frame(&ctx, &mut app, false);
     app.session.execute("proto.present", &json!({"start": frame_id})).unwrap();
@@ -73,7 +74,7 @@ fn windows_hold_tabs_and_close_with_their_files() {
     for n in ["A", "B", "C"] {
         s.execute("file.new", &json!({"name": n})).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     // As eframe does where windows are native.
     ctx.set_embed_viewports(false);
     let mut app = FigApp::new(s, Box::new(NoServices));
@@ -115,7 +116,7 @@ fn another_hidden_window_answers_requests_that_need_no_frame_in_its_own_file() {
     for n in ["A", "B"] {
         s.execute("file.new", &json!({"name": n})).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.set_embed_viewports(false);
     let mut app = FigApp::new(s, Box::new(NoServices));
     frame(&ctx, &mut app, false);
@@ -165,7 +166,7 @@ fn a_request_for_a_window_on_screen_wakes_it_while_the_main_window_is_hidden() {
     for n in ["A", "B"] {
         s.execute("file.new", &json!({"name": n})).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.set_embed_viewports(false);
     let mut app = FigApp::new(s, Box::new(NoServices));
     frame(&ctx, &mut app, false);
@@ -191,7 +192,7 @@ fn a_request_for_a_window_on_screen_wakes_it_while_the_main_window_is_hidden() {
 fn every_direct_ui_frame_runs_background_work() {
     // Direct `App::ui` harnesses never call `App::logic`: the tick marker the UI pass consumes
     // must not leak into the next frame, or autosave/live/control work would run every other frame.
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut app = FigApp::new(Session::empty(), Box::new(NoServices));
     for _ in 0..3 {
         frame(&ctx, &mut app, false);
@@ -207,7 +208,7 @@ fn synthetic_input_for_a_child_window_reaches_the_pane_that_draws_it() {
     for n in ["A", "B"] {
         s.execute("file.new", &json!({"name": n})).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.set_embed_viewports(false);
     let mut app = FigApp::new(s, Box::new(NoServices));
     frame(&ctx, &mut app, false);
@@ -231,7 +232,7 @@ fn a_frame_without_a_batch_does_not_error_another_windows_acknowledgement() {
     for n in ["A", "B"] {
         s.execute("file.new", &json!({"name": n})).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.set_embed_viewports(false);
     let mut app = FigApp::new(s, Box::new(NoServices));
     frame(&ctx, &mut app, false);
@@ -259,7 +260,7 @@ fn a_child_window_runs_the_ui_setup_the_main_window_does() {
     for n in ["A", "B"] {
         s.execute("file.new", &json!({"name": n})).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.set_embed_viewports(false);
     let mut app = FigApp::new(s, Box::new(NoServices));
     frame(&ctx, &mut app, false);
@@ -289,7 +290,7 @@ fn an_emptied_window_forgets_its_ime_context() {
     for n in ["A", "B"] {
         s.execute("file.new", &json!({"name": n})).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.set_embed_viewports(false);
     let mut app = FigApp::new(s, Box::new(NoServices));
     frame(&ctx, &mut app, false);
@@ -344,7 +345,7 @@ fn asking(path: Option<&std::path::Path>, save_as: Vec<std::path::PathBuf>) -> (
     }
     s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
     let asked = std::rc::Rc::new(std::cell::Cell::new(0));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut app = FigApp::new(s, Box::new(SaveAs { paths: save_as, asked: asked.clone() }));
     frame(&ctx, &mut app, false);
     frame(&ctx, &mut app, true);
@@ -371,6 +372,7 @@ fn the_unsaved_changes_question_offers_save_dont_save_and_cancel() {
     let (ctx, mut app, _) = asking(None, vec![]);
     ctx.enable_accesskit();
     frame(&ctx, &mut app, false);
+    app.before_input(&ctx);
     let mut out = ctx.run_ui(RawInput::default(), |ui| app.ui(ui));
     // A canvas picture that lands in this frame uploads a texture nobody applies here.
     out.textures_delta.clear();
@@ -491,8 +493,9 @@ fn enter_answers_save() {
     frame(&ctx, &mut app, false);
     let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
     let input = RawInput { events: vec![enter(true), enter(false)], ..Default::default() };
+    app.before_input(&ctx);
     ctx.run_ui(input, |ui| {
-        crate::windows::on_close_request(&mut app, ui.ctx());
+        app.close_path(ui.ctx());
         app.ui(ui);
     })
     .textures_delta
@@ -511,7 +514,7 @@ fn enter_answers_save() {
 fn a_quit_with_unsaved_changes_waits_for_the_answer() {
     let mut s = Session::new();
     s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut app = FigApp::new(s, Box::new(NoServices));
     frame(&ctx, &mut app, false);
     let sent = frame(&ctx, &mut app, true);
@@ -533,7 +536,7 @@ fn quitting_twice_before_the_window_draws_closes_it_once() {
     for n in ["A", "B"] {
         s.execute("file.new", &json!({"name": n})).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.set_embed_viewports(false);
     let mut app = FigApp::new(s, Box::new(NoServices));
     frame(&ctx, &mut app, false);
@@ -548,10 +551,126 @@ fn quitting_twice_before_the_window_draws_closes_it_once() {
     for _ in 0..2 {
         let mut input = RawInput::default();
         input.viewports.insert(ViewportId::ROOT, ViewportInfo { events: vec![ViewportEvent::Close], occluded: Some(true), ..Default::default() });
-        let _ = ctx.run_logic(&input, |ctx| crate::windows::on_close_request(&mut app, ctx));
+        let _ = ctx.run_logic(&input, |ctx| app.close_path(ctx));
     }
     frame(&ctx, &mut app, false);
     frame(&ctx, &mut app, false);
     assert!(app.session.docs.iter().any(|d| d.doc.name == "A" && d.is_dirty()), "A keeps its changes: {:?}", names(&app));
+    assert!(!app.session.docs.iter().any(|d| d.doc.name == "B"), "the clean main window's file B closed: {:?}", names(&app));
     assert!(!app.ui.quit, "the app didn't quit over A's unsaved changes");
+}
+
+/// The main window and another one, driven as eframe drives them: a pass of one at a time, and a
+/// close a pass asked a window for reaches that window in its next pass. The app is installed,
+/// because the other window draws itself from there.
+struct Desk {
+    ctx: egui::Context,
+    other: ViewportId,
+    draw_other: Option<std::sync::Arc<egui::DeferredViewportUiCallback>>,
+    closing: Vec<ViewportId>,
+    /// The unsaved-changes question was on screen in the last pass.
+    asks: bool,
+}
+
+impl Desk {
+    /// File A in another window, with unsaved changes when `dirty`, and file B in the main window
+    /// with none.
+    fn new(dirty: bool) -> (Desk, u64) {
+        let mut s = Session::empty();
+        for n in ["A", "B"] {
+            s.execute("file.new", &json!({"name": n})).unwrap();
+        }
+        let ctx = crate::framework::headless_context();
+        ctx.set_embed_viewports(false);
+        let mut app = FigApp::new(s, Box::new(NoServices));
+        frame(&ctx, &mut app, false);
+        let w = crate::control::handle(&mut app, &ctx, "window.new", &json!({"index": 0})).unwrap()["window"].as_u64().unwrap();
+        if dirty {
+            let drawn = crate::windows::as_window(&mut app, w, |app| {
+                app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).is_ok()
+            });
+            assert_eq!(drawn, Some(true));
+        }
+        crate::windows::install(app);
+        let mut desk = Desk { ctx, other: crate::windows::viewport(w), draw_other: None, closing: vec![], asks: false };
+        desk.frames(2);
+        (desk, w)
+    }
+
+    fn pass(&mut self, id: ViewportId, events: Vec<egui::Event>) {
+        let mut input = RawInput { viewport_id: id, events, ..Default::default() };
+        for window in [ViewportId::ROOT, self.other] {
+            let info = input.viewports.entry(window).or_default();
+            info.focused = Some(window == id);
+            if window == id && self.closing.contains(&id) {
+                info.events.push(ViewportEvent::Close);
+            }
+        }
+        self.closing.retain(|closing| *closing != id);
+        let draw = if id == self.other { Some(self.draw_other.clone().expect("the main window shows the other one")) } else { None };
+        with_app(|app| app.before_input(&self.ctx));
+        let mut out = self.ctx.run_ui(input, |ui| {
+            match &draw {
+                Some(draw) => draw(ui),
+                None => with_app(|app| {
+                    app.close_path(ui.ctx());
+                    app.ui(ui);
+                }),
+            }
+            let question = egui::Id::unique(Some(crate::i18n::tr("Unsaved changes")));
+            self.asks = ui.ctx().memory(|memory| memory.area_rect(question).is_some());
+        });
+        out.textures_delta.clear();
+        let closing = out.viewport_output.iter().filter(|(_, window)| window.commands.contains(&egui::ViewportCommand::Close));
+        self.closing.extend(closing.map(|(window, _)| *window));
+        if id == ViewportId::ROOT {
+            self.draw_other = out.viewport_output.get(&self.other).and_then(|window| window.viewport_ui_cb.clone());
+        }
+    }
+
+    /// `n` passes of the main window, each followed by one of the other window while it is open.
+    fn frames(&mut self, n: usize) {
+        for _ in 0..n {
+            self.pass(ViewportId::ROOT, vec![]);
+            if self.draw_other.is_some() {
+                self.pass(self.other, vec![]);
+            }
+        }
+    }
+
+    /// Ctrl+Q pressed in the other window, and the frames it takes to act.
+    fn quit_in_other(&mut self) {
+        let key = |pressed| egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::COMMAND };
+        self.pass(self.other, vec![key(true), key(false)]);
+        self.frames(3);
+    }
+}
+
+fn with_app<R>(f: impl FnOnce(&mut FigApp) -> R) -> R {
+    crate::windows::with_app(f).expect("the app is installed and idle")
+}
+
+/// Ctrl+Q closes the window it is pressed in: one whose file has unsaved changes asks and stays, and
+/// the main window, with nothing unsaved, neither closes nor takes the file over. One with nothing
+/// unsaved closes with its file.
+#[test]
+fn ctrl_q_in_another_window_asks_about_its_own_files_and_closes_only_it() {
+    let (mut desk, w) = Desk::new(true);
+    desk.quit_in_other();
+    assert!(desk.asks, "the question is on screen in the window the key was pressed in");
+    with_app(|app| {
+        assert_eq!(crate::windows::as_window(app, w, |app| app.ui.confirm_close), Some(true));
+        assert!(!app.ui.confirm_close && !app.ui.quit, "the main window is not asked to close");
+        let list = crate::windows::list(app);
+        assert_eq!((&list[0]["files"], &list[1]["files"]), (&json!(["B"]), &json!(["A"])), "no file closed or moved");
+        assert!(app.session.docs.iter().any(|d| d.doc.name == "A" && d.is_dirty()), "A keeps its changes");
+    });
+
+    let (mut desk, w) = Desk::new(false);
+    desk.quit_in_other();
+    with_app(|app| {
+        assert!(!app.windows.exists(w), "nothing to ask about: the window closes");
+        assert_eq!(names(app), ["B"], "with its file, and the main window keeps its own");
+        assert!(!app.ui.quit);
+    });
 }

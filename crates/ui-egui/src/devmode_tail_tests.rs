@@ -293,7 +293,7 @@ fn measurements_kept_on_the_canvas_draw_in_dev_mode_and_follow_their_layers() {
 
 /// A file dropped with its contents and no file on disk.
 #[derive(Debug)]
-struct DroppedBytes(std::path::PathBuf, Vec<u8>);
+pub(crate) struct DroppedBytes(pub(crate) std::path::PathBuf, pub(crate) Vec<u8>);
 
 impl egui::DroppedFile for DroppedBytes {
     fn path(&self) -> &std::path::Path {
