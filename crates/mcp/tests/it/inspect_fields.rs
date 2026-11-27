@@ -130,7 +130,13 @@ fn fields_and_outline_survive_every_depth_retry() {
 #[test]
 fn compact_children_keep_window_markers_and_page_in_order() {
     let mut c = Client::new();
-    let root = tree(|params| c.create(params));
+    // Wide and one level deep: compact JSON makes `tree`'s 24 cards smaller than the 1 KB envelope,
+    // so these children carry enough text that the one-level tree still needs a child window.
+    let root = c.create(json!({"type": "frame", "name": "Product list", "width": 1200, "height": 2400}));
+    for i in 0..48 {
+        c.create(json!({"type": "frame", "parent": root, "name": format!("Product card {i}: synthetic product name"),
+            "width": 280, "height": 160}));
+    }
     let full = c.ok("get_node", json!({"id": root, "depth": 1, "fields": []}));
     let expected = full["children"].as_array().unwrap();
     let wire = serde_json::to_string(&serde_json::to_string(&full).unwrap()).unwrap().len();
