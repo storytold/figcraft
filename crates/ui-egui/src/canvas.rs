@@ -19,6 +19,7 @@ mod background;
 mod builder;
 mod drag_sprite;
 mod input;
+pub(crate) use input::release_fields_for_press;
 mod outline;
 mod overlays;
 mod render;
