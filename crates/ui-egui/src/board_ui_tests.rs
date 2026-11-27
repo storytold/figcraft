@@ -4,7 +4,7 @@
 //! board objects selected, never on a file you can only view), the home screen's New board card,
 //! and the marks design files and boards get.
 
-use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, pos2};
 use figcraft_doc::{BoardItem, BoardShape, FileKind, NodeId, Routing, Stamp, board_color};
 use figcraft_engine::Session;
 use figcraft_engine::tools::ToolId;
@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::layers_drag_tests::Ui;
 use crate::live_tests::{flat, has_text, text_center};
+use crate::shortcuts_tests::press;
 
 fn click(u: &mut Ui, p: Pos2) {
     for pressed in [true, false] {
@@ -397,6 +398,224 @@ fn cmd_while_moving_a_connector_end_places_it_on_the_object() {
     u.frame(vec![]);
     drag(&mut u, Modifiers::NONE);
     assert!(matches!(end(&u), figcraft_doc::End::Node { at: None, side: figcraft_doc::Side::Right, .. }), "{:?}", end(&u));
+}
+
+/// `board.mindMap` at the page's origin: the first node, its three children and their branches.
+fn mind_map(u: &mut Ui) -> (NodeId, [NodeId; 3], [NodeId; 3]) {
+    let out = u.app.run("board.mindMap", json!({"x": 0, "y": 0})).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let kids = out["children"].as_array().unwrap();
+    let pick = |key: &str| -> [NodeId; 3] { [0, 1, 2].map(|i| NodeId(kids[i][key].as_u64().unwrap())) };
+    (id(&out), pick("id"), pick("connector"))
+}
+
+/// The node whose text is being typed in.
+fn typing_in(u: &Ui) -> Option<NodeId> {
+    let te = u.app.session.ds().ok()?.text_edit.clone()?;
+    figcraft_engine::board::owner_of_text(u.app.session.doc().ok()?, te.id)
+}
+
+/// The layer a mind map branch arrives at `n` from.
+fn parent(u: &Ui, n: NodeId) -> Option<NodeId> {
+    u.app.session.doc().unwrap().nodes().find_map(|l| match &l.board {
+        Some(BoardItem::Connector(c)) if c.branch && c.to.node() == Some(n) => c.from.node(),
+        _ => None,
+    })
+}
+
+fn mind_nodes(u: &Ui) -> usize {
+    u.app.session.doc().unwrap().nodes().filter(|n| n.board == Some(BoardItem::MindNode)).count()
+}
+
+fn middle(u: &Ui, n: NodeId) -> f64 {
+    u.app.session.doc().unwrap().world_bounds(n).unwrap().center().y
+}
+
+fn text_of_node(u: &Ui, n: NodeId) -> String {
+    let t = figcraft_engine::board::text_of(u.app.session.doc().unwrap(), n).unwrap();
+    u.app.session.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters.clone()
+}
+
+fn select(u: &mut Ui, ids: &[NodeId]) {
+    u.app.session.execute("select.set", &json!({"ids": ids})).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+}
+
+#[test]
+fn the_shapes_flyout_ends_in_a_mind_map_that_a_click_places_and_types_in() {
+    let mut u = board();
+    let cells = BoardShape::ALL.len() + 1;
+    pick_option(&mut u, 3, cells - 1, cells);
+    assert_eq!(u.app.session.tool.tool, ToolId::MindMap);
+    assert!(u.app.ui.tool_flyout.is_none(), "the flyout closed");
+    let at = u.app.canvas.rect.center();
+    let p = u.app.to_page(at);
+    click(&mut u, at);
+    assert_eq!(mind_nodes(&u), 4);
+    let doc = u.app.session.doc().unwrap();
+    assert_eq!(doc.nodes().filter(|n| matches!(&n.board, Some(BoardItem::Connector(c)) if c.branch)).count(), 3);
+    let root = typing_in(&u).expect("typing in the first node");
+    assert_eq!(parent(&u, root), None);
+    let b = doc.world_bounds(root).unwrap();
+    assert!((b.x0 - p.x).abs() < 0.01 && (b.center().y - p.y).abs() < 0.01, "{b:?} at {p:?}");
+    let te = u.app.session.ds().unwrap().text_edit.clone().unwrap();
+    assert_eq!((te.anchor.min(te.caret), te.anchor.max(te.caret)), (0, 5));
+    assert_eq!(u.app.session.tool.tool, ToolId::Move);
+    u.frame(vec![Event::Text("Plan".into())]);
+    assert_eq!(text_of_node(&u, root), "Plan");
+    let x1 = u.app.session.doc().unwrap().world_bounds(root).unwrap().x1;
+    for n in u.app.session.doc().unwrap().nodes().filter(|n| n.board == Some(BoardItem::MindNode) && n.id != root) {
+        let k = u.app.session.doc().unwrap().world_bounds(n.id).unwrap();
+        assert!((k.x0 - (x1 + 88.0)).abs() < 1e-6, "the map followed the typing");
+    }
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    assert_eq!(typing_in(&u), None);
+    assert_eq!(u.app.session.selection(), vec![root]);
+}
+
+#[test]
+fn cmd_enter_adds_a_child_shift_cmd_enter_a_sibling_and_typing_goes_on() {
+    let mut u = board();
+    let (root, [_, c1, _], _) = mind_map(&mut u);
+    select(&mut u, &[c1]);
+    press(&mut u, Key::Enter, Modifiers::COMMAND);
+    let g = typing_in(&u).expect("typing in the new child");
+    assert!(![c1, root].contains(&g));
+    assert_eq!(parent(&u, g), Some(c1));
+    u.frame(vec![Event::Text("deep".into())]);
+    press(&mut u, Key::Enter, Modifiers::COMMAND);
+    let gg = typing_in(&u).expect("typing in the grandchild");
+    assert_eq!(parent(&u, gg), Some(g));
+    assert_eq!(text_of_node(&u, g), "deep");
+    press(&mut u, Key::Enter, Modifiers::SHIFT | Modifiers::COMMAND);
+    let h = typing_in(&u).expect("typing in the sibling");
+    assert_eq!(parent(&u, h), Some(g));
+    assert!(middle(&u, h) > middle(&u, gg));
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    assert_eq!(u.app.session.selection(), vec![h]);
+    press(&mut u, Key::Enter, Modifiers::SHIFT | Modifiers::COMMAND);
+    let i = typing_in(&u).expect("typing in the next sibling");
+    assert_eq!(parent(&u, i), Some(g));
+    assert!(middle(&u, i) > middle(&u, h));
+    // The first node has no sibling.
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    let count = mind_nodes(&u);
+    select(&mut u, &[root]);
+    press(&mut u, Key::Enter, Modifiers::SHIFT | Modifiers::COMMAND);
+    assert_eq!(mind_nodes(&u), count);
+    assert!(u.app.ui.last_error.as_deref().is_some_and(|e| e.contains("first node")), "{:?}", u.app.ui.last_error);
+    // A sticky keeps its key.
+    let st = id(&u.app.run("board.sticky", json!({"x": 900, "y": 0})).unwrap());
+    select(&mut u, &[st]);
+    press(&mut u, Key::Enter, Modifiers::SHIFT | Modifiers::COMMAND);
+    let n = typing_in(&u).expect("typing in the new sticky");
+    assert_eq!(u.app.session.doc().unwrap().node(n).unwrap().transform.translation().x, 1124.0);
+}
+
+#[test]
+fn tab_selects_the_next_sibling_and_enter_types_in_it() {
+    let mut u = board();
+    let (_, [c0, c1, c2], _) = mind_map(&mut u);
+    select(&mut u, &[c0]);
+    for want in [c1, c2, c0] {
+        press(&mut u, Key::Tab, Modifiers::NONE);
+        assert_eq!(u.app.session.selection(), vec![want]);
+    }
+    press(&mut u, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(u.app.session.selection(), vec![c2]);
+    press(&mut u, Key::Enter, Modifiers::NONE);
+    assert_eq!(typing_in(&u), Some(c2));
+    let te = u.app.session.ds().unwrap().text_edit.clone().unwrap();
+    assert_eq!((te.anchor.min(te.caret), te.anchor.max(te.caret)), (0, 6), "all of Idea 3");
+    u.frame(vec![Event::Text("x".into())]);
+    assert_eq!(text_of_node(&u, c2), "x");
+}
+
+#[test]
+fn the_bar_colours_and_sizes_a_node_and_restyles_a_branch_without_line_types() {
+    let mut u = board();
+    let (_, [c0, c1, _], lines) = mind_map(&mut u);
+    select(&mut u, &[c0]);
+    let r = bar(&u).expect("the bar shows");
+    assert_eq!(r.width(), 336.0);
+    let text = figcraft_engine::board::text_of(u.app.session.doc().unwrap(), c0).unwrap();
+    let ink = u.app.session.doc().unwrap().node(text).unwrap().fills.clone();
+    click(&mut u, pos2(r.min.x + 8.0 + 5.0 * 24.0 + 10.0, r.center().y));
+    assert_ne!(u.app.session.doc().unwrap().node(text).unwrap().fills, ink);
+    let r = bar(&u).unwrap();
+    click(&mut u, pos2(r.min.x + 208.0 + 2.0 * 30.0 + 14.0, r.center().y));
+    assert_eq!(u.app.session.doc().unwrap().node(text).unwrap().kind.text().unwrap().style.font_size, 24.0);
+    select(&mut u, &[lines[1]]);
+    assert_eq!(bar(&u).unwrap().width(), 414.0);
+    let child = u.app.session.doc().unwrap().world_bounds(c1).unwrap();
+    crate::board_line_tests::pick(&mut u, 232.0 + 31.0, "Circle");
+    let doc = u.app.session.doc().unwrap();
+    let line = doc.node(lines[1]).unwrap();
+    assert_eq!(line.stroke.cap_start, figcraft_doc::StrokeCap::CircleFilled);
+    assert!(matches!(&line.board, Some(BoardItem::Connector(c)) if c.routing == Routing::Curved && c.branch));
+    assert_eq!(doc.world_bounds(c1).unwrap(), child, "the child has not moved");
+    // A branch with an ordinary connector keeps the line types.
+    let a = id(&u.app.run("board.sticky", json!({"x": 900, "y": 0})).unwrap());
+    let b = id(&u.app.run("board.sticky", json!({"x": 1300, "y": 0})).unwrap());
+    let k = id(&u.app.run("board.connector", json!({"from": a, "to": b})).unwrap());
+    select(&mut u, &[lines[1], k]);
+    assert_eq!(bar(&u).unwrap().width(), 512.0);
+}
+
+#[test]
+fn cmd_enter_is_the_mind_maps_only_on_a_mind_map_node() {
+    let mut u = board();
+    let st = id(&u.app.run("board.sticky", json!({"x": 900, "y": 0})).unwrap());
+    select(&mut u, &[st]);
+    let count = u.app.session.doc().unwrap().ids().count();
+    press(&mut u, Key::Enter, Modifiers::COMMAND);
+    assert_eq!(u.app.session.doc().unwrap().ids().count(), count);
+    assert!(u.app.session.ds().unwrap().text_edit.is_none());
+    assert_eq!(u.app.ui.last_error, None);
+    // While typing in the sticky it ends the edit, as before.
+    press(&mut u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![Event::Text("x".into())]);
+    assert_eq!(typing_in(&u), Some(st));
+    press(&mut u, Key::Enter, Modifiers::COMMAND);
+    assert!(u.app.session.ds().unwrap().text_edit.is_none(), "the edit ended");
+    assert_eq!(text_of_node(&u, st), "x");
+    assert_eq!(u.app.session.doc().unwrap().ids().count(), count);
+    assert_eq!(u.app.ui.last_error, None);
+    // A design file.
+    let mut d = Ui::new(Session::new());
+    d.frame(vec![]);
+    d.app.session.execute("text.create", &json!({"x": 0, "y": 0, "text": "hi"})).unwrap();
+    d.frame(vec![]);
+    press(&mut d, Key::Enter, Modifiers::NONE);
+    assert!(d.app.session.ds().unwrap().text_edit.is_some());
+    press(&mut d, Key::Enter, Modifiers::COMMAND);
+    assert!(d.app.session.ds().unwrap().text_edit.is_none());
+    assert_eq!(d.app.ui.last_error, None);
+    // The control channel's key.
+    let key = json!({"key": "Enter", "cmd": true});
+    let ctx = u.ctx.clone();
+    select(&mut u, &[st]);
+    let count = u.app.session.doc().unwrap().ids().count();
+    let r = crate::control::handle(&mut u.app, &ctx, "ui.key", &key);
+    assert!(!format!("{r:?}").contains("board.mindMapAdd"), "{r:?}");
+    assert_eq!(u.app.session.doc().unwrap().ids().count(), count);
+    assert_eq!(u.app.ui.last_error, None);
+    press(&mut u, Key::Enter, Modifiers::NONE);
+    assert_eq!(typing_in(&u), Some(st));
+    let r = crate::control::handle(&mut u.app, &ctx, "ui.key", &key);
+    assert!(!format!("{r:?}").contains("board.mindMapAdd"), "{r:?}");
+    assert_eq!(u.app.session.doc().unwrap().ids().count(), count);
+    assert_eq!(u.app.ui.last_error, None);
+    // On a mind map node it is the child.
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    let (_, [c0, ..], _) = mind_map(&mut u);
+    select(&mut u, &[c0]);
+    let r = crate::control::handle(&mut u.app, &ctx, "ui.key", &key).unwrap();
+    assert_eq!(r, json!({"command": "board.mindMapAdd"}));
+    let g = typing_in(&u).expect("typing in the new child");
+    assert_eq!(parent(&u, g), Some(c0));
 }
 
 #[test]
