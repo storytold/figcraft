@@ -392,6 +392,25 @@ fn clear_field_editor(ui: &mut Ui, id: Id) {
     ui.memory_mut(|m| m.surrender_focus(id.with("te")));
 }
 
+/// Paint a lead label or icon for a number field.
+fn paint_number_field_lead(ui: &mut Ui, lead: &Lead, lead_rect: Rect, rect: Rect, lead_w: f32, lead_resp: &egui::Response, t: &Tokens) {
+    match lead {
+        Lead::Text(s) => {
+            // Whole points: egui rounds wrap width to GUI_ROUNDING, which wraps a fractional label column.
+            let galley = crate::bidi::name_galley(ui.painter(), s, regular(11.0), t.text_secondary, (lead_w - 12.0).ceil());
+            // A label cut short shows whole on hover.
+            if galley.elided {
+                lead_resp.clone().on_hover_text(*s);
+            }
+            ui.painter().galley(pos2(lead_rect.min.x + 8.0, rect.center().y - galley.size().y / 2.0), galley, t.text_secondary);
+        }
+        Lead::Icon(i, _) => {
+            icons::paint(ui.painter(), Rect::from_center_size(lead_rect.center() + vec2(1.0, 0.0), vec2(14.0, 14.0)), *i, t.icon_secondary);
+        }
+        Lead::None | Lead::Named(_) => {}
+    }
+}
+
 /// Implement the shared number field: label/icon lead, scrubbing, keyboard stepping and
 /// typing, select-all when a click starts editing, bindable values and deferred-save
 /// cancellation; returns an edit and/or bind event.
@@ -448,21 +467,7 @@ fn number_field_impl(
     } else if hovered {
         ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, t.field_hover_border), StrokeKind::Inside);
     }
-    match lead {
-        Lead::Text(s) => {
-            // Whole points: egui rounds wrap width to GUI_ROUNDING, which wraps a fractional label column.
-            let galley = crate::bidi::name_galley(ui.painter(), s, regular(11.0), t.text_secondary, (lead_w - 12.0).ceil());
-            // A label cut short shows whole on hover.
-            if galley.elided {
-                lead_resp.clone().on_hover_text(s);
-            }
-            ui.painter().galley(pos2(lead_rect.min.x + 8.0, rect.center().y - galley.size().y / 2.0), galley, t.text_secondary);
-        }
-        Lead::Icon(i, _) => {
-            icons::paint(ui.painter(), Rect::from_center_size(lead_rect.center() + vec2(1.0, 0.0), vec2(14.0, 14.0)), i, t.icon_secondary)
-        }
-        Lead::None | Lead::Named(_) => {}
-    }
+    paint_number_field_lead(ui, &lead, lead_rect, rect, lead_w, &lead_resp, &t);
     if lead_resp.hovered() || lead_resp.dragged() || (alt_now && editing.is_none() && field_resp.hovered()) || (alt_scrub && field_resp.dragged()) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
