@@ -16,6 +16,7 @@ mod canvas;
 pub mod catalog;
 pub mod cmd;
 mod content;
+mod design;
 mod dev;
 pub mod events;
 mod extensions;
@@ -62,6 +63,7 @@ pub use content::synthetic_ds;
 pub use content::templates;
 pub use content::textfit;
 pub use dev::annotations;
+pub use dev::asset_handoff;
 pub use dev::code_connect;
 pub use dev::codegen;
 pub use dev::component_codegen;
@@ -194,6 +196,8 @@ mod annotations_tests;
 mod arc_fields_tests;
 #[cfg(test)]
 mod arc_handles_tests;
+#[cfg(test)]
+mod asset_handoff_tests;
 #[cfg(test)]
 mod auto_layout_move_tests;
 #[cfg(test)]
@@ -439,6 +443,8 @@ mod live_tests;
 #[cfg(test)]
 mod lock_behaviour_tests;
 #[cfg(test)]
+mod locked_ratio_layout_tests;
+#[cfg(test)]
 mod marquee_behaviour_tests;
 #[cfg(test)]
 mod mask_tests;
@@ -558,6 +564,8 @@ mod rotation_origin_tests;
 mod save_disk_changes_tests;
 #[cfg(test)]
 mod save_format_tests;
+#[cfg(test)]
+mod scale_bound_values_tests;
 #[cfg(test)]
 mod scale_tool_tests;
 #[cfg(test)]
@@ -687,6 +695,8 @@ mod widget_shapes_tests;
 #[cfg(test)]
 mod widgets_tests;
 
+#[cfg(test)]
+mod export_bounds_tests;
 #[cfg(test)]
 mod page_view_tests;
 #[cfg(test)]

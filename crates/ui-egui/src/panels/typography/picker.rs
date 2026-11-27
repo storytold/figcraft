@@ -76,7 +76,7 @@ pub(crate) fn font_picker(
     let hi_id = Id::unique("font_highlight");
     let q_id = Id::unique("font_query");
     let search_id = Id::unique("font_search");
-    craft_ui::combo::Menu::new(ui, anchor)
+    crate::combo_menu::Menu::new(ui, anchor)
         .height(MENU_HEIGHT)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .style(crate::right::menu_style)

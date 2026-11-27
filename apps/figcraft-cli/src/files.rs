@@ -2,13 +2,12 @@
 
 use std::ffi::OsStr;
 use std::path::Path;
-use std::process::ExitCode;
 
 use figcraft_doc::{Document, ExportFormat, ExportSetting, NodeId, NodeKind, PrintSettings, VdCompat};
 use figcraft_engine::{BatchScope, BatchStep, Session};
 use serde_json::{Value, json};
 
-use crate::{CliError, CliResult};
+use crate::{CliError, CliResult, Io};
 
 /// A document's or plugin's text as a terminal should show it: control characters escaped, and
 /// everything else (quotes, backslashes in paths) left as it is.
@@ -16,11 +15,11 @@ pub(crate) fn plain(text: &str) -> String {
     text.chars().map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() }).collect()
 }
 
-pub fn load(path: &str) -> CliResult<Document> {
+pub fn load(path: &str, io: &mut Io) -> CliResult<Document> {
     let (doc, notes) = load_noted(path)?;
     if ext(path) == "penpot" {
         for note in notes {
-            eprintln!("note: {note}");
+            errln!(io, "note: {note}");
         }
     }
     Ok(doc)
@@ -115,7 +114,7 @@ fn encode(doc: &Document, pix: &figcraft_render::Pixmap, e: &str) -> CliResult<V
 }
 
 /// Write `doc` to `out`, choosing the format by extension.
-pub fn write_doc(doc: &Document, page: NodeId, out: &str) -> CliResult<()> {
+pub fn write_doc(doc: &Document, page: NodeId, out: &str, io: &mut Io) -> CliResult<()> {
     let e = ext(out);
     let bytes = match e.as_str() {
         "figcraft" => {
@@ -131,26 +130,26 @@ pub fn write_doc(doc: &Document, page: NodeId, out: &str) -> CliResult<()> {
             .into_bytes(),
         "png" | "jpg" | "jpeg" | "webp" => encode(doc, &render_page(doc, page, 1.0)?, &e)?,
         "pdf" => page_pdf(doc, page, &PrintSettings::default())?,
-        "fig" => fig_bytes(doc)?,
-        "penpot" => penpot_bytes(doc)?,
+        "fig" => fig_bytes(doc, io)?,
+        "penpot" => penpot_bytes(doc, io)?,
         other => return Err(CliError::Usage(format!("unknown output format `.{other}` (figcraft, json, svg, png, jpg, webp, pdf, fig, penpot)"))),
     };
     write(out, &bytes)
 }
 
 /// `doc` as a `.fig` file (experimental), printing what was left out.
-fn fig_bytes(doc: &Document) -> CliResult<Vec<u8>> {
+fn fig_bytes(doc: &Document, io: &mut Io) -> CliResult<Vec<u8>> {
     let (bytes, warnings) = figcraft_engine::cmd::file::fig_bytes(doc).map_err(|e| CliError::Failed(e.to_string()))?;
     for w in warnings {
-        eprintln!("note: {w}");
+        errln!(io, "note: {w}");
     }
     Ok(bytes)
 }
 
-fn penpot_bytes(doc: &Document) -> CliResult<Vec<u8>> {
+fn penpot_bytes(doc: &Document, io: &mut Io) -> CliResult<Vec<u8>> {
     let (bytes, warnings) = figcraft_engine::cmd::file::penpot_bytes(doc).map_err(|e| CliError::Failed(e.to_string()))?;
     for w in warnings {
-        eprintln!("note: {w}");
+        errln!(io, "note: {w}");
     }
     Ok(bytes)
 }
@@ -170,7 +169,7 @@ fn page_pdf(doc: &Document, page: NodeId, print: &PrintSettings) -> CliResult<Ve
     r.map_err(|e| CliError::Failed(e.to_string()))
 }
 
-pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
+pub fn info(path: &str, as_json: bool, io: &mut Io) -> CliResult<i32> {
     let (doc, notes) = load_noted(path)?;
     let pages: Vec<Value> = doc
         .pages
@@ -201,13 +200,14 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
         "missingFonts": missing.iter().map(|m| json!({"family": m.family, "layers": m.layers})).collect::<Vec<_>>(),
     });
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-        return Ok(ExitCode::SUCCESS);
+        outln!(io, "{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return Ok(0);
     }
     for n in &notes {
-        eprintln!("note: {}", plain(&n.to_string()));
+        errln!(io, "note: {}", plain(&n.to_string()));
     }
-    println!(
+    outln!(
+        io,
         "{} — {} ({} nodes, {} styles, {} variables, {} images)",
         plain(path),
         plain(&doc.name),
@@ -217,9 +217,10 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
         doc.images.len()
     );
     for p in &pages {
-        println!("page {} \"{}\": {} nodes, {} top-level", p["id"], plain(p["name"].as_str().unwrap_or("")), p["nodes"], p["topLevel"]);
+        outln!(io, "page {} \"{}\": {} nodes, {} top-level", p["id"], plain(p["name"].as_str().unwrap_or("")), p["nodes"], p["topLevel"]);
         for f in p["frames"].as_array().into_iter().flatten() {
-            println!(
+            outln!(
+                io,
                 "  {} {} \"{}\" {}×{}",
                 f["id"],
                 f["type"].as_str().unwrap_or(""),
@@ -231,9 +232,9 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
     }
     for m in &missing {
         let layers = if m.layers == 1 { "text layer" } else { "text layers" };
-        println!("missing font \"{}\": {} {layers} (drawn in a fallback font)", plain(&m.family), m.layers);
+        outln!(io, "missing font \"{}\": {} {layers} (drawn in a fallback font)", plain(&m.family), m.layers);
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// The file name a layer exports to: the app's rule ([`figcraft_engine::cmd::file::safe_file_name`],
@@ -260,18 +261,18 @@ pub struct Target {
     pub vd_compat: VdCompat,
 }
 
-pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
-    let doc = load(file)?;
+pub fn export(file: &str, out: &str, t: &Target, io: &mut Io) -> CliResult<i32> {
+    let doc = load(file, io)?;
     // `.fig`: the whole file.
     if t.format.as_deref().map_or(ext(out) == "fig", |f| f.eq_ignore_ascii_case("fig")) {
-        write(out, &fig_bytes(&doc)?)?;
-        println!("{out}");
-        return Ok(ExitCode::SUCCESS);
+        write(out, &fig_bytes(&doc, io)?)?;
+        outln!(io, "{out}");
+        return Ok(0);
     }
     if t.format.as_deref().map_or(ext(out) == "penpot", |f| f.eq_ignore_ascii_case("penpot")) {
-        write(out, &penpot_bytes(&doc)?)?;
-        println!("{out}");
-        return Ok(ExitCode::SUCCESS);
+        write(out, &penpot_bytes(&doc, io)?)?;
+        outln!(io, "{out}");
+        return Ok(0);
     }
     let page = page_named(&doc, t.page.as_deref())?;
     let (scale, node, print) = (t.scale, t.node.as_deref(), &t.print);
@@ -282,12 +283,12 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
     };
     let target = node.map(|q| find_node(&doc, page, q)).transpose()?;
     let single = image_format(&ext(out)).is_some();
-    let bytes_of = |ids: &[NodeId]| {
+    let mut bytes_of = |ids: &[NodeId]| {
         let setting = ExportSetting { format: fmt, print: *print, vd_compat: t.vd_compat, ..Default::default() };
         let (bytes, warnings) = figcraft_engine::cmd::file::export_file(&doc, ids, &setting, scale).map_err(|e| CliError::Failed(e.to_string()))?;
         // What an Android Vector Drawable changed or left out, like the .fig notes.
         for w in warnings {
-            eprintln!("note: {w}");
+            errln!(io, "note: {w}");
         }
         Ok::<_, CliError>(bytes)
     };
@@ -298,8 +299,8 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
             None => bytes_of(&children(&doc, page))?,
         };
         write(out, &bytes)?;
-        println!("{out}");
-        return Ok(ExitCode::SUCCESS);
+        outln!(io, "{out}");
+        return Ok(0);
     }
     figcraft_engine::file_access::create_dir_all(out).map_err(|e| CliError::Failed(e.to_string()))?;
     let ids = match target {
@@ -329,9 +330,9 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
         };
         let path = Path::new(out).join(format!("{name}.{}", fmt.ext())).to_string_lossy().into_owned();
         write(&path, &bytes_of(&[id])?)?;
-        println!("{path}");
+        outln!(io, "{path}");
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 fn refuse_dropping_images(input: &str, out: &str, images_left_out: usize) -> CliResult<()> {
@@ -353,12 +354,12 @@ fn refuse_dropping_images_from_script(input: Option<(&str, usize)>, active: &fig
     Ok(())
 }
 
-pub fn convert(input: &str, out: &str) -> CliResult<ExitCode> {
+pub fn convert(input: &str, out: &str, io: &mut Io) -> CliResult<i32> {
     let (loaded, _) = figcraft_engine::cmd::file::load_path(input, None).map_err(|e| CliError::Failed(format!("can't open {input}: {e}")))?;
     refuse_dropping_images(input, out, loaded.images_past_budget)?;
     if ext(input) == "penpot" {
         for note in &loaded.issues {
-            eprintln!("note: {note}");
+            errln!(io, "note: {note}");
         }
     }
     let doc = loaded.doc;
@@ -367,13 +368,13 @@ pub fn convert(input: &str, out: &str) -> CliResult<ExitCode> {
         .filter(|p| doc.pages.contains(p))
         .or_else(|| doc.first_page())
         .ok_or_else(|| CliError::Failed("the document has no pages".into()))?;
-    write_doc(&doc, page, out)?;
-    println!("{out}");
-    Ok(ExitCode::SUCCESS)
+    write_doc(&doc, page, out, io)?;
+    outln!(io, "{out}");
+    Ok(0)
 }
 
-pub fn render(file: &str, out: &str, scale: f64, page: Option<&str>) -> CliResult<ExitCode> {
-    let doc = load(file)?;
+pub fn render(file: &str, out: &str, scale: f64, page: Option<&str>, io: &mut Io) -> CliResult<i32> {
+    let doc = load(file, io)?;
     let page = page_named(&doc, page)?;
     let e = ext(out);
     if !matches!(e.as_str(), "png" | "jpg" | "jpeg" | "webp") {
@@ -381,8 +382,8 @@ pub fn render(file: &str, out: &str, scale: f64, page: Option<&str>) -> CliResul
     }
     let pix = render_page(&doc, page, scale)?;
     write(out, &encode(&doc, &pix, &e)?)?;
-    println!("{out} ({}×{})", pix.width(), pix.height());
-    Ok(ExitCode::SUCCESS)
+    outln!(io, "{out} ({}×{})", pix.width(), pix.height());
+    Ok(0)
 }
 
 /// Parse a script: a JSON array of steps, `{"commands": [...]}`, or JSON lines.
@@ -422,7 +423,7 @@ pub fn parse_script(text: &str) -> Result<Vec<BatchStep>, String> {
 /// file is refused before it is read (#1114).
 pub const MAX_SCRIPT: u64 = 1 << 30;
 
-pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliResult<ExitCode> {
+pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>, io: &mut Io) -> CliResult<i32> {
     let bytes = figcraft_engine::file_access::read_capped(script, MAX_SCRIPT).map_err(|e| CliError::Failed(e.to_string()))?;
     let text = String::from_utf8(bytes).map_err(|_| CliError::Failed(format!("{script}: not UTF-8")))?;
     let steps = parse_script(&text).map_err(|e| CliError::Failed(format!("{script}: {e}")))?;
@@ -453,14 +454,14 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
     if let Err(e) = outcome {
         let cmd = steps.get(failed_at).map_or("", |step| step.command.as_str());
         let i = failed_at;
-        println!("{}", json!({"step": i, "command": cmd, "ok": false, "error": e.to_string(), "rolledBack": true}));
+        outln!(io, "{}", json!({"step": i, "command": cmd, "ok": false, "error": e.to_string(), "rolledBack": true}));
         // Plugin-supplied text: escape terminal controls and line breaks.
-        eprintln!("error: step {i} ({}) failed: {}", plain(cmd), plain(&e.to_string()));
-        eprintln!("the script's document changes were rolled back");
-        return Ok(ExitCode::from(1));
+        errln!(io, "error: step {i} ({}) failed: {}", plain(cmd), plain(&e.to_string()));
+        errln!(io, "the script's document changes were rolled back");
+        return Ok(1);
     }
     for (i, (step, v)) in steps.iter().zip(scope.results()).enumerate() {
-        println!("{}", json!({"step": i, "command": step.command, "ok": true, "result": v}));
+        outln!(io, "{}", json!({"step": i, "command": step.command, "ok": true, "result": v}));
     }
     if let Some(out) = out {
         let ds = s.ds().map_err(|e| CliError::Failed(e.to_string()))?;
@@ -469,17 +470,17 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
             // Through the engine, so the version history is kept.
             write(out, &figcraft_engine::cmd::file::file_bytes_at(ds, out).map_err(|e| CliError::Failed(e.to_string()))?)?;
         } else {
-            write_doc(&ds.doc, ds.page, out)?;
+            write_doc(&ds.doc, ds.page, out, io)?;
         }
-        eprintln!("wrote {out}");
+        errln!(io, "wrote {out}");
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// Link the components of `file` (a `.figcraft`) to their code as `mappings` (a
 /// `figcraft.connect.json`) says, and save it in place unless `dry_run`. Prints what was linked;
 /// entries that were skipped are warnings on stderr, and linking nothing fails (exit code 1).
-pub fn connect_publish(file: &str, mappings: &str, dry_run: bool) -> CliResult<ExitCode> {
+pub fn connect_publish(file: &str, mappings: &str, dry_run: bool, io: &mut Io) -> CliResult<i32> {
     if ext(file) != "figcraft" {
         return Err(CliError::Usage(format!("{file}: connect publish saves code links in a .figcraft file")));
     }
@@ -487,25 +488,32 @@ pub fn connect_publish(file: &str, mappings: &str, dry_run: bool) -> CliResult<E
     s.execute("file.open", &json!({"path": file})).map_err(|e| CliError::Failed(format!("can't open {file}: {e}")))?;
     let r = s.execute("codeConnect.import", &json!({"path": mappings})).map_err(|e| CliError::Failed(format!("{mappings}: {e}")))?;
     for w in r["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-        eprintln!("warning: {w}");
+        errln!(io, "warning: {w}");
     }
     let linked = r["linked"].as_u64().unwrap_or(0);
     if linked == 0 {
-        eprintln!("error: no component of {file} matches a link in {mappings}: nothing published");
-        return Ok(ExitCode::from(1));
+        errln!(io, "error: no component of {file} matches a link in {mappings}: nothing published");
+        return Ok(1);
     }
     if dry_run {
-        println!("{linked} component link(s) from {mappings} would be published to {file} (dry run: not saved)");
-        return Ok(ExitCode::SUCCESS);
+        outln!(io, "{linked} component link(s) from {mappings} would be published to {file} (dry run: not saved)");
+        return Ok(0);
     }
     // The engine's save: written whole or not at all, with the file's version history.
     s.execute("file.save", &json!({})).map_err(|e| CliError::Failed(format!("can't save {file}: {e}")))?;
-    println!("published {linked} component link(s) from {mappings} to {file}");
-    Ok(ExitCode::SUCCESS)
+    outln!(io, "published {linked} component link(s) from {mappings} to {file}");
+    Ok(0)
 }
 
 #[cfg(test)]
 mod tests {
+    /// Streams that swallow what a command writes.
+    macro_rules! io {
+        () => {
+            &mut Io { out: &mut Vec::new(), err: &mut Vec::new() }
+        };
+    }
+
     use super::*;
 
     /// `info` and a script's failure print what a file and its steps name, controls escaped.
@@ -516,8 +524,8 @@ mod tests {
         let (svg, script) = (dir.join("a.svg"), dir.join("s.json"));
         std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>"#).unwrap();
         std::fs::write(&script, r#"[{"command":"no.such\u001b"}]"#).unwrap();
-        assert_eq!(info(svg.to_str().unwrap(), false).unwrap(), ExitCode::SUCCESS);
-        assert_eq!(run_script(script.to_str().unwrap(), None, None).unwrap(), ExitCode::from(1));
+        assert_eq!(info(svg.to_str().unwrap(), false, io!()).unwrap(), 0);
+        assert_eq!(run_script(script.to_str().unwrap(), None, None, io!()).unwrap(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -602,7 +610,7 @@ mod tests {
         for ext in ["svg", "pdf"] {
             let path = dir.join(format!("previous.{ext}"));
             std::fs::write(&path, b"previous export").unwrap();
-            let CliError::Failed(error) = write_doc(&doc, page, path.to_str().unwrap()).unwrap_err() else {
+            let CliError::Failed(error) = write_doc(&doc, page, path.to_str().unwrap(), io!()).unwrap_err() else {
                 panic!("depth overflow must be an operation failure");
             };
             assert!(error.contains("maximum export depth of 256"), "{ext}: {error}");
@@ -629,7 +637,7 @@ mod tests {
             bad.push("/dev/zero".into());
         }
         for path in bad {
-            let Err(CliError::Failed(e)) = run_script(&path, None, None) else { panic!("{path} ran") };
+            let Err(CliError::Failed(e)) = run_script(&path, None, None, io!()) else { panic!("{path} ran") };
             assert!(e.contains("is a folder, not a file") || e.contains("isn't a regular file"), "{path}: {e}");
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -658,16 +666,16 @@ mod tests {
             doc.nodes().filter(|n| n.name == "Card").map(|n| n.code_links.len()).sum::<usize>()
         };
 
-        assert_eq!(connect_publish(file, mappings, true).unwrap(), ExitCode::SUCCESS);
+        assert_eq!(connect_publish(file, mappings, true, io!()).unwrap(), 0);
         assert_eq!(links(), 0, "a dry run saves nothing");
-        assert_eq!(connect_publish(file, mappings, false).unwrap(), ExitCode::SUCCESS, "an unknown component is only a warning");
+        assert_eq!(connect_publish(file, mappings, false, io!()).unwrap(), 0, "an unknown component is only a warning");
         assert_eq!(links(), 1, "Card is linked to its code in the saved file");
 
         let none = dir.join("none.json");
         std::fs::write(&none, json!({"version": 1, "links": [link("Nope")]}).to_string()).unwrap();
-        assert_eq!(connect_publish(file, none.to_str().unwrap(), false).unwrap(), ExitCode::from(1));
-        assert!(matches!(connect_publish(dir.join("ui.svg").to_str().unwrap(), mappings, false), Err(CliError::Usage(_))));
-        assert!(matches!(connect_publish(file, dir.join("missing.json").to_str().unwrap(), false), Err(CliError::Failed(_))));
+        assert_eq!(connect_publish(file, none.to_str().unwrap(), false, io!()).unwrap(), 1);
+        assert!(matches!(connect_publish(dir.join("ui.svg").to_str().unwrap(), mappings, false, io!()), Err(CliError::Usage(_))));
+        assert!(matches!(connect_publish(file, dir.join("missing.json").to_str().unwrap(), false, io!()), Err(CliError::Failed(_))));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -687,7 +695,7 @@ mod tests {
         )
         .unwrap();
         let out = dir.join("out.figcraft");
-        assert_eq!(run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap(), ExitCode::SUCCESS);
+        assert_eq!(run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), io!()).unwrap(), 0);
 
         let mut s = Session::empty();
         s.execute("file.open", &json!({"path": out.to_str().unwrap()})).unwrap();
@@ -717,7 +725,7 @@ mod tests {
         )
         .unwrap();
         let out = dir.join("out.figcraft");
-        assert_eq!(run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap(), ExitCode::SUCCESS);
+        assert_eq!(run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), io!()).unwrap(), 0);
 
         let mut s = Session::empty();
         s.execute("file.open", &json!({"path": out.to_str().unwrap()})).unwrap();
@@ -734,7 +742,7 @@ mod tests {
         let dir = temp_dir("run-dup-name");
         let script = dir.join("script.json");
         std::fs::write(&script, r#"[{"command": "select.none", "as": "a"}, {"command": "select.none", "as": "a"}]"#).unwrap();
-        let Err(CliError::Failed(e)) = run_script(script.to_str().unwrap(), None, None) else { panic!("a name twice must fail") };
+        let Err(CliError::Failed(e)) = run_script(script.to_str().unwrap(), None, None, io!()) else { panic!("a name twice must fail") };
         assert!(e.contains("step 1: `as` \"a\" is already step 0's name"), "{e}");
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -754,7 +762,7 @@ mod tests {
         .unwrap();
         let out = dir.join("out.figcraft");
         // The failure is the script's, not the call's: the CLI reports it and exits non-zero.
-        assert_eq!(run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap(), ExitCode::from(1));
+        assert_eq!(run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap()), io!()).unwrap(), 1);
         assert!(!out.exists(), "a script that failed writes nothing");
         std::fs::remove_dir_all(dir).unwrap();
     }
