@@ -556,8 +556,9 @@ pub(crate) fn list_width(ui: &Ui) -> f32 {
 }
 
 /// A name's room on a row stops growing here: a name of thousands of characters (#1650) elides
-/// past it instead of making the list that wide.
-pub(crate) const NAME_ROOM: f32 = 1200.0;
+/// past it instead of making the list that wide. 400 pt still holds a long variant name
+/// (`Size=small, Type=primary, State=default, Icon=leading, Width=full`) in full.
+pub(crate) const NAME_ROOM: f32 = 400.0;
 
 /// A row's name: the layer's, or its kind's label when it has none.
 fn row_name(n: &figcraft_doc::Node) -> &str {
@@ -1018,20 +1019,34 @@ fn drop_layers(app: &mut FigApp, doc: &Document, rows: &[Row], moving: &[NodeId]
     app.run("layers.reparent", json!({"ids": ids, "parent": parent.id, "index": index}));
 }
 
-/// The eye and padlock of a row: painted when hovered (`over`, false in Dev Mode) or set, and, outside
-/// Dev Mode, clickable; a drag over them starts a sweep. Returns the layers whose eye / padlock was clicked.
-fn eye_lock(
-    ui: &mut Ui,
-    t: &Tokens,
-    rects: [Rect; 2],
-    row: &Row,
-    n: &figcraft_doc::Node,
-    over: bool,
-    dev: bool,
-    sweep: &mut Option<Sweep>,
-) -> (Option<NodeId>, Option<NodeId>) {
-    let [r, rr] = rects;
-    let (mut vis, mut lock) = (None, None);
+/// The eye and padlock's span on a row (`rr`, the row inset 8 pt from each side) wider than the view:
+/// its end stops 8 pt inside the view's edge, where it is on a row as wide as the view, but never so
+/// far in that the buttons cover the row's disclosure triangle, icon or name start (`name_x`,
+/// unmirrored). Returns that row span (what [`eye_lock`] places them at the end of) and the
+/// buttons' 48 pt: the eye and padlock are 20 pt each, 4 pt from the end and 2 pt apart.
+fn row_buttons(rr: Rect, view: Rect, name_x: f32, rtl: bool) -> (Rect, Rect) {
+    if rtl {
+        let name_start = rr.min.x + rr.max.x - name_x;
+        let end = Rect::from_min_max(pos2(rr.min.x.max((view.min.x + 8.0).min(name_start - 48.0)), rr.min.y), rr.max);
+        return (end, Rect::from_x_y_ranges(end.min.x..=(end.min.x + 48.0), rr.y_range()));
+    }
+    let end = Rect::from_min_max(rr.min, pos2(rr.max.x.min((view.max.x - 8.0).max(name_x + 48.0)), rr.max.y));
+    (end, Rect::from_x_y_ranges((end.max.x - 48.0)..=end.max.x, rr.y_range()))
+}
+
+/// Where a row's name is drawn: the view, less the eye and padlock's `buttons` while they show, so
+/// a long name is clipped before them instead of drawn under them.
+fn name_clip(view: Rect, buttons: Rect, buttons_shown: bool, rtl: bool) -> Rect {
+    match (buttons_shown, rtl) {
+        (false, _) => view,
+        (true, false) => Rect::from_x_y_ranges(view.min.x..=view.max.x.min(buttons.min.x), view.y_range()),
+        (true, true) => Rect::from_x_y_ranges(view.min.x.max(buttons.max.x)..=view.max.x, view.y_range()),
+    }
+}
+
+/// Whether row `r`'s layer shows as hidden and as locked: what a sweep in progress sets for the rows
+/// it took in, else the layer's own state. The row joins the sweep when the pointer is on it.
+fn swept_state(ui: &Ui, r: Rect, row: &Row, n: &figcraft_doc::Node, sweep: &mut Option<Sweep>) -> (bool, bool) {
     // A sweep across the eyes or padlocks takes in the rows the pointer passes.
     if let Some(sw) = sweep.as_mut()
         && !sw.ids.contains(&row.id)
@@ -1042,9 +1057,26 @@ fn eye_lock(
         sw.ids.push(row.id);
     }
     let swept = |lock: bool| sweep.as_ref().filter(|sw| sw.lock == lock && sw.ids.contains(&row.id)).map(|sw| sw.on);
+    (swept(false).unwrap_or(!n.visible), swept(true).unwrap_or(n.locked))
+}
+
+/// The eye and padlock of a row, shown `hidden` and `locked` ([`swept_state`]): painted when hovered
+/// (`over`, false in Dev Mode) or set, and, outside Dev Mode, clickable; a drag over them starts a
+/// sweep. Returns the layers whose eye / padlock was clicked.
+fn eye_lock(
+    ui: &mut Ui,
+    t: &Tokens,
+    rects: [Rect; 2],
+    row: &Row,
+    n: &figcraft_doc::Node,
+    (hidden, locked): (bool, bool),
+    over: bool,
+    dev: bool,
+    sweep: &mut Option<Sweep>,
+) -> (Option<NodeId>, Option<NodeId>) {
+    let [r, rr] = rects;
+    let (mut vis, mut lock) = (None, None);
     // Lock / eye on hover (or when set); a layer in a locked one shows a faint padlock.
-    let hidden = swept(false).unwrap_or(!n.visible);
-    let locked = swept(true).unwrap_or(n.locked);
     // In Dev Mode they only show what is set.
     let show_lock = over || locked || row.locked_above;
     let show_eye = over || hidden;
@@ -1315,6 +1347,8 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             let icon_rect = Rect::from_center_size(pos2(fx(x0 + 22.0), r.center().y), vec2(14.0, 14.0));
             icons::paint(ui.painter(), icon_rect, icon, icon_col);
             let name_x = x0 + 36.0;
+            let (buttons_end, buttons) = row_buttons(rr, ui.clip_rect(), name_x, rtl);
+            let toggles = swept_state(ui, r, row, n, &mut sweep);
             if app.ui.rename.is_some_and(|rn| rn.id == row.id) {
                 if let Some(new) = rename_field(app, ui, row.id, row.depth, &n.name, r) {
                     rename_done = Some((row.id, new));
@@ -1326,9 +1360,11 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 // Room before the lock and eye buttons (the row is wide enough for the whole
                 // name, up to `NAME_ROOM`: a row widened by a deeper name gives no more).
                 let max_w = (rr.max.x - 56.0 - name_x).clamp(20.0, NAME_ROOM);
-                crate::bidi::paint_name_from(ui.painter(), pos2(fx(name_x), r.center().y), rtl, &name, font, col, max_w);
+                let buttons_shown = (over && !dev) || toggles.0 || toggles.1 || row.locked_above;
+                let clip = name_clip(ui.clip_rect(), buttons, buttons_shown, rtl);
+                crate::bidi::paint_name_from(&ui.painter().with_clip_rect(clip), pos2(fx(name_x), r.center().y), rtl, &name, font, col, max_w);
             }
-            let (v, l) = eye_lock(ui, &t, [r, rr], row, n, over && !dev, dev, &mut sweep);
+            let (v, l) = eye_lock(ui, &t, [r, buttons_end], row, n, toggles, over && !dev, dev, &mut sweep);
             vis = v.or(vis);
             lock = l.or(lock);
             if resp.clicked() {
