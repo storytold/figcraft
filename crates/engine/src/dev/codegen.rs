@@ -6,7 +6,7 @@
 //! their iOS and Android code syntax in SwiftUI and Compose. The output is a starting point, not a
 //! pixel-exact translation.
 
-use figcraft_color::{Color, Gradient, GradientKind, Paint, PaintKind};
+use figcraft_color::{Color, Gradient, GradientKind, ImagePaint, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::{
     ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, Shadow, Sizing,
     TextAlignH, TextCase, TextDecoration, Variable,
@@ -349,6 +349,28 @@ fn first_fill(n: &Node) -> Option<Color> {
 /// the renderer paints them; the index tells a target which paint is the bottom one.
 fn visible_fills(n: &Node) -> impl DoubleEndedIterator<Item = (usize, &Paint)> {
     n.fills.iter().enumerate().filter(|(_, p)| p.visible)
+}
+
+/// The file an image fill's picture is handed over as by `file.exportAssets`, as its name without
+/// extension (the start of its content hash) and its extension; `image.png` when the file doesn't
+/// hold the picture, as CSS writes it.
+fn image_asset(doc: &Document, image: &ImagePaint) -> (String, &'static str) {
+    crate::asset_handoff::image_file(doc, &image.image)
+        .map_or_else(|_| ("image".to_string(), "png"), |(_, hash, ext)| (crate::asset_handoff::file_stem(&hash).to_string(), ext))
+}
+
+/// A `//` line at `pad` for each visible pattern fill: a pattern's cells are layers, which no native
+/// paint can repeat, so the code leaves it out and says so.
+fn pattern_notes(n: &Node, pad: &str) -> String {
+    visible_fills(n)
+        .filter(|(_, p)| matches!(p.kind, PaintKind::Pattern(_)))
+        .map(|_| format!("{pad}// pattern fill left out: export the layer as an image for it\n"))
+        .collect()
+}
+
+/// Whether a layer's fills paint a box of its own: the layers the native targets give fills.
+fn paints_a_box(n: &Node) -> bool {
+    matches!(n.kind, NodeKind::Ellipse { .. } | NodeKind::Rectangle | NodeKind::Group) || n.kind.is_frame_like()
 }
 
 /// A gradient's sorted stops as (position, colour), the paint's opacity folded into each colour.
@@ -1159,6 +1181,81 @@ mod tests {
             );
             assert!(!dart.contains("DecoratedBox"), "{dart}");
             assert!(code_for(doc, f, CodeLang::ArkUi).contains(".backgroundColor('#FFFFFF')"));
+        }
+    }
+
+    /// White, a photo, then 50% black (bottom to top) on a layer of `kind`, and the name the photo's
+    /// file goes by in the asset handoff.
+    fn photo_under_overlay(s: &mut Session, kind: &str, mode: figcraft_color::ImageScaleMode) -> (NodeId, String) {
+        let bytes = b"\x89PNG\r\n\x1a\nphoto".to_vec();
+        let hash = figcraft_format::image_hash(&bytes);
+        let data = figcraft_doc::ImageData { bytes: std::sync::Arc::new(bytes), width: 4, height: 3 };
+        s.doc_mut().unwrap().images.insert(hash.clone(), data);
+        let mut overlay = figcraft_color::Paint::solid(Color::BLACK);
+        overlay.opacity = 0.5;
+        let fills = vec![figcraft_color::Paint::solid(Color::WHITE), figcraft_color::Paint::image(hash.clone(), mode), overlay];
+        (fill_layer(s, kind, 120.0, fills), crate::asset_handoff::file_stem(&hash).to_string())
+    }
+
+    /// Where `needle` first appears in `code`, failing when it doesn't.
+    fn at(code: &str, needle: &str) -> usize {
+        code.find(needle).unwrap_or_else(|| panic!("no {needle} in:\n{code}"))
+    }
+
+    #[test]
+    fn native_code_keeps_an_image_fill_between_the_fills_around_it() {
+        use figcraft_color::ImageScaleMode;
+        let mut s = Session::new();
+        for kind in ["frame", "rectangle"] {
+            let (id, stem) = photo_under_overlay(&mut s, kind, ImageScaleMode::Fill);
+            let doc = s.doc().unwrap();
+            // SwiftUI writes backgrounds top first and overlays bottom first.
+            let sw = code_for(doc, id, CodeLang::SwiftUi);
+            let (white, photo, half) = (at(&sw, SWIFT_WHITE), at(&sw, &format!("Image(\"{stem}\").resizable().scaledToFill()")), at(&sw, SWIFT_HALF));
+            if kind == "frame" {
+                assert!(half < photo && photo < white, "{sw}");
+            } else {
+                assert!(white < photo && photo < half, "{sw}");
+            }
+            assert!(sw.contains(".clip"), "the photo is clipped to the layer: {sw}");
+            // Compose and Flutter paint bottom first.
+            let kt = code_for(doc, id, CodeLang::Compose);
+            let photo = at(&kt, &format!("painterResource(R.drawable.image_{stem}), contentScale = ContentScale.Crop"));
+            assert!(at(&kt, "Color(0xFFFFFFFF)") < photo && photo < at(&kt, "Color(0x80000000)"), "{kt}");
+            let dart = code_for(doc, id, CodeLang::Flutter);
+            let photo = at(&dart, &format!("image: DecorationImage(image: AssetImage(\"{stem}.png\"), fit: BoxFit.cover)"));
+            assert!(at(&dart, "color: Color(0xFFFFFFFF)") < photo && photo < at(&dart, "color: Color(0x80000000)"), "{dart}");
+        }
+    }
+
+    #[test]
+    fn native_image_fills_follow_their_scale_mode_and_opacity() {
+        use figcraft_color::ImageScaleMode;
+        let mut s = Session::new();
+        let (fit, stem) = photo_under_overlay(&mut s, "frame", ImageScaleMode::Fit);
+        let (tile, _) = photo_under_overlay(&mut s, "frame", ImageScaleMode::Tile);
+        s.doc_mut().unwrap().get_mut(tile).unwrap().fills[1].opacity = 0.25;
+        let doc = s.doc().unwrap();
+        assert!(code_for(doc, fit, CodeLang::SwiftUi).contains(".scaledToFit()"));
+        assert!(code_for(doc, fit, CodeLang::Compose).contains("ContentScale.Fit"));
+        assert!(code_for(doc, fit, CodeLang::Flutter).contains("BoxFit.contain"));
+        let sw = code_for(doc, tile, CodeLang::SwiftUi);
+        assert!(sw.contains(&format!("Image(\"{stem}\").resizable(resizingMode: .tile).opacity(0.25)")), "{sw}");
+        let kt = code_for(doc, tile, CodeLang::Compose);
+        assert!(kt.contains("TileMode.Repeated") && kt.contains("alpha = 0.25f"), "{kt}");
+        let dart = code_for(doc, tile, CodeLang::Flutter);
+        assert!(dart.contains("repeat: ImageRepeat.repeat, opacity: 0.25"), "{dart}");
+    }
+
+    #[test]
+    fn native_code_says_a_pattern_fill_is_left_out() {
+        let mut s = Session::new();
+        let f = fill_layer(&mut s, "frame", 120.0, vec![figcraft_color::Paint::solid(Color::WHITE), figcraft_color::Paint::pattern(1)]);
+        let doc = s.doc().unwrap();
+        for lang in [CodeLang::SwiftUi, CodeLang::Compose, CodeLang::Flutter] {
+            let code = code_for(doc, f, lang);
+            assert_eq!(code.matches("// pattern fill left out").count(), 1, "{code}");
+            assert!(code.contains("FFFFFF") || code.contains("red: 1"), "the other fill stays: {code}");
         }
     }
 }
