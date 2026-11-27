@@ -218,6 +218,124 @@ fn ordinary_resize_and_scale_keep_image_fill_settings() {
 }
 
 #[test]
+fn crop_mode_image_resizing_without_cmd_morphs_and_with_cmd_crops() {
+    use figcraft_doc::color::{ImageScaleMode, PaintKind};
+    let mut s = session();
+    let layer = image_layer(&mut s);
+    // Set the image fill mode to Crop without an explicit crop: fill.set initializes placement crop.
+    let mut fills = s.doc().unwrap().node(layer).unwrap().fills.clone();
+    let PaintKind::Image(img) = &mut fills[0].kind else { panic!("image fill") };
+    img.scale_mode = ImageScaleMode::Crop;
+    img.crop = None;
+    ex(&mut s, "fill.set", json!({"ids": [layer], "index": 0, "paint": fills[0]}));
+
+    // Verify fill.set initialized img.crop with placement crop.
+    let initial_node = s.doc().unwrap().node(layer).unwrap().clone();
+    let PaintKind::Image(img) = &initial_node.fills[0].kind else { panic!("image fill") };
+    let Some(initial_crop) = img.crop else { panic!("crop initialized") };
+
+    let before = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    assert_eq!((before.width(), before.height()), (200, 100));
+
+    // 1. Resize without Cmd (normal resize from bottom edge: 100 -> 50).
+    // The layer height shrinks to 50, but img.crop stays unchanged, stretching/squishing the image.
+    s.pointer(&ev(PointerKind::Down, Point::new(100.0, 100.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Move, Point::new(100.0, 50.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Up, Point::new(100.0, 50.0), NONE)).unwrap();
+    assert_eq!(size(&s, layer), (200.0, 50.0));
+
+    let n = s.doc().unwrap().node(layer).unwrap().clone();
+    let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+    assert_eq!(img.crop, Some(initial_crop), "normal resize leaves crop transform unchanged");
+
+    let morphed = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    assert_eq!((morphed.width(), morphed.height()), (200, 50));
+
+    // 2. Resize with Cmd from right edge: 200 -> 100.
+    // The layer width shrinks to 100, and img.crop is updated so the pixels stay stationary on page (cropping).
+    s.pointer(&ev(PointerKind::Down, Point::new(200.0, 25.0), CMD)).unwrap();
+    s.pointer(&ev(PointerKind::Move, Point::new(100.0, 25.0), CMD)).unwrap();
+    s.pointer(&ev(PointerKind::Up, Point::new(100.0, 25.0), CMD)).unwrap();
+    assert_eq!(size(&s, layer), (100.0, 50.0));
+
+    let n = s.doc().unwrap().node(layer).unwrap().clone();
+    let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+    assert_ne!(img.crop, Some(initial_crop), "Cmd resize updates crop transform");
+
+    let cropped = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    assert_eq!((cropped.width(), cropped.height()), (100, 50));
+    // The remaining 100x50 pixels match the top-left 100x50 of morphed (pixels stayed still in layer space).
+    for y in 0..50usize {
+        assert_eq!(&cropped.data()[y * 400..(y + 1) * 400], &morphed.data()[y * 800..y * 800 + 400], "row {y}: stationary cropped pixels");
+    }
+}
+
+#[test]
+fn multi_layer_crop_mode_selection_computes_placement_per_node() {
+    use figcraft_doc::color::{ImageScaleMode, PaintKind};
+    let mut s = session();
+    let layer1 = image_layer(&mut s); // 200 x 100
+    let layer2 = id(&ex(&mut s, "shape.rectangle", json!({"x": 300, "y": 0, "width": 100, "height": 100})));
+
+    // Choose Crop mode on both layers simultaneously via fill.set with crop: None (as the picker does).
+    let mut fill = s.doc().unwrap().node(layer1).unwrap().fills[0].clone();
+    let PaintKind::Image(img) = &mut fill.kind else { panic!("image fill") };
+    img.scale_mode = ImageScaleMode::Crop;
+    img.crop = None;
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": fill}));
+
+    // Verify both layers received crop transforms tailored to their own dimensions, not stretched.
+    let n1 = s.doc().unwrap().node(layer1).unwrap().clone();
+    let n2 = s.doc().unwrap().node(layer2).unwrap().clone();
+    let PaintKind::Image(img1) = &n1.fills[0].kind else { panic!("image fill") };
+    let PaintKind::Image(img2) = &n2.fills[0].kind else { panic!("image fill") };
+
+    let crop1 = img1.crop.expect("layer1 crop initialized");
+    let crop2 = img2.crop.expect("layer2 crop initialized");
+
+    // layer1 (200x100) and layer2 (100x100) have different aspect ratios, so their crop transforms must differ.
+    assert_ne!(crop1, crop2, "differently sized layers must have distinct crop transforms");
+
+    // Both should match expected placement crop for their respective dimensions (iw=200, ih=100 from image_layer):
+    assert_eq!(crop1, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(crop2, [0.5, 0.0, 0.0, 1.0, 0.25, 0.0]);
+
+    // Rotate 90° on the multi-selection (as the picker's Rotate button does):
+    let mut rot_fill = n1.fills[0].clone();
+    let PaintKind::Image(img) = &mut rot_fill.kind else { panic!("image fill") };
+    img.rotation = 1;
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": rot_fill}));
+
+    let n1_rot = s.doc().unwrap().node(layer1).unwrap().clone();
+    let n2_rot = s.doc().unwrap().node(layer2).unwrap().clone();
+    let PaintKind::Image(img1_rot) = &n1_rot.fills[0].kind else { panic!("image fill") };
+    let PaintKind::Image(img2_rot) = &n2_rot.fills[0].kind else { panic!("image fill") };
+
+    let crop1_rot = img1_rot.crop.expect("layer1 rotated crop initialized");
+    let crop2_rot = img2_rot.crop.expect("layer2 rotated crop initialized");
+    assert_ne!(crop1_rot, crop2_rot, "differently sized layers must have distinct rotated crop transforms");
+    assert_eq!(crop1_rot, [1.0, 0.0, 0.0, 0.25, 0.0, 0.375]);
+    assert_eq!(crop2_rot, [1.0, 0.0, 0.0, 0.5, 0.0, 0.25]);
+
+    // Shared filter edit on multi-selection in Crop mode (e.g. Exposure slider):
+    let mut filter_fill = n1_rot.fills[0].clone();
+    let PaintKind::Image(img) = &mut filter_fill.kind else { panic!("image fill") };
+    img.filters.exposure = 0.5;
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": filter_fill}));
+
+    let n1_filt = s.doc().unwrap().node(layer1).unwrap().clone();
+    let n2_filt = s.doc().unwrap().node(layer2).unwrap().clone();
+    let PaintKind::Image(img1_filt) = &n1_filt.fills[0].kind else { panic!("image fill") };
+    let PaintKind::Image(img2_filt) = &n2_filt.fills[0].kind else { panic!("image fill") };
+
+    // Both layers keep their distinct crop transforms; neither is overwritten by the other.
+    assert_eq!(img1_filt.crop, Some(crop1_rot));
+    assert_eq!(img2_filt.crop, Some(crop2_rot));
+    assert_eq!(img1_filt.filters.exposure, 0.5);
+    assert_eq!(img2_filt.filters.exposure, 0.5);
+}
+
+#[test]
 fn command_crop_preserves_each_image_fill_and_leaves_tiles() {
     use figcraft_doc::color::{Color, ImageScaleMode, Paint, PaintKind};
     let mut s = session();
@@ -793,6 +911,73 @@ fn snapping_to_layers_wins_over_the_pixel_grid() {
     ex(&mut s, "edit.undo", json!({}));
     drag(&mut s, Point::new(250.0, 400.0), Point::new(250.0, 450.6), NONE);
     assert_eq!(size(&s, b), (100.0, 151.0));
+}
+
+#[test]
+fn frames_land_on_whole_pixels_whatever_they_snap_to() {
+    // Figma's help: frames, sections and components "always snap to the pixel grid, even if Snap
+    // to pixel grid is disabled". Other layers follow the setting.
+    let frame = |s: &mut Session, x: f64, y: f64| id(&ex(s, "frame.create", json!({"x": x, "y": y, "width": 100, "height": 100})));
+    let whole = |r: Rect| [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.fract() == 0.0);
+    let mut s = Session::new();
+    // A neighbour off the pixel grid, as a scaled or imported layer leaves one: its right edge at
+    // 100.4.
+    rect(&mut s, 0.4, 0.0, 100.0, 100.0, None);
+    let f = frame(&mut s, 300.0, 300.0);
+    let r = rect(&mut s, 300.0, 600.0, 100.0, 100.0, None);
+    // Moved next to it, a rectangle snaps onto 100.4 and the frame to the whole pixel there.
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    drag(&mut s, Point::new(350.0, 650.0), Point::new(151.5, 650.0), Mods::default());
+    assert!(near(bounds(&s, r).x0, 100.4), "{:?}", bounds(&s, r));
+    ex(&mut s, "select.set", json!({"ids": [f]}));
+    drag(&mut s, Point::new(350.0, 350.0), Point::new(151.5, 350.0), Mods::default());
+    assert_eq!(bounds(&s, f).origin(), Point::new(100.0, 300.0), "moved by the snap, onto the whole pixel");
+    // With Snap to pixel grid off, frames still move, resize and draw on whole pixels.
+    ex(&mut s, "view.snapPixel", json!({"on": false}));
+    ex(&mut s, "view.snapObjects", json!({"on": false}));
+    drag(&mut s, Point::new(150.0, 350.0), Point::new(160.3, 360.6), Mods::default());
+    assert_eq!(bounds(&s, f).origin(), Point::new(110.0, 311.0), "moved");
+    drag(&mut s, Point::new(210.0, 411.0), Point::new(250.4, 450.6), Mods::default());
+    assert_eq!(size(&s, f), (140.0, 140.0), "resized");
+    ex(&mut s, "tool.set", json!({"tool": "frame"}));
+    drag(&mut s, Point::new(500.3, 500.6), Point::new(560.6, 540.2), Mods::default());
+    let drawn = s.selection()[0];
+    assert!(whole(bounds(&s, drawn)), "drawn: {:?}", bounds(&s, drawn));
+    // A frame already off the pixel grid lands on it once moved.
+    ex(&mut s, "tool.set", json!({"tool": "move"}));
+    let off = frame(&mut s, 800.4, 800.7);
+    ex(&mut s, "select.set", json!({"ids": [off]}));
+    drag(&mut s, Point::new(850.0, 850.0), Point::new(860.0, 850.0), Mods::default());
+    assert!(whole(bounds(&s, off)), "{:?}", bounds(&s, off));
+    // A rectangle follows the pointer.
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    drag(&mut s, Point::new(150.0, 650.0), Point::new(160.3, 650.0), Mods::default());
+    assert!(near(bounds(&s, r).x0, 110.7), "{:?}", bounds(&s, r));
+}
+
+#[test]
+fn frames_resized_together_each_land_on_whole_pixels() {
+    let mut s = session();
+    let frame = |s: &mut Session, x: f64| id(&ex(s, "frame.create", json!({"x": x, "y": 0, "width": 100, "height": 100})));
+    let (a, b) = (frame(&mut s, 0.0), frame(&mut s, 200.0));
+    ex(&mut s, "select.set", json!({"ids": [a, b]}));
+    // 300 wide to 400: a third more, so each frame alone would be 133.33 wide.
+    drag(&mut s, Point::new(300.0, 100.0), Point::new(400.0, 100.0), Mods::default());
+    assert_eq!(bounds(&s, a), Rect::new(0.0, 0.0, 133.0, 100.0));
+    assert_eq!(bounds(&s, b), Rect::new(267.0, 0.0, 400.0, 100.0));
+}
+
+#[test]
+fn a_frame_dropped_into_a_frame_off_the_pixel_grid_lands_on_its_whole_pixels() {
+    let mut s = session();
+    let target = id(&ex(&mut s, "frame.create", json!({"x": 300.5, "y": 0.5, "width": 300, "height": 300})));
+    let f = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 50})));
+    ex(&mut s, "select.set", json!({"ids": [f]}));
+    drag(&mut s, Point::new(25.0, 25.0), Point::new(425.0, 125.0), Mods::default());
+    let n = s.doc().unwrap().node(f).unwrap().clone();
+    assert_eq!(n.parent, Some(target));
+    let [.., x, y] = n.transform.as_coeffs();
+    assert_eq!((x.fract(), y.fract()), (0.0, 0.0), "at {x}, {y} in the frame");
 }
 
 #[test]
