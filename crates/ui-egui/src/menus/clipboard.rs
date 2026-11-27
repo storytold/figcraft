@@ -62,13 +62,32 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
     // user's own text is pasted instead of the programmatic selection.
     let ours = sys_text.is_some() && sys_text == app.ui.last_copy && app.ui.last_copy_generation == app.session.clipboard.layers_generation;
     let (cx, cy) = at.or_else(|| app.session.ds().ok().map(|d| (d.view.cx, d.view.cy))).unwrap_or((0.0, 0.0));
-    if !ours {
-        if let Some((png, w, h)) = clipboard_png(app) {
+    let file = app.services.clipboard_image_file();
+    if file.is_some() || !ours {
+        // Finder also offers a filename and a TIFF icon. A copied image file supplies its own
+        // pixels; a read error must not turn it into a successful paste of the icon.
+        let image = if let Some(path) = file {
+            let read = figcraft_engine::file_access::read_capped(&path, figcraft_doc::ImageData::MAX_BYTES)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| with_pixel_size(bytes).ok_or_else(|| crate::unreadable(&path.to_string_lossy())));
+            match read {
+                Ok(image) => Some(image),
+                Err(why) => {
+                    app.toast(why);
+                    return;
+                }
+            }
+        } else {
+            clipboard_pixels(app)
+        };
+        if let Some((bytes, (w, h))) = image {
             if dev_mode_refuses(app, "edit.paste") {
                 return;
             }
             use base64::Engine as _;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+            let density = figcraft_format::pixel_density(&bytes);
+            let (w, h) = figcraft_format::placed_size(w, h, density, figcraft_engine::cmd::create::PLACED_IMAGE_MAX_SIDE);
+            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
             // One selected layer that can have fills takes the image as its top fill.
             if let [target] = app.session.selection()[..]
                 && at.is_none()
@@ -135,16 +154,13 @@ fn paste_text(app: &mut FigApp, text: &str, (cx, cy): (f64, f64), center: bool) 
     }
 }
 
-/// The system clipboard's image as PNG bytes, with its size.
-fn clipboard_png(app: &mut FigApp) -> Option<(Vec<u8>, f64, f64)> {
-    let clipboard_png = app.services.clipboard_get_png().filter(|png| png.len() <= crate::MAX_CLIPBOARD_PNG_BYTES);
-    let (png, (w, h)) = match clipboard_png.and_then(with_pixel_size) {
-        Some(readable) => readable,
-        None => with_pixel_size(encoded_clipboard_image(app)?)?,
-    };
-    let density = figcraft_format::pixel_density(&png);
-    let (w, h) = figcraft_format::placed_size(w, h, density, figcraft_engine::cmd::create::PLACED_IMAGE_MAX_SIDE);
-    Some((png, w, h))
+/// The clipboard's encoded image and its pixel dimensions.
+fn clipboard_pixels(app: &mut FigApp) -> Option<(Vec<u8>, (u32, u32))> {
+    app.services
+        .clipboard_get_png()
+        .filter(|png| png.len() <= crate::MAX_CLIPBOARD_PNG_BYTES)
+        .and_then(with_pixel_size)
+        .or_else(|| with_pixel_size(encoded_clipboard_image(app)?))
 }
 
 const MAX_PASTED_IMAGE_PIXELS: u64 = 100_000_000;

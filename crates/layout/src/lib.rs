@@ -368,6 +368,31 @@ struct Item {
     baseline: Option<f64>,
     /// Baseline alignment: offset from the line's top (computed per line).
     base_off: f64,
+    /// A layer with its aspect ratio locked that fills one axis and is fixed on the other: its
+    /// cross size over its main size, so the fixed side follows the filled one. `None` otherwise,
+    /// and in a wrapping flow (where a changed cross size would move the next lines).
+    locked_cross_per_main: Option<f64>,
+}
+
+impl Item {
+    /// The cross size for a child filling the main axis at `main`: at the locked ratio when it
+    /// has one, else `cross`. A main size of zero leaves `cross` alone rather than shrink the
+    /// layer to nothing.
+    fn cross_for_main(&self, main: f64, cross: f64) -> f64 {
+        match self.locked_cross_per_main {
+            Some(r) if self.fill_main && !self.fill_cross && main > 0.0 => clamp_size(main * r, self.min_cross, self.max_cross),
+            _ => cross,
+        }
+    }
+
+    /// The main size for a child filling the cross axis at `cross`: at the locked ratio when it
+    /// has one, else `main`. A cross size of zero leaves `main` alone.
+    fn main_for_cross(&self, cross: f64, main: f64) -> f64 {
+        match self.locked_cross_per_main {
+            Some(r) if self.fill_cross && !self.fill_main && cross > 0.0 => clamp_size(cross / r, self.min_main, self.max_main),
+            _ => main,
+        }
+    }
 }
 
 /// Split flow items into lines, preserving a single empty line when wrapping is off.
@@ -446,7 +471,7 @@ fn align_flow_lines(items: &[Item], extents: &mut [(f64, f64)], al: &AutoLayout,
 }
 
 /// Collect the size and sizing constraints of the children in flow order.
-fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool, cross_fill_off: bool) -> Vec<Item> {
+fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool, cross_fill_off: bool, wraps: bool) -> Vec<Item> {
     let mut items = Vec::with_capacity(kids.len());
     for child in kids {
         let Some(node) = doc.node(*child) else { continue };
@@ -459,6 +484,22 @@ fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool,
             let (pt, pr, pb, pl) = insets(node, al);
             if horizontal { pl + pr } else { pt + pb }
         });
+        let (main, cross) = if horizontal { (w, h) } else { (h, w) };
+        let (fill_main, fill_cross) = (sm == Sizing::Fill && !hug_main, sc == Sizing::Fill && !cross_fill_off);
+        let one_axis_fills_the_other_is_fixed = (fill_main && sc == Sizing::Fixed) || (fill_cross && sm == Sizing::Fixed);
+        // Layout gives a child its bounding box but sets its own width and height: the ratio holds
+        // only when the two agree, which a rotation (other than a half turn) breaks.
+        let [_, skew_y, skew_x, _, _, _] = node.transform.as_coeffs();
+        let unrotated = skew_y.abs() < 1e-9 && skew_x.abs() < 1e-9;
+        let locked_cross_per_main = (node.constrain_proportions
+            && one_axis_fills_the_other_is_fixed
+            && unrotated
+            && !wraps
+            && !matches!(node.kind, NodeKind::Text(_))
+            && main > 0.0
+            && cross > 0.0)
+            .then(|| cross / main)
+            .filter(|r| r.is_finite());
         items.push(Item {
             id: *child,
             main: if horizontal { w } else { h },
@@ -476,6 +517,7 @@ fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool,
             inset_main,
             baseline: None,
             base_off: 0.0,
+            locked_cross_per_main,
         });
     }
     items
@@ -504,7 +546,8 @@ fn stretch_fill_across_hug_line(
     let mut main_changed = false;
     for it in items.iter_mut().filter(|it| it.fill_cross) {
         let cross = clamp_size(line_cross, it.min_cross, it.max_cross);
-        let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
+        let main = it.main_for_cross(cross, it.main);
+        let (w, h) = if horizontal { (main, cross) } else { (cross, main) };
         resize_child(doc, it.id, w, h, m);
         let (w, h) = outer_size(doc, it.id);
         let (main, cross) = if horizontal { (w, h) } else { (h, w) };
@@ -517,6 +560,7 @@ fn stretch_fill_across_hug_line(
 /// Resize a child that fills the main axis to its distributed main size and the given cross size,
 /// and take the size it ends up with across (wrapped text, a hugging frame).
 fn resize_fill_main_item(doc: &mut Document, it: &mut Item, cross: f64, horizontal: bool, m: &dyn Measure) {
+    let cross = it.cross_for_main(it.main, cross);
     let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
     resize_child(doc, it.id, w, h, m);
     let (w, h) = outer_size(doc, it.id);
@@ -647,7 +691,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let gap = finite_or_zero(al.gap);
     let auto_gap = al.main_align.is_auto_gap();
     let wraps = al.wrap && !hug_main;
-    let mut items = flow_items(doc, &kids, horizontal, hug_main, hug_cross && wraps);
+    let mut items = flow_items(doc, &kids, horizontal, hug_main, hug_cross && wraps, wraps);
 
     // Fill across a single line of a frame that doesn't hug that axis: the size is the frame's
     // inner cross size, known up front. Resize those children first, so text that wraps (or a
@@ -656,7 +700,8 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     if !wraps && !hug_cross {
         for it in items.iter_mut().filter(|it| it.fill_cross && !it.fill_main) {
             let cross = clamp_size(inner_cross_fixed, it.min_cross, it.max_cross);
-            let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
+            let main = it.main_for_cross(cross, it.main);
+            let (w, h) = if horizontal { (main, cross) } else { (cross, main) };
             resize_child(doc, it.id, w, h, m);
             let (w, h) = outer_size(doc, it.id);
             it.main = if horizontal { w } else { h };
