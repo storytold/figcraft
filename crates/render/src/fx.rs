@@ -345,6 +345,22 @@ pub fn mask_by(p: &mut Pixmap, m: &Pixmap, invert: bool) {
     }
 }
 
+/// Hide the drop shadow `p` behind a layer that covers `cover` and draws `over` (alpha, times
+/// `opacity`) on top of it, all the same size: a pixel keeps the part of the shadow outside the
+/// cover, scaled up by what the layer lets through there. The layer's own pixel already shows its
+/// share of a pixel along its edge, so cutting that share from the shadow as well would count the
+/// edge twice: a light line where the edge lies over the shadow.
+pub fn hide_behind(p: &mut Pixmap, cover: &Pixmap, over: &Pixmap, opacity: f32) {
+    let alpha = |px: &[u8]| f32::from(px.get(3).copied().unwrap_or(0)) / 255.0;
+    for ((px, c), o) in p.data_mut().as_chunks_mut::<4>().0.iter_mut().zip(cover.data().chunks_exact(4)).zip(over.data().chunks_exact(4)) {
+        let through = 1.0 - alpha(o) * opacity;
+        let keep = if through > 0.0 { ((1.0 - alpha(c)) / through).min(1.0) } else { 0.0 };
+        for v in px.iter_mut() {
+            *v = (f32::from(*v) * keep).round() as u8;
+        }
+    }
+}
+
 /// Call `f(dst_row, src_row, row, first_col)` for each row where `src`, with its top-left at `at`
 /// on `dst`, overlaps it (premultiplied RGBA bytes of the overlapping columns; `row` and
 /// `first_col` in `src`'s pixels). Nothing past either edge is visited.

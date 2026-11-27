@@ -17,7 +17,7 @@ use figcraft_doc::{Document, EffectKind, Node, NodeKind, SPREAD_MITER_LIMIT, Sha
 use figcraft_geom::{Affine, BezPath};
 use tiny_skia::{FillRule, Pixmap, PixmapPaint, Transform};
 
-use crate::draw::{hash_path, node_outline, stroke_area, stroke_rule, ts_path, ts_transform};
+use crate::draw::{fill_to_stroke_middle, hash_path, node_outline, stroke_area, stroke_rule, ts_path, ts_transform};
 use crate::fx;
 
 /// The largest spread drawn, in device pixels.
@@ -28,8 +28,8 @@ pub type Outline = (BezPath, FillRule);
 
 /// The outlines a node's shadows are cast by when they spread, in local space: its fill outline
 /// (when a fill shows) and its stroke area. `None` when the layer's pixels aren't those outlines:
-/// groups, frames that don't clip their children or show no fill, text with a stroke, layers
-/// filled only with images or patterns (whose transparent pixels cast no shadow).
+/// groups, frames that don't clip their children or show no fill, layers filled only with images
+/// or patterns (whose transparent pixels cast no shadow).
 pub fn silhouette(doc: &Document, n: &Node) -> Option<Vec<Outline>> {
     outlines(doc, n, |f| f.visible && f.opacity > 0.0)
 }
@@ -72,7 +72,6 @@ fn outlines_with(doc: &Document, n: &Node, fill_counts: fn(&Paint) -> bool, kids
     let kids = !is_bool && !kids_within && n.children.iter().any(|c| doc.node(*c).is_some_and(|c| c.visible));
     if matches!(n.kind, NodeKind::Group | NodeKind::Page { .. })
         || (kids && !(n.kind.is_frame_like() && n.clip && has_fill))
-        || (is_text && n.has_visible_stroke())
         || alpha_fills(doc, n, fill_counts)
     {
         return None;
@@ -82,12 +81,15 @@ fn outlines_with(doc: &Document, n: &Node, fill_counts: fn(&Paint) -> bool, kids
     let mut out = Vec::new();
     if has_fill
         && closed
-        && let Some(o) = outline.clone()
+        && let Some((path, rule)) = outline.clone()
     {
-        out.push(o);
+        // As the layer fills it: out to the middle of a stroke that hides it, so the fill and the
+        // stroke share no anti-aliased edge that would count twice.
+        out.push(fill_to_stroke_middle(n, &path, rule).map_or((path, rule), |(p, r)| ((*p).clone(), r)));
     }
     if n.has_visible_stroke() {
-        let geom = if is_bool { outline.map(|(p, _)| p) } else { figcraft_doc::geometry::stroke_geometry(n) };
+        // Booleans and text are stroked along the outline they fill.
+        let geom = if is_bool || is_text { outline.map(|(p, _)| p) } else { figcraft_doc::geometry::stroke_geometry(n) };
         if let Some(g) = geom {
             out.push(((*stroke_area(n, &g, closed)).clone(), stroke_rule(n, closed)));
         }
@@ -184,6 +186,8 @@ pub struct Caster<'a> {
     pub silhouette: Option<Vec<Outline>>,
     /// The node's [`cover`] in the layer's pixels; only when a shadow hides behind the layer.
     pub cover: Option<Pixmap>,
+    /// The node's opacity, which the layer is drawn over its shadows at.
+    pub opacity: f32,
 }
 
 fn drop_shadows(n: &Node) -> impl Iterator<Item = &Shadow> {
@@ -206,7 +210,7 @@ impl<'a> Caster<'a> {
     pub fn new(doc: &Document, n: &Node, layer: &'a Pixmap, xf: Affine, scale: f64) -> Self {
         let silhouette = if drop_shadows(n).any(|s| s.spread != 0.0) { silhouette(doc, n) } else { None };
         let cover = hiding_cover(doc, n).and_then(|c| spread_alpha(&c, 0.0, xf, layer.width(), layer.height()));
-        Caster { layer, xf, scale, silhouette, cover }
+        Caster { layer, xf, scale, silhouette, cover, opacity: n.opacity.clamp(0.0, 1.0) }
     }
 }
 
@@ -230,7 +234,10 @@ pub fn drop_shadow(c: &Caster, s: &Shadow) -> Option<Pixmap> {
     fx::blur(&mut sh, s.radius / 2.0 * c.scale);
     fx::tint(&mut sh, color4(s.color));
     if !s.show_behind {
-        fx::mask_by(&mut sh, c.cover.as_ref().unwrap_or(c.layer), true);
+        match &c.cover {
+            Some(cover) => fx::hide_behind(&mut sh, cover, c.layer, c.opacity),
+            None => fx::mask_by(&mut sh, c.layer, true),
+        }
     }
     Some(sh)
 }
@@ -378,7 +385,7 @@ fn stretch(xf: Affine) -> f64 {
 
 /// The drop shadow `s` cast by `outlines` (local space, drawn at `xf` into a `size` pixmap), where
 /// it shows on that pixmap: the shadow's pixels and where their top-left goes. Unless it shows
-/// behind the layer, it is hidden behind `cover`.
+/// behind the layer, it is hidden behind `cover`, which the layer paints opaque at `opacity`.
 ///
 /// A shadow blurred widely is drawn `k` times smaller, blurred there and scaled back up: a wide
 /// blur has no detail a pixel across. The small pixels line up with the shape, not with the
@@ -390,6 +397,7 @@ pub fn outline_drop_shadow(
     xf: Affine,
     scale: f64,
     size: (u32, u32),
+    opacity: f32,
 ) -> Option<(Pixmap, (i32, i32))> {
     let spread = if s.spread.is_finite() { s.spread } else { 0.0 };
     let sigma = (s.radius / 2.0 * scale).min(fx::MAX_SIGMA);
@@ -434,7 +442,7 @@ pub fn outline_drop_shadow(
     }
     if !s.show_behind {
         let hides = spread_alpha(cover, 0.0, Affine::translate((-f64::from(x0), -f64::from(y0))) * xf, w, h)?;
-        fx::mask_by(&mut out, &hides, true);
+        fx::hide_behind(&mut out, &hides, &hides, opacity);
     }
     Some((out, (x0, y0)))
 }
