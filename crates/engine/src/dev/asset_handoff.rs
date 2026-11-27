@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use figcraft_color::{Paint, PaintKind};
-use figcraft_doc::{Document, ExportFormat, NodeId};
+use figcraft_doc::{Document, ExportFormat, ImageData, NodeId};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
@@ -87,22 +87,32 @@ fn add(files: &mut BTreeMap<String, File>, mut file: File) {
     }
 }
 
+/// The image `key` of `doc` as a file to hand over: its data, content hash and extension, or why it
+/// can't be handed over.
+pub(crate) fn image_file<'a>(doc: &'a Document, key: &str) -> std::result::Result<(&'a ImageData, String, &'static str), &'static str> {
+    let data = doc.images.get(key).filter(|d| !d.bytes.is_empty()).ok_or("the file doesn't hold this image")?;
+    let ext = image_kind(&data.bytes).ok_or("not an image format a project can use as it is")?;
+    Ok((data, figcraft_format::image_hash(&data.bytes), ext))
+}
+
+/// The name a handed-over file goes by, before its extension: the start of its content `hash`.
+pub(crate) fn file_stem(hash: &str) -> &str {
+    hash.get(..NAME_HEX).unwrap_or(hash)
+}
+
 /// The image paints of layer `id`: their original bytes, or why one can't be handed over.
 fn image_files(doc: &Document, id: NodeId, files: &mut BTreeMap<String, File>, skipped: &mut Vec<Value>) {
     let Some(n) = doc.node(id) else { return };
     for p in n.fills.iter().chain(&n.strokes).filter(|p| p.visible) {
         let PaintKind::Image(paint) = &p.kind else { continue };
-        let refuse = |why: &str| json!({"id": id, "name": n.name, "image": paint.image, "why": why});
-        let Some(data) = doc.images.get(&paint.image).filter(|d| !d.bytes.is_empty()) else {
-            skipped.push(refuse("the file doesn't hold this image"));
-            continue;
+        let (data, hash, ext) = match image_file(doc, &paint.image) {
+            Ok(file) => file,
+            Err(why) => {
+                skipped.push(json!({"id": id, "name": n.name, "image": paint.image, "why": why}));
+                continue;
+            }
         };
-        let Some(ext) = image_kind(&data.bytes) else {
-            skipped.push(refuse("not an image format a project can use as it is"));
-            continue;
-        };
-        let hash = figcraft_format::image_hash(&data.bytes);
-        let name = format!("{}.{ext}", hash.get(..NAME_HEX).unwrap_or(&hash));
+        let name = format!("{}.{ext}", file_stem(&hash));
         let adjusted = adjustments(p).map(|changes| json!({"id": id, "changes": changes}));
         let file = File {
             name,
@@ -141,7 +151,7 @@ fn collect(doc: &Document, listed: &[Asset]) -> (BTreeMap<String, File>, Vec<Val
             let hash = figcraft_format::image_hash(&bytes);
             let vector = matches!(setting.format, ExportFormat::Svg);
             let file = File {
-                name: format!("{}.{}", hash.get(..NAME_HEX).unwrap_or(&hash), setting.format.ext()),
+                name: format!("{}.{}", file_stem(&hash), setting.format.ext()),
                 hash,
                 bytes: Arc::new(bytes),
                 source: if vector { "vector" } else { "rendered" },
