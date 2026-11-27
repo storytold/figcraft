@@ -358,7 +358,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move layer into",
             "{ids?, parent, index? (final position among parent's children, bottom first; default top)}",
             true,
-            reparent
+            |s, p| reparent(s, p, "node.reparent", false)
+        ),
+        spec!(
+            "layers.reparent",
+            "Move layer into",
+            "{ids (in the destination's stored child order), parent, index? (final position among parent's children, bottom first; default top)}",
+            true,
+            |s, p| reparent(s, p, "layers.reparent", true)
         ),
         spec!("node.reorder", "Reorder layer", "{id, index}", true, |s, p| {
             let i = req_id("node.reorder", p, "id")?;

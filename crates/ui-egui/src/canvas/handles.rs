@@ -698,8 +698,8 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> Input {
         }
     }
     if let Some((id, fills, index, _, rect)) = crop_target(app) {
-        // Crop mode: the layer's own resize handles crop it (the pointer events carry Cmd/Ctrl).
-        if app.ui.crop.is_some() && on_resize_handle(app, pos) {
+        // The layer's own resize handles resize/crop the layer, not the crop handles.
+        if on_resize_handle(app, pos) {
             return Input::Ignored;
         }
         let Some(c) = crop_corners(app, id, rect) else { return Input::Ignored };
