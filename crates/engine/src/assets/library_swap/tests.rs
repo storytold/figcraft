@@ -203,6 +203,41 @@ fn swap_repoints_colour_calculations() {
     assert!(reads.iter().all(|r| doc.libraries.variable_import(r).is_some_and(|i| i.library == b)), "{reads:?}");
 }
 
+/// Copies of A nothing uses (a component imported but not placed, a variable imported but not
+/// bound) go with the swap, as they did; the result now names them (#2569). A copy the swap moves
+/// to B isn't among them.
+#[test]
+fn swap_lists_the_unused_copies_it_removes() {
+    let (_dir, mut s, a, b) = two_libraries("unused", &["Only in A"]);
+    let placed = idv(&ex(&mut s, "library.place", json!({"library": a, "component": "Button", "x": 0, "y": 0})));
+    let only = id_of(&ex(&mut s, "library.import", json!({"library": a, "component": "Only in A"}))["component"]).unwrap();
+    ex(&mut s, "library.importVariable", json!({"library": a, "variable": "accent"}));
+
+    let r = ex(&mut s, "library.swap", json!({"from": a, "to": b}));
+    assert_eq!(r["dropped"], json!(["component Only in A", "variable Theme/accent", "collection Theme"]), "{r}");
+    assert_eq!((r["components"].as_u64(), r["variables"].as_u64(), &r["unmatched"]), (Some(1), Some(0), &json!([])), "{r}");
+    assert_eq!(r["removed"], true, "{r}");
+    let doc = s.doc().unwrap();
+    assert!(!doc.contains(only), "the dropped copy is gone");
+    assert_eq!(library_of(doc, main_of(&s, placed)), Some(b.as_str()), "the placed Button moved, so it isn't listed");
+    assert!(doc.variables.variables.is_empty() && doc.variables.collections.is_empty(), "{:?}", doc.variables);
+
+    // One undo step brings them back.
+    s.undo().unwrap();
+    let doc = s.doc().unwrap();
+    assert!(doc.contains(only) && library_of(doc, only) == Some(a.as_str()));
+    assert_eq!(doc.variables.variables.len(), 1);
+
+    // A deleted instance leaves its copy unused, so it is listed too; a placed copy B has no match
+    // for stays and is listed as unmatched.
+    ex(&mut s, "edit.delete", json!({"ids": [placed]}));
+    let kept = idv(&ex(&mut s, "library.place", json!({"library": a, "component": "Only in A", "x": 0, "y": 0})));
+    let r = ex(&mut s, "library.swap", json!({"from": a, "to": b}));
+    assert_eq!(r["dropped"], json!(["component Button", "variable Theme/accent", "collection Theme"]), "{r}");
+    assert_eq!((&r["unmatched"], &r["removed"]), (&json!(["component Only in A"]), &json!(false)), "{r}");
+    assert_eq!(library_of(s.doc().unwrap(), main_of(&s, kept)), Some(a.as_str()));
+}
+
 /// A component B has no match for stays on A, but the Brand style and `accent` variable its own
 /// layers link do have matches (#2568). The swap re-points them in A's read-only copy as on the
 /// placed instances, so an instance placed after the swap looks like the ones placed before it,
