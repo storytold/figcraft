@@ -295,7 +295,7 @@ fn tools() -> Vec<Value> {
         tool(
             "compare_design",
             "Compare with the design",
-            "Compare a capture you made of the built page with a frame, on this computer. Size the browser to the `viewport` it returns (the frame's size in CSS pixels), capture the page to a file, and call this again. It names the layers that differ, largest first and each on the deepest layer it belongs to, as a position, colour or content difference with the expected and actual colours and any offset. Fix those; don't aim for a pixel score, because fonts and antialiasing always differ a little between renderers.",
+            "Compare a capture you made of the built page with a frame, on this computer. Size the browser to the `viewport` it returns (the frame's size in CSS pixels), capture the page to a file, and call this again. It names the layers that differ, largest first and each on the deepest layer it belongs to, as a position, colour or content difference with the expected and actual colours and any offset. A layer is listed once at least 2% of its own pixels differ, so an empty list doesn't mean every pixel matches. Fix those; don't aim for a pixel score, because fonts and antialiasing always differ a little between renderers.",
             obj(
                 json!({
                     "id": id_schema("The frame, component or instance (default the first selected layer; any other kind of layer is refused)"),

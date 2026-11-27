@@ -507,14 +507,17 @@ computer through it.
 | `note` | On text: check the font, size and line height first. Text is held to twice the tolerance, since fonts and antialiasing differ between renderers |
 | `total` | How many layers differ, listed or not |
 | `capture` | `width`, `height`, `density` (device pixels per CSS pixel, from the widths unless given), `sameSize`, `cssWidth`, `cssHeight`. A page that isn't the frame's size is the first thing to fix |
-| `changedPercent` | How much of the frame differs. Not a score: fonts and antialiasing always differ a little |
+| `changedPercent` | How much of the frame differs, to one decimal. Not a score: fonts and antialiasing always differ a little |
 | `truncated` | `maxLayers` when the frame has more than 5,000 visible layers: those past it weren't looked at. `matchedByBox`: how many layers were matched by their whole box, not the shape they draw (past 300 drawn), so a see-through part of one may hide a difference of a layer under it |
 
-`tolerance` (default 24 of 255) is how different a pixel must be to count. Moves of more than 16
-compared pixels show as `content`. Only the area both images have is compared, so content scrolled
-out of the capture needs a full-page capture. A clean result says only that, in the area compared
-and the layers looked at, nothing differs by more than the tolerance; it doesn't verify the rest of
-the frame (see `capture.sameSize` and `truncated`), and it isn't proof the pages are identical.
+`tolerance` (default 24 of 255) is how different a pixel must be to count. A layer is listed only
+when at least 2% of the pixels it owns (those no layer above it claims) differ by more than that, so
+a smaller difference, such as a few stray pixels or a thin line on a large background, isn't listed,
+and `changedPercent`, rounded to one decimal, can read 0 for it. Moves of more than 16 compared
+pixels show as `content`. Only the area both images have is compared, so content scrolled out of the
+capture needs a full-page capture. A clean result (`total` 0) says only that no layer looked at
+differs by that 2% in the area compared; it doesn't verify the rest of the frame (see
+`capture.sameSize` and `truncated`), and it isn't proof the pages are identical.
 Images are compared at up to 2,000 pixels a side, the larger of the frame and the capture setting
 the scale. Each layer claims the pixels it draws on, so a see-through part of a shape leaves a
 difference to the layer under it.
