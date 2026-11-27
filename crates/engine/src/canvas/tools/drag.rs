@@ -91,7 +91,7 @@ impl Session {
                 })
         };
         let label = label_at(&doc, page, &self.tool.labels, ev.p());
-        let leaf = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+        let leaf = self.hit_pick(&doc, page, ev.p(), ev.tol() * 2.0, ev.cmd);
         let hit = label.or(leaf);
         let background_under_cmd = leaf.filter(|l| ev.cmd && label.is_none() && board_background(*l));
         let target = label.or_else(|| leaf.filter(|leaf| !board_background(*leaf)).map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
@@ -102,11 +102,18 @@ impl Session {
         // A press on a layer inside a selected one (a child of a selected frame) drags the
         // selection too, and a click selects that layer; Cmd/Ctrl keeps the deep pick.
         let in_selected = |t: NodeId| sel.iter().any(|s| *s != t && doc.is_ancestor(*s, t));
-        let behind_sel = |t: Option<NodeId>| {
-            t.is_none_or(|t| {
+        // With Cmd/Ctrl, a selected nested frame the deep pick went through here (no fill under the
+        // pointer, see `HitOpts::deep`) isn't pressed on: the layer under it is the pick, as when
+        // the frame isn't selected.
+        let passed_through =
+            |s: NodeId| ev.cmd && doc.node(s).is_some_and(|n| n.kind.is_frame_like()) && !hit.is_some_and(|h| h == s || doc.is_ancestor(s, h));
+        let behind_sel = |t: Option<NodeId>| match t {
+            // Reaching nothing counts only for a selected layer the press wasn't passed through.
+            None => sel.iter().any(|s| !passed_through(*s)),
+            Some(t) => {
                 (!ev.cmd && in_selected(t))
-                    || sel.iter().any(|s| *s != t && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s))))
-            })
+                    || sel.iter().any(|s| *s != t && !passed_through(*s) && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s))))
+            }
         };
         // What the press hit (a label or a painted layer): a click that doesn't become a drag
         // selects just it. A press that reaches nothing above the selection uses the selection as
