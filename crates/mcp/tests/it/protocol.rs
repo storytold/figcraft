@@ -353,3 +353,21 @@ fn create_node_x_y_offset_a_vector_path_by_its_own_box_as_documented() {
     assert!(x_doc.contains("path") && x_doc.contains("x + 30"), "{x_doc}");
     assert!(tool["inputSchema"]["properties"]["path"]["description"].as_str().unwrap().contains("offset by its own box"));
 }
+
+/// Tool results and resources are compact JSON: indentation is whitespace the agent pays for in
+/// every result, more than half of a layer tree's text.
+#[test]
+fn json_results_are_sent_without_indentation() {
+    let mut c = Client::new();
+    let frame = c.create(json!({"type": "frame"}));
+    c.create(json!({"type": "rectangle", "parent": frame}));
+    let compact = |text: &str| serde_json::to_string(&serde_json::from_str::<Value>(text).expect("JSON")).unwrap();
+    for (tool, args) in [("inspect_document", json!({})), ("get_node", json!({"id": frame, "depth": 1}))] {
+        let r = c.call(tool, args);
+        let text = r["content"][0]["text"].as_str().expect("a text block");
+        assert_eq!(text, compact(text), "{tool} sends its JSON without indentation");
+    }
+    let r = c.rpc("resources/read", json!({"uri": "figcraft://document"}));
+    let text = r["result"]["contents"][0]["text"].as_str().expect("a text resource");
+    assert_eq!(text, compact(text), "resources send their JSON without indentation");
+}

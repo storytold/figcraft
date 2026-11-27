@@ -130,10 +130,16 @@ fn fields_and_outline_survive_every_depth_retry() {
 #[test]
 fn compact_children_keep_window_markers_and_page_in_order() {
     let mut c = Client::new();
-    let root = tree(|params| c.create(params));
+    // Wide and one level deep: with no fields a compact child is only `{"id":N}`, so it takes this
+    // many children for the one-level tree to outgrow the 1 KB envelope and need a child window.
+    let root = c.create(json!({"type": "frame", "name": "Product list", "width": 1200, "height": 2400}));
+    for i in 0..128 {
+        c.create(json!({"type": "frame", "parent": root, "name": format!("Product card {i}: synthetic product name"),
+            "width": 280, "height": 160}));
+    }
     let full = c.ok("get_node", json!({"id": root, "depth": 1, "fields": []}));
     let expected = full["children"].as_array().unwrap();
-    let wire = serde_json::to_string(&serde_json::to_string_pretty(&full).unwrap()).unwrap().len();
+    let wire = serde_json::to_string(&serde_json::to_string(&full).unwrap()).unwrap().len();
     let limit = wire + 1024 - 1;
     assert!(limit > 2048, "room for both the envelope and the marker");
     let mut seen = Vec::new();
@@ -142,7 +148,7 @@ fn compact_children_keep_window_markers_and_page_in_order() {
     while let Some(at) = offset {
         let page = c.ok("get_node", json!({"id": root, "depth": 1, "fields": [], "offset": at, "maxBytes": limit}));
         assert!(page["truncated"]["children"].is_object(), "{page}");
-        let wire = serde_json::to_string(&serde_json::to_string_pretty(&page).unwrap()).unwrap().len();
+        let wire = serde_json::to_string(&serde_json::to_string(&page).unwrap()).unwrap().len();
         assert!(wire + 1024 <= limit, "page at {at} exceeds maxBytes: {wire} + envelope > {limit}");
         assert_eq!(page["truncated"]["children"]["from"], at);
         seen.extend(page["children"].as_array().unwrap().iter().cloned());

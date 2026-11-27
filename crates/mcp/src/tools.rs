@@ -19,8 +19,10 @@ impl ToolResult {
     pub fn text(t: impl Into<String>) -> Self {
         Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: false }
     }
+    /// Compact JSON: indentation is whitespace the agent pays for in tokens on every result, and
+    /// a layer tree's indentation can be more than half of its text.
     pub fn json(v: &Value) -> Self {
-        Self::text(serde_json::to_string_pretty(v).unwrap_or_default())
+        Self::text(serde_json::to_string(v).unwrap_or_default())
     }
     pub fn error(t: impl Into<String>) -> Self {
         Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: true }
@@ -889,14 +891,15 @@ fn budget(a: &Map<String, Value>) -> Result<(usize, usize), String> {
 }
 
 /// What a value's text block would take on the wire. It is sent as a text block, so it is measured
-/// pretty-printed *and* escaped -- escaping adds about a tenth.
+/// as [`ToolResult::json`] writes it *and* escaped -- escaping adds about a tenth.
 fn wire_size(value: &Value) -> usize {
-    let text = serde_json::to_string_pretty(value).unwrap_or_default();
+    let text = serde_json::to_string(value).unwrap_or_default();
     serde_json::to_string(&text).map_or(text.len(), |s| s.len())
 }
 
 /// The document at `depth`, and what its text block would take on the wire. The tree is sent as a
-/// text block, so it is measured pretty-printed *and* escaped -- escaping adds about a tenth.
+/// text block, so it is measured as [`ToolResult::json`] writes it *and* escaped -- escaping adds
+/// about a tenth.
 fn inspect_at(b: &mut dyn Backend, depth: u64, all: bool, options: &Value) -> Result<(Value, usize), String> {
     let mut params = options.clone();
     params["depth"] = json!(depth);
