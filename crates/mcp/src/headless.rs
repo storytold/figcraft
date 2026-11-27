@@ -364,3 +364,42 @@ impl Backend for Headless {
         figcraft_render::encode_png(&pix)
     }
 }
+
+#[cfg(test)]
+mod document_tests {
+    use super::{Backend, Headless};
+    use serde_json::json;
+
+    #[test]
+    fn explicit_switch_survives_document_routing_but_edits_and_errors_do_not_switch() {
+        // Headless routing preserves the same file-selection behavior as an attached app.
+        let mut backend = Headless::default();
+        let back = backend.session.docs[0].uid;
+        backend.call("engine.execute", json!({"command": "file.new", "params": {}})).unwrap();
+        backend.call("engine.execute", json!({"command": "frame.create", "document": back, "params": {"width": 200, "height": 200}})).unwrap();
+        assert_eq!(backend.session.active, 1);
+        assert!(backend.call("engine.execute", json!({"command": "doc.switch", "document": back, "params": {"index": 999}})).is_err());
+        assert_eq!(backend.session.active, 1);
+        backend.call("engine.execute", json!({"command": "doc.switch", "document": back, "params": {"index": 0}})).unwrap();
+        assert_eq!(backend.session.active, 0);
+    }
+
+    #[test]
+    fn nested_batches_track_only_successful_document_switches() {
+        // Nested commands use the same selection tracking as a direct call.
+        let switch = json!({"command": "doc.switch", "params": {"index": 0}});
+        let failed = json!({"command": "command.batch", "params": {"commands": [switch, {"command": "does.not.exist"}]}});
+        for (params, expected) in [
+            (json!({"commands": [switch]}), 0usize),
+            (json!({"commands": [{"command": "command.batch", "params": {"commands": [switch]}}]}), 0),
+            (json!({"onError": "continue", "commands": [failed]}), 1),
+            (json!({"onError": "continue", "commands": [{"command": "doc.switch", "params": {"index": 999}}]}), 1),
+        ] {
+            let mut backend = Headless::default();
+            let back = backend.session.docs[0].uid;
+            backend.call("engine.execute", json!({"command": "file.new", "params": {}})).unwrap();
+            backend.call("engine.execute", json!({"document": back, "command": "command.batch", "params": params})).unwrap();
+            assert_eq!(backend.session.active, expected);
+        }
+    }
+}

@@ -142,7 +142,7 @@ const DOCUMENT_TOOLS: &[&str] = &[
 pub fn tool_definitions() -> Vec<Value> {
     let mut tools = tools();
     let document = id_schema(
-        "The open file to act on: its `id` (from run_command doc.list, or the `document` open_file and inspect_document return) or its path. Default: the file in front. The tab in front stays in front; with an attached app, a screenshot of the window needs the file in front",
+        "The open file to act on: its `id` (from run_command doc.list, or the `document` open_file and inspect_document return) or its path. Default: the file in front. Reads and edits keep the front tab; explicit file/tab switches and proto.present/proto.preview show the requested file. With an attached app, a screenshot of the window needs the file in front",
     );
     for t in &mut tools {
         if t.get("name").and_then(Value::as_str).is_some_and(|n| DOCUMENT_TOOLS.contains(&n))
