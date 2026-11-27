@@ -71,6 +71,9 @@ impl Backend for Store {
         // A refusal changes nothing in the document: it counts toward the log's size (bytes), but
         // not toward the entries that make a snapshot rewrite worthwhile.
         log.entries += journal.iter().filter(|j| !matches!(j, figcraft_collab::Journal::Refused { .. })).count();
+        if journal.iter().any(super::is_branch_journal) {
+            log.branch_dirty = true;
+        }
         log.dirty = true;
         e.meta.updated = now();
         if log.entries >= after || log.bytes + log.pending.len() as u64 >= max_bytes {
@@ -95,7 +98,7 @@ impl Backend for Store {
                 // Issued client ids and refusals are durable in the log; edits (on main or
                 // shared branches) need a new snapshot. Still try a snapshot if syncing failed.
                 synced = flush_log(file, log).is_ok();
-                !synced || (log.dirty && (server.seq() > snapshot_seq || server.has_branches()))
+                !synced || (log.dirty && (server.seq() > snapshot_seq || log.branch_dirty))
             })
         });
         if compact {

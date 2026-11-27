@@ -354,11 +354,12 @@ impl<B: Backend> Hub<B> {
             let reject = ServerMsg::Reject { batch_id: *batch_id, reason, fixes: Vec::new() };
             return self.queue(file, vec![Outgoing::To(id, reject)]);
         }
-        if let (ClientMsg::Branch(_), Some(n)) = (&msg, bytes)
+        if let (ClientMsg::Branch(req), Some(n)) = (&msg, bytes)
             && let Some(room) = self.rooms.get(file)
-            && self.backend.room(file, &room.server, n).is_err()
+            && let Err(reason) = self.backend.room(file, &room.server, n)
         {
-            return;
+            let reject = ServerMsg::Branch(Box::new(figcraft_collab::BranchEvent::Rejected { id: req.id().to_string(), reason }));
+            return self.queue(file, vec![Outgoing::To(id, reject)]);
         }
         let Some(room) = self.rooms.get_mut(file) else { return };
         let outs = room.server.receive(id, msg);

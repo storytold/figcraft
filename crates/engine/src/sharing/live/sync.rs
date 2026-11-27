@@ -39,10 +39,16 @@ impl Session {
     /// called `label`, or not undoable (`None`: also what changed it outside a command). Nothing
     /// while a gesture or preview shows, or inside a group (it syncs when the group ends).
     pub(crate) fn live_edit(&mut self, uid: u64, label: Option<&str>) {
-        let Some(ds) = self.docs.iter().find(|d| d.uid == uid) else { return };
-        let Some(live) = self.live.doc(uid) else { return };
+        let _ = self.live_edit_batch(uid, label);
+    }
+
+    /// Like [`live_edit`](Self::live_edit), returning the sent `ClientMsg::Changes` batch id when
+    /// one was produced.
+    pub(crate) fn live_edit_batch(&mut self, uid: u64, label: Option<&str>) -> Option<u64> {
+        let ds = self.docs.iter().find(|d| d.uid == uid)?;
+        let live = self.live.doc(uid)?;
         if live.hold > 0 || busy(ds) || live.synced.as_ref().is_some_and(|s| Arc::ptr_eq(s, &ds.doc)) {
-            return;
+            return None;
         }
         let (id, doc, synced) = (live.id, ds.doc.clone(), live.synced.clone());
         if self.live_read_only(uid).is_some() && !self.live_comment_edit(uid, &doc) {
@@ -50,16 +56,27 @@ impl Session {
             if let Some(s) = synced {
                 self.apply_remote(uid, s);
             }
-            return;
+            return None;
         }
-        let Some(live) = self.live.sessions.get_mut(&id) else { return };
-        let Some(client) = live.client.as_mut() else { return };
+        let live = self.live.sessions.get_mut(&id)?;
+        let client = live.client.as_mut()?;
         match client.edit_with(&doc, label) {
             Ok(msg) => {
+                let batch_id = match &msg {
+                    Some(figcraft_collab::ClientMsg::Changes { batch_id, .. }) => {
+                        live.last_batch = Some(*batch_id);
+                        Some(*batch_id)
+                    }
+                    _ => None,
+                };
                 live.synced = Some(doc);
                 self.live.send(id, msg);
+                batch_id
             }
-            Err(e) => self.live_fail(id, format!("Couldn't sync an edit: {e}")),
+            Err(e) => {
+                self.live_fail(id, format!("Couldn't sync an edit: {e}"));
+                None
+            }
         }
     }
 
@@ -112,11 +129,13 @@ impl Session {
         }
         // Your own edits first: the client replays them over what others did.
         self.live_edit(uid, None);
+        self.live_branches_sync(uid);
         let waiting = {
             let Some(live) = self.live.sessions.get_mut(&id) else { return };
             std::mem::take(&mut live.deferred)
         };
         let mut waiting = waiting.into_iter();
+        let mut still_waiting = Vec::new();
         let mut out = Vec::new();
         let mut changed_main = false;
         while let Some(m) = waiting.next() {
@@ -126,11 +145,26 @@ impl Session {
                     continue;
                 }
                 ServerMsg::Branch(ev) => {
-                    self.live_branch_event(id, *ev);
+                    let tab_busy = crate::branches::tab_of(self, uid, ev.id()).and_then(|ti| self.docs.get(ti)).is_some_and(busy);
+                    if tab_busy {
+                        still_waiting.push(ServerMsg::Branch(ev));
+                    } else {
+                        self.live_branch_event(id, *ev);
+                    }
                     continue;
                 }
                 _ => {}
             }
+            let merge_outcome = match &m {
+                ServerMsg::Changes(acc) => self.live.sessions.get_mut(&id).and_then(|live| {
+                    let me = live.client.as_ref()?.id();
+                    (acc.author == me).then(|| live.pending_merges.remove(&acc.batch_id)).flatten().map(|bid| (bid, true))
+                }),
+                ServerMsg::Reject { batch_id, .. } => {
+                    self.live.sessions.get_mut(&id).and_then(|live| live.pending_merges.remove(batch_id)).map(|bid| (bid, false))
+                }
+                _ => None,
+            };
             let Some(live) = self.live.sessions.get_mut(&id) else { return };
             let Some(client) = live.client.as_mut() else { return };
             // The server no longer knows this client (it restarted without its saved state, say):
@@ -140,7 +174,8 @@ impl Session {
                 if (*session, *client_id) != (me.session, me.client_id) {
                     live.hold();
                     live.client = None;
-                    let rest: Vec<_> = waiting.collect();
+                    let mut rest: Vec<_> = still_waiting;
+                    rest.extend(waiting);
                     self.live_welcome(id, m);
                     if let Some(live) = self.live.sessions.get_mut(&id) {
                         live.deferred = rest;
@@ -162,6 +197,15 @@ impl Session {
                     return;
                 }
             }
+            if let Some((branch_id, accepted)) = merge_outcome {
+                self.live_branch_merge_finished(uid, &branch_id, accepted);
+            }
+        }
+        if !still_waiting.is_empty()
+            && let Some(live) = self.live.sessions.get_mut(&id)
+        {
+            still_waiting.extend(std::mem::take(&mut live.deferred));
+            live.deferred = still_waiting;
         }
         if changed_main {
             let Some(live) = self.live.sessions.get_mut(&id) else { return };

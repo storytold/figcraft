@@ -145,6 +145,11 @@ pub struct Live {
     pub shared_branches: bool,
     /// Synced replicas of each shared branch on this client.
     branch_replicas: BTreeMap<String, branches::SyncedBranch>,
+    /// Shared-branch merges waiting for their main `ClientMsg::Changes` batch (`batch_id`) to be
+    /// accepted by the server before marking the branch `Merged` (`batch_id` -> `branch_id`).
+    pending_merges: BTreeMap<u64, String>,
+    /// Batch id of the most recent main-document `ClientMsg::Changes` sent in this session.
+    last_batch: Option<u64>,
     /// You were in this session and aren't now: what joining it again takes (`collab.reconnect`).
     stranded: Option<Stranded>,
 }

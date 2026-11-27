@@ -476,8 +476,9 @@ fn combine(s: &mut Session, p: &Value, from: Side) -> Result<Value> {
         if let Some(b) = m.branches_mut().get_mut(bi) {
             b.state = BranchState::Merged;
         }
+        let before_batch = s.live_last_batch(main_uid);
         s.record(main_uid, Some("Merge branch"), main, selection, page);
-        s.live_branch_set_state(main_uid, &id, BranchState::Merged);
+        s.live_branch_merge(main_uid, &id, before_batch);
         close_tabs(s, main_uid, Some(&id));
         s.active = s.docs.iter().position(|d| d.uid == main_uid).unwrap_or(s.active);
         out["merged"] = json!(true);

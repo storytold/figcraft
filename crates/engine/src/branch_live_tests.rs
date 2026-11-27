@@ -331,3 +331,92 @@ fn remote_merge_closes_peers_open_branch_tab_and_switches_to_main() {
     assert!(room.s(1).message.as_deref().is_some_and(|m| m.contains("merged branch")));
     room.check();
 }
+
+#[test]
+fn concurrent_conflicting_renames_on_a_shared_branch_converge_to_server_order() {
+    let mut room = Room::new(base(), 2, 31);
+    room.settle();
+    let (_, r) = frame_and_rect(room.server.document());
+    let id = ok(room.s(0), "branch.create", json!({"name": "Race"}))["id"].as_str().unwrap().to_string();
+    room.settle();
+    ok(room.s(1), "branch.open", json!({"id": id}));
+    // Both peers rename the same layer on the shared branch before any messages are delivered.
+    ok(room.s(0), "node.set", json!({"id": r, "props": {"name": "AdaName"}}));
+    ok(room.s(1), "node.set", json!({"id": r, "props": {"name": "BoName"}}));
+    room.settle();
+    // Both peers must converge to the exact same final name (no stale local divergence).
+    let n0 = room.s(0).doc().unwrap().node(r).unwrap().name.clone();
+    let n1 = room.s(1).doc().unwrap().node(r).unwrap().name.clone();
+    assert_eq!(n0, n1);
+    assert!(n0 == "AdaName" || n0 == "BoName", "unexpected name {n0}");
+}
+
+#[test]
+fn rejected_merge_batch_leaves_shared_branch_active() {
+    let limits = figcraft_collab::Limits { max_changes: 2, ..figcraft_collab::Limits::default() };
+    let mut room = Room::new_with_limits(base(), 2, 37, limits);
+    room.settle();
+    let (main0, _) = (room.s(0).active, room.s(1).active);
+    let (_, r) = frame_and_rect(room.server.document());
+    let id = ok(room.s(0), "branch.create", json!({"name": "BigMerge"}))["id"].as_str().unwrap().to_string();
+    room.settle();
+    // Each individual edit fits within max_changes = 2, so the branch accepts them one by one.
+    ok(room.s(0), "node.set", json!({"id": r, "props": {"name": "Changed"}}));
+    room.settle();
+    ok(room.s(0), "fill.set", json!({"ids": [r], "color": "#FF00AA"}));
+    room.settle();
+    let added = NodeId(ok(room.s(0), "shape.rectangle", json!({"x": 50, "y": 50, "width": 40, "height": 40}))["id"].as_u64().unwrap());
+    room.settle();
+    // Merging all three edits into main in one batch exceeds max_changes = 2, so the server rejects it.
+    assert_eq!(ok(room.s(0), "branch.merge", json!({"id": id}))["merged"], true);
+    room.settle();
+    // Because the main merge batch was rejected, main does NOT have `added`, and BOTH peers still
+    // see the branch as active (not prematurely marked merged).
+    assert!(!room.server.document().contains(added));
+    ok(room.s(0), "doc.switch", json!({"index": main0}));
+    assert_eq!(ok(room.s(0), "branch.list", json!({}))[0]["state"], "active");
+    assert_eq!(ok(room.s(1), "branch.list", json!({}))[0]["state"], "active");
+}
+
+#[test]
+fn refused_branch_create_clears_shared_flag_and_surfaces_reason() {
+    let mut room = Room::new(base(), 2, 41);
+    room.settle();
+    let main0 = room.s(0).active;
+    // Fill up to MAX_SHARED_BRANCHES on the server.
+    for i in 0..figcraft_collab::message::MAX_SHARED_BRANCHES {
+        ok(room.s(0), "doc.switch", json!({"index": main0}));
+        ok(room.s(0), "branch.create", json!({"name": format!("B{i}")}));
+        room.settle();
+    }
+    ok(room.s(0), "doc.switch", json!({"index": main0}));
+    let main_uid = room.s(0).docs[main0].uid;
+    // One more branch exceeds the server cap (64): server rejects it with an explicit notice.
+    let extra = ok(room.s(0), "branch.create", json!({"name": "OverCap"}))["id"].as_str().unwrap().to_string();
+    room.settle();
+    assert!(!room.s(0).live_branch_shared(main_uid, &extra), "refused branch must not stay marked shared");
+    assert!(room.s(0).message.as_deref().is_some_and(|m| m.contains("wasn't synced")));
+}
+
+#[test]
+fn shared_branch_preserves_and_syncs_edits_made_while_disconnected() {
+    let mut room = Room::new(base(), 2, 43);
+    room.settle();
+    let (_, r) = frame_and_rect(room.server.document());
+    let id = ok(room.s(0), "branch.create", json!({"name": "OfflineWork"}))["id"].as_str().unwrap().to_string();
+    room.settle();
+    ok(room.s(1), "branch.open", json!({"id": id}));
+    // Disconnect Person 0 (simulating a transient network drop).
+    room.disconnect(0);
+    // Person 0 edits the shared branch while disconnected; Person 1 adds another shape online.
+    ok(room.s(0), "node.set", json!({"id": r, "props": {"name": "EditedOffline"}}));
+    let online_shape = NodeId(ok(room.s(1), "shape.rectangle", json!({"x": 300, "y": 50, "width": 30, "height": 30}))["id"].as_u64().unwrap());
+    room.settle();
+    // Reconnect Person 0: offline branch edit must survive and sync to Person 1 alongside online_shape.
+    room.reconnect(0);
+    room.settle();
+    assert_eq!(room.s(0).doc().unwrap().node(r).unwrap().name, "EditedOffline");
+    assert!(room.s(0).doc().unwrap().contains(online_shape));
+    assert_eq!(room.s(1).doc().unwrap().node(r).unwrap().name, "EditedOffline");
+    assert!(room.s(1).doc().unwrap().contains(online_shape));
+}

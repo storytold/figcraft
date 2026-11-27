@@ -867,14 +867,60 @@ pub enum BranchReq {
     SetState { id: String, status: BranchStatus },
 }
 
+impl BranchReq {
+    /// The branch id this request targets.
+    pub fn id(&self) -> &str {
+        match self {
+            BranchReq::Create { id, .. } | BranchReq::Edit { id, .. } | BranchReq::UpdateFromMain { id, .. } | BranchReq::SetState { id, .. } => id,
+        }
+    }
+}
+
 /// Server -> client shared branch updates.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BranchEvent {
-    Created { author: u32, branch: SharedBranch },
-    Edited { id: String, author: u32, rev: u64, changes: Vec<Change> },
-    UpdatedFromMain { id: String, author: u32, rev: u64, base_changes: Vec<Change>, head_changes: Vec<Change> },
-    State { id: String, author: u32, rev: u64, status: BranchStatus },
+    Created {
+        author: u32,
+        branch: SharedBranch,
+    },
+    Edited {
+        id: String,
+        author: u32,
+        rev: u64,
+        changes: Vec<Change>,
+    },
+    UpdatedFromMain {
+        id: String,
+        author: u32,
+        rev: u64,
+        base_changes: Vec<Change>,
+        head_changes: Vec<Change>,
+    },
+    State {
+        id: String,
+        author: u32,
+        rev: u64,
+        status: BranchStatus,
+    },
+    /// Sent only to the sender of a refused [`BranchReq`].
+    Rejected {
+        id: String,
+        reason: String,
+    },
+}
+
+impl BranchEvent {
+    /// The branch id this event targets.
+    pub fn id(&self) -> &str {
+        match self {
+            BranchEvent::Created { branch, .. } => &branch.id,
+            BranchEvent::Edited { id, .. }
+            | BranchEvent::UpdatedFromMain { id, .. }
+            | BranchEvent::State { id, .. }
+            | BranchEvent::Rejected { id, .. } => id,
+        }
+    }
 }
 
 /// Client → server.

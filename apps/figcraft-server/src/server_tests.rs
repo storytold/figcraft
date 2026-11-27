@@ -291,7 +291,10 @@ fn shared_branches_sync_and_survive_a_server_restart() {
     let card = id_of(&b.execute("shape.rectangle", &json!({"x": 120, "y": 20, "width": 100, "height": 60})).unwrap());
     b.execute("node.set", &json!({"ids": [base_rect.0], "props": {"name": "Base From Branch"}})).unwrap();
     pump(&mut [&mut a, &mut b], "Ada receives Bo's branch and edits", |s| {
-        s[0].docs[0].branches.iter().any(|br| br.id == branch_id && br.head.contains(card))
+        s[0].docs[0]
+            .branches
+            .iter()
+            .any(|br| br.id == branch_id && br.head.contains(card) && br.head.node(base_rect).is_some_and(|n| n.name == "Base From Branch"))
     });
     assert!(!a.doc().unwrap().contains(card), "main stays clean until merged");
     // Switch Bo back to main before checking reconnect status on main.
