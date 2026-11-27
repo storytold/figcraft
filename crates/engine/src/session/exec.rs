@@ -107,9 +107,9 @@ impl Session {
             .and_then(|v| self.check_live_access(id, &before).map(|()| v))
             .and_then(|v| self.check_finite_geometry(id, &before).map(|()| v))
             // Normalising is part of the command: a panic in it rolls the edit back too (#1085).
-            .and_then(|v| {
+            .and_then(|mut v| {
                 guard::run(id, || {
-                    self.normalize_edit(spec, &before);
+                    self.normalize_edit(spec, &before, &mut v);
                     Ok(v)
                 })
             });
@@ -229,13 +229,17 @@ impl Session {
 
     /// Normalise what a command changed in the document it ran on (text boxes, groups, instances,
     /// auto layout…).
-    fn normalize_edit(&mut self, spec: &CommandSpec, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) {
+    fn normalize_edit(&mut self, spec: &CommandSpec, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>, result: &mut Value) {
         let Some((bdoc, _, _, uid)) = before else { return };
+        let deletes = spec.id == "edit.delete" || (spec.id == "edit.repeat" && self.last_command.as_ref().is_some_and(|(id, _)| id == "edit.delete"));
         let Some(ds) = self.docs.iter_mut().find(|d| d.uid == *uid) else { return };
         // Saving may adopt the chosen filename as the document title. The encoded snapshot is
         // already final; normalising it again would detach it from the saved baseline.
         if !Arc::ptr_eq(&ds.doc, bdoc) && !matches!(spec.id, "file.save" | "file.saveAs") {
             normalize(ds.doc_mut(), bdoc);
+            if deletes {
+                cmd::edit::report_orphaned_instances(result, bdoc, &ds.doc);
+            }
         }
     }
 

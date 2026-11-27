@@ -18,10 +18,11 @@ impl Services for SaveTo {
 /// The menu item, then a frame: the save dialog answers asynchronously and the frame takes its answer.
 fn invoke(app: &mut FigApp, id: &str) {
     menus::invoke(app, id);
-    let ctx = egui::Context::default();
+    let ctx = figcraft_ui_egui::framework::headless_context();
     for _ in 0..2 {
         let input =
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))), ..Default::default() };
+        app.before_input(&ctx);
         ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
     }
 }
