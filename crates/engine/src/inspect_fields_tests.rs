@@ -116,6 +116,7 @@ fn empty_options_keep_the_main_tree_and_document_output() {
                                 "fontFamily": "Synthetic",
                                 "fontSize": 18.0,
                                 "fontStyle": "Bold",
+                                "fontWeight": 700,
                                 "height": 24.0,
                                 "id": 3,
                                 "letterSpacing": "1",
@@ -560,4 +561,43 @@ fn modes_property_bindings_and_exposed_instances_are_read() {
     s.execute("node.reparent", &json!({"ids": [nested.clone()], "parent": main})).unwrap();
     s.execute("component.exposeInstance", &json!({"id": nested.clone()})).unwrap();
     assert_eq!(s.execute("node.get", &json!({"id": nested})).unwrap()["exposedInstance"], true);
+}
+
+/// Every key a layer's JSON can have is one `fields` accepts: a key missing from `NODE_KEYS` can be
+/// read in full output but is refused when asked for by name (`dashCap` was).
+#[test]
+fn every_key_node_get_writes_can_be_asked_for() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    let frame = s
+        .execute("node.create", &json!({"type": "frame", "width": 200, "height": 100, "props": {"layout": {"mode": "horizontal"}, "gap": 4}}))
+        .unwrap()["id"]
+        .clone();
+    let line = s
+        .execute(
+            "node.create",
+            &json!({"type": "line", "parent": frame, "width": 80, "props": {
+            "strokes": ["#000000"], "strokeWeight": 2, "dashes": [4, 2], "dashCap": "round", "strokeJoin": "round",
+            "opacity": 0.5, "visible": false, "locked": true}}),
+        )
+        .unwrap()["id"]
+        .clone();
+    s.execute("node.create", &json!({"type": "text", "parent": frame, "text": "Hi", "props": {"textDecoration": "underline"}})).unwrap();
+    s.execute("annotation.add", &json!({"id": line, "label": "Note"})).unwrap();
+    let mut keys = std::collections::BTreeSet::new();
+    fn walk(v: &Value, keys: &mut std::collections::BTreeSet<String>) {
+        if let Some(o) = v.as_object() {
+            keys.extend(o.keys().cloned());
+            for c in o.get("children").and_then(Value::as_array).into_iter().flatten() {
+                walk(c, keys);
+            }
+        }
+    }
+    walk(&node_json(s.doc().unwrap(), crate::params::id_of(&frame).unwrap(), 4), &mut keys);
+    assert!(keys.contains("dashCap"), "the test sets a dash cap: {keys:?}");
+    for key in keys {
+        assert!(crate::inspect::NODE_KEYS.contains(&key.as_str()), "`{key}` is written but `fields` refuses it");
+        let one = InspectOptions::parse(&json!({"fields": [key]}));
+        assert!(one.is_ok(), "{key}: {one:?}");
+    }
 }

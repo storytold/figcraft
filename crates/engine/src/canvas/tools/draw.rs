@@ -1,7 +1,8 @@
 use super::handles::SNAP_PX;
 use super::pen::take_enclosed;
 use super::{
-    Affine, Cursor, Gesture, Node, NodeId, NodeKind, Point, PointerEvent, Rect, Result, Session, StrokeCap, Targets, ToolId, Vec2, frame_at, textedit,
+    Affine, Cursor, Gesture, Node, NodeId, NodeKind, Point, PointerEvent, Rect, Result, Session, StrokeCap, Targets, ToolId, Vec2, frame_at,
+    pencil_add, textedit,
 };
 
 impl Session {
@@ -240,10 +241,7 @@ impl Session {
                 self.tool.overlay.pen.clear();
                 self.tool.overlay.pen_color = None;
                 // The stroke ends where the button came up, even without a move to get there.
-                if points.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
-                    points.push(ev.p());
-                    pressure.push(ev.pressure);
-                }
+                pencil_add(&mut points, &mut pressure, ev);
                 self.pencil_finish(&points, &pressure)?;
             }
             Gesture::Connect { from, start } => self.connect_up(ev, from, start)?,
