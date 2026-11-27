@@ -67,6 +67,8 @@ pub(crate) fn show(app: &mut FigApp, ui: &Ui, pill: Rect) {
         for (i, (name, c)) in INK_COLORS.iter().enumerate() {
             let (resp, r) = chip(ui, i + 1, tr(color_label(name)), ink.color == Some(*c));
             paint_choice(ui.painter(), r, &Mark::Color(*c), t.icon);
+            // Outlined so a dark ink still reads against the dark bar.
+            ui.painter().rect_stroke(r, CornerRadius::same(4), Stroke::new(1.0, t.border), StrokeKind::Inside);
             if resp.clicked() {
                 chosen = Some(*name);
             }
