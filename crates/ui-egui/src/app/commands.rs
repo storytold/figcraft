@@ -22,7 +22,21 @@ impl FigApp {
         // `file.open`/`file.close`). Record that presentation before returning, so an in-flight
         // screenshot admitted on the old file cannot accept pixels from the new one.
         self.observe_presentation();
+        if let Ok(v) = &r {
+            self.note_snapping(id, v);
+        }
         r.map_err(|e| self.failed(id, &e)).ok()
+    }
+
+    /// Snap to pixel grid turned on or off says which at the bottom, as in Figma: its shortcut
+    /// (Shift+Cmd/Ctrl+') changes nothing on the canvas until the next drag.
+    fn note_snapping(&mut self, id: &str, result: &Value) {
+        let msg = match (id, result.get("on").and_then(Value::as_bool)) {
+            ("view.snapPixel", Some(true)) => crate::i18n::tr("Snap to pixel grid on"),
+            ("view.snapPixel", Some(false)) => crate::i18n::tr("Snap to pixel grid off"),
+            _ => return,
+        };
+        self.toast(msg);
     }
 
     /// A programmatic command that changed the engine clipboard never wrote the system clipboard:
