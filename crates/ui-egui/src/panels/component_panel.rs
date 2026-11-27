@@ -293,7 +293,7 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId, v
             let def = own.as_ref().map_or(&defaults, |(_, pairs)| pairs).get(k).or(vals.first()).cloned().unwrap_or_default();
             let hint = if own.is_some() { tr("This variant's value") } else { tr("Default value (the top-left variant)") };
             let resp = widgets::dropdown(ui, &def, DEFAULT_W, None).on_hover_text(hint);
-            menu_popup(&resp).show(|ui| {
+            craft_ui::combo::Menu::new(ui, &resp).height(COMP_MENU_HEIGHT).style(crate::right::menu_style).show_ui(|ui| {
                 for v in vals {
                     if menu_item(ui, v, "") {
                         match &own {
@@ -749,7 +749,7 @@ fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node, comps
                 // A string variable naming one of the values can choose it.
                 crate::variable_ui::bindable(app, ui, &[id], &format!("{PROP_BINDING}{k}"), VariableType::String, w, |app, ui| {
                     let resp = widgets::dropdown(ui, &cur, w, None);
-                    menu_popup(&resp).show(|ui| {
+                    craft_ui::combo::Menu::new(ui, &resp).height(COMP_MENU_HEIGHT).style(crate::right::menu_style).show_ui(|ui| {
                         for v in &vals {
                             if menu_item(ui, v, "") {
                                 app.run("instance.setProperties", json!({"ids": [id], "properties": {k.clone(): v}}));

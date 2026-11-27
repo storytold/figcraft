@@ -375,7 +375,7 @@ pub fn playground_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: Nod
                 widgets::label(ui, name, t.text_secondary);
                 let resp = widgets::dropdown(ui, value.as_str().unwrap_or(""), ui.available_width().max(60.0), None);
                 crate::a11y::combo(&resp, name, value.as_str().unwrap_or(""), crate::a11y::menu_open(&resp));
-                menu_popup(&resp).show(|ui| {
+                craft_ui::combo::Menu::new(ui, &resp).height(360.0).style(crate::right::menu_style).show_ui(|ui| {
                     for o in p["options"].as_array().into_iter().flatten().filter_map(|o| o.as_str()) {
                         if crate::right::menu_item(ui, o, "") {
                             set = Some((name.to_string(), json!(o)));
