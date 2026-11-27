@@ -15,7 +15,7 @@ use figcraft_engine::dev_measurements::{self, Placed};
 use figcraft_engine::devinspect::{self, DevItem, Prop};
 use figcraft_engine::plugins::Access;
 use figcraft_engine::snap::Guide;
-use figcraft_engine::{components, dev_resources};
+use figcraft_engine::{components, dev_resources, responsive};
 use serde_json::json;
 
 use crate::a11y::Tip;
@@ -404,7 +404,8 @@ pub fn playground_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: Nod
                 widgets::label(ui, name, t.text_secondary);
                 let preferred: Vec<NodeId> = p["preferred"].as_array().into_iter().flatten().filter_map(figcraft_engine::params::id_of).collect();
                 let w = ui.available_width().max(60.0);
-                if let Some(c) = crate::component_panel::swap_dropdown(ui, doc, figcraft_engine::params::id_of(value), &preferred, &comps, w, name).1
+                if let Some(c) =
+                    crate::component_panel::swap_dropdown(ui, doc, figcraft_engine::params::id_of(value), false, &preferred, &comps, w, name).1
                 {
                     set = Some((name.to_string(), json!(c.0)));
                 }
@@ -481,11 +482,21 @@ pub fn connect_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId
             edit = Some(("name", v));
         }
     });
+    widgets::sublabels(ui, tr("Source file"), None);
+    row(ui, 32.0, |ui| {
+        let width = ui.available_width() - 2.0 * PAD;
+        if let Some(v) =
+            widgets::text_field(ui, Id::unique(("code_connect_source", owner, lang.id())), &link.source, width, "src/components/button.tsx")
+        {
+            edit = Some(("source", v));
+        }
+    });
     widgets::sublabels(ui, tr("Template"), None);
     if let Some(v) = widgets::multiline_field(ui, template_id(owner, lang), &link.template, "<Button size={size}>{label}</Button>", 3) {
         edit = Some(("template", v));
     }
     widgets::note(ui, tr("{property} is its value; {property ? \"a\" : \"b\"} picks a string. Other {…} stays as written."), t.text_secondary);
+    variant_values(app, ui, doc, owner, lang, &link);
     if let Some((key, value)) = edit {
         let mut params = params;
         params[key] = json!(value);
@@ -497,6 +508,103 @@ pub fn connect_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId
         }
     }
     ui.add_space(4.0);
+}
+
+/// The variant values of a connected component and what code calls them: a value left empty
+/// stays as the design names it.
+fn variant_values(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId, lang: CodeLang, link: &CodeLink) {
+    let properties = code_connect::variants(doc, owner);
+    if properties.is_empty() {
+        return;
+    }
+    let mut change: Option<(String, String, String)> = None;
+    widgets::sublabels(ui, tr("Variant value"), Some(tr("In code")));
+    let col = widgets::col_width(ui.available_width());
+    for (property, options) in &properties {
+        for option in options {
+            let current = link.values.get(property).and_then(|m| m.get(option)).map_or("", String::as_str);
+            row(ui, 32.0, |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.allocate_ui_with_layout(vec2(col, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_min_width(col);
+                    ui.add(egui::Label::new(format!("{property}: {option}")).truncate());
+                });
+                if let Some(v) = widgets::text_field(ui, Id::unique(("code_connect_value", owner, lang.id(), property, option)), current, col, option)
+                {
+                    change = Some((property.clone(), option.clone(), v));
+                }
+            });
+        }
+    }
+    let Some((property, option, value)) = change else { return };
+    let mut values = link.values.clone();
+    let mapped = values.entry(property).or_default();
+    if value.trim().is_empty() {
+        mapped.remove(&option);
+    } else {
+        mapped.insert(option, value.trim().to_string());
+    }
+    values.retain(|_, m| !m.is_empty());
+    app.run("codeConnect.set", json!({"id": owner, "language": lang.id(), "values": values}));
+}
+
+/// Screen sizes for a frame: which version of a design it is, and rules for other sizes. What's
+/// here is the designer's word: agents read it instead of guessing.
+pub fn responsive_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
+    // Screens are frames and sections: a component isn't a version of one.
+    let Some(n) = doc.node(id).filter(|n| responsive::can_mark(&n.kind)) else { return };
+    let t = Tokens::get(ui.ctx());
+    let current = responsive::viewport_of(n);
+    widgets::separator(ui);
+    widgets::section_header(ui, tr("Screen sizes"), &[], current.is_none());
+    let labels = [(tr("Mobile"), "mobile"), (tr("Tablet"), "tablet"), (tr("Desktop"), "desktop")];
+    row(ui, 32.0, |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (label, viewport) in labels {
+            let on = current == Some(viewport);
+            if widgets::button(ui, label, on, true).clicked() {
+                app.run("responsive.set", json!({"id": id, "viewport": if on { json!(null) } else { json!(viewport) }}));
+            }
+        }
+    });
+    if current.is_some() {
+        widgets::sublabels(ui, tr("Design it's a version of"), None);
+        let group = responsive::group_of(n);
+        row(ui, 32.0, |ui| {
+            let width = ui.available_width() - 2.0 * PAD;
+            if let Some(v) = widgets::text_field(ui, Id::unique(("responsive_group", id)), group, width, tr("Design it's a version of")) {
+                // Emptied: back to the frame's name.
+                let group = if v.trim().is_empty() { json!(null) } else { json!(v) };
+                app.run("responsive.set", json!({"id": id, "viewport": current, "group": group}));
+            }
+        });
+    }
+    let field = rule_draft(app, id);
+    let draft = ui.data(|d| d.get_temp::<String>(field)).unwrap_or_default();
+    widgets::sublabels(ui, tr("Add a rule"), None);
+    if let Some(v) = widgets::multiline_field(ui, field, &draft, tr("Sidebar becomes a drawer below 768 px"), 3) {
+        ui.data_mut(|d| d.insert_temp(field, v));
+    }
+    row(ui, 32.0, |ui| {
+        if widgets::button(ui, tr("Add rule"), false, !draft.trim().is_empty()).clicked() {
+            add_rule(app, ui.ctx(), id, &draft);
+        }
+    });
+    widgets::note(ui, tr("Rules appear under Annotations, in the Responsive category."), t.text_secondary);
+}
+
+/// Where the Screen sizes section keeps the rule being typed for layer `id`.
+pub(crate) fn rule_draft(app: &FigApp, id: NodeId) -> Id {
+    // Layer ids repeat across open documents.
+    Id::unique(("responsive_rule", app.session.ds().ok().map(|d| d.uid), id))
+}
+
+/// Add `text` as a rule on `id`. The draft stays when the rule is refused, so nothing typed is lost.
+pub(crate) fn add_rule(app: &mut FigApp, ctx: &egui::Context, id: NodeId, text: &str) {
+    let field = rule_draft(app, id);
+    if app.run("responsive.rule", json!({"id": id, "text": text})).is_some() {
+        ctx.data_mut(|d| d.remove_temp::<String>(field));
+    }
 }
 
 /// Dev Mode plugins: the installed plugins that only read the document, run from the Inspect tab.

@@ -369,6 +369,7 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Selection, "Pick select: next or previous layer", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
     (Selection, "Pick select: into a layer, out to its parent", "↵ / ⇧↵", "Enter / Shift+Enter"),
     (Selection, "Pick select: select the picked layer", "Space", "Space"),
+    (Text, "While editing text: next or previous text layer", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
     (Edit, "Duplicate by dragging", "⌥ drag", "Alt+drag"),
     (Transform, "Nudge (Shift: big nudge)", "← ↑ → ↓", "← ↑ → ↓"),
     (Transform, "Resize by the nudge amount", "⌘ arrows", "Ctrl+arrows"),

@@ -35,6 +35,38 @@ pub(super) fn bindings_of<'a>(n: &'a Node, g: &'a str) -> impl Iterator<Item = (
     n.bound.iter().filter(move |(k, _)| binding_group(k) == Some(g))
 }
 
+/// Whether `n` binds group `g` to other variables than `src` does. Keys are compared by what they
+/// bind, so `fill` and `fills/0/color` are the same binding.
+pub(super) fn bound_differently(n: &Node, src: &Node, g: &str) -> bool {
+    let canonical = |m: &Node| -> std::collections::BTreeSet<(String, String)> {
+        bindings_of(m, g)
+            .map(|(k, v)| {
+                let key = crate::cmd::lists::list_binding(k).map_or_else(|| k.clone(), |(l, i, f)| format!("{}/{i}/{f}", l.prefix()));
+                (key, v.clone())
+            })
+            .collect()
+    };
+    canonical(n) != canonical(src)
+}
+
+/// The property groups whose variable bindings differ between layer `n` and its main layer `src`:
+/// overrides even where both resolve to the same value.
+pub(super) fn rebound_groups(n: &Node, src: &Node) -> Vec<&'static str> {
+    let mut compared = Vec::new();
+    let mut out = Vec::new();
+    for k in n.bound.keys().chain(src.bound.keys()) {
+        let Some(g) = binding_group(k) else { continue };
+        if compared.contains(&g) {
+            continue;
+        }
+        compared.push(g);
+        if bound_differently(n, src, g) {
+            out.push(g);
+        }
+    }
+    out
+}
+
 /// Property groups that differ between two versions of a node.
 pub fn diff_groups(a: &Node, b: &Node) -> Vec<&'static str> {
     let mut out = Vec::new();

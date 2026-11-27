@@ -419,6 +419,9 @@ pub fn run_binding(app: &mut FigApp, id: &str) {
         "edit.delete" if app.session.tool.pen.is_some() => {
             let _ = app.session.pen_finish();
         }
+        "edit.pickColor" if app.ui.picker.is_some() => {
+            app.run("edit.pickColor", json!({"apply": false}));
+        }
         // Enter with a shape or frame tool chosen places one in the middle of the view.
         "select.children" if !dev && app.session.tool.tool.draws_shape() => {
             app.run("tool.place", json!({}));
@@ -481,10 +484,6 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
             }
             run_binding(app, b.id);
         }
-        return true;
-    }
-    // Arrows move through the layers panel while it has the keyboard.
-    if app.ui.layers_focus && !m.command && !m.alt && crate::layers::key_nav(app, key, m.shift) {
         return true;
     }
     // Arrow nudges, Alt held too (measuring stays on while the selection moves); with nothing
@@ -783,6 +782,10 @@ fn text_keys(app: &mut FigApp, ctx: &Context, events: &[Event], ime_input: Optio
     let reject_ime = ime_input.is_some_and(|baseline| baseline.interrupted(app));
     // A key that ran a shortcut swallows the text it also produced (Alt+. types "≥" on macOS).
     let mut skip_text = false;
+    let paste_in_batch = events.iter().any(|e| matches!(e, Event::Paste(_)));
+    // The browser sends Shift/Alt+Cmd/Ctrl+V's keys along with its paste event: the chord on the
+    // key, not the modifiers still held when the paste is handled, says to match the style.
+    let match_style = events.iter().any(|e| matches!(e, Event::Key { key: Key::V, pressed: true, modifiers: m, .. } if match_style_chord(*m)));
     for ev in events {
         if reject_ime && matches!(ev, Event::Ime(_)) {
             continue;
@@ -794,9 +797,19 @@ fn text_keys(app: &mut FigApp, ctx: &Context, events: &[Event], ime_input: Optio
                 }
             }
             Event::Ime(ime) => ime_event(app, ctx, ime),
-            Event::Paste(t) => insert_text(app, ctx, t),
+            Event::Paste(t) => paste_text(app, ctx, t, match_style),
             Event::Copy => copy_or_cut(app, ctx, false),
             Event::Cut => copy_or_cut(app, ctx, true),
+            // On the desktop the chord comes without a paste event: paste the clipboard's characters.
+            Event::Key { key: Key::V, pressed: true, modifiers: m, .. } if match_style_chord(*m) => {
+                if !paste_in_batch
+                    && !app.control_synthetic
+                    && let Some(t) = app.services.clipboard_get_text()
+                {
+                    insert_text(app, ctx, &t);
+                }
+                skip_text = true;
+            }
             Event::Key { key, physical_key, pressed: true, modifiers: m, .. } if text_key_event(app, ctx, *key, *physical_key, *m) => {
                 skip_text = true;
             }
@@ -813,6 +826,29 @@ fn text_keys(app: &mut FigApp, ctx: &Context, events: &[Event], ime_input: Optio
 fn insert_text(app: &mut FigApp, ctx: &Context, t: &str) {
     let before = ime_stamp(app);
     if let Err(e) = figcraft_engine::textedit::insert(&mut app.session, t) {
+        app.toast(e.to_string());
+    }
+    if ime_stamp(app) != before {
+        note_ime_application_change(app, ctx);
+    }
+}
+
+/// Shift or Alt with Cmd/Ctrl, the Paste and match style chord with V. Shift alone is another
+/// paste key (Shift+Insert), which keeps the copied formatting.
+fn match_style_chord(m: Modifiers) -> bool {
+    m.command && (m.alt || m.shift)
+}
+
+/// Paste `t` into the edit: with the formatting it was copied with when it's the characters
+/// FigCraft last copied and `match_style` is off, otherwise in the style at the caret.
+fn paste_text(app: &mut FigApp, ctx: &Context, t: &str, match_style: bool) {
+    let pasted = t.replace("\r\n", "\n").replace('\r', "\n");
+    let Some(copied) = app.ui.text_copy.clone().filter(|c| !match_style && c.text == pasted) else {
+        insert_text(app, ctx, t);
+        return;
+    };
+    let before = ime_stamp(app);
+    if let Err(e) = figcraft_engine::textedit::insert_rich(&mut app.session, &copied) {
         app.toast(e.to_string());
     }
     if ime_stamp(app) != before {
@@ -874,6 +910,7 @@ fn copy_or_cut(app: &mut FigApp, ctx: &Context, cut: bool) {
         && let Some(text) = &selected
     {
         app.clipboard_set_text(text);
+        app.ui.text_copy = figcraft_engine::textedit::selected_rich_text(&app.session);
     }
     if cut && selected.is_some() {
         let _ = figcraft_engine::textedit::key(&mut app.session, "Delete", false, false, false);

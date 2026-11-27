@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::change::{Change, Entry, Family, Prop, Target};
 use crate::message::{
-    Accepted, Access, CatchUp, ClientMsg, Hello, PROTOCOL, Peer, Presence, Processed, Resume, ServerMsg, Signal, reads_comments, reads_signals,
+    Accepted, Access, BranchEvent, BranchReq, BranchStatus, CatchUp, ClientMsg, Hello, MAX_SHARED_BRANCHES, PROTOCOL, Peer, Presence, Processed,
+    Resume, ServerMsg, SharedBranch, Signal, reads_branches, reads_comments, reads_design_review, reads_signals,
 };
 use crate::replica::{Mode, Replica, create_change};
-use crate::{Error, Limits, docprops, same_secret};
+use crate::{Error, Limits, diff, docprops, same_secret};
 
 /// A message for the transport to deliver.
 #[derive(Clone, Debug, PartialEq)]
@@ -48,6 +49,31 @@ pub enum Journal {
     Accepted(Accepted),
     /// A client's batch was refused.
     Refused { client: u32, batch_id: u64 },
+    /// A shared branch was created.
+    BranchCreate(SharedBranch),
+    /// A shared branch was edited.
+    BranchEdit { id: String, rev: u64, changes: Vec<Change> },
+    /// A shared branch was updated from main.
+    BranchUpdateFromMain { id: String, rev: u64, base_changes: Vec<Change>, head_changes: Vec<Change> },
+    /// A shared branch changed state (merged or archived).
+    BranchState { id: String, rev: u64, status: BranchStatus },
+}
+
+/// One shared branch kept on the server.
+#[derive(Clone, Debug)]
+struct BranchData {
+    id: String,
+    name: String,
+    time: u64,
+    client: u32,
+    status: BranchStatus,
+    rev: u64,
+    base: Replica,
+    head: Replica,
+    /// Node ids deleted on this branch (so undo can bring a peer-created layer back with its id).
+    deleted: BTreeSet<NodeId>,
+    /// Document-level entries removed on this branch (so undo can bring them back).
+    removed: BTreeSet<Entry>,
 }
 
 /// A session server for one file.
@@ -86,6 +112,14 @@ pub struct Server {
     journal: Option<Vec<Journal>>,
     /// The connected clients that read signals (cursor chat, spotlight).
     signals: BTreeSet<u32>,
+    /// The connected clients that read shared branches.
+    branches_capable: BTreeSet<u32>,
+    /// Shared branches kept by this session, oldest first.
+    branches: Vec<BranchData>,
+    /// The connected clients that read the design review settings (`DocProp::DesignReview`): a
+    /// peer that doesn't announce them can't decode the variant, so the server keeps review
+    /// edits out of everything it sends them.
+    design_review: BTreeSet<u32>,
     /// Who spotlights now (a newcomer is told).
     spotlight: Option<u32>,
     /// Saved history this server restored or replayed left image entries out (or may give a
@@ -118,6 +152,9 @@ pub struct SessionState {
     #[serde(default)]
     pub removed: BTreeSet<Entry>,
     pub log: Vec<Accepted>,
+    /// Absent in states saved before shared branches.
+    #[serde(default)]
+    pub branches: Vec<SharedBranch>,
 }
 
 impl Server {
@@ -146,6 +183,9 @@ impl Server {
             limited: BTreeMap::new(),
             journal: None,
             signals: BTreeSet::new(),
+            branches_capable: BTreeSet::new(),
+            branches: Vec::new(),
+            design_review: BTreeSet::new(),
             spotlight: None,
             resync: false,
         }
@@ -162,6 +202,7 @@ impl Server {
             deleted: self.deleted.clone(),
             removed: self.removed.clone(),
             log: self.log.iter().cloned().collect(),
+            branches: self.wire_branches(),
         })
     }
 
@@ -169,7 +210,7 @@ impl Server {
     /// reconnect with their ids). A log that doesn't lead up to the sequence number is dropped
     /// (clients then catch up with a snapshot).
     pub fn restore(state: SessionState, token: impl Into<String>, limits: Limits) -> Result<Server, Error> {
-        let (replica, left_out) = Replica::from_snapshot_leaving_out(&state.snapshot)?;
+        let (replica, left_out, review_clamped) = Replica::from_snapshot_leaving_out(&state.snapshot)?;
         let mut server = Server::new(replica.document().clone(), token, limits);
         server.state = replica;
         server.session = state.session;
@@ -189,12 +230,22 @@ impl Server {
         // History saved before the image checks may hold image entries they refuse. The snapshot
         // opens without them, and a saved log putting images may give a resuming client other
         // bytes under a key it holds, which this state can't check: either way resuming clients
-        // catch up with the snapshot.
+        // catch up with the snapshot. The same holds for review settings this build had to clamp:
+        // a saved batch still carries the value past the limits, and a resuming client would
+        // refuse it, so the clamped snapshot is what everyone catches up with.
         let puts_images = state.log.iter().flat_map(|a| &a.changes).any(Change::is_image);
-        server.resync = left_out > 0 || puts_images;
+        server.resync = left_out > 0 || puts_images || review_clamped;
         if contiguous && state.log.last().is_none_or(|a| a.seq == state.seq) {
             for a in state.log {
                 server.remember(a);
+            }
+        }
+        for wb in state.branches.into_iter().take(MAX_SHARED_BRANCHES) {
+            if let Ok(b) = branch_from_wire(&server.state, wb) {
+                if b.client < u32::MAX {
+                    server.next_client = server.next_client.max(b.client.saturating_add(1));
+                }
+                server.branches.push(b);
             }
         }
         Ok(server)
@@ -251,6 +302,38 @@ impl Server {
             Journal::Refused { client, batch_id } => {
                 if let Some(p) = self.issued.get_mut(&client).filter(|p| batch_id > p.last_batch) {
                     p.note(batch_id, true);
+                }
+                Ok(())
+            }
+            Journal::BranchCreate(wb) => {
+                if !self.branches.iter().any(|b| b.id == wb.id) && self.branches.len() < MAX_SHARED_BRANCHES {
+                    let b = branch_from_wire(&self.state, wb)?;
+                    if b.client < u32::MAX {
+                        self.next_client = self.next_client.max(b.client.saturating_add(1));
+                    }
+                    self.branches.push(b);
+                }
+                Ok(())
+            }
+            Journal::BranchEdit { id, rev, changes } => {
+                if let Some(b) = self.branches.iter_mut().find(|b| b.id == id && rev > b.rev) {
+                    b.head.apply(&changes, Mode::Lenient)?;
+                    b.rev = rev;
+                }
+                Ok(())
+            }
+            Journal::BranchUpdateFromMain { id, rev, base_changes, head_changes } => {
+                if let Some(b) = self.branches.iter_mut().find(|b| b.id == id && rev > b.rev) {
+                    b.base.apply(&base_changes, Mode::Lenient)?;
+                    b.head.apply(&head_changes, Mode::Lenient)?;
+                    b.rev = rev;
+                }
+                Ok(())
+            }
+            Journal::BranchState { id, rev, status } => {
+                if let Some(b) = self.branches.iter_mut().find(|b| b.id == id && rev > b.rev) {
+                    b.status = status;
+                    b.rev = rev;
                 }
                 Ok(())
             }
@@ -333,12 +416,16 @@ impl Server {
         }
         // The log holds every batch after `floor`.
         let floor = self.log.front().map_or(self.seq, |a| a.seq.saturating_sub(1));
+        let reads_design_review = reads_design_review(&hello.client_version);
         let catch_up = match resume {
             Some(r) if !self.resync && r.seq <= self.seq && r.seq >= floor => {
                 CatchUp::Delta(self.log.iter().filter(|a| a.seq > r.seq).cloned().collect())
             }
             _ => CatchUp::Snapshot(self.state.snapshot().map_err(|e| refuse(&e.to_string()))?),
         };
+        // A peer that doesn't read the review settings can't decode them: its catch-up carries
+        // everything else.
+        let catch_up = filter_catch_up(catch_up, reads_design_review);
         let (id, secret) = match resume {
             Some(r) => (r.client_id, *self.secrets.entry(r.client_id).or_insert(r.secret)),
             None => {
@@ -355,6 +442,7 @@ impl Server {
         let processed = self.issued.get(&id).cloned().unwrap_or_default();
         self.presence.remove(&id);
         let signals = reads_signals(&hello.client_version);
+        let branches = reads_branches(&hello.client_version);
         let peer = Peer { client_id: id, name: hello.name, color: hello.color };
         let others = self.peers.values().filter(|p| p.client_id != id).cloned().collect();
         let welcome = ServerMsg::Welcome { session: self.session, client_id: id, seq: self.seq, catch_up, processed, peers: others, access, secret };
@@ -374,7 +462,24 @@ impl Server {
         } else {
             self.signals.remove(&id);
         }
+        if branches {
+            self.branches_capable.insert(id);
+            outs.push(Outgoing::To(id, ServerMsg::Branches(self.wire_branches_within_limit())));
+        } else {
+            self.branches_capable.remove(&id);
+        }
+        if reads_design_review {
+            self.design_review.insert(id);
+        } else {
+            self.design_review.remove(&id);
+        }
         Ok((id, outs))
+    }
+
+    /// Whether every connected peer reads the design review settings: then a batch goes out as
+    /// one message, the common case.
+    fn everyone_reads_design_review(&self) -> bool {
+        self.peers.keys().all(|id| self.design_review.contains(id))
     }
 
     /// Whether `r` may take its client id back: it carries the secret that id was given with, or
@@ -393,6 +498,8 @@ impl Server {
         self.acked.remove(&id);
         self.limited.remove(&id);
         self.signals.remove(&id);
+        self.branches_capable.remove(&id);
+        self.design_review.remove(&id);
         if self.spotlight == Some(id) {
             self.spotlight = None;
         }
@@ -430,7 +537,7 @@ impl Server {
                         let acc = Accepted { seq: self.seq, author: from, batch_id, changes };
                         self.remember(acc.clone());
                         self.note(Journal::Accepted(acc.clone()));
-                        vec![Outgoing::All(ServerMsg::Changes(acc))]
+                        self.relay_changes(acc)
                     }
                     Err(e) => {
                         self.note(Journal::Refused { client: from, batch_id });
@@ -467,6 +574,7 @@ impl Server {
                 Vec::new()
             }
             ClientMsg::Ping => vec![Outgoing::To(from, ServerMsg::Pong)],
+            ClientMsg::Branch(req) => self.branch_request(from, *req),
             ClientMsg::Manage(_)
             | ClientMsg::Admin(_)
             | ClientMsg::OpenLibrary(_)
@@ -480,6 +588,31 @@ impl Server {
                 vec![Outgoing::To(from, ServerMsg::Refused { reason: "managing files and libraries needs a connection of its own".into() })]
             }
         }
+    }
+
+    /// Send an accepted batch to every connected peer. A peer that doesn't read the review
+    /// settings can't decode them, so it gets the same batch (its seq, batch id and the peer's
+    /// own accounting included) with those edits left out and everything else in order.
+    fn relay_changes(&self, acc: Accepted) -> Vec<Outgoing> {
+        if !acc.changes.iter().any(Change::is_design_review) || self.everyone_reads_design_review() {
+            return vec![Outgoing::All(ServerMsg::Changes(acc))];
+        }
+        // Every peer hears the batch, even one with nothing left for it: the batch still carries
+        // the next sequence number, and a peer that skipped it would reject its next ordinary
+        // batch as out of order.
+        self.peers
+            .keys()
+            .copied()
+            .map(|id| {
+                if self.design_review.contains(&id) || id == acc.author {
+                    Outgoing::To(id, ServerMsg::Changes(acc.clone()))
+                } else {
+                    let mut filtered = acc.clone();
+                    filtered.changes = Change::without_design_review(filtered.changes);
+                    Outgoing::To(id, ServerMsg::Changes(filtered))
+                }
+            })
+            .collect()
     }
 
     /// Client `from` is called `name` from now on (cleaned): everyone, itself too, hears it as its
@@ -526,6 +659,7 @@ impl Server {
                 && !self.state.document().contains(*id)
                 && !self.deleted.contains(id)
                 && id.0 >> 32 != u64::from(from)
+                && !self.in_branch(*id)
             {
                 return Err(Error::Invalid(format!("new node {id} isn't in client {from}'s id space")));
             }
@@ -561,42 +695,15 @@ impl Server {
     /// [`NO_SESSION_SPACE`] (unless it was removed before: undo puts entries back); ids from
     /// before the session (space 0, earlier sessions, other files) are fine.
     fn check_entries(&self, from: u32, changes: &[Change], after: &Document) -> Result<Vec<(Entry, bool)>, Error> {
-        let before = self.state.document();
-        let mut touched: BTreeSet<Entry> = BTreeSet::new();
-        let mut listed: BTreeMap<Family, (BTreeSet<Entry>, BTreeSet<Entry>)> = BTreeMap::new();
-        for c in changes {
-            match c {
-                Change::Put { entry, .. } | Change::Remove { entry } if entry.id_space().is_some() => {
-                    touched.insert(entry.clone());
-                }
-                // A whole list replaced (the fallback for lists whose ids aren't unique).
-                Change::SetDoc { prop, .. } => {
-                    if let Some(Ok(family)) = prop.list() {
-                        let (b, a) = (docprops::entries(before, family), docprops::entries(after, family));
-                        touched.extend(b.iter().chain(&a).cloned());
-                        // Looked up in sets below: a linear search per entry would be quadratic.
-                        listed.entry(family).or_insert_with(|| (b.into_iter().collect(), a.into_iter().collect()));
-                    }
-                }
-                _ => {}
-            }
-        }
-        let mut out = Vec::new();
-        for entry in touched {
-            let (was, now) = match entry.family().and_then(|f| listed.get(&f)) {
-                Some((b, a)) => (b.contains(&entry), a.contains(&entry)),
-                None => (docprops::has(before, &entry), docprops::has(after, &entry)),
-            };
-            if was == now {
-                continue;
-            }
-            if now
-                && !self.removed.contains(&entry)
+        let out = touched_entries(self.state.document(), changes, after);
+        for (entry, now) in &out {
+            if *now
+                && !self.removed.contains(entry)
+                && !self.entry_in_branch(entry)
                 && let Some(space) = entry.id_space().filter(|s| *s != from && (self.issued.contains_key(s) || *s >= NO_SESSION_SPACE))
             {
                 return Err(Error::Invalid(format!("new {} isn't in client {from}'s id space (it is client {space}'s)", entry.describe())));
             }
-            out.push((entry, now));
         }
         Ok(out)
     }
@@ -663,6 +770,446 @@ impl Server {
         nodes.extend(out);
         Ok(nodes)
     }
+
+    /// The shared branches encoded relative to the server's current main state.
+    fn wire_branches(&self) -> Vec<SharedBranch> {
+        self.branches
+            .iter()
+            .filter_map(|b| {
+                let base_diff = diff(&self.state, b.base.document()).ok()?.changes;
+                let head_diff = diff(&b.base, b.head.document()).ok()?.changes;
+                Some(SharedBranch {
+                    id: b.id.clone(),
+                    name: b.name.clone(),
+                    time: b.time,
+                    client: b.client,
+                    status: b.status,
+                    rev: b.rev,
+                    base_diff,
+                    head_diff,
+                })
+            })
+            .collect()
+    }
+
+    /// Whether node `id` exists in any shared branch kept by this server.
+    fn in_branch(&self, id: NodeId) -> bool {
+        self.branches.iter().any(|b| b.head.document().contains(id) || b.base.document().contains(id))
+    }
+
+    /// Whether document-level entry `entry` exists in any shared branch kept by this server.
+    fn entry_in_branch(&self, entry: &Entry) -> bool {
+        self.branches.iter().any(|b| docprops::has(b.head.document(), entry) || docprops::has(b.base.document(), entry))
+    }
+
+    /// The shared branches encoded relative to the server's current main state, bounded to fit
+    /// within [`Limits::max_message_bytes`] so a welcome never disconnects a joining client.
+    fn wire_branches_within_limit(&self) -> Vec<SharedBranch> {
+        let all = self.wire_branches();
+        if crate::message::encode(&ServerMsg::Branches(all.clone())).is_ok_and(|b| b.len() <= self.limits.max_message_bytes) {
+            return all;
+        }
+        let mut out = Vec::new();
+        for b in all {
+            out.push(b);
+            if !crate::message::encode(&ServerMsg::Branches(out.clone())).is_ok_and(|enc| enc.len() <= self.limits.max_message_bytes) {
+                out.pop();
+                break;
+            }
+        }
+        out
+    }
+
+    fn branches_fit_wire(&self, replace: Option<usize>, candidate: &BranchData) -> bool {
+        let mut list: Vec<SharedBranch> = Vec::with_capacity(self.branches.len() + 1);
+        for (i, b) in self.branches.iter().enumerate() {
+            let item = if replace == Some(i) { candidate } else { b };
+            let Some(wb) = self.wire_branch(item) else { return false };
+            list.push(wb);
+        }
+        if replace.is_none() {
+            let Some(wb) = self.wire_branch(candidate) else { return false };
+            list.push(wb);
+        }
+        crate::message::encode(&ServerMsg::Branches(list)).is_ok_and(|enc| enc.len() <= self.limits.max_message_bytes)
+    }
+
+    fn wire_branch(&self, b: &BranchData) -> Option<SharedBranch> {
+        let base_diff = diff(&self.state, b.base.document()).ok()?.changes;
+        let head_diff = diff(&b.base, b.head.document()).ok()?.changes;
+        Some(SharedBranch {
+            id: b.id.clone(),
+            name: b.name.clone(),
+            time: b.time,
+            client: b.client,
+            status: b.status,
+            rev: b.rev,
+            base_diff,
+            head_diff,
+        })
+    }
+
+    fn branch_reject(&self, from: u32, id: &str, reason: impl Into<String>) -> Vec<Outgoing> {
+        if !self.branches_capable.contains(&from) {
+            return Vec::new();
+        }
+        vec![Outgoing::To(from, ServerMsg::Branch(Box::new(BranchEvent::Rejected { id: id.to_string(), reason: reason.into() })))]
+    }
+
+    fn broadcast_branch(&self, skip: Option<u32>, ev: BranchEvent) -> Vec<Outgoing> {
+        self.branches_capable
+            .iter()
+            .copied()
+            .filter(|id| Some(*id) != skip)
+            .map(|id| Outgoing::To(id, ServerMsg::Branch(Box::new(ev.clone()))))
+            .collect()
+    }
+
+    fn branch_request(&mut self, from: u32, req: BranchReq) -> Vec<Outgoing> {
+        if let Some(access) = self.limited.get(&from) {
+            let why = if *access == Access::View { VIEW_ONLY } else { COMMENT_ONLY };
+            return self.branch_reject(from, req.id(), why);
+        }
+        match req {
+            BranchReq::Create { id, name, time, base_seq: _, base_diff, head_diff } => {
+                self.branch_create(from, NewBranch { id, name, time, base_diff, head_diff })
+            }
+            BranchReq::Edit { id, changes } => self.branch_edit(from, &id, &changes),
+            BranchReq::UpdateFromMain { id, base_changes, head_changes } => self.branch_update_from_main(from, &id, &base_changes, &head_changes),
+            BranchReq::SetState { id, status } => self.branch_set_state(from, &id, status),
+        }
+    }
+
+    fn branch_node_ids_ok(&self, from: u32, changes: &[Change], existing: &[&Document], deleted: Option<&BTreeSet<NodeId>>) -> bool {
+        changes.iter().all(|c| match c {
+            Change::Create { id, .. } => {
+                id.0 >> 32 == u64::from(from)
+                    || self.state.document().contains(*id)
+                    || self.deleted.contains(id)
+                    || deleted.is_some_and(|d| d.contains(id))
+                    || existing.iter().any(|d| d.contains(*id))
+            }
+            _ => true,
+        })
+    }
+
+    fn branch_entries_ok(
+        &self,
+        from: u32,
+        before: &Document,
+        changes: &[Change],
+        after: &Document,
+        existing: &[&Document],
+        removed: Option<&BTreeSet<Entry>>,
+    ) -> Option<Vec<(Entry, bool)>> {
+        let entries = touched_entries(before, changes, after);
+        for (entry, now) in &entries {
+            if *now
+                && !self.removed.contains(entry)
+                && !removed.is_some_and(|r| r.contains(entry))
+                && !existing.iter().any(|d| docprops::has(d, entry))
+                && entry.id_space().is_some_and(|s| s != from && (self.issued.contains_key(&s) || s >= NO_SESSION_SPACE))
+            {
+                return None;
+            }
+        }
+        Some(entries)
+    }
+
+    fn apply_branch(&self, replica: &Replica, changes: &[Change]) -> Option<(Replica, Vec<NodeId>)> {
+        for c in changes {
+            if matches!(c, Change::Put { entry: Entry::Image(_), .. }) {
+                let mut probe = replica.clone();
+                probe.apply(std::slice::from_ref(c), Mode::Strict).ok()?;
+            }
+        }
+        let mut next = replica.clone();
+        let applied = next.apply(changes, Mode::Lenient).ok()?;
+        next.check(&applied.touched).ok()?;
+        (next.document().node_count() <= self.limits.max_nodes).then_some((next, applied.deleted))
+    }
+
+    fn branch_create(&mut self, from: u32, req: NewBranch) -> Vec<Outgoing> {
+        let NewBranch { id, name, time, base_diff, head_diff } = req;
+        if !valid_branch_id(&id) {
+            return self.branch_reject(from, &id, "invalid branch id");
+        }
+        if self.branches.len() >= MAX_SHARED_BRANCHES {
+            return self.branch_reject(from, &id, format!("the session has the most shared branches it can keep ({MAX_SHARED_BRANCHES})"));
+        }
+        if self.branches.iter().any(|b| b.id == id) {
+            return self.branch_reject(from, &id, "a shared branch with that id already exists");
+        }
+        if base_diff.len() > self.limits.max_changes || head_diff.len() > self.limits.max_changes {
+            return self.branch_reject(from, &id, "too many changes in one branch request");
+        }
+        if !self.branch_node_ids_ok(from, &base_diff, &[], None) {
+            return self.branch_reject(from, &id, "branch base uses a node id outside your id space");
+        }
+        let name = clean_branch_name(&name);
+        if name.is_empty() {
+            return self.branch_reject(from, &id, "branch name can't be empty");
+        }
+        let Some((base, _)) = self.apply_branch(&self.state, &base_diff) else {
+            return self.branch_reject(from, &id, "branch base couldn't be applied");
+        };
+        if self.branch_entries_ok(from, self.state.document(), &base_diff, base.document(), &[], None).is_none()
+            || !self.branch_node_ids_ok(from, &head_diff, &[base.document()], None)
+        {
+            return self.branch_reject(from, &id, "branch uses an id outside your id space");
+        }
+        let Some((head, _)) = self.apply_branch(&base, &head_diff) else {
+            return self.branch_reject(from, &id, "branch edits couldn't be applied");
+        };
+        if self.branch_entries_ok(from, base.document(), &head_diff, head.document(), &[self.state.document()], None).is_none() {
+            return self.branch_reject(from, &id, "branch uses an entry id outside your id space");
+        }
+        let candidate = BranchData {
+            id: id.clone(),
+            name: name.clone(),
+            time,
+            client: from,
+            status: BranchStatus::Active,
+            rev: 0,
+            base,
+            head,
+            deleted: BTreeSet::new(),
+            removed: BTreeSet::new(),
+        };
+        if !self.branches_fit_wire(None, &candidate) {
+            return self.branch_reject(from, &id, "shared branches would exceed the session's message size limit");
+        }
+        let Some(wb) = self.wire_branch(&candidate) else {
+            return self.branch_reject(from, &id, "branch couldn't be encoded");
+        };
+        self.branches.push(candidate);
+        self.note(Journal::BranchCreate(wb.clone()));
+        self.broadcast_branch(None, BranchEvent::Created { author: from, branch: wb })
+    }
+
+    fn branch_edit(&mut self, from: u32, id: &str, changes: &[Change]) -> Vec<Outgoing> {
+        if changes.is_empty() || changes.len() > self.limits.max_changes {
+            return self.branch_reject(from, id, "invalid branch edit size");
+        }
+        let Some(bi) = self.branches.iter().position(|b| b.id == id && b.status == BranchStatus::Active) else {
+            return self.branch_reject(from, id, "the branch isn't active");
+        };
+        let branch = &self.branches[bi];
+        if !self.branch_node_ids_ok(from, changes, &[branch.head.document(), branch.base.document()], Some(&branch.deleted)) {
+            return self.branch_reject(from, id, "branch edit uses a node id outside your id space");
+        }
+        let Some((next, deleted)) = self.apply_branch(&branch.head, changes) else {
+            return self.branch_reject(from, id, "branch edit couldn't be applied");
+        };
+        let Some(entries) = self.branch_entries_ok(
+            from,
+            branch.head.document(),
+            changes,
+            next.document(),
+            &[self.state.document(), branch.base.document()],
+            Some(&branch.removed),
+        ) else {
+            return self.branch_reject(from, id, "branch edit uses an entry id outside your id space");
+        };
+        let Ok(applied) = diff(&branch.head, next.document()) else {
+            return self.branch_reject(from, id, "branch edit couldn't be diffed");
+        };
+        if applied.changes.is_empty() {
+            // Still echo an empty no-op edit to the sender so pending queues drain cleanly.
+            return vec![Outgoing::To(
+                from,
+                ServerMsg::Branch(Box::new(BranchEvent::Edited { id: id.to_string(), author: from, rev: branch.rev, changes: Vec::new() })),
+            )];
+        }
+        let mut candidate = branch.clone();
+        candidate.head = next;
+        candidate.rev = branch.rev.saturating_add(1);
+        for c in &applied.changes {
+            if let Change::Create { id: nid, .. } = c {
+                candidate.deleted.remove(nid);
+            }
+        }
+        candidate.deleted.extend(deleted);
+        while candidate.deleted.len() > self.limits.max_nodes {
+            if candidate.deleted.pop_first().is_none() {
+                break;
+            }
+        }
+        for (entry, now) in entries {
+            if now {
+                candidate.removed.remove(&entry);
+            } else {
+                candidate.removed.insert(entry);
+            }
+        }
+        if !self.branches_fit_wire(Some(bi), &candidate) {
+            return self.branch_reject(from, id, "shared branches would exceed the session's message size limit");
+        }
+        let rev = candidate.rev;
+        if let Some(b) = self.branches.get_mut(bi) {
+            *b = candidate;
+        }
+        self.note(Journal::BranchEdit { id: id.to_string(), rev, changes: applied.changes.clone() });
+        self.broadcast_branch(None, BranchEvent::Edited { id: id.to_string(), author: from, rev, changes: applied.changes })
+    }
+
+    fn branch_update_from_main(&mut self, from: u32, id: &str, base_changes: &[Change], head_changes: &[Change]) -> Vec<Outgoing> {
+        if base_changes.len() > self.limits.max_changes || head_changes.len() > self.limits.max_changes {
+            return self.branch_reject(from, id, "too many changes in branch update");
+        }
+        let Some(bi) = self.branches.iter().position(|b| b.id == id && b.status == BranchStatus::Active) else {
+            return self.branch_reject(from, id, "the branch isn't active");
+        };
+        let branch = &self.branches[bi];
+        if !self.branch_node_ids_ok(from, base_changes, &[branch.base.document(), branch.head.document()], Some(&branch.deleted))
+            || !self.branch_node_ids_ok(from, head_changes, &[branch.base.document(), branch.head.document()], Some(&branch.deleted))
+        {
+            return self.branch_reject(from, id, "branch update uses a node id outside your id space");
+        }
+        let Some((next_base, _)) = self.apply_branch(&branch.base, base_changes) else {
+            return self.branch_reject(from, id, "branch base update couldn't be applied");
+        };
+        let Some((next_head, deleted)) = self.apply_branch(&branch.head, head_changes) else {
+            return self.branch_reject(from, id, "branch head update couldn't be applied");
+        };
+        if self
+            .branch_entries_ok(
+                from,
+                branch.base.document(),
+                base_changes,
+                next_base.document(),
+                &[self.state.document(), branch.head.document()],
+                Some(&branch.removed),
+            )
+            .is_none()
+        {
+            return self.branch_reject(from, id, "branch base update uses an entry id outside your id space");
+        }
+        let Some(entries) = self.branch_entries_ok(
+            from,
+            branch.head.document(),
+            head_changes,
+            next_head.document(),
+            &[self.state.document(), branch.base.document(), next_base.document()],
+            Some(&branch.removed),
+        ) else {
+            return self.branch_reject(from, id, "branch head update uses an entry id outside your id space");
+        };
+        let Ok(bd) = diff(&branch.base, next_base.document()) else {
+            return self.branch_reject(from, id, "branch base update couldn't be diffed");
+        };
+        let Ok(hd) = diff(&branch.head, next_head.document()) else {
+            return self.branch_reject(from, id, "branch head update couldn't be diffed");
+        };
+        let mut candidate = branch.clone();
+        candidate.base = next_base;
+        candidate.head = next_head;
+        candidate.rev = branch.rev.saturating_add(1);
+        candidate.deleted.extend(deleted);
+        for (entry, now) in entries {
+            if now {
+                candidate.removed.remove(&entry);
+            } else {
+                candidate.removed.insert(entry);
+            }
+        }
+        if !self.branches_fit_wire(Some(bi), &candidate) {
+            return self.branch_reject(from, id, "shared branches would exceed the session's message size limit");
+        }
+        let rev = candidate.rev;
+        if let Some(b) = self.branches.get_mut(bi) {
+            *b = candidate;
+        }
+        self.note(Journal::BranchUpdateFromMain { id: id.to_string(), rev, base_changes: bd.changes.clone(), head_changes: hd.changes.clone() });
+        self.broadcast_branch(
+            None,
+            BranchEvent::UpdatedFromMain { id: id.to_string(), author: from, rev, base_changes: bd.changes, head_changes: hd.changes },
+        )
+    }
+
+    fn branch_set_state(&mut self, from: u32, id: &str, status: BranchStatus) -> Vec<Outgoing> {
+        if status == BranchStatus::Active {
+            return self.branch_reject(from, id, "can't reopen a merged or archived branch");
+        }
+        let Some(b) = self.branches.iter_mut().find(|b| b.id == id && b.status == BranchStatus::Active) else {
+            return self.branch_reject(from, id, "the branch isn't active");
+        };
+        b.status = status;
+        b.rev = b.rev.saturating_add(1);
+        let rev = b.rev;
+        self.note(Journal::BranchState { id: id.to_string(), rev, status });
+        self.broadcast_branch(None, BranchEvent::State { id: id.to_string(), author: from, rev, status })
+    }
+}
+
+/// Document-level entries (styles, variables, collections, comments) that `changes` added or
+/// removed between `before` and `after`, each paired with whether it exists in `after`.
+fn touched_entries(before: &Document, changes: &[Change], after: &Document) -> Vec<(Entry, bool)> {
+    let mut touched: BTreeSet<Entry> = BTreeSet::new();
+    let mut listed: BTreeMap<Family, (BTreeSet<Entry>, BTreeSet<Entry>)> = BTreeMap::new();
+    for c in changes {
+        match c {
+            Change::Put { entry, .. } | Change::Remove { entry } if entry.id_space().is_some() => {
+                touched.insert(entry.clone());
+            }
+            // A whole list replaced (the fallback for lists whose ids aren't unique).
+            Change::SetDoc { prop, .. } => {
+                if let Some(Ok(family)) = prop.list() {
+                    let (b, a) = (docprops::entries(before, family), docprops::entries(after, family));
+                    touched.extend(b.iter().chain(&a).cloned());
+                    // Looked up in sets below: a linear search per entry would be quadratic.
+                    listed.entry(family).or_insert_with(|| (b.into_iter().collect(), a.into_iter().collect()));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for entry in touched {
+        let (was, now) = match entry.family().and_then(|f| listed.get(&f)) {
+            Some((b, a)) => (b.contains(&entry), a.contains(&entry)),
+            None => (docprops::has(before, &entry), docprops::has(after, &entry)),
+        };
+        if was != now {
+            out.push((entry, now));
+        }
+    }
+    out
+}
+
+struct NewBranch {
+    id: String,
+    name: String,
+    time: u64,
+    base_diff: Vec<Change>,
+    head_diff: Vec<Change>,
+}
+
+fn valid_branch_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn clean_branch_name(name: &str) -> String {
+    name.trim().chars().filter(|c| !c.is_control()).take(256).collect()
+}
+
+fn branch_from_wire(main: &Replica, wb: SharedBranch) -> Result<BranchData, Error> {
+    let mut base = main.clone();
+    base.apply(&wb.base_diff, Mode::Lenient)?;
+    let mut head = base.clone();
+    head.apply(&wb.head_diff, Mode::Lenient)?;
+    Ok(BranchData {
+        id: wb.id,
+        name: wb.name,
+        time: wb.time,
+        client: wb.client,
+        status: wb.status,
+        rev: wb.rev,
+        base,
+        head,
+        deleted: BTreeSet::new(),
+        removed: BTreeSet::new(),
+    })
 }
 
 /// A fresh session identity: random per server (std's hasher keys are seeded from the OS).
@@ -703,4 +1250,24 @@ pub fn weight(changes: &[Change]) -> usize {
             Change::Remove { .. } => 64,
         })
         .fold(0, usize::saturating_add)
+}
+
+/// A catch-up a peer that doesn't read the design review settings can decode: the review-setting
+/// edits are left out of a delta and out of a snapshot, everything else as it was.
+fn filter_catch_up(cu: CatchUp, reads_design_review: bool) -> CatchUp {
+    if reads_design_review {
+        return cu;
+    }
+    match cu {
+        CatchUp::Delta(list) => CatchUp::Delta(
+            list.into_iter()
+                .map(|mut a| {
+                    a.changes = Change::without_design_review(a.changes);
+                    a
+                })
+                .collect(),
+        ),
+        CatchUp::Snapshot(changes) => CatchUp::Snapshot(Change::without_design_review(changes)),
+        packed => packed,
+    }
 }

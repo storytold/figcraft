@@ -374,7 +374,10 @@ Or in a project's `.mcp.json`:
   tracking shortcuts, a canvas drag) detaches that field's variable; fields the edit
   left as they were stay bound.
   `variable.addMode {from}` duplicates a mode, `variable.moveMode {collection, mode, to}` reorders
-  (index 0 is the default mode, which layers on Auto follow). `variable.update {codeSyntax: {WEB?,
+  (index 0 is the default mode, which layers on Auto follow). `variable.move {variables, before?}`
+  reorders variables within their collection (the order the Variables window and the pickers list),
+  `variable.sort {collection, group?, descending?}` sorts them by name, numbers by value (50 before
+  100). `variable.update {codeSyntax: {WEB?,
   iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one, SwiftUI the iOS one and
   Compose the Android one (a variable without one keeps its value there).
 - **Live previews**: `text.preview {command, params}` shows what `style.apply`,
@@ -410,6 +413,8 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
 | `export_assets {ids?, dir?, dryRun?}` | Write the selection's images and vectors into `dir` as files named by their content: see [Asset handoff](#asset-handoff). |
+| `component_mappings {ids?, unmapped?, root?}` | Which code component each design component is: `import`, `name`, `source` (and `sourceFound` under `root`, default the server's folder), a ready `snippet`, `properties` with variants, and `values` that need translating. |
+| `sync_mappings {direction, path?}` | Apply a code repository's `figcraft.connect.json` to the open design (`import`) or write the design's mappings to it (`export`); `path` defaults to that file in the server's folder. |
 | `select {ids}` | Replace the selection (`[]` deselects). |
 | `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (PNG: `sRGB` chunk, or ICC and `cICP` for Display P3; JPG: ICC profile; WebP: ICC profile for Display P3, none for sRGB) (SVG, XML and RGB PDF output are always sRGB; PDF with `cmyk` is DeviceCMYK). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
@@ -437,7 +442,8 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `components` | By id: `name`, `type`, `properties` with variants, `codeLinks` |
 | `fonts` | `family`, `styles`, and whether it's `installed` |
 | `assets` | What `inspect.assets` lists, for the layers in the tree |
-| `missing` | `{what, why}`: what the design doesn't specify. Always says that the file stores no breakpoints |
+| `responsive` | What the designer stated about other screen sizes, as `responsive.list` gives it for the target: `explicit`, `versions`, `rules`. Nothing is inferred from names or sizes |
+| `missing` | `{what, why}`: what the design doesn't specify. Says that the file stores no breakpoints unless `responsive` is `explicit` |
 | `truncated` | When `depth` or `maxNodes` cut the tree, or `maxBytes` made the tool ask for fewer layers: `layersLeftOut`, `assetsLeftOut`, `depth`, `maxNodes`; and `variables` when aliases went deeper than the 10,000 variables followed |
 
 Each layer in `nodes` has `id`, `name`, `type` and:
@@ -449,7 +455,7 @@ Each layer in `nodes` has `id`, `name`, `type` and:
   with the `name` of each. `explicit` holds the value they resolved to.
 - `unsupported`: `{property, why}` for what has no direct CSS equivalent. The value stays in `explicit`.
 - `code`: for a component or instance connected to code, per language, `{language, importPath, name,
-  code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
+  source?, notes?, code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
   says what it holds, and `get_node` reads it.
 - `children`, or `childCount` where the tree stops.
 
@@ -816,9 +822,10 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   it is larger; the choice is kept. In the browser the interface always follows the browser's zoom.
 - `pref.autoSave {on?}`: files that have a path save themselves a few seconds after they change
   (off by default; the desktop app's timer does it, so scripts still call `file.save`).
-- `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of in a new file
-  (off by default; files named on the command line still open, and `--control` starts in a new
-  file anyway, so control callers have a document).
+- `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of reopening the
+  files open when it last quit (off by default; with nothing to reopen it starts on the Home screen
+  too; files named on the command line still open, and with nothing open `--control` starts in a new
+  file, so control callers have a document).
 - `pref.language {language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|sv|vi|zh-Hans|zh-Hant|…}`: the app's interface language, applied live ("system":
   the OS or browser language; a language without a catalog shows English). Command ids, labels and
   every result stay English.
@@ -1083,6 +1090,8 @@ name and sets them this way);
   same library, components the other file publishes as a library are used from it (and that
   library is enabled when the other file is saved), and other mains stay behind: the instance shows
   a missing main (`component.restoreMain` makes it a main here).
+  A main component copied from a file that publishes it as a library pastes as an instance of
+  it from that library (enabled the same way); a main that library doesn't offer pastes as a copy.
 
 ### Team libraries
 
@@ -1119,7 +1128,9 @@ most when it can't be reached).
   by name in their set, styles by name and type, variables by collection, name and type, modes by
   name), keeping overrides; one undo step → `{components, styles, variables, unmatched: [names
   still from `from`, including this file's collections that extend one of its collections],
-  removed (nothing of `from` was left, so it was removed)}`.
+  dropped: [`from`'s copies nothing used before the swap, which it removed rather than moved: a
+  component imported but not placed, or whose instances were deleted; a variable imported but not
+  bound], removed (nothing of `from` was left, so it was removed)}`.
 
 ### Overrides and variants
 
@@ -1135,7 +1146,8 @@ most when it can't be reached).
   the instance itself (its layers follow the main's constraints) or edit the main.
 - **Variants**: `instance.setProperties {ids?, properties}` switching variants keeps an override
   where the layer's name path matches and both variants had the same value for that property;
-  text layers keep all theirs. The default variant (`instance.create` with a set, the Assets
+  text layers keep all theirs, and a text layer the other variant nests elsewhere is matched by
+  its name when one layer on each side has it. The default variant (`instance.create` with a set, the Assets
   thumbnail) is the one in the set's top-left corner; `component.editProperty {name, default}`
   moves the chosen variant there, `{name, index}` reorders variant properties (the variants'
   names follow). `component.properties` on a set reports `conflicts`: variants sharing one
@@ -1886,11 +1898,20 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   `@acme/ui` gives `import { Button } from "@acme/ui";` then `<Button variant="primary" icon="none">{"Buy
   now"}</Button>`. `codeConnect.remove {id?, language?}` (no language: all). `codeConnect.export
   {path?}` → `{text, links}` (or writes the file): `{version: 1, links: [{component, language,
-  importPath, name, template}]}`, sorted, meant to live in the code repository as
-  `figcraft.connect.json`; `codeConnect.import {json | path}` → `{linked, warnings}` links each
+  importPath, name, template, source?, values?, notes?}]}`, sorted, meant to live in the code
+  repository as `figcraft.connect.json` (writing a file that's there keeps its other top-level keys
+  and the links of components this design doesn't have, so several designs can share one file; a
+  file there that isn't a connect file it can read is left alone and the export refused); `codeConnect.import {json | path}` → `{linked, warnings}` links each
   entry to every component or set with that name (one undo step; at most 5,000 links and 4 MB;
-  templates up to 4,000 characters, names 100, import paths 300; invalid entries are skipped with a
-  warning). `get_node` lists a component's links as `codeLinks`. In the app, the Inspect tab's
+  templates up to 4,000 characters, names 100, import paths 300; invalid entries, a malformed `values`
+  among them, are skipped with a warning). A link can also say where the code component lives (`source`, a path inside the
+  repository), what a property's design values are called in code (`values`:
+  `{"Variant": {"Primary": "primary"}}`, so `{Variant}` renders `primary`; a value without an entry
+  keeps its design name; `{Variant ? "a" : "b"}` still reads the design's value) and `notes`, through `codeConnect.set`, the file and the Inspect tab.
+  `codeConnect.list {ids?, unmapped?, root?}` → `{components: [{id, name, type, mapped, properties,
+  links: [{language, importPath, import, name, template, snippet, source?, sourceFound?, values?,
+  notes?}]}], mapped, unmapped}` answers which code component each design component is; with `root`
+  it says whether each `source` exists there. `get_node` lists a component's links as `codeLinks`. In the app, the Inspect tab's
   Connect to code section edits them in the Code section's language, with a live preview and a
   Connected badge. An editor extension isn't needed: agents and editors read the same snippets
   through this server. Plugins whose manifest asks only for `read` also run from the Inspect tab,
@@ -1948,6 +1969,19 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   the defaults (old files open with the defaults). In the app, with nothing selected, the Inspect
   tab filters the callouts by category and edits the categories (colour, name, delete, add); each
   note has a category menu.
+- **Screen sizes:** a file has no breakpoints, so the designer states what happens at other sizes and
+  agents read that rather than guess. Undoable `responsive.set {ids?, viewport, group?}` marks frames
+  or sections as the `mobile`, `tablet` or `desktop` version of a design (`null` clears the mark;
+  `group` names the design, and `null` goes back to each frame's name). Undoable `responsive.rule {id?,
+  text}` adds a note to the **Responsive** annotation category, making the category if the file lacks
+  it; the note keeps to `annotation.add`'s limits, and pages are refused. Developer Mode makes both
+  edits, as it does annotations. `responsive.list {}` → `{versions: [{group, frames: [{id, name, viewport,
+  width, height, page}]}]}`, narrowest first; with `ids` or `id`, what is stated about those layers,
+  the layers above them and those inside them: `{explicit, versions, rules: [{id, layer, text}],
+  truncated?}` (`truncated`: too many layers to read every rule). Nothing is inferred from names or
+  sizes, and stored values that aren't one of the three versions are ignored. `design_context` gives
+  the same for its target under `responsive`. Marks are layer data (`figcraft.viewport`, `figcraft.viewportGroup`), so they save and sync
+  with no change to the file format. In the app, a frame's or section's Inspect tab has a **Screen sizes** section.
 - **Ready for dev:** frames at the top of a page or section, and sections, carry a handoff status
   (`node.set {devStatus: none|readyForDev|completed}`; other layers are refused a status).
   `inspect.readyForDev {status?: readyForDev|changed|completed|any, page?}` lists them across pages
@@ -2199,7 +2233,8 @@ turned off 0°.
   `cmd` while resizing a frame ignores its children's constraints (they stay where they are) and,
   as in every drag, turns snapping off. Moves snap to edges, centres and equal spacing (the gaps
   show in `tool.overlay.guides` with labels); with the pixel grid on, moves and resizes land on
-  whole pixels.
+  whole pixels. Frames, sections, components and instances always land on whole pixels of their
+  parent, with the pixel grid off too and after a snap to a layer off the grid.
 
 Tool failures come back as results with `isError: true` and a message; protocol problems (unknown
 tool, malformed JSON, wrong parameter types) are JSON-RPC errors. Nothing crashes the server.
