@@ -18,6 +18,7 @@ workflows:
     '.github/workflows/nightly-sign.yml': []
     '.github/workflows/nightly.yml': []
     '.github/workflows/nix.yml': []
+    '.github/workflows/notify-services.yml': []
     '.github/workflows/packaging-lint.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/harden-runner@v2.22.4'
