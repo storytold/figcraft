@@ -7,7 +7,6 @@
 use std::io::Cursor;
 
 use figcraft_color::ColorProfile;
-use image::{ImageDecoder, ImageFormat};
 use moxcms::{Chromaticity, ColorPrimaries, DataColorSpace, Layout, ParsingOptions, ProfileText, ToneReprCurve, TransformOptions, XyY};
 
 /// The most bytes an embedded profile may have; bigger ones are ignored.
@@ -30,29 +29,19 @@ impl Source {
         Source { name: Some("sRGB".into()), profile: None }
     }
 
-    /// The colour space of encoded image `bytes` (reads the headers only).
+    /// The colour space of encoded image `bytes` (reads the headers or embedded profile).
     pub fn of(bytes: &[u8]) -> Source {
-        image::ImageReader::new(Cursor::new(bytes))
-            .with_guessed_format()
-            .ok()
-            .and_then(|r| r.into_decoder().ok())
-            .map(|mut dec| Source::read(bytes, &mut dec))
-            .unwrap_or_default()
-    }
-
-    /// The colour space `dec`, a decoder of `bytes`, says the image is in.
-    /// shortcut: GIF and BMP profiles and a PNG `cICP` without `iCCP` are ignored (taken as sRGB);
-    /// read them if such files turn up.
-    pub(crate) fn read(bytes: &[u8], dec: &mut impl ImageDecoder) -> Source {
-        let format = image::guess_format(bytes).ok();
-        if !matches!(format, Some(ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP | ImageFormat::Tiff)) {
+        let Some(format) = craft_image_codecs::detect(bytes) else {
+            return Source::default();
+        };
+        if !matches!(
+            format,
+            craft_image_codecs::Format::Png | craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::WebP | craft_image_codecs::Format::Tiff
+        ) {
             return Source::default();
         }
-        match dec.icc_profile() {
-            Ok(Some(icc)) => from_icc(&icc),
-            _ if format == Some(ImageFormat::Png) => png_chunks(bytes),
-            _ => Source::default(),
-        }
+        let icc = craft_image_codecs::embedded_icc(bytes).ok().flatten();
+        Source::from_decoded(bytes, icc.as_deref())
     }
 
     /// The colour space of `bytes` given the ICC profile returned by `craft-image-codecs`.
