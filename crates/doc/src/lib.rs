@@ -776,20 +776,27 @@ impl Document {
     /// children only within their mask). A group, or an unclipped frame past its box, is what its
     /// children show grown by its effects, which apply to all of it.
     pub fn world_render_bounds(&self, id: NodeId) -> Option<Rect> {
-        // A tree visits each node once; a child list deserialized with repeats (a graph) is cut off
-        // after twice the document's node count rather than walked in full.
-        self.render_bounds_at(id, 0, &std::cell::Cell::new(self.nodes.len().saturating_mul(2).saturating_add(8)))
+        self.world_render_bounds_with(id, &|n, world| n.own_paint_bounds(world))
     }
 
-    fn render_bounds_at(&self, id: NodeId, depth: usize, left: &std::cell::Cell<usize>) -> Option<Rect> {
+    /// [`Document::world_render_bounds`] with what each node paints itself (its children aside)
+    /// measured by `own` from the node and its world transform, for a caller that measures it more
+    /// closely than [`Node::own_paint_bounds`] (an export measures the stroke itself).
+    pub fn world_render_bounds_with(&self, id: NodeId, own: &dyn Fn(&Node, Affine) -> Rect) -> Option<Rect> {
+        // A tree visits each node once; a child list deserialized with repeats (a graph) is cut off
+        // after twice the document's node count rather than walked in full.
+        self.render_bounds_at(id, 0, &std::cell::Cell::new(self.nodes.len().saturating_mul(2).saturating_add(8)), own)
+    }
+
+    fn render_bounds_at(&self, id: NodeId, depth: usize, left: &std::cell::Cell<usize>, own_paint: &dyn Fn(&Node, Affine) -> Rect) -> Option<Rect> {
         let n = self.node(id)?;
-        let own = n.own_paint_bounds(self.world_transform(id));
+        let own = own_paint(n, self.world_transform(id));
         let visit = left.get();
         left.set(visit.saturating_sub(1));
         if (n.clip && n.kind.is_frame_like() && !n.kind.bounds_follow_children()) || depth >= MAX_RENDER_DEPTH || visit == 0 {
             return Some(own);
         }
-        Some(match (self.children_render_bounds(n, depth + 1, left), &n.kind) {
+        Some(match (self.children_render_bounds(n, depth + 1, left, own_paint), &n.kind) {
             (Some(kids), NodeKind::Group) => n.grow_by_effects(kids),
             // An unclipped frame's effects apply to its children too, past its box included.
             (Some(kids), _) => own.union(n.grow_by_effects(kids)),
@@ -798,15 +805,24 @@ impl Document {
     }
 
     /// What `n`'s visible children show, together: each mask's run within the mask's bounds.
-    fn children_render_bounds(&self, n: &Node, depth: usize, left: &std::cell::Cell<usize>) -> Option<Rect> {
+    fn children_render_bounds(
+        &self,
+        n: &Node,
+        depth: usize,
+        left: &std::cell::Cell<usize>,
+        own_paint: &dyn Fn(&Node, Affine) -> Rect,
+    ) -> Option<Rect> {
         let shown = |i: &NodeId| self.node(*i).is_some_and(|c| c.visible && !c.is_mask);
         let mut out: Option<Rect> = None;
         for run in self.paint_runs(n) {
             let ids = n.children.get(run).unwrap_or(&[]);
             let mask = ids.first().copied().filter(|m| self.node(*m).is_some_and(|c| c.is_mask && c.visible));
-            let r = ids.iter().filter(|i| shown(i)).filter_map(|i| self.render_bounds_at(*i, depth, left)).reduce(|a, b| a.union(b));
+            let r = ids.iter().filter(|i| shown(i)).filter_map(|i| self.render_bounds_at(*i, depth, left, own_paint)).reduce(|a, b| a.union(b));
             let r = match mask {
-                Some(m) => r.zip(self.render_bounds_at(m, depth, left)).map(|(a, b)| a.intersect(b)).filter(|x| x.width() > 0.0 && x.height() > 0.0),
+                Some(m) => r
+                    .zip(self.render_bounds_at(m, depth, left, own_paint))
+                    .map(|(a, b)| a.intersect(b))
+                    .filter(|x| x.width() > 0.0 && x.height() > 0.0),
                 None => r,
             };
             out = match (out, r) {
