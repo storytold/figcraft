@@ -178,7 +178,14 @@ fn code(doc: &Document, id: NodeId) -> Vec<Value> {
         .filter_map(|l| {
             let lang = CodeLang::from_id(&l.language)?;
             let snippet = code_connect::connected_code(doc, id, lang, l)?;
-            Some(json!({"language": l.language, "importPath": l.import_path, "name": l.name, "code": snippet}))
+            // The snippet already holds the template and the values it maps.
+            let mut v = code_connect::link_fields(l);
+            if let Some(o) = v.as_object_mut() {
+                o.remove("template");
+                o.remove("values");
+            }
+            v["code"] = json!(snippet);
+            Some(v)
         })
         .collect()
 }
@@ -355,7 +362,7 @@ fn components_json(doc: &Document, ids: &BTreeSet<NodeId>) -> Value {
             v["description"] = json!(description);
         }
         if !n.code_links.is_empty() {
-            v["codeLinks"] = camel(serde_json::to_value(&n.code_links).unwrap_or(Value::Null));
+            v["codeLinks"] = json!(n.code_links.iter().map(code_connect::link_fields).collect::<Vec<_>>());
         }
         out.insert(id.to_string(), v);
     }
