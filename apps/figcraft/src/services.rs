@@ -357,9 +357,12 @@ fn open_directory(file: &std::fs::File) -> Result<(), String> {
 const STATE: &str = "state.json";
 
 /// Everything quitting keeps, all done when it returns (macOS then ends the process): the
-/// preferences in `dir`, this run's recovery copies ([`Recovery::quit`](crate::recovery::Recovery::quit))
+/// preferences in `dir` with the files open now, which the next start reopens, and where each was
+/// left, this run's recovery copies ([`Recovery::quit`](crate::recovery::Recovery::quit))
 /// and the live sessions' ends (one this app hosts tells everyone and stops; a joined one leaves).
 pub fn shutdown(app: &mut FigApp, dir: Option<&Path>, recovery: Option<crate::recovery::Recovery>) {
+    app.session.remember_open_files();
+    app.session.remember_views();
     if let Some(dir) = dir {
         write_prefs(dir, &app.session.prefs);
     }
