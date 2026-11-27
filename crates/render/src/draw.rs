@@ -276,7 +276,7 @@ pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
 /// at the stroke's outer edge (a light fringe on an inside stroke) nor leaves a gap at its inner
 /// edge (what is behind showing between an outside stroke and the fill) (#2635). `None`: fill
 /// `path` as it is.
-fn fill_to_stroke_middle(n: &Node, path: &BezPath, rule: FillRule) -> Option<(Arc<BezPath>, FillRule)> {
+pub(crate) fn fill_to_stroke_middle(n: &Node, path: &BezPath, rule: FillRule) -> Option<(Arc<BezPath>, FillRule)> {
     let props = &n.stroke;
     let opaque = n
         .strokes
@@ -865,7 +865,7 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         let cover = shadow::hiding_cover(ctx.doc, n);
         for e in n.effects.iter().filter(|e| e.visible) {
             if let EffectKind::DropShadow(s) = &e.kind
-                && let Some((sh, at)) = shadow::outline_drop_shadow(outlines, cover.as_deref().unwrap_or(outlines), s, xf, ctx.scale, (pw, ph))
+                && let Some((sh, at)) = shadow::outline_drop_shadow(outlines, cover.as_deref().unwrap_or(outlines), s, xf, ctx.scale, (pw, ph), op)
             {
                 composite(pix, at, &sh, op, s.blend);
             }
