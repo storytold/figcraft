@@ -342,6 +342,8 @@ mod eyedropper_create_tests;
 #[cfg(test)]
 mod eyedropper_image_tests;
 #[cfg(test)]
+mod eyedropper_stroke_tests;
+#[cfg(test)]
 mod facilitate_tests;
 #[cfg(test)]
 mod fig_export_assets_tests;
@@ -492,6 +494,8 @@ mod panels_behaviour_tests;
 #[cfg(test)]
 mod paste_missing_image_tests;
 #[cfg(test)]
+mod paste_over_tests;
+#[cfg(test)]
 mod paste_sibling_tests;
 #[cfg(test)]
 mod path_read_caps_tests;
@@ -576,6 +580,8 @@ mod scaled_instance_tests;
 #[cfg(test)]
 mod section_contents_tests;
 #[cfg(test)]
+mod section_marquee_tests;
+#[cfg(test)]
 mod section_tests;
 #[cfg(test)]
 mod select_area_tests;
@@ -591,6 +597,8 @@ mod shapebuilder_strokes_tests;
 mod shapebuilder_tests;
 #[cfg(test)]
 mod shapes_behaviour_tests;
+#[cfg(test)]
+mod shift_double_click_tests;
 #[cfg(test)]
 mod shortcut_parity_tests;
 #[cfg(test)]
@@ -629,6 +637,8 @@ mod text_metrics_local_tests;
 mod text_motion_tests;
 #[cfg(test)]
 mod text_style_picker_tests;
+#[cfg(test)]
+mod text_tab_tests;
 #[cfg(test)]
 mod text_tail_tests;
 #[cfg(test)]

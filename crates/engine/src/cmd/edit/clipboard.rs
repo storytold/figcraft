@@ -422,14 +422,16 @@ fn copied_variants_set(doc: &Document, copied: &[(NodeId, Vec<Node>)]) -> Option
     sets.all(|set| set == Some(first)).then_some(first)
 }
 
+/// Paste over selection (Shift+Cmd/Ctrl+V): the copies go into the parent of the selected layer
+/// [`last_seen`] picks, just above it, at the place it gives.
 pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
     let sel = s.selection();
     let page = s.page()?;
     let doc = s.doc()?;
-    let (parent, at, above) = match sel.first() {
-        Some(i) => {
-            let parent = doc.node(*i).and_then(|n| n.parent).unwrap_or(page);
-            (parent, doc.world_bounds(*i).map(|b| (b.x0, b.y0)), doc.index_in_parent(*i).map(|ix| ix + 1))
+    let (parent, at, above) = match last_seen(doc, &sel) {
+        Some((i, at)) => {
+            let parent = doc.node(i).and_then(|n| n.parent).unwrap_or(page);
+            (parent, at, doc.index_in_parent(i).map(|ix| ix + 1))
         }
         None => (page, None, None),
     };
@@ -437,6 +439,38 @@ pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
     move_above(s, &ids, parent, above)?;
     s.set_selection(ids.clone());
     Ok(json!({"ids": ids}))
+}
+
+/// The selected layer Paste over selection pastes after, and where the copies' top-left goes.
+///
+/// One layer: that layer, at its position. Several in one auto layout frame's flow (none absolutely
+/// positioned): the last of them in the flow, which the layout follows. Several elsewhere: the lowest (then rightmost), with the copies
+/// below it, as far below as it is from the selected layers above it. A selection with nothing above
+/// its lowest layer is a row: the copies go right of the rightmost, as far as it is from its
+/// neighbour on the left. Layers that overlap every way get the copies right under the lowest.
+fn last_seen(doc: &Document, sel: &[NodeId]) -> Option<(NodeId, Option<(f64, f64)>)> {
+    let first = *sel.first()?;
+    let top_left = |i: NodeId| doc.world_bounds(i).map(|b| (b.x0, b.y0));
+    if sel.len() == 1 {
+        return Some((first, top_left(first)));
+    }
+    let parent = doc.node(first).and_then(|n| n.parent);
+    let one_flow = parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+        && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.parent == parent && !n.child_layout.absolute));
+    if one_flow {
+        let last = sel.iter().copied().max_by_key(|i| doc.index_in_parent(*i))?;
+        return Some((last, top_left(last)));
+    }
+    let boxes: Vec<(NodeId, figcraft_geom::Rect)> = sel.iter().filter_map(|i| Some((*i, doc.world_bounds(*i)?))).collect();
+    let (lowest, low) = *boxes.iter().max_by(|(_, a), (_, b)| a.y1.total_cmp(&b.y1).then(a.x1.total_cmp(&b.x1)))?;
+    if let Some(above) = boxes.iter().filter(|(_, o)| o.y1 <= low.y0).map(|(_, o)| o.y1).max_by(f64::total_cmp) {
+        return Some((lowest, Some((low.x0, low.y1 + (low.y0 - above)))));
+    }
+    let (rightmost, right) = *boxes.iter().max_by(|(_, a), (_, b)| a.x1.total_cmp(&b.x1).then(a.y1.total_cmp(&b.y1)))?;
+    match boxes.iter().filter(|(_, o)| o.x1 <= right.x0).map(|(_, o)| o.x1).max_by(f64::total_cmp) {
+        Some(left) => Some((rightmost, Some((right.x1 + (right.x0 - left), right.y0)))),
+        None => Some((lowest, Some((low.x0, low.y1)))),
+    }
 }
 
 pub(super) fn paste_replace(s: &mut Session, p: &Value) -> Result<Value> {
