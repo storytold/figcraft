@@ -154,7 +154,7 @@ pub(super) fn cut_selection(s: &mut Session, sel: EditSelection) -> Result<Value
     }
     let cut = sel.parts.len();
     let segments = copy_parts(s, "edit.cut", &sel)?;
-    vectoredit::delete_selection(s, sel.delete, false)?;
+    vectoredit::delete_selection(s, sel.delete, false, false)?;
     Ok(json!({"cut": cut, "segments": segments}))
 }
 

@@ -119,6 +119,9 @@ pub struct DocState {
     /// Where each page's view was left in this session (its centre and zoom; see
     /// [`Self::open_page`]; not saved).
     page_views: BTreeMap<NodeId, (f64, f64, f64)>,
+    /// The canvas fits the page's content when it first gets its size. Off when the view was
+    /// restored from where the file was left ([`Session::restore_view`]).
+    pub fit_when_sized: bool,
 }
 
 /// A version shown on the canvas in place of the document: read-only until it's restored or the
@@ -184,6 +187,7 @@ impl DocState {
             images_left_in_file: None,
             on_disk: None,
             page_views: BTreeMap::new(),
+            fit_when_sized: true,
         };
         st.zoom_to_fit();
         st
@@ -328,6 +332,29 @@ impl DocState {
         self.page = page;
         match self.page_views.get(&page) {
             Some(&(cx, cy, zoom)) => (self.view.cx, self.view.cy, self.view.zoom) = (cx, cy, zoom),
+            None => self.zoom_to_fit(),
+        }
+    }
+
+    /// Each page's view as left: the one shown now at its current view, the others shown in this
+    /// session at theirs.
+    pub(crate) fn page_views(&self) -> impl Iterator<Item = (NodeId, (f64, f64, f64))> + '_ {
+        let shown = (self.page, (self.view.cx, self.view.cy, self.view.zoom));
+        self.page_views.iter().filter(|(p, _)| **p != self.page).map(|(p, v)| (*p, *v)).chain(std::iter::once(shown))
+    }
+
+    /// Take `views` as where their pages were left, and show `page` (or the page shown now) at
+    /// its view. With one, the canvas keeps it instead of fitting the page when it gets its size.
+    pub(crate) fn show_views(&mut self, page: Option<NodeId>, views: impl IntoIterator<Item = (NodeId, (f64, f64, f64))>) {
+        self.page_views.extend(views);
+        if let Some(page) = page {
+            self.page = page;
+        }
+        match self.page_views.get(&self.page) {
+            Some(&(cx, cy, zoom)) => {
+                (self.view.cx, self.view.cy, self.view.zoom) = (cx, cy, zoom);
+                self.fit_when_sized = false;
+            }
             None => self.zoom_to_fit(),
         }
     }

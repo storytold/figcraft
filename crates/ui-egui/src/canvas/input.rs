@@ -1,4 +1,4 @@
-use super::{FigApp, Point, PointerEvent, PointerKind, Pos2, Rect, Ui, json, pointer_event};
+use super::{FigApp, Point, PointerKind, Pos2, Rect, Ui, json, pointer_event};
 
 /// What a hover was found in: the event (where, the modifiers, the zoom) and what decides what it
 /// hits (the file and page, their revision, the selection, the tool and modes). The same again finds
@@ -134,7 +134,9 @@ fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui:
             refused = true;
             continue;
         }
-        let pt = hover_pos.map(|h| app.to_page(h)).unwrap_or_default();
+        // macOS reports no pointer while a file is dragged in from another app, so a quick drop
+        // comes with no position: the file then lands in the middle of the view, not at 0, 0.
+        let pt = app.to_page(hover_pos.unwrap_or_else(|| app.canvas.rect.center()));
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped.png".into());
         let (command, mut params) = match well.take() {
             Some(params) => ("image.replace", params),
@@ -189,6 +191,28 @@ fn pan_view(app: &mut FigApp, ctx: &egui::Context, pos: Pos2, mods: &egui::Modif
     }
 }
 
+/// A press on the canvas takes the keyboard from a panel field before the panels draw, so the
+/// field commits to the layers it was edited for. Drawn after the panels, the press would first
+/// select another layer, and the field would commit to that one (or into the move the press
+/// starts, which an unmoved release puts back).
+pub(crate) fn release_fields_for_press(ctx: &egui::Context) {
+    let Some(canvas) = crate::a11y::canvas_id(ctx).and_then(|id| ctx.read_response(id)) else { return };
+    let press = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+            _ => None,
+        })
+    });
+    let on_canvas = press.is_some_and(|p| canvas.rect.contains(p) && ctx.layer_id_at(p) == Some(canvas.layer_id));
+    if on_canvas && crate::a11y::field_focused(ctx) {
+        ctx.memory_mut(|m| {
+            if let Some(f) = m.focused() {
+                m.surrender_focus(f);
+            }
+        });
+    }
+}
+
 /// The pointer and keys on the canvas. False when something on it with a cursor of its own has
 /// the pointer (a comment pin, a ruler guide, a gradient or padding handle): the tool's cursor
 /// then doesn't show.
@@ -208,7 +232,6 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     });
     let (wheel, zoom_delta) = wheel_zoom(app, &ctx, zoom_delta, mods.shift);
     let scroll = wheel + pan;
-    deliver_deferred_down(app, &ctx);
     let editing_text = app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false);
     let typing_elsewhere = crate::a11y::field_focused(&ctx);
     app.canvas.space_pan = space && !editing_text && !typing_elsewhere;
@@ -298,6 +321,9 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         open_context_menu(app, pos, mods.command);
         return true;
     }
+    if crop_mode_multi_click(app, resp, pos, &mods) {
+        return true;
+    }
     // A third quick click is counted as a triple, not a double (a click elsewhere in between still
     // leaves its time in the sequence): it means the same here — edit, enter, open — unless a
     // vector or text is being edited, where a triple already has its own meaning. A triple on
@@ -327,8 +353,41 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     let primary_pressed = ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
     let primary_down = ctx.input(|i| i.pointer.primary_down());
     let primary_released = ctx.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
-    let (press_pos, release_pos) = pointer_press_release_positions(&ctx);
-    let kind = primary_pointer_kind(app, &ctx, resp, pos, mods, press_pos, release_pos, primary_pressed, primary_down, primary_released);
+    // The press and the release carry their own positions: both in one frame (a quick click or a
+    // slow frame) would otherwise send the press from the hover position the pointer ended at.
+    let (press_pos, release_pos) = ctx.input(|i| {
+        let (mut press, mut release) = (None, None);
+        for e in &i.events {
+            if let egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } = e {
+                if *pressed {
+                    press = Some(*pos);
+                } else {
+                    release = Some(*pos);
+                }
+            }
+        }
+        (press, release)
+    });
+    let kind = if primary_pressed && resp.hovered() {
+        app.canvas.dragging = true;
+        app.ui.context_menu = None;
+        app.ui.tool_flyout = None;
+        Some(PointerKind::Down)
+    } else if app.canvas.dragging && primary_released {
+        app.canvas.dragging = false;
+        Some(PointerKind::Up)
+    } else if app.canvas.dragging && primary_down {
+        Some(PointerKind::Move)
+    } else if resp.hovered() {
+        app.canvas.hovering = true;
+        Some(PointerKind::Hover)
+    } else {
+        // Something over the canvas took the pointer.
+        if std::mem::take(&mut app.canvas.hovering) {
+            left(app);
+        }
+        None
+    };
     // Pen pressure comes with touch events (a pen on Windows, a stylus in a browser); a mouse,
     // macOS and Linux tablets report none and draw at the stroke weight.
     let force = ctx.input(|i| {
@@ -365,112 +424,6 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     }
 }
 
-/// Decide the primary pointer event kind (Down, Up, Move, Hover, or deferred).
-fn primary_pointer_kind(
-    app: &mut FigApp,
-    ctx: &egui::Context,
-    resp: &egui::Response,
-    pos: Pos2,
-    mods: egui::Modifiers,
-    press_pos: Option<Pos2>,
-    release_pos: Option<Pos2>,
-    primary_pressed: bool,
-    primary_down: bool,
-    primary_released: bool,
-) -> Option<PointerKind> {
-    if primary_pressed && resp.hovered() {
-        app.canvas.dragging = true;
-        app.ui.context_menu = None;
-        app.ui.tool_flyout = None;
-        // Clicking the canvas takes focus from panel fields.
-        let had_field_focus = ctx.memory(|m| m.focused()).is_some();
-        ctx.memory_mut(|m| {
-            if let Some(f) = m.focused() {
-                m.surrender_focus(f);
-            }
-        });
-        if had_field_focus {
-            if let Ok(ds) = app.session.ds() {
-                let press_screen = press_pos.unwrap_or(pos);
-                let press_page = app.to_page(press_screen);
-                let release_screen = release_pos.unwrap_or(pos);
-                let release_page = app.to_page(release_screen);
-                app.canvas.deferred_down = Some(crate::canvas::DeferredDown {
-                    doc_uid: ds.uid,
-                    page: ds.page,
-                    page_pos: press_page,
-                    screen_pos: press_screen,
-                    released: primary_released,
-                    release_page_pos: release_page,
-                    release_screen_pos: release_screen,
-                    mods,
-                });
-            }
-            ctx.request_repaint();
-            None
-        } else {
-            Some(PointerKind::Down)
-        }
-    } else if app.canvas.dragging && primary_released {
-        app.canvas.dragging = false;
-        Some(PointerKind::Up)
-    } else if app.canvas.dragging && primary_down {
-        Some(PointerKind::Move)
-    } else if resp.hovered() {
-        app.canvas.hovering = true;
-        Some(PointerKind::Hover)
-    } else {
-        // Something over the canvas took the pointer.
-        if std::mem::take(&mut app.canvas.hovering) {
-            left(app);
-        }
-        None
-    }
-}
-
-/// Send a pointer down/up sequence deferred from the previous frame to let a focused field blur and commit.
-fn deliver_deferred_down(app: &mut FigApp, ctx: &egui::Context) {
-    let Some(deferred) = app.canvas.deferred_down.take() else {
-        return;
-    };
-    let Ok(ds) = app.session.ds() else {
-        app.canvas.dragging = false;
-        return;
-    };
-    if ds.uid != deferred.doc_uid || ds.page != deferred.page {
-        app.canvas.dragging = false;
-        return;
-    }
-    let released_now = !ctx.input(|i| i.pointer.primary_down());
-    if deferred.released || released_now {
-        send_at_page(app, PointerKind::Down, deferred.page_pos, deferred.screen_pos, &deferred.mods);
-        app.canvas.dragging = false;
-        let up_page = if deferred.released { deferred.release_page_pos } else { deferred.page_pos };
-        let up_screen = if deferred.released { deferred.release_screen_pos } else { deferred.screen_pos };
-        send_at_page(app, PointerKind::Up, up_page, up_screen, &deferred.mods);
-    } else {
-        app.canvas.dragging = true;
-        send_at_page(app, PointerKind::Down, deferred.page_pos, deferred.screen_pos, &deferred.mods);
-    }
-}
-
-/// The press and release positions from raw pointer events in this batch.
-fn pointer_press_release_positions(ctx: &egui::Context) -> (Option<Pos2>, Option<Pos2>) {
-    ctx.input(|i| {
-        let (mut press, mut release) = (None, None);
-        for e in &i.events {
-            if let egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } = e {
-                if *pressed {
-                    press = Some(*pos);
-                } else {
-                    release = Some(*pos);
-                }
-            }
-        }
-        (press, release)
-    })
-}
-
 /// Pointer event `kind` at screen point `pos`, to the tools.
 /// A drag held past the edge pans toward it, the layer or box going with the pointer.
 fn pan_past_edge(app: &mut FigApp, ctx: &egui::Context, mods: &egui::Modifiers) {
@@ -482,30 +435,20 @@ fn pan_past_edge(app: &mut FigApp, ctx: &egui::Context, mods: &egui::Modifiers) 
     }
 }
 
+/// A double- or triple-click in crop mode stays in crop mode (it would edit the points), and is
+/// taken here. Its last press may have begun a resize on a side of the layer: its release ends that.
+fn crop_mode_multi_click(app: &mut FigApp, resp: &egui::Response, pos: Pos2, mods: &egui::Modifiers) -> bool {
+    if app.ui.crop.is_none() || !(resp.double_clicked() || resp.triple_clicked()) {
+        return false;
+    }
+    if std::mem::take(&mut app.canvas.dragging) {
+        send(app, PointerKind::Up, pos, mods);
+    }
+    true
+}
+
 fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
-    let page_pos = app.to_page(pos);
-    send_at_page(app, kind, page_pos, pos, m);
-}
-
-fn send_at_page(app: &mut FigApp, kind: PointerKind, page_pos: Point, screen_pos: Pos2, m: &egui::Modifiers) {
-    let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
-    let ev = PointerEvent {
-        kind,
-        x: page_pos.x,
-        y: page_pos.y,
-        sx: f64::from(screen_pos.x),
-        sy: f64::from(screen_pos.y),
-        shift: m.shift,
-        alt: m.alt,
-        cmd: m.command || app.ui.crop.is_some(),
-        ctrl: m.ctrl,
-        zoom,
-        pressure: app.canvas.pressure,
-    };
-    send_pointer_event(app, ev, kind);
-}
-
-fn send_pointer_event(app: &mut FigApp, ev: PointerEvent, kind: PointerKind) {
+    let ev = pointer_event(app, kind, pos, m);
     // A hover where nothing changed since the last one finds what that one found (the state is
     // taken after it ran: what it set, such as the hovered layer, is part of it).
     let hover = kind == PointerKind::Hover;
@@ -514,9 +457,6 @@ fn send_pointer_event(app: &mut FigApp, ev: PointerEvent, kind: PointerKind) {
     }
     if kind == PointerKind::Up {
         app.canvas.pressure = None;
-    }
-    if kind == PointerKind::Down {
-        app.canvas.last_down = Some(Point::new(ev.x, ev.y));
     }
     app.canvas.last_pointer = Some(Point::new(ev.x, ev.y));
     // A gesture something else committed under the held button (a colour picker closing on this

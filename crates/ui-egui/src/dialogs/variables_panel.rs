@@ -683,6 +683,7 @@ fn create_collection(app: &mut FigApp, vars: &Variables, st: &mut Editor) {
     {
         st.library = None;
         st.collection = Some(id.clone());
+        st.group = None;
         start_rename(st, Rename::Collection(id));
     }
 }
@@ -763,7 +764,7 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
     // Escape clears the selection (unless a field has the keyboard).
     if !st.selected.is_empty()
         && st.rename.is_none()
-        && !ui.ctx().egui_wants_keyboard_input()
+        && !crate::a11y::field_focused(ui.ctx())
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         st.selected.clear();
@@ -896,7 +897,11 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
     // An inherited variable is named (and deleted) in the collection it extends.
     let inherited = v.extends.is_some();
     if editable && st.rename.as_ref() == Some(&target) {
-        if let Some(name) = rename_field(ui, st, &target, &v.name, name_r, regular(11.0)) {
+        // The row shows the name's last part: the field edits that and keeps the group. A name of
+        // slashes and spaces alone is ignored, as the group would swallow it and drop the variable.
+        let (group, short) = v.name.rsplit_once('/').unwrap_or(("", &v.name));
+        if let Some(typed) = rename_field(ui, st, &target, short, name_r, regular(11.0)).filter(|n| n.split('/').any(|p| !p.trim().is_empty())) {
+            let name = if group.is_empty() { typed } else { format!("{group}/{typed}") };
             app.run("variable.update", json!({"variable": v.id, "name": name}));
         }
     } else {
@@ -1160,7 +1165,9 @@ fn create_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
                     VariableType::Boolean => tr_noop("Boolean"),
                 };
                 if menu_item(ui, tr(label), "") {
-                    let name = unique(label, |n| view.in_collection(&coll.id).any(|v| v.name == n));
+                    // Made in the group shown, so the table showing it lists it.
+                    let base = st.group.as_ref().map_or_else(|| label.to_string(), |g| format!("{g}/{label}"));
+                    let name = unique(&base, |n| view.in_collection(&coll.id).any(|v| v.name == n));
                     let params = json!({"collection": coll.id, "name": name, "type": kind.id()});
                     if let Some(id) = app.run("variable.create", params).and_then(|r| r["id"].as_str().map(str::to_string)) {
                         st.query.clear();

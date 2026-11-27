@@ -461,8 +461,29 @@ fn hidden_apple_families_take_public_names() {
     assert_eq!(public_family(".SF Compact").as_deref(), Some("SF Compact"));
     assert_eq!(public_family(".SF Compact Rounded").as_deref(), Some("SF Compact Rounded"));
     assert_eq!(public_family(".SF NS Rounded").as_deref(), Some("SF Pro Rounded"));
+    assert_eq!(public_family(".New York").as_deref(), Some("New York"));
     assert_eq!(public_family(".Keyboard"), None);
     assert_eq!(public_family("Inter").as_deref(), Some("Inter"));
+}
+
+#[test]
+fn new_york_is_found_under_its_public_name() {
+    // macOS installs New York as `.New York` (a dot keeps it out of font menus): it used to be
+    // skipped, so "New York" was a missing font. Only on a Mac that has the files.
+    let dir = std::path::Path::new("/System/Library/Fonts");
+    if !dir.join("NewYork.ttf").is_file() || !dir.join("NewYorkItalic.ttf").is_file() {
+        return;
+    }
+    let mut pending = BTreeMap::new();
+    scan_dir(dir, 0, &mut pending);
+    let mut db = FontDb { pending, ..FontDb::default() };
+    let families = db.families();
+    assert!(families.iter().any(|f| f == "New York"), "{families:?}");
+    assert!(families.iter().all(|f| !f.starts_with('.')), "dot names stay out of the list: {families:?}");
+    for (style, italic) in [("Regular", false), ("Italic", true)] {
+        let face = db.find("New York", style).expect("New York loads");
+        assert_eq!((face.family.as_str(), face.italic), ("New York", italic), "{style}");
+    }
 }
 
 /// A named style keeps its own optical size whatever the text size (existing documents render as
