@@ -675,6 +675,8 @@ mod boolean_radius_tests;
 #[cfg(test)]
 mod bounds_memo_tests;
 #[cfg(test)]
+mod clip_cover_tests;
+#[cfg(test)]
 mod dots_tests;
 #[cfg(test)]
 mod effect_order_tests;
@@ -728,6 +730,8 @@ mod rtl_list_tests;
 mod solo_tests;
 #[cfg(test)]
 mod spread_tests;
+#[cfg(test)]
+mod stroke_fringe_tests;
 #[cfg(test)]
 mod stroke_reach_tests;
 #[cfg(test)]
