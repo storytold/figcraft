@@ -68,9 +68,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// Props resolve an exact id first, then an unambiguous exact name or `Collection/name`. Compare
-/// whole names: both collection and variable names can contain `/`. Other commands keep their
-/// existing first-match lookup.
+/// Props, `variable.bind` and `variable.create` aliases resolve an exact id first, then an
+/// unambiguous exact name or `Collection/name`. Compare whole names: both collection and variable
+/// names can contain `/`. Other commands keep their existing first-match lookup.
 pub(crate) fn resolve_strict(cmd: &str, doc: &Document, name: &str) -> Result<VariableId> {
     let vars = &doc.variables;
     if let Some(v) = vars.variables.iter().find(|v| v.id == name) {
@@ -764,6 +764,8 @@ pub fn field_scope(doc: &Document, node: NodeId, field: &str) -> Option<&'static
         "characters" => "TEXT_CONTENT",
         "fontFamily" => "FONT_FAMILY",
         "fontStyle" => "FONT_STYLE",
+        // What shows behind a page's frames is filled like a frame.
+        "background" => "FRAME_FILL",
         f => match super::lists::list_binding(f)? {
             (BoundList::Strokes, _, _) => "STROKE_COLOR",
             (BoundList::Effects, _, "color") => "EFFECT_COLOR",
@@ -789,6 +791,11 @@ fn effect_field(doc: &Document, node: NodeId, i: usize, field: &str) -> Option<V
 /// `effects/<i>/<field>` when its effect `i` has that field (a drop shadow has no `refraction`),
 /// and an `effects…` key naming no effect's field (`effects/x/radius`, `effects/0`) has none.
 pub fn has_field(doc: &Document, node: NodeId, field: &str) -> bool {
+    // A page's background colour (#2343) is the only field a page binds, and only a page has it.
+    let page = doc.node(node).is_some_and(|n| matches!(n.kind, NodeKind::Page { .. }));
+    if field == "background" || page {
+        return field == "background" && page;
+    }
     match super::lists::list_binding(field) {
         Some((BoundList::Effects, i, f)) => effect_field(doc, node, i, f).is_some(),
         _ => field.split('/').next() != Some(BoundList::Effects.prefix()),

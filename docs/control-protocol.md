@@ -79,7 +79,10 @@ unknown id is an error.
 **Documents.** `engine.execute`, `document.inspect`, `node.get` and `ui.render` take an optional
 `document`: an open file's `id` (from `doc.list`, or `document.inspect`'s `id`) or its path. The
 request acts on that file without bringing its tab to the front; the tab in front comes back
-afterwards unless the command opened or switched to another file itself. A file that isn't open is
+afterwards unless the command explicitly opens or switches a file (`file.new`, `file.open`,
+`doc.switch`, `doc.nextTab`, `doc.previousTab`) or shows its prototype (`proto.present`,
+`proto.preview`). These commands keep the requested file in front even if it was already selected
+temporarily for this call; a failed command restores the previous tab. A file that isn't open is
 an error, and so is a `document` naming a file behind the tab in front on any other method
 (`ui.screenshot`, `ui.input`, `ui.key`… act on what the window shows). `doc.list` includes each file's
 `path` only when the call names no `agent`: an AI agent's calls (MCP sets `agent`) get ids and names.

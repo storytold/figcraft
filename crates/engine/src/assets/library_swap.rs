@@ -101,6 +101,36 @@ fn copies_of(doc: &Document, from: &str) -> Vec<(String, String)> {
     components.chain(styles).chain(variables).chain(collections).collect()
 }
 
+/// A layer's explicit modes after a swap: a mode of A's collection becomes B's mode of the same
+/// name (`colls`: A's collection → B's, and A's mode ids → B's), and stays as well while that
+/// collection still has a variable on A (`still_a`). A mode the layer already chose of B's
+/// collection wins over one moved from A's.
+fn move_modes(
+    old: BTreeMap<String, String>,
+    colls: &BTreeMap<String, (String, BTreeMap<String, String>)>,
+    still_a: &BTreeSet<String>,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut moved = Vec::new();
+    for (c, mode) in old {
+        match colls.get(&c).and_then(|(b, modes)| modes.get(&mode).map(|bm| (b.clone(), bm.clone()))) {
+            Some(to) => {
+                moved.push(to);
+                if still_a.contains(&c) {
+                    out.insert(c, mode);
+                }
+            }
+            None => {
+                out.insert(c, mode);
+            }
+        }
+    }
+    for (c, mode) in moved {
+        out.entry(c).or_insert(mode);
+    }
+    out
+}
+
 /// Swap the copies of library `from` in `doc` to library `to` by names (see the module docs).
 pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Result<Swapped> {
     let m = &to.manifest;
@@ -245,8 +275,19 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
         out.unmatched.push(format!("extended collection {}", c.name));
     }
 
-    // Re-point layers outside the library copies, and local variables aliasing A's.
-    let ids: Vec<NodeId> = doc.nodes().filter(|n| outside(doc, n.id)).map(|n| n.id).collect();
+    // Re-point the layers, and local variables aliasing A's. The library copies' own layers too:
+    // a copy B has no match for stays (A's, or another library's), and instances placed from it
+    // later must link what the ones re-pointed here link (#2568).
+    // A's collections that keep a variable on A (one B has no match for): a layer choosing a mode
+    // of one keeps that choice next to B's, so what still reads the A variable keeps its mode.
+    let still_a: BTreeSet<String> = doc
+        .libraries
+        .variables
+        .iter()
+        .filter(|r| r.library == from && !vars.contains_key(&r.local))
+        .filter_map(|r| doc.variables.get_by_id(&r.local).map(|v| v.collection.clone()))
+        .collect();
+    let ids: Vec<NodeId> = doc.nodes().map(|n| n.id).collect();
     for id in ids {
         let Ok(n) = doc.get_mut(id) else { continue };
         for r in [&mut n.styles.fill, &mut n.styles.stroke, &mut n.styles.effect, &mut n.styles.grid, &mut n.styles.text] {
@@ -262,13 +303,7 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
                 *v = b.clone();
             }
         }
-        n.var_modes = std::mem::take(&mut n.var_modes)
-            .into_iter()
-            .map(|(c, mode)| match colls.get(&c).and_then(|(b, modes)| modes.get(&mode).map(|bm| (b.clone(), bm.clone()))) {
-                Some(moved) => moved,
-                None => (c, mode),
-            })
-            .collect();
+        n.var_modes = move_modes(std::mem::take(&mut n.var_modes), &colls, &still_a);
     }
     for v in doc.variables.variables.iter_mut().filter(|v| !remote.contains(&v.id)) {
         for r in v.values.values_mut().flat_map(VariableValue::references_mut) {
