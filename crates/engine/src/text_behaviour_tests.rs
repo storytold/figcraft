@@ -350,10 +350,7 @@ fn a_fixed_size_text_keeps_the_height_it_is_created_with() {
     let mut base_style = style().as_object().unwrap().clone();
     for (mode, want) in [("none", TextAutoResize::None), ("truncate", TextAutoResize::Truncate)] {
         base_style.insert("textAutoResize".into(), json!(mode));
-        let t = create(
-            &mut s,
-            json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": Value::Object(base_style.clone())}),
-        );
+        let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": Value::Object(base_style.clone())}));
         assert_eq!(size(&s, t), (200.0, 100.0), "mode {mode}");
         assert_eq!(resize_mode(&s, t), want, "mode {mode} stays");
     }
