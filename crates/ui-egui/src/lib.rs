@@ -111,6 +111,8 @@ mod devmode_tail_tests;
 #[cfg(test)]
 mod display_name_tests;
 #[cfg(test)]
+mod drop_position_tests;
+#[cfg(test)]
 mod duplicate_paint_tests;
 #[cfg(test)]
 mod export_name_tests;

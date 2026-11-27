@@ -134,7 +134,9 @@ fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui:
             refused = true;
             continue;
         }
-        let pt = hover_pos.map(|h| app.to_page(h)).unwrap_or_default();
+        // macOS reports no pointer while a file is dragged in from another app, so a quick drop
+        // comes with no position: the file then lands in the middle of the view, not at 0, 0.
+        let pt = app.to_page(hover_pos.unwrap_or_else(|| app.canvas.rect.center()));
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped.png".into());
         let (command, mut params) = match well.take() {
             Some(params) => ("image.replace", params),
