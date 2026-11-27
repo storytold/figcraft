@@ -586,10 +586,16 @@ pub fn responsive_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: Nod
         ui.data_mut(|d| d.insert_temp(field, v.clone()));
         draft = v;
     }
-    // While the field has focus, what it holds is the rule. Only then: text it kept when the
-    // section went away mid-edit isn't shown, so it mustn't be what Add rule sends.
+    // While the field has focus, what it holds is the rule. Without focus, text it kept when the
+    // section went away mid-edit was never shown: it isn't sent, and it's dropped so the next
+    // edit starts from the draft the field shows.
     let focused = ui.memory(|m| m.has_focus(editor.with("te")));
-    let draft = if focused { ui.data(|d| d.get_temp::<String>(editor)).unwrap_or(draft) } else { draft };
+    let draft = if focused {
+        ui.data(|d| d.get_temp::<String>(editor)).unwrap_or(draft)
+    } else {
+        ui.data_mut(|d| d.remove_temp::<String>(editor));
+        draft
+    };
     row(ui, 32.0, |ui| {
         if widgets::button(ui, tr("Add rule"), false, !draft.trim().is_empty()).clicked() {
             add_rule(app, ui.ctx(), id, &draft);
@@ -618,9 +624,13 @@ pub(crate) fn rule_draft(app: &FigApp, id: NodeId) -> Id {
 
 /// Add `text` as a rule on `id`. The draft stays when the rule is refused, so nothing typed is lost.
 pub(crate) fn add_rule(app: &mut FigApp, ctx: &egui::Context, id: NodeId, text: &str) {
-    let field = rule_draft(app, id);
+    let (field, editor) = (rule_draft(app, id), rule_editor(app, id));
     if app.run("responsive.rule", json!({"id": id, "text": text})).is_some() {
-        ctx.data_mut(|d| d.remove_temp::<String>(field));
+        // Both: a field that kept focus (an assistive Click doesn't move it) would bring the rule back.
+        ctx.data_mut(|d| {
+            d.remove_temp::<String>(field);
+            d.remove_temp::<String>(editor);
+        });
     }
 }
 

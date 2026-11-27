@@ -279,6 +279,13 @@ fn a_typed_rule_stays_when_the_field_loses_focus() {
     assert_eq!(draft.as_deref(), Some("Cards stack"));
 }
 
+/// The text the field whose editor is `te` shows, as assistive technology reads it.
+fn shown(u: &mut crate::layers_drag_tests::Ui, te: egui::Id) -> String {
+    let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+    let field = nodes.into_iter().find(|(at, _)| *at == te.accesskit_id()).expect("the field").1;
+    field.value().unwrap_or_default().to_string()
+}
+
 /// `n` frames with no input.
 fn idle(u: &mut crate::layers_drag_tests::Ui, n: usize) {
     for _ in 0..n {
@@ -335,4 +342,39 @@ fn a_rule_left_typed_when_the_section_hid_isnt_added_unseen() {
     idle(&mut u, 2);
     let rules = u.app.session.doc().unwrap().node(f).unwrap().annotations.len();
     assert_eq!(rules, 0, "nothing the field doesn't show is added");
+    // Nor does it come back when the field is edited again.
+    u.ctx.memory_mut(|m| m.request_focus(te));
+    idle(&mut u, 2);
+    assert_eq!(shown(&mut u, te), "", "the field starts from what it showed");
+}
+
+#[test]
+fn a_rule_added_while_its_field_keeps_focus_is_added_once() {
+    let mut u = crate::layers_drag_tests::Ui::new(Session::new());
+    u.app.ui.right_tab = crate::RightTab::Inspect;
+    u.ctx.enable_accesskit();
+    let f = marked_frame(&mut u, "Home");
+    let te = crate::dev_mode::rule_editor(&u.app, f).with("te");
+    u.ctx.memory_mut(|m| m.request_focus(te));
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("Cards stack".into())]);
+    // An assistive Click activates the button without taking focus from the field.
+    let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+    let add = nodes.iter().find(|(_, n)| n.role() == Role::Button && n.label() == Some("Add rule")).expect("Add rule").0;
+    let activate = || {
+        Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+            action: egui::accesskit::Action::Click,
+            target_tree: egui::accesskit::TreeId::ROOT,
+            target_node: add,
+            data: None,
+        })
+    };
+    u.frame(vec![activate()]);
+    idle(&mut u, 2);
+    assert!(u.ctx.memory(|m| m.has_focus(te)), "the field kept focus");
+    assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().annotations.len(), 1);
+    assert_eq!(shown(&mut u, te), "", "the field clears once the rule is added");
+    u.frame(vec![activate()]);
+    idle(&mut u, 2);
+    assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().annotations.len(), 1, "a second activation adds nothing");
 }
