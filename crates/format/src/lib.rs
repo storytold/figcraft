@@ -559,6 +559,7 @@ pub fn load_bytes(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> 
 }
 
 /// Read a member from a foreign ZIP archive, refusing entries larger than `limit`.
+#[cfg(test)]
 pub(crate) fn read_member<R: Read + std::io::Seek>(z: &mut zip::ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
     let f = z.by_name(name).map_err(|e| FormatError::Corrupt(format!("{name}: {e}")))?;
     if f.size() > limit {

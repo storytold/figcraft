@@ -4,7 +4,6 @@
 //! card group, button instances and a grid of shapes and text). Every row is the mean of several
 //! runs; use a release build for meaningful numbers (`cargo xtask bench`).
 
-use std::process::ExitCode;
 use std::time::Instant;
 
 use figcraft_doc::geom::Point;
@@ -12,7 +11,7 @@ use figcraft_doc::{Document, NodeId, NodeKind};
 use figcraft_engine::{PointerEvent, PointerKind, Session, ViewState};
 use serde_json::json;
 
-use crate::{CliError, CliResult};
+use crate::{CliError, CliResult, Io};
 
 /// Canvas size of the measured viewport (a typical laptop window).
 const VIEW_W: u32 = 1440;
@@ -31,12 +30,17 @@ fn mean(n: usize, mut f: impl FnMut(usize)) -> f64 {
     ms(t) / n.max(1) as f64
 }
 
+/// The messages of the failed measured commands, written to stderr at the end.
+static FAILURES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 /// Set when a measured command fails (the numbers would be meaningless).
 static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn exec(s: &mut Session, id: &str, p: serde_json::Value) {
     if let Err(e) = s.execute(id, &p) {
-        eprintln!("{id}: {e}");
+        if let Ok(mut messages) = FAILURES.lock() {
+            messages.push(format!("{id}: {e}"));
+        }
         FAILED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -292,39 +296,43 @@ fn measure_boolean_drag(table: &mut Table, col: usize) {
 
 /// Time the hot paths for each document size in `sizes` (layers) and, with the synthetic design
 /// system, for each instance count in `instances`; print the tables.
-pub fn run(sizes: &[usize], instances: &[usize], system_fonts: bool) -> CliResult<ExitCode> {
+pub fn run(sizes: &[usize], instances: &[usize], system_fonts: bool, io: &mut Io) -> CliResult<i32> {
     // Text renders with system fonts too, like the desktop app; scanned up front, outside the timings.
     if system_fonts {
         figcraft_text::scan_system_fonts();
     }
     let mut table = Table { rows: Vec::new() };
     for (col, n) in sizes.iter().enumerate() {
-        eprintln!("measuring {n} layers…");
+        errln!(io, "measuring {n} layers…");
         measure(&mut table, col, *n)?;
     }
     let mut comps = Table { rows: Vec::new() };
     for (col, n) in instances.iter().enumerate() {
-        eprintln!("measuring components with {n} instances…");
+        errln!(io, "measuring components with {n} instances…");
         measure_components(&mut comps, col, *n)?;
     }
     if FAILED.load(std::sync::atomic::Ordering::Relaxed) {
+        for message in FAILURES.lock().map(|m| m.clone()).unwrap_or_default() {
+            errln!(io, "{message}");
+        }
         return Err(failed("a measured command failed"));
     }
-    println!(
+    outln!(
+        io,
         "figcraft perf ({} {}; ms unless noted; mean of several runs)",
         std::env::consts::OS,
         if cfg!(debug_assertions) { "debug build" } else { "release build" }
     );
-    print_table(&table, &sizes.iter().map(|n| format!("{n} layers")).collect::<Vec<_>>());
+    print_table(io, &table, &sizes.iter().map(|n| format!("{n} layers")).collect::<Vec<_>>());
     if !instances.is_empty() {
-        println!();
-        print_table(&comps, &instances.iter().map(|n| format!("{n} inst.")).collect::<Vec<_>>());
+        outln!(io);
+        print_table(io, &comps, &instances.iter().map(|n| format!("{n} inst.")).collect::<Vec<_>>());
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(0)
 }
 
 /// Print `table` as Markdown with one column per `heads`.
-fn print_table(table: &Table, heads: &[String]) {
+fn print_table(io: &mut Io, table: &Table, heads: &[String]) {
     let w = table.rows.iter().map(|r| r.0.chars().count()).max().unwrap_or(10);
     let mut head = format!("| {:<w$} |", "operation");
     let mut rule = format!("|{}|", "-".repeat(w + 2));
@@ -332,14 +340,14 @@ fn print_table(table: &Table, heads: &[String]) {
         head.push_str(&format!(" {h:>10} |"));
         rule.push_str(&format!("{}:|", "-".repeat(11)));
     }
-    println!("{head}");
-    println!("{rule}");
+    outln!(io, "{head}");
+    outln!(io, "{rule}");
     for (name, vals) in &table.rows {
         let mut line = format!("| {name:<w$} |");
         for v in vals {
             line.push_str(&format!(" {:>10} |", if v.is_finite() { format!("{v:.2}") } else { "-".into() }));
         }
-        println!("{line}");
+        outln!(io, "{line}");
     }
 }
 

@@ -67,8 +67,15 @@ echo "==> FigCraft $VERSION for FreeBSD $ARCH"
 
 # The release VM has 12 GB; full parallelism on the biggest crates runs it out of memory.
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
+# The man-and-completions example writes figcraft-cli's man pages and shell completions below. It
+# is built in its own cargo run: built with the binaries, its dev-dependencies' features would be
+# unified into them. It runs here, so a cross build builds it for the host.
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
 if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"} "${CARGO_PKGS[@]}")
+  if [[ "$HAS_CLI" = 1 ]]; then
+    (cd "$ROOT" && cargo build --release --locked --target "$HOST_TRIPLE" -p figcraft-cli --example man-and-completions)
+  fi
 fi
 WORK="$CARGO_TARGET_DIR/freebsd-package"
 STAGE="$WORK/$BASENAME"
@@ -87,6 +94,16 @@ if [[ "$DRY_RUN" = 1 ]]; then
     printf '#!/bin/sh\necho "%s %s (dry-run stub)"\n' "$b" "$VERSION" >"$BIN/$b"
     chmod 755 "$BIN/$b"
   done
+  # A stub of the example: it writes the files the real one does.
+  mkdir -p "$BIN/examples"
+  cat >"$BIN/examples/man-and-completions" <<'STUB'
+#!/bin/sh
+mkdir -p "$1"
+for f in figcraft-cli.bash _figcraft-cli figcraft-cli.fish figcraft-cli.elv _figcraft-cli.ps1 figcraft-cli.1 figcraft-cli-info.1; do
+  echo "dry-run stub" >"$1/$f"
+done
+STUB
+  chmod 755 "$BIN/examples/man-and-completions"
 fi
 
 # ---- stage a /usr/local-style tree --------------------------------------------------------------
@@ -108,10 +125,31 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$FIGCRAFT_BUILD_DATE/g" \
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/share/icons/"
 copy_docs "$STAGE/share/doc/figcraft"
 if [[ -f "$ROOT/ATTRIBUTION.md" ]]; then install -m 644 "$ROOT/ATTRIBUTION.md" "$STAGE/share/doc/figcraft/"; fi
+# figcraft-cli's man pages and shell completions, from its clap definition, written by the example
+# built above (a --skip-build run needs it built too). Under /usr/local, man pages go in man/ and
+# the completions in the directories bash, zsh and fish read there.
+CLI_FILES=()
+if [[ "$HAS_CLI" = 1 ]]; then
+  CLI_DOCS="$CARGO_TARGET_DIR/$HOST_TRIPLE/release/examples/man-and-completions"
+  [[ "$DRY_RUN" = 0 ]] || CLI_DOCS="$BIN/examples/man-and-completions"
+  if [[ ! -x "$CLI_DOCS" ]]; then
+    echo "error: $CLI_DOCS is not built (cargo build --release --target $HOST_TRIPLE -p figcraft-cli --example man-and-completions)" >&2
+    exit 1
+  fi
+  "$CLI_DOCS" "$WORK/cli-docs"
+  mkdir -p "$STAGE/man/man1" "$STAGE/share/bash-completion/completions" \
+    "$STAGE/share/zsh/site-functions" "$STAGE/share/fish/vendor_completions.d"
+  install -m 644 "$WORK"/cli-docs/*.1 "$STAGE/man/man1/"
+  install -m 644 "$WORK/cli-docs/figcraft-cli.bash" "$STAGE/share/bash-completion/completions/figcraft-cli"
+  install -m 644 "$WORK/cli-docs/_figcraft-cli" "$STAGE/share/zsh/site-functions/_figcraft-cli"
+  install -m 644 "$WORK/cli-docs/figcraft-cli.fish" "$STAGE/share/fish/vendor_completions.d/figcraft-cli.fish"
+  CLI_FILES=(man/man1/figcraft-cli.1 share/bash-completion/completions/figcraft-cli share/zsh/site-functions/_figcraft-cli
+    share/fish/vendor_completions.d/figcraft-cli.fish)
+fi
 
 for f in "${BINS[@]/#/bin/}" "share/applications/$APP_ID.desktop" \
   "share/icons/hicolor/256x256/apps/$APP_ID.png" \
-  share/doc/figcraft/LICENSE-MIT share/doc/figcraft/LICENSE-APACHE; do
+  share/doc/figcraft/LICENSE-MIT share/doc/figcraft/LICENSE-APACHE "${CLI_FILES[@]}"; do
   if [[ ! -e "$STAGE/$f" ]]; then echo "error: $f is missing from the package" >&2; exit 1; fi
 done
 
