@@ -371,7 +371,8 @@ Hours in this narrative are the builders' estimates; the tables above supersede 
    Instance swap properties have preferred values (offered first). Alt-drop from the Assets panel
    onto an instance swaps it (same-set instance preferred, highlighted while dragging); instances
    pasted into other files follow their mains (library copies shared, published components used
-   from their library, other mains left behind as a restorable missing main). The Assets panel lays
+   from their library, other mains left behind as a restorable missing main), and a main pasted
+   from its library file is an instance of it from that library. The Assets panel lays
    out only the tiles in view and renders thumbnails as they show (cached, re-rendered only for
    changed components). A behaviour suite from the public documentation checks overrides (what an
    instance takes, what it refuses: geometry, constraints and resizing of its layers, its auto

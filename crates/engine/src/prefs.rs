@@ -122,6 +122,9 @@ pub struct Prefs {
     /// files opened or made later start with them. Missing: the toggle's default.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub view: BTreeMap<String, bool>,
+    /// Design review ignores, by document path: whole rule ids and `rule@layer` entries.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub design_review_ignored: BTreeMap<String, Vec<String>>,
     /// The board canvas's background grid (`board.grid`).
     #[serde(deserialize_with = "crate::board_grid::read")]
     pub board_grid: crate::board_grid::BoardGrid,
@@ -178,6 +181,7 @@ impl Default for Prefs {
             home_sort: "modified".into(),
             home_order: "desc".into(),
             view: BTreeMap::new(),
+            design_review_ignored: BTreeMap::new(),
             board_grid: Default::default(),
             recent_actions: Vec::new(),
             team_libraries: Vec::new(),
@@ -213,6 +217,9 @@ pub struct Clipboard {
     pub images: std::collections::BTreeMap<String, figcraft_doc::ImageData>,
     /// Copied properties (Copy properties / Paste properties).
     pub props: Option<Value>,
+    /// The file the copied properties came from: their style and variable ids name its styles and
+    /// variables, and in another file the same ids can name unrelated ones.
+    pub props_source_doc: u64,
     /// A copied fill or stroke row (`fill.copy`, `stroke.copy`): whether it's a fill, and the paint.
     pub paint: Option<(bool, figcraft_color::Paint)>,
     /// The stroke settings (`weight`, alignment, sides…) copied with a stroke's paint.

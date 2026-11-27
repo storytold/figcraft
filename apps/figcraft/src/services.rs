@@ -538,6 +538,12 @@ impl Services for Desktop {
         Some((w, h, img.bytes.into_owned()))
     }
     #[cfg(target_os = "macos")]
+    fn clipboard_image_file(&mut self) -> Option<PathBuf> {
+        let files = self.clipboard.as_mut()?.get().file_list().ok()?;
+        let [path] = files.as_slice() else { return None };
+        image::ImageFormat::from_path(path).ok()?.reading_enabled().then(|| path.clone())
+    }
+    #[cfg(target_os = "macos")]
     fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
         let board = objc2_app_kit::NSPasteboard::generalPasteboard();
         let png = board.dataForType(&objc2_foundation::NSString::from_str(MACOS_PASTEBOARD_PNG))?;

@@ -21,7 +21,7 @@ mod drag_sprite;
 mod input;
 pub(crate) use input::release_fields_for_press;
 mod outline;
-mod overlays;
+pub(crate) mod overlays;
 mod render;
 mod rulers;
 
@@ -350,7 +350,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         Some((rect, _)) => crate::drop_overlay(&ctx, rect, tr("Drop to use this image")),
         None => crate::drop_overlay(&ctx, ctx.content_rect(), label),
     }
-    crate::guides::end_released(&ctx);
+    crate::guides::end_released(app, &ctx);
     crate::live::track_pointer(app, &ctx);
     app.sync_preedit();
     // Retained rendering snaps the view outward and adds one pixel on each axis.
