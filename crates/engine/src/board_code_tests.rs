@@ -3,7 +3,7 @@
 
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{
-    BoardItem, CODE_FONT, CODE_MAX_CHARS, CodeLanguage, EffectKind, FileKind, LayoutMode, LineHeight, ListStyle, NodeId, NodeKind, Sizing,
+    BoardItem, CODE_FONT, CODE_MAX_CHARS, CodeLanguage, CodeToken, EffectKind, FileKind, LayoutMode, LineHeight, ListStyle, NodeId, NodeKind, Sizing,
     TextAlignH, TextAutoResize, TextCase, TextData, TextDecoration,
 };
 use figcraft_geom::Rect;
@@ -440,6 +440,52 @@ fn lists_links_and_styled_ranges_do_not_stick() {
         NodeKind::Text(d) => assert_eq!(d.style.link.as_deref(), Some("https://example.com")),
         other => panic!("not text: {other:?}"),
     }
+}
+
+#[test]
+fn keywords_strings_numbers_and_comments_take_their_colours() {
+    // Step 3: the text is coloured as its language writes it, through its runs' fills, so the
+    // canvas and every export show it.
+    let mut s = board();
+    let (f, t) = block(
+        &mut s,
+        json!({"x": 0, "y": 0, "text": "const n = 1; // one
+let s = \"two\";"}),
+    );
+    let fill_at = |s: &Session, word: &str| {
+        let d = td(s, f);
+        let i = d.characters.find(word).map(|b| d.characters[..b].chars().count()).unwrap_or_else(|| panic!("no {word:?}"));
+        d.style_at(i).fills.clone()
+    };
+    let colour = |t: CodeToken| Some(vec![Paint::solid(t.color())]);
+    for (word, token) in [
+        ("const", CodeToken::Keyword),
+        ("let", CodeToken::Keyword),
+        ("1", CodeToken::Number),
+        ("// one", CodeToken::Comment),
+        ("\"two\"", CodeToken::String),
+    ] {
+        assert_eq!(fill_at(&s, word), colour(token), "{word}");
+    }
+    assert_eq!(fill_at(&s, "n ="), None, "a name keeps the text's own colour");
+    assert!(td(&s, f).runs.iter().all(|r| r.style.font_family == CODE_FONT), "the runs keep the code font");
+
+    // A second pass over the coloured block changes nothing.
+    let doc = s.doc().unwrap().clone();
+    let mut again = doc.clone();
+    again.mark_dirty(doc.ids().collect::<Vec<_>>());
+    crate::normalize(&mut again, &doc);
+    assert_eq!(again, doc);
+
+    // Plain text colours nothing; back in TypeScript, an edit is coloured again.
+    s.execute("board.setLanguage", &json!({"id": f, "language": "plainText"})).unwrap();
+    assert!(td(&s, f).runs.is_empty());
+    s.execute("board.setLanguage", &json!({"id": f, "language": "typescript"})).unwrap();
+    s.execute("text.set", &json!({"id": t, "characters": "return 2"})).unwrap();
+    assert_eq!((fill_at(&s, "return"), fill_at(&s, "2")), (colour(CodeToken::Keyword), colour(CodeToken::Number)));
+    // The same word is a keyword in one language and a name in another.
+    s.execute("board.setLanguage", &json!({"id": f, "language": "sql"})).unwrap();
+    assert_eq!(fill_at(&s, "return"), None);
 }
 
 #[test]
