@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use figcraft_color::Paint;
 use figcraft_doc::{
     AutoLayout, BoardItem, CODE_FONT, CODE_FONT_SIZE, CODE_GAP, CODE_MAX_CHARS, CODE_MAX_W, CODE_MIN_H, CODE_MIN_W, CODE_PAD, CODE_PANEL,
-    CODE_RADIUS, CODE_TEXT, CODE_WIDTH, CodeLanguage, Document, LayoutMode, LineHeight, ListStyle, NodeId, NodeKind, ParaList, Sizing, TextAlignH,
-    TextAutoResize, TextCase, TextData, TextDecoration,
+    CODE_RADIUS, CODE_TEXT, CODE_WIDTH, CodeLanguage, Document, LayoutMode, LineHeight, ListStyle, NodeId, NodeKind, ParaList, Sizing, StyleRun,
+    TextAlignH, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, code_tokens,
 };
 use serde_json::{Value, json};
 
@@ -165,9 +165,27 @@ pub(super) fn next_block(s: &mut Session, from: NodeId, language: CodeLanguage, 
     Ok(json!({"id": frame, "text": label, "language": language.id()}))
 }
 
-/// Whether `td` is already plain code: no list, indent, spacing, link, decoration, case change or
-/// hand-made run, and a height that follows its lines.
-fn is_plain(td: &TextData) -> bool {
+/// The runs that colour `td`'s keywords, strings, numbers and comments as `language` writes them:
+/// its own style with the token's fill, touching runs of one colour merged.
+fn highlight(td: &TextData, language: CodeLanguage) -> Vec<StyleRun> {
+    let mut runs: Vec<StyleRun> = Vec::new();
+    for (start, end, token) in code_tokens(language, &td.characters) {
+        let fills = Some(vec![Paint::solid(token.color())]);
+        // A run like the text's own style would be dropped as no run at all.
+        if fills == td.style.fills {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(last) if last.end == start && last.style.fills == fills => last.end = end,
+            _ => runs.push(StyleRun { start, end, style: TextStyle { fills, ..td.style.clone() } }),
+        }
+    }
+    runs
+}
+
+/// Whether `td` is already plain code, coloured as `language`: no list, indent, spacing, link,
+/// decoration, case change or hand-made run, and a height that follows its lines.
+fn is_plain(td: &TextData, language: CodeLanguage) -> bool {
     td.auto_resize == TextAutoResize::Height
         && td.list == ListStyle::None
         && td.paragraphs == plain_paragraphs(&td.paragraphs)
@@ -178,7 +196,7 @@ fn is_plain(td: &TextData) -> bool {
         && td.style.decoration == TextDecoration::None
         && td.style.decoration_look.is_none()
         && td.style.case == TextCase::Original
-        && td.runs.is_empty()
+        && td.runs == highlight(td, language)
 }
 
 /// `paragraphs` with no list, level or counting offset (the direction stays); empty when that
@@ -188,7 +206,7 @@ fn plain_paragraphs(paragraphs: &[ParaList]) -> Vec<ParaList> {
     if v.iter().all(|p| *p == ParaList::default()) { Vec::new() } else { v }
 }
 
-fn make_plain(td: &mut TextData) {
+fn make_plain(td: &mut TextData, language: CodeLanguage) {
     td.auto_resize = TextAutoResize::Height;
     td.list = ListStyle::None;
     td.paragraphs = plain_paragraphs(&td.paragraphs);
@@ -199,7 +217,7 @@ fn make_plain(td: &mut TextData) {
     td.style.decoration = TextDecoration::None;
     td.style.decoration_look = None;
     td.style.case = TextCase::Original;
-    td.runs.clear();
+    td.runs = highlight(td, language);
 }
 
 /// In the normalize pass, before text is measured and layout runs: every code block an edit
@@ -238,10 +256,11 @@ pub(crate) fn settle_code(doc: &mut Document, touched: &BTreeSet<NodeId>) {
         {
             n.child_layout.sizing_v = Sizing::Hug;
         }
+        let Some(BoardItem::CodeBlock { language }) = doc.node(b).and_then(|n| n.board.clone()) else { continue };
         let Some(t) = text_of(doc, b) else { continue };
         let Some(node) = doc.node(t) else { continue };
         let off = match &node.kind {
-            NodeKind::Text(td) => !is_plain(td),
+            NodeKind::Text(td) => !is_plain(td, language),
             _ => continue,
         };
         let fill_off = node.child_layout.sizing_h != Sizing::Fill;
@@ -253,7 +272,7 @@ pub(crate) fn settle_code(doc: &mut Document, touched: &BTreeSet<NodeId>) {
                 n.child_layout.sizing_h = Sizing::Fill;
             }
             if off && let NodeKind::Text(td) = &mut n.kind {
-                make_plain(td);
+                make_plain(td, language);
             }
         }
     }

@@ -321,6 +321,9 @@ Or in a project's `.mcp.json`:
   `textDecorationOffset` (`auto`, px, or `"10%"` of the font size; the offset runs from the baseline
   down to an underline's top edge), `textDecorationSkipInk` (underlines break around descenders) and
   `textDecorationColor` (a colour, or `auto` for the text's) are character props too.
+  `textPosition` (`none`, `superscript`, `subscript`) is one as well, so `text.style` with
+  `start`/`end` raises or lowers only those chars; it wins over the layer's `sups` / `subs`
+  features, which move onto the chars the first time a position is set.
 - **Wrap style** (`auto`, `balance`, `pretty`) works at three levels: `wrapStyle` on `node.set`
   sets the layer (every paragraph); with `start`/`end` it sets the paragraphs those chars touch,
   and a paragraph's own style beats the layer's. `text.wrapStyle` sets the selected paragraphs while
