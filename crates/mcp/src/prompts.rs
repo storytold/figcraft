@@ -117,6 +117,32 @@ pub const PROMPTS: &[PromptDef] = &[
 4. Stop after {minutes} minutes; summarize the threads you fixed and the ones still open (and why)."#,
         defaults: &[("minutes", "5")],
     },
+    PromptDef {
+        name: "implement_design",
+        title: "Implement the selected design",
+        description: "Build the design selected in FigCraft in this codebase from its stated values, real assets and connected components, then check the result against the design.",
+        args: &[PromptArg {
+            name: "destination",
+            description: "Where it goes in the code, e.g. a route or a component (default: ask if it isn't clear)",
+            required: false,
+        }],
+        template: r#"Implement the design selected in FigCraft in this codebase. Destination: {destination}.
+
+Paths you pass are absolute, or relative to where the FigCraft MCP server runs, which may not be this project; they must be inside its automation roots when it has them.
+
+1. Read the design with design_context {}. Check `target` first: if its `source` is `page`, nothing was selected and you have the whole page, so ask the designer which frame to build unless the whole page is meant. Where the tree stops, a layer has `childCount` instead of `children`; if the result has `truncated`, call design_context again with the `ids` of the parts you need.
+2. Learn the project before writing code: its components, styling, tokens and where files go.
+3. Reuse code that exists. A layer with `code` is connected to a code component: write its `code` snippet with its `importPath`, follow its `notes`, and don't build its children. component_mappings {"unmapped": true} lists the design's components with no code component yet: search the project for each before creating one. If the project has a figcraft.connect.json with mappings component_mappings doesn't show, ask the designer before running sync_mappings {"direction": "import"}: it changes the design (one undo step).
+4. Use tokens over literal values. A layer's `tokens` name the variables and shared styles it uses: for a variable, use its `codeSyntax` from `variables` when it has one, else the project's matching token; for a style, the project's style of that `name`. Fall back to the resolved value only when the project has neither.
+5. Treat `explicit` values as the specification. `derived` values are what layout worked out at this size: build the layout that produces them with the platform's own layout (flex or grid on the web, stacks natively), filling and hugging as the design does, instead of hard-coding them.
+6. Bring in the real assets: export_assets {"ids": <the ids in target>, "dir": "<the project's asset folder>"} writes them as files and lists each one. Use those files, never screenshots or redrawn stand-ins. An asset whose `source` is `rendered` isn't the original image, each entry in its `adjustments` still has to be applied in code, and `skipped` says what couldn't be handed over. If the result has `truncated`, call export_assets again with the `ids` of the parts it left out. Fonts aren't exported: `fonts` lists them, and the project has to provide each one and check its licence.
+7. For each `unsupported` entry, get as close as the platform allows and list it in your report. Never drop one silently.
+8. Read what the design leaves open: `missing`, and the designer's annotations from run_command {"command": "annotation.list", "params": {"page": <the id of the page in document>}}, keeping those whose `id` is a layer in the tree: the rest belong to other designs. Don't invent behaviour the design doesn't state: ask, or report what you assumed.
+9. For other screen sizes, follow `responsive`: its `versions` group the designs of one screen at each size, and its `rules` are the designer's instructions. Read the other sizes' `frames` with design_context {"ids": [...]} before building them. When its `explicit` is false the file states no breakpoints: keep to what constraints, sizing and annotations say, and say so instead of inventing breakpoints.
+10. If a browser tool is available and the app runs, check the result. Size the browser to the frame's width and height in CSS pixels, capture the page to a file inside the project, and call compare_design {"id": <the frame's id>, "image": "<the capture>"}, one frame at a time; each result repeats the size as `viewport`. Fix the layers in `differences` and repeat. An empty list means no layer differs on 2% or more of its pixels, not that every pixel matches. Delete the captures afterwards. Without a browser tool, say the result wasn't checked against the design.
+11. Finish with a report: the files you changed, the components you reused and created, what you approximated, what you assumed, what the design left missing, and whether the result was compared with the design."#,
+        defaults: &[("destination", "ask if it isn't clear")],
+    },
 ];
 
 pub fn list() -> Value {

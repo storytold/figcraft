@@ -56,7 +56,7 @@ with severities; design.fix repairs the fixable ones as one undo step; design.ru
 presets; design.configure {preset, grid, radii, brand, disabled} sets the file's design system, and \
 design.assert {failOn, minScore} is a read-only CI gate. \
 Resources: figcraft://document, figcraft://node/{id}, figcraft://command/{id}, figcraft://comments. \
-prompts/list has workflows, including fix_comments and design_review.";
+prompts/list has workflows, including fix_comments, design_review and implement_design (build the selected design in a codebase).";
 
 /// An MCP server bound to one backend.
 pub struct Server {

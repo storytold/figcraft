@@ -219,7 +219,10 @@ fn prompts_list_and_get() {
     let mut c = Client::new();
     let r = c.rpc("prompts/list", json!({}));
     let names: Vec<&str> = r["result"]["prompts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["mobile_screen", "design_system", "landing_page", "design_review", "prototype_flow", "fix_comments", "watch_comments"]);
+    assert_eq!(
+        names,
+        ["mobile_screen", "design_system", "landing_page", "design_review", "prototype_flow", "fix_comments", "watch_comments", "implement_design"]
+    );
     let r = c.rpc("prompts/get", json!({"name": "mobile_screen", "arguments": {"screen": "login"}}));
     let text = r["result"]["messages"][0]["content"]["text"].as_str().unwrap();
     assert!(text.contains("login") && text.contains("iPhone 16") && text.contains("#3B5BDB") && !text.contains("{device}"));
