@@ -413,24 +413,25 @@ fn selection_overlay(
         // Mode: no handles either.
         // Crop mode draws its own marks on the box instead (`handles::crop_marks`).
         let cropping = app.ui.crop.is_some();
+        // A code block keeps only its width: handles on its left and right edges instead of corners.
+        let width_only = figcraft_engine::board::is_one_code_block(doc, sel);
         let handles = if cropping || measuring || app.session.tool.dev_mode || connector.is_some() || geo.locked {
             0
         } else if is_line {
             2
-        } else if tiny {
+        } else if tiny || width_only {
             0
         } else {
             4
         };
-        size_label = transform_box(
-            app,
-            painter,
-            b.map(|p| app.to_screen(p.x, p.y)),
-            col,
-            sel.len() > 1,
-            handles,
-            (!measuring && connector.is_none()).then_some(label),
-        );
+        let q = b.map(|p| app.to_screen(p.x, p.y));
+        size_label = transform_box(app, painter, q, col, sel.len() > 1, handles, (!measuring && connector.is_none()).then_some(label));
+        if width_only && !(cropping || measuring || app.session.tool.dev_mode || geo.locked) {
+            // Edges run top, right, bottom, left from the corners tl, tr, br, bl.
+            for (a, c) in [(q[1], q[2]), (q[3], q[0])] {
+                edge_handle(painter, a, c, col);
+            }
+        }
         // Its path handles, one for each portion that can be dragged.
         let paths = if app.session.tool.dev_mode { Vec::new() } else { figcraft_engine::board::selected_connector_handles(doc, sel, zoom) };
         for (_, at) in paths {
@@ -585,6 +586,14 @@ fn transform_box(
         return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
     }
     None
+}
+
+/// A handle on the middle of the box edge from `a` to `b` on screen: a white bar along it.
+fn edge_handle(painter: &egui::Painter, a: Pos2, b: Pos2, col: Color32) {
+    let along = (b - a).normalized();
+    let (u, n) = (along * 9.0, along.rot90() * 3.0);
+    let c = a + (b - a) / 2.0;
+    painter.add(Shape::convex_polygon(vec![c - u - n, c + u - n, c + u + n, c - u + n], Color32::WHITE, stroke(col, 1.0)));
 }
 
 /// Blue dashed guides showing how a selected layer is pinned within its parent frame, and a short

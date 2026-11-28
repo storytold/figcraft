@@ -40,10 +40,10 @@ fn pill(u: &Ui) -> Rect {
 }
 
 /// The left edge of board toolbar group `i` (button 32 wide, a 16-wide caret 2 after it on the
-/// groups with flyouts, 8 between): move, ink, sticky, shapes, connector, text, section, stamp,
-/// comment.
+/// groups with flyouts, 8 between): move, ink, sticky, shapes, connector, text and code, section,
+/// stamp, comment.
 fn group_x(u: &Ui, i: usize) -> f32 {
-    const WIDTHS: [f32; 9] = [58.0, 58.0, 58.0, 58.0, 40.0, 40.0, 40.0, 58.0, 40.0];
+    const WIDTHS: [f32; 9] = [58.0, 58.0, 58.0, 58.0, 40.0, 58.0, 40.0, 58.0, 40.0];
     pill(u).min.x + 8.0 + WIDTHS.iter().take(i).sum::<f32>()
 }
 
@@ -642,4 +642,58 @@ fn a_selected_sticky_has_a_size_menu_instead_of_the_size_cells() {
     u.frame(vec![]);
     let shapes = flat(&u.frame_output(vec![]).shapes);
     assert!(has_text(&shapes, "Large") && !has_text(&shapes, "Small"), "the menu reads Large");
+}
+
+fn code_language(u: &Ui, block: NodeId) -> Option<figcraft_doc::CodeLanguage> {
+    match u.app.session.doc().unwrap().node(block)?.board {
+        Some(BoardItem::CodeBlock { language }) => Some(language),
+        _ => None,
+    }
+}
+
+#[test]
+fn the_text_flyout_and_the_backtick_key_choose_the_code_block_tool_a_click_places_and_types_in() {
+    let mut u = board();
+    let caret = pos2(group_x(&u, 5) + 42.0, pill(&u).center().y);
+    click(&mut u, caret);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    click(&mut u, text_center(&shapes, "Code block"));
+    assert_eq!(u.app.session.tool.tool, ToolId::CodeBlock);
+    assert!(u.app.ui.tool_flyout.is_none(), "the flyout closed");
+    u.app.run("tool.set", json!({"tool": "move"}));
+    press(&mut u, Key::Backtick, Modifiers::NONE);
+    assert_eq!(u.app.session.tool.tool, ToolId::CodeBlock);
+    let at = u.app.canvas.rect.center();
+    let p = u.app.to_page(at);
+    click(&mut u, at);
+    let block = typing_in(&u).expect("typing in the new block");
+    let b = u.app.session.doc().unwrap().world_bounds(block).unwrap();
+    assert!((b.center().x - p.x).abs() < 0.01 && (b.center().y - p.y).abs() < 0.01, "{b:?} round {p:?}");
+    assert_eq!(code_language(&u, block), Some(figcraft_doc::CodeLanguage::Typescript));
+    u.frame(vec![Event::Text("let a = 1;".into())]);
+    assert_eq!(text_of_node(&u, block), "let a = 1;");
+    assert_eq!(u.app.session.tool.tool, ToolId::Move);
+}
+
+#[test]
+fn a_selected_code_block_has_a_language_menu() {
+    let mut u = board();
+    let block = id(&u.app.session.execute("board.codeBlock", &json!({"x": 0, "y": 0, "text": "x = 1"})).unwrap());
+    select(&mut u, &[block]);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "TypeScript"), "the menu reads TypeScript");
+    let b = bar(&u).expect("the bar shows");
+    click(&mut u, pos2(b.min.x + 8.0 + 50.0, b.center().y));
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    for name in ["✓ TypeScript", "    Bash", "    Plain text", "    Python"] {
+        assert!(has_text(&shapes, name), "{name:?} in the menu");
+    }
+    click(&mut u, text_center(&shapes, "    Python"));
+    assert_eq!(code_language(&u, block), Some(figcraft_doc::CodeLanguage::Python));
+    u.frame(vec![]);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "Python") && !has_text(&shapes, "TypeScript"), "the menu reads Python");
+    // Undo puts the language back.
+    u.app.run("edit.undo", json!({}));
+    assert_eq!(code_language(&u, block), Some(figcraft_doc::CodeLanguage::Typescript));
 }

@@ -357,10 +357,18 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     widgets::section_header(ui, tr("Page"), &[], false);
     // The new colour and, from a scrub, whether the scrub is over (live edits stay one undo step).
     let mut new_color: Option<(figcraft_color::Color, Option<bool>)> = None;
+    // The colour variable the background follows in the page's mode (#2343), as a fill shows one.
+    let bound = crate::variable_ui::bound_name(doc, &[page], "background");
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
+        let mut hex_area = None;
         let (sw, opacity) =
             widgets::paint_field(ui, Id::unique("pagebg_swatch"), Id::unique("pagebg_a"), &p, ui.available_width(), |child, text_r| {
+                if let Some(name) = &bound {
+                    crate::variable_ui::paint_chip(app, child, &[page], "background", name, text_r, Id::unique("pagebg_bound"));
+                    return;
+                }
+                hex_area = Some(text_r);
                 // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
                 // (`FF000080`; `FF0000FF` asks for opaque).
                 if let Some(h) = widgets::text_field_inline(child, Id::unique("pagebg"), &bg.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
@@ -371,6 +379,9 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
                     new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
                 }
             });
+        if let Some(area) = hex_area {
+            crate::variable_ui::bind_button(ui, area, &[page], "background", VariableType::Color);
+        }
         app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
         // The opacity: a field like every other opacity field, not a label (#1748).
         let alpha = |v: f64| bg.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);

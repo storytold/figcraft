@@ -54,3 +54,70 @@ fn a_selected_variants_dropdown_shows_and_sets_its_own_value() {
     assert_eq!(names, ["Looking=Top right, Size=S", "Looking=Down left, Size=L", "Looking=Top right, Size=L"]);
     assert_eq!(place(&u), before, "no variant moves");
 }
+
+#[test]
+fn a_long_variant_dropdown_scrolls_within_the_viewport() {
+    let mut s = Session::new();
+    let mut variants = Vec::new();
+    for k in 0..50 {
+        let name = format!("icon=v{k:02}");
+        let f = id(s.execute("frame.create", &json!({"x": 0, "y": 20 + k * 44, "width": 24, "height": 24, "name": name})).unwrap());
+        variants.push(id(s.execute("component.create", &json!({"ids": [f]})).unwrap()));
+    }
+    id(s.execute("component.combineVariants", &json!({"ids": variants})).unwrap());
+    let inst = id(s.execute("instance.create", &json!({"component": variants[0], "x": 120, "y": 20})).unwrap());
+    s.execute("select.set", &json!({"ids": [inst]})).unwrap();
+
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    let nodes = tree(&mut u);
+    let before: Vec<egui::LayerId> = u.ctx.memory(|m| m.layer_ids().collect());
+    let combo = nodes.iter().find(|n| n.role() == Role::ComboBox && n.value() == Some("v00")).expect("the icon variant dropdown");
+    click(&mut u, centre(combo));
+    // menu_popup measures its rows on frame 1 and enables scrolling on frame 2.
+    let mut nodes = tree(&mut u);
+    for _ in 0..3 {
+        nodes = tree(&mut u);
+    }
+
+    let menu = u
+        .ctx
+        .memory(|m| m.layer_ids().collect::<Vec<_>>())
+        .into_iter()
+        .filter(|l| l.order == egui::Order::Foreground && !before.contains(l))
+        .filter_map(|l| u.ctx.memory(|m| m.area_rect(l.id)))
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the variant dropdown menu is open");
+    let viewport = u.ctx.content_rect();
+    assert!(menu.top() >= viewport.top() && menu.bottom() <= viewport.bottom(), "menu {menu:?} stays inside viewport {viewport:?}");
+    assert!(menu.height() < viewport.height(), "50 variants are capped rather than overflowing: {menu:?}");
+
+    let v00 = nodes
+        .iter()
+        .find(|n| n.label() == Some("v00") && !matches!(n.role(), Role::ComboBox | Role::TextInput) && n.bounds().is_some())
+        .expect("v00 in the menu");
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, -5000.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    };
+    u.frame(vec![egui::Event::PointerMoved(centre(v00)), wheel]);
+    for _ in 0..30 {
+        nodes = tree(&mut u);
+    }
+
+    let v49 = nodes
+        .iter()
+        .find(|n| n.label() == Some("v49") && !matches!(n.role(), Role::ComboBox | Role::TextInput) && n.bounds().is_some())
+        .expect("v49 in the scrolled menu");
+    let v49_pos = centre(v49);
+    assert!(v49_pos.y >= viewport.top() && v49_pos.y <= viewport.bottom(), "v49 scrolled into viewport: {v49_pos:?}");
+    click(&mut u, v49_pos);
+    let doc = u.app.session.doc().unwrap();
+    let figcraft_doc::NodeKind::Instance { component, .. } = &doc.node(inst).unwrap().kind else {
+        panic!("expected instance");
+    };
+    assert_eq!(*component, variants[49], "picking the last variant from the scrolled menu switches the instance");
+}

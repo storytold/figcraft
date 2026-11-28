@@ -1107,7 +1107,24 @@ pub fn apply_bindings(doc: &mut Document) {
 
 /// [`apply_bindings`] for the layers `only` (every bound layer when `None`).
 pub fn apply_bindings_to(doc: &mut Document, only: Option<&std::collections::BTreeSet<NodeId>>) {
-    apply_bindings_matching(doc, only, |_| true);
+    apply_bindings_matching(doc, only, |field| field != "background");
+    apply_page_backgrounds(doc, only);
+}
+
+/// Pages whose background is bound to a colour variable (#2343) show its value in the page's own
+/// variable mode.
+fn apply_page_backgrounds(doc: &mut Document, only: Option<&std::collections::BTreeSet<NodeId>>) {
+    let bound: Vec<(NodeId, String)> = doc
+        .pages
+        .iter()
+        .filter(|p| only.is_none_or(|o| o.contains(p)))
+        .filter_map(|p| doc.node(*p)?.bound.get("background").map(|v| (*p, v.clone())))
+        .collect();
+    for (page, var) in bound {
+        if let Some(VariableValue::Color(c)) = doc.variables.resolve(&var, &doc.modes_for(page)) {
+            set_page_background(doc, page, c);
+        }
+    }
 }
 
 /// The layers `ids` before an explicit edit, for [`detach_edited`] (only those with bindings).
@@ -1451,6 +1468,17 @@ fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::B
         if !prop_sets.is_empty() {
             super::component::apply_prop_bindings(doc, id, &prop_sets);
         }
+    }
+}
+
+/// Set page `id`'s background to `c`, leaving the page untouched when it already shows it.
+fn set_page_background(doc: &mut Document, id: NodeId, c: Color) {
+    let shows = |doc: &Document| matches!(doc.node(id).map(|n| &n.kind), Some(NodeKind::Page { background, .. }) if *background == c);
+    if !shows(doc)
+        && let Ok(n) = doc.get_mut(id)
+        && let NodeKind::Page { background, .. } = &mut n.kind
+    {
+        *background = c;
     }
 }
 

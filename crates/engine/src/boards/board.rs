@@ -30,7 +30,7 @@ mod mindmap;
 mod reshape;
 mod tools;
 
-pub use code::is_code_text;
+pub use code::{is_code_text, is_one_code_block};
 pub(crate) use connectors::end_handle_at;
 pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
@@ -113,7 +113,7 @@ pub const INK_COLORS: [(&str, Color); 8] = [
 /// The stroke weights `tool.ink` takes.
 pub const INK_WEIGHTS: std::ops::RangeInclusive<f64> = 0.1..=100.0;
 /// How far the eraser reaches around the pointer (screen pixels).
-const ERASER_PX: f64 = 8.0;
+pub const ERASER_PX: f64 = 8.0;
 /// The text sizes the contextual bar offers.
 pub const TEXT_SIZES: [(&str, f64); 4] = [("S", 12.0), ("M", 16.0), ("L", 24.0), ("XL", 36.0)];
 /// The text sizes a sticky's menu offers (FigJam's, measured 2026-11-12): name and size.
@@ -273,6 +273,9 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             |s, _| board_tool(s, ToolId::MindMap)
         ),
+        spec!("tool.codeBlock", "Code block tool", "{} (a click places a code block centred there and starts typing in it)", false, |s, _| {
+            board_tool(s, ToolId::CodeBlock)
+        }),
         spec!("tool.shape", "Shapes", "{shape?} (a click places a shape with text)", false, |s, p| {
             if let Some(v) = string(p, "shape") {
                 s.tool.board.shape = shape_of("tool.shape", &v)?;

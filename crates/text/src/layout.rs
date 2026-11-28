@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use figcraft_doc::{
     DecorationLength, DecorationStyle, LeadingTrim, LetterSpacing, LineHeight, ListStyle, ParaList, TextAlignH, TextAutoResize, TextCase, TextData,
-    TextDecoration, TextDirection, TextStyle, WrapStyle, color::PaintKind, valid_feature_tag,
+    TextDecoration, TextDirection, TextPosition, TextStyle, WrapStyle, color::PaintKind, valid_feature_tag,
 };
 use figcraft_geom::{Affine, BezPath, Rect};
 use harfrust::{Direction, Feature, ShapeOptions, ShaperInstance, Tag, UnicodeBuffer, Variation};
@@ -1708,6 +1708,16 @@ fn shape_segment(chars: &[char], seg: &Segment, face: &Arc<Face>, features: &[Fe
     }
     let small_at = |src: usize| src.checked_sub(start).and_then(|i| small.get(i)).copied().unwrap_or(false);
     let mut feats: Vec<Feature> = features.to_vec();
+    // These chars' own position wins over the layer's `sups` / `subs` (#2338).
+    let run_script = match style.position {
+        TextPosition::None => None,
+        TextPosition::Superscript => Some(b"sups"),
+        TextPosition::Subscript => Some(b"subs"),
+    };
+    if let Some(tag) = run_script {
+        feats.retain(|f| f.tag != Tag::new(b"sups") && f.tag != Tag::new(b"subs"));
+        feats.push(Feature::new(Tag::new(tag), 1, ..));
+    }
     if native_smcp {
         feats.push(Feature::new(Tag::new(b"smcp"), 1, ..));
     }

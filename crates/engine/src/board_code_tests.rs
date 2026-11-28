@@ -3,7 +3,7 @@
 
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{
-    BoardItem, CODE_FONT, CODE_MAX_CHARS, CodeLanguage, EffectKind, FileKind, LayoutMode, LineHeight, ListStyle, NodeId, NodeKind, Sizing,
+    BoardItem, CODE_FONT, CODE_MAX_CHARS, CodeLanguage, CodeToken, EffectKind, FileKind, LayoutMode, LineHeight, ListStyle, NodeId, NodeKind, Sizing,
     TextAlignH, TextAutoResize, TextCase, TextData, TextDecoration,
 };
 use figcraft_geom::Rect;
@@ -163,11 +163,11 @@ fn only_the_width_is_the_users() {
     s.execute("node.set", &json!({"id": f, "props": {"width": 100}})).unwrap();
     assert_eq!((bx(&s, f).width(), bx(&s, t).width()), (210.0, 130.0));
 
-    // A pointer drag of the bottom-right handle.
+    // A pointer drag of the right edge's handle (a block has no corner handles).
     let mut s = board();
     let (f, _) = block(&mut s, json!({"x": 100, "y": 200}));
     let depth = s.undo_depth().0;
-    drag(&mut s, (676.0, 328.0), (876.0, 628.0));
+    drag(&mut s, (676.0, 264.0), (876.0, 564.0));
     let r = bx(&s, f);
     assert_eq!((r.x0, r.y0, r.width(), r.height()), (100.0, 200.0, 776.0, 128.0));
     assert_eq!(s.undo_depth().0, depth + 1);
@@ -183,6 +183,60 @@ fn only_the_width_is_the_users() {
     let now = lines(&s, t);
     assert!(now > was, "{now} > {was}");
     assert_eq!(bx(&s, f).height(), 32.0 + 24.0 * now as f64);
+}
+
+#[test]
+fn a_block_has_handles_on_its_left_and_right_edges_only() {
+    let mut s = board();
+    let (f, _) = block(&mut s, json!({"x": 100, "y": 200}));
+    let sel = [f];
+    let at = |s: &Session, x: f64, y: f64| crate::tools::handle_at(s.doc().unwrap(), &sel, figcraft_geom::Point::new(x, y), 1.0);
+    // The box runs 100..676 by 200..328.
+    assert_eq!(at(&s, 676.0, 264.0), Some(crate::tools::Handle::Edge(1)));
+    assert_eq!(at(&s, 100.0, 264.0), Some(crate::tools::Handle::Edge(3)));
+    for (x, y) in [(100.0, 200.0), (676.0, 200.0), (676.0, 328.0), (100.0, 328.0), (388.0, 200.0), (388.0, 328.0)] {
+        assert_eq!(at(&s, x, y), None, "no handle at {x}, {y}");
+    }
+    // Zoomed out to 10%, a press a screen pixel right of the right edge's middle is that edge's,
+    // although a corner (which a block has no handle on) is nearer than a corner's reach.
+    let far = crate::tools::handle_at(s.doc().unwrap(), &sel, figcraft_geom::Point::new(686.0, 264.0), 0.1);
+    assert_eq!(far, Some(crate::tools::Handle::Edge(1)));
+    // The left edge widens it leftwards; a drag from a corner or the bottom edge moves it whole.
+    drag(&mut s, (100.0, 264.0), (40.0, 300.0));
+    let r = bx(&s, f);
+    assert_eq!((r.x0, r.x1, r.y0, r.height()), (40.0, 676.0, 200.0, 128.0));
+    for corner in [true, false] {
+        let was = bx(&s, f);
+        let from = (if corner { was.x1 } else { was.center().x }, was.y1);
+        drag(&mut s, from, (from.0 + 50.0, from.1 + 70.0));
+        let r = bx(&s, f);
+        assert_eq!((r.width(), r.height()), (was.width(), was.height()), "a drag from {from:?} keeps the size");
+        assert!(r.x0 > was.x0 && r.y0 > was.y0, "and moves the block");
+    }
+    // A shape's box keeps its corners.
+    let r = s.execute("board.shape", &json!({"x": 100, "y": 600})).unwrap();
+    let b = bx(&s, id(&r, "id"));
+    assert!(matches!(crate::tools::handle_at(s.doc().unwrap(), &[id(&r, "id")], b.origin(), 1.0), Some(crate::tools::Handle::Corner(_))));
+}
+
+#[test]
+fn the_tool_places_a_block_centred_on_the_click_and_types_in_it() {
+    let mut s = board();
+    s.execute("tool.codeBlock", &json!({})).unwrap();
+    assert_eq!(s.tool.tool, crate::tools::ToolId::CodeBlock);
+    for kind in [PointerKind::Down, PointerKind::Up] {
+        s.pointer(&PointerEvent::at(kind, 500.0, 400.0, 1.0)).unwrap();
+    }
+    let doc = s.doc().unwrap();
+    let f = doc.nodes().find(|n| matches!(n.board, Some(BoardItem::CodeBlock { .. }))).map(|n| n.id).expect("a block was placed");
+    let c = bx(&s, f).center();
+    assert_eq!((c.x, c.y), (500.0, 400.0));
+    let editing = s.ds().unwrap().text_edit.as_ref().map(|te| te.id);
+    assert_eq!(editing, text_of(s.doc().unwrap(), f), "typing in it");
+    assert_eq!(s.tool.tool, crate::tools::ToolId::Move);
+    // Only on a board.
+    let mut d = Session::new();
+    assert!(d.execute("tool.codeBlock", &json!({})).is_err());
 }
 
 /// A block settled after `how` made it incoherent: still 5 lines tall, 576 wide, hugging, with
@@ -440,6 +494,52 @@ fn lists_links_and_styled_ranges_do_not_stick() {
         NodeKind::Text(d) => assert_eq!(d.style.link.as_deref(), Some("https://example.com")),
         other => panic!("not text: {other:?}"),
     }
+}
+
+#[test]
+fn keywords_strings_numbers_and_comments_take_their_colours() {
+    // Step 3: the text is coloured as its language writes it, through its runs' fills, so the
+    // canvas and every export show it.
+    let mut s = board();
+    let (f, t) = block(
+        &mut s,
+        json!({"x": 0, "y": 0, "text": "const n = 1; // one
+let s = \"two\";"}),
+    );
+    let fill_at = |s: &Session, word: &str| {
+        let d = td(s, f);
+        let i = d.characters.find(word).map(|b| d.characters[..b].chars().count()).unwrap_or_else(|| panic!("no {word:?}"));
+        d.style_at(i).fills.clone()
+    };
+    let colour = |t: CodeToken| Some(vec![Paint::solid(t.color())]);
+    for (word, token) in [
+        ("const", CodeToken::Keyword),
+        ("let", CodeToken::Keyword),
+        ("1", CodeToken::Number),
+        ("// one", CodeToken::Comment),
+        ("\"two\"", CodeToken::String),
+    ] {
+        assert_eq!(fill_at(&s, word), colour(token), "{word}");
+    }
+    assert_eq!(fill_at(&s, "n ="), None, "a name keeps the text's own colour");
+    assert!(td(&s, f).runs.iter().all(|r| r.style.font_family == CODE_FONT), "the runs keep the code font");
+
+    // A second pass over the coloured block changes nothing.
+    let doc = s.doc().unwrap().clone();
+    let mut again = doc.clone();
+    again.mark_dirty(doc.ids().collect::<Vec<_>>());
+    crate::normalize(&mut again, &doc);
+    assert_eq!(again, doc);
+
+    // Plain text colours nothing; back in TypeScript, an edit is coloured again.
+    s.execute("board.setLanguage", &json!({"id": f, "language": "plainText"})).unwrap();
+    assert!(td(&s, f).runs.is_empty());
+    s.execute("board.setLanguage", &json!({"id": f, "language": "typescript"})).unwrap();
+    s.execute("text.set", &json!({"id": t, "characters": "return 2"})).unwrap();
+    assert_eq!((fill_at(&s, "return"), fill_at(&s, "2")), (colour(CodeToken::Keyword), colour(CodeToken::Number)));
+    // The same word is a keyword in one language and a name in another.
+    s.execute("board.setLanguage", &json!({"id": f, "language": "sql"})).unwrap();
+    assert_eq!(fill_at(&s, "return"), None);
 }
 
 #[test]

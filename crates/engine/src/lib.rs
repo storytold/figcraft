@@ -479,6 +479,8 @@ mod open_issues_tests;
 #[cfg(test)]
 mod outline_options_tests;
 #[cfg(test)]
+mod page_background_variable_tests;
+#[cfg(test)]
 mod page_clipboard_tests;
 #[cfg(test)]
 mod page_copy_navigation_tests;

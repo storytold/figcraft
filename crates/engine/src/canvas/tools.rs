@@ -70,10 +70,11 @@ pub enum ToolId {
     Eraser,
     Stamp,
     MindMap,
+    CodeBlock,
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 28] = [
+    pub const ALL: [ToolId; 29] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -102,6 +103,7 @@ impl ToolId {
         ToolId::Eraser,
         ToolId::Stamp,
         ToolId::MindMap,
+        ToolId::CodeBlock,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -133,6 +135,7 @@ impl ToolId {
             ToolId::Eraser => "eraser",
             ToolId::Stamp => "stamp",
             ToolId::MindMap => "mindMap",
+            ToolId::CodeBlock => "codeBlock",
         }
     }
     /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
@@ -173,6 +176,7 @@ impl ToolId {
             ToolId::Eraser => "Eraser",
             ToolId::Stamp => "Stamp",
             ToolId::MindMap => "Mind map",
+            ToolId::CodeBlock => "Code block",
         }
     }
 
@@ -188,6 +192,7 @@ impl ToolId {
                 | ToolId::Eraser
                 | ToolId::Stamp
                 | ToolId::MindMap
+                | ToolId::CodeBlock
         )
     }
     /// The tool's key (from [`crate::keymap`]; empty when it has none).
@@ -295,6 +300,9 @@ pub enum Cursor {
     Pointer,
     Eyedropper,
     Comment,
+    /// The Pencil, Marker, Highlighter and Eraser: a round tip the canvas draws in the ink's colour
+    /// and width (`Session::ink_tip`).
+    Ink,
     /// What the gesture is doing will be undone when it ends (an edit only a main component can
     /// make).
     NotAllowed,
@@ -322,10 +330,11 @@ impl ToolId {
             ToolId::Pen => Cursor::Pen(PenCursor::New),
             ToolId::Comment => Cursor::Comment,
             ToolId::Eyedropper => Cursor::Eyedropper,
+            ToolId::Pencil | ToolId::Marker | ToolId::Highlighter | ToolId::Eraser => Cursor::Ink,
             // Text on a path acts only over a path, where it shows the I-beam.
             ToolId::Move | ToolId::Scale | ToolId::TextOnPath => Cursor::Default,
-            // The other tools make something where they are pressed: shapes, frames, slices, pencil
-            // strokes, a new text (over a text the Text tool shows the I-beam instead).
+            // The other tools make something where they are pressed: shapes, frames, slices, a new
+            // text (over a text the Text tool shows the I-beam instead).
             _ => Cursor::Crosshair,
         }
     }

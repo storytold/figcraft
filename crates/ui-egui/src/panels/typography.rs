@@ -210,7 +210,7 @@ pub(crate) fn field_row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui, f
 #[cfg(test)]
 mod variable_tests {
     use egui::{Event, Modifiers, PointerButton, Pos2, RawInput};
-    use figcraft_doc::WrapStyle;
+    use figcraft_doc::{TextPosition, WrapStyle};
     use figcraft_engine::Session;
 
     use super::*;
@@ -432,7 +432,8 @@ mod variable_tests {
 
     #[test]
     fn details_position_sets_superscript_subscript_or_neither() {
-        // #2338: Type settings ▸ Details ▸ Position, for the selected layer.
+        // #2338: Type settings ▸ Details ▸ Position, for the selected layer, then for the selected
+        // chars while editing.
         let mut p = settings_panel();
         // The tab is a clickable label: its text is the node's value.
         let tab = p.nodes.iter().find(|n| n.value() == Some("Details") || n.label() == Some("Details")).expect("the Details tab");
@@ -443,18 +444,30 @@ mod variable_tests {
             let toggled = |l: &str| p.nodes.iter().find(|n| n.label() == Some(l)).and_then(|n| n.toggled());
             ["None", "Superscript", "Subscript"].into_iter().filter(|l| toggled(l) == Some(egui::accesskit::Toggled::True)).collect::<Vec<_>>()
         };
-        let feats = |p: &Panel| {
-            let t = p.app.session.doc().unwrap().node(p.text).unwrap().kind.text().unwrap().features.clone();
-            (t.get("sups").copied(), t.get("subs").copied())
+        let positions = |p: &Panel| {
+            let t = p.app.session.doc().unwrap().node(p.text).unwrap().kind.text().unwrap().clone();
+            t.spans().into_iter().map(|(a, b, st)| (a, b, t.position_of(st))).collect::<Vec<_>>()
         };
         assert_eq!(on(&p), ["None"]);
-        for (label, want) in [("Superscript", (Some(true), None)), ("Subscript", (None, Some(true))), ("None", (None, None))] {
+        for (label, want) in [("Superscript", TextPosition::Superscript), ("Subscript", TextPosition::Subscript), ("None", TextPosition::None)] {
             let at = node_center(&p, label);
             p.click(at);
             p.frame(vec![]);
-            assert_eq!(feats(&p), want, "{label}");
+            assert_eq!(positions(&p), [(0, 7, want)], "{label}");
             assert_eq!(on(&p), [label]);
         }
+        // While editing, the selected chars ("two") and nothing else.
+        figcraft_engine::textedit::begin(&mut p.app.session, p.text, Some(4), false).unwrap();
+        figcraft_engine::textedit::set_caret(&mut p.app.session, 7, true).unwrap();
+        p.frame(vec![]);
+        let at = node_center(&p, "Superscript");
+        p.click(at);
+        assert_eq!(positions(&p), [(0, 4, TextPosition::None), (4, 7, TextPosition::Superscript)]);
+        assert_eq!(on(&p), ["Superscript"], "the control shows the selected chars' position");
+        figcraft_engine::textedit::set_caret(&mut p.app.session, 0, false).unwrap();
+        figcraft_engine::textedit::set_caret(&mut p.app.session, 7, true).unwrap();
+        p.frame(vec![]);
+        assert!(on(&p).is_empty(), "chars that differ: {:?}", on(&p));
         assert!(p.app.ui.last_error.is_none(), "{:?}", p.app.ui.last_error);
     }
 }
