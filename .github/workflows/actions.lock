@@ -24,7 +24,9 @@ workflows:
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
         - 'actions/checkout@v7.0.1'
         - 'step-security/harden-runner@v2.23.0'
-    '.github/workflows/release.yml': []
+    '.github/workflows/release.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'step-security/harden-runner@v2.23.0'
     '.github/workflows/sonarcloud.yml': []
     '.github/workflows/windows-arm64.yml': []
 dependencies:

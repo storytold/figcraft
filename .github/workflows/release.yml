@@ -29,8 +29,25 @@ jobs:
       contents: read
       pull-requests: read
     uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@main
+  # The DMG round trip with an ad-hoc signed fixture (#387): no signing secrets.
+  dmg-test:
+    name: macOS DMG integrity
+    runs-on: macos-15
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test signed fixture and installation copy
+        run: bash packaging/macos/dmg-test.sh
   release:
-    needs: credits
+    needs: [credits, dmg-test]
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
