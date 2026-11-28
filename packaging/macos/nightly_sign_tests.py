@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The macOS Nightly signing and verification scripts, run on any POSIX host against generated
 fixtures and stand-in Apple tools (codesign, notarytool, stapler, spctl, security, ditto, plutil,
-lipo) that log their arguments. This proves the scripts' order, refusals and cleanup; it is not a
-real signature, notarization or Mac run."""
+lipo) that log their arguments. The unsigned producer also runs with a stub GUI build. These
+check the scripts and bundle layout, not native signing, notarization or Mac execution."""
 import base64
 import importlib.util
 import json
@@ -26,6 +26,8 @@ COMMIT = "b" * 40
 VERSION = "0.18.1-nightly.20261124.4567.1.g" + COMMIT[:12]
 ASSET = f"figcraft-{VERSION}-macos-aarch64-nightly.zip"
 APP = "FigCraft Nightly.app"
+APP_NOTICES = ("README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md")
+OPTIONAL_NOTICES = ("LICENSE", "COPYRIGHT")
 TEAM = "ABCDE12345"
 IDENTITY = "0123456789ABCDEF0123456789ABCDEF01234567"
 SECRETS = {
@@ -181,6 +183,50 @@ class Fixture:
                 info.external_attr = (path.stat().st_mode & 0xFFFF) << 16
                 z.writestr(info, b"" if path.is_dir() else path.read_bytes())
         return self.input
+
+    def package(self, font_licences):
+        """Drive the real producer from a clean fixture checkout, without Cargo or Apple tools."""
+        source = HERE.parents[1]
+        checkout = self.root / "source"
+        checkout.mkdir()
+        notices = APP_NOTICES + tuple(name for name in OPTIONAL_NOTICES if (source / name).is_file())
+        for relative in (*notices, "packaging/env.sh", "packaging/nightly-common.sh", "packaging/nightly_paths.py",
+                         "packaging/macos/nightly.sh", "packaging/macos/nightly-lib.sh",
+                         "packaging/macos/Info.plist.in", "packaging/macos/nightly_plist.py",
+                         "assets/app-icon/figcraft-nightly.icns"):
+            target = checkout / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / relative, target)
+        env = self.env(**dict.fromkeys(SECRETS))
+
+        def git(*args):
+            return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", *args],
+                                  cwd=checkout, env=env, check=True, capture_output=True, text=True, timeout=30).stdout
+
+        git("init", "-q")
+        git("add", "--", ".")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Packaging fixture")
+        commit = git("rev-parse", "HEAD").strip()
+        version = VERSION[:-12] + commit[:12]
+        # Generated licence text exercises the copier without depending on a font checkout.
+        fonts = self.root / "craft-fonts"
+        for family, data in font_licences.items():
+            licence = fonts / "fonts" / family / "OFL.txt"
+            licence.parent.mkdir(parents=True)
+            licence.write_bytes(data)
+        # The existing cargo stub fails for every invocation. Only this producer fixture emits a GUI.
+        (self.bin / "cargo").write_text(
+            '#!/bin/sh\nset -eu\n'
+            'gui="$CARGO_TARGET_DIR/aarch64-apple-darwin/release/figcraft"\n'
+            'mkdir -p "$(dirname "$gui")"\n'
+            "printf \"#!/bin/sh\\necho 'FigCraft %s (nightly-v1)'\\n\" \"$FIGCRAFT_VERSION\" >\"$gui\"\n",
+        )
+        result = self.run(checkout / "packaging/macos/nightly.sh", "--arch", "aarch64", **dict.fromkeys(SECRETS),
+                          DIST=str(self.dist), CARGO_TARGET_DIR=str(self.root / "target"), CRAFT_FONTS_DIR=str(fonts),
+                          FIGCRAFT_BUILD_CHANNEL="nightly-v1", FIGCRAFT_VERSION=version,
+                          FIGCRAFT_BUILD_SHA=commit, FIGCRAFT_BUILD_DATE="2026-11-24")
+        assert result.returncode == 0, result.stdout
+        return self.dist / ASSET.replace(VERSION, version)
 
     def env(self, **changes):
         env = {"PATH": f"{self.bin}:{os.environ['PATH']}", "HOME": str(self.root), "SHIM_LOG": str(self.log),
@@ -438,6 +484,40 @@ class Verify(unittest.TestCase):
 
 
 class Build(unittest.TestCase):
+    def test_unsigned_archive_has_launcher_layout_and_keeps_all_notices(self):
+        f = Fixture(self)
+        fonts = {"fixture-one": b"generated font notice one", "fixture-two": b"generated font notice two"}
+        archive = f.package(fonts)
+        source = HERE.parents[1]
+        resources = f"{APP}/Contents/Resources"
+        icon = "figcraft-nightly.icns"
+        notice_files = {name: (source / name).read_bytes() for name in APP_NOTICES}
+        notice_files.update({name: (source / name).read_bytes() for name in OPTIONAL_NOTICES if (source / name).is_file()})
+        notice_files.update({f"OFL-{family}.txt": data for family, data in fonts.items()})
+        # Shipped Launcher v0.20.3 accepts these leaves only in Resources/docs, except for the root icon.
+        expected_files = {f"{resources}/docs/{name}": data for name, data in notice_files.items()}
+        expected_files[f"{resources}/{icon}"] = (source / "assets/app-icon" / icon).read_bytes()
+        contents = f"{APP}/Contents"
+        gui = f"{contents}/MacOS/FigCraft"
+        with zipfile.ZipFile(archive) as zipped:
+            entries = zipped.infolist()
+            names = {entry.filename for entry in entries}
+            self.assertEqual(len(entries), len({name.casefold() for name in names}), "unique paths, ignoring case")
+            self.assertEqual({entry.filename for entry in entries if not entry.is_dir()},
+                             set(expected_files) | {gui, f"{contents}/Info.plist", f"{contents}/PkgInfo"})
+            self.assertTrue({entry.filename for entry in entries if entry.is_dir()} <= {
+                f"{APP}/", f"{contents}/", f"{contents}/MacOS/", f"{resources}/", f"{resources}/docs/"})
+            for path, data in expected_files.items():
+                with self.subTest(path=path):
+                    self.assertEqual(zipped.read(path), data)
+                    mode = zipped.getinfo(path).external_attr >> 16
+                    self.assertTrue(stat.S_ISREG(mode))
+                    self.assertFalse(mode & 0o111)
+            mode = zipped.getinfo(gui).external_attr >> 16
+            self.assertTrue(stat.S_ISREG(mode) and mode & stat.S_IXUSR)
+        result = f.run("nightly-verify.sh", "--input", archive, "--expect", "unsigned", **dict.fromkeys(SECRETS))
+        self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_compilation_refuses_signing_material_before_building(self):
         f = Fixture(self)
         for name in ("APPLE_CERTIFICATE", "APPLE_PASSWORD", "MACOS_SIGN_IDENTITY", "WINDOWS_CERTIFICATE", "AZURE_CLIENT_SECRET", "LINUX_SIGNING_KEY"):

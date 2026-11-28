@@ -20,6 +20,12 @@ def inline_scripts(path):
         r"^        run: \|\n((?:          .*\n|\n)+)", path.read_text(), re.MULTILINE)]
 
 NIGHTLY_PLATFORMS = ("windows-x86_64", "linux-x86_64", "macos-aarch64")
+# The pinned shared registry enables Windows, Linux and macOS for FigCraft.
+SIGNER_SECRETS = {
+    "AZURE_CERT_PROFILE", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_SIGNING_ACCOUNT",
+    "AZURE_SIGNING_ENDPOINT", "AZURE_TENANT_ID", "LINUX_SIGNING_KEY", "APPLE_CERTIFICATE",
+    "APPLE_CERTIFICATE_PASSWORD", "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "KEYCHAIN_PASSWORD",
+}
 # Each platform's one trust field in policy v3, and the public stable identity it must name.
 NIGHTLY_TRUST = {
     "windows-x86_64": ("publisher_subject",
@@ -51,6 +57,49 @@ def assert_nightly_serialization(source):
         values[row[1]] = row[2].rstrip()
     if values != {"group": "figcraft-nightly-release", "cancel-in-progress": "false"}:
         raise ValueError("nightly serialization must use its stable group and no cancellation")
+
+
+def caller_entries(lines, indent):
+    """Split the callers' plain YAML block entries; refuse other forms at checked levels."""
+    entries = {}
+    children = None
+    for line in lines:
+        if children is not None and line.startswith(" " * (indent + 1)):
+            children.append(line)
+            continue
+        row = re.fullmatch(r" " * indent + r"([A-Za-z0-9_-]+):(?: (.*))?", line)
+        if row is None or row[1] in entries:
+            raise ValueError("malformed or duplicate caller mapping entry")
+        children = []
+        entries[row[1]] = row[2], children
+    return entries
+
+
+def assert_caller_secrets(source, job_name, names):
+    """Check the actual caller's root, job and secret blocks without a YAML dependency."""
+    lines = [line for line in source.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    root = caller_entries(lines, 0)
+    job_marker, job_lines = root.pop("jobs", (None, []))
+    jobs = caller_entries(job_lines, 2)
+    if job_marker is not None or set(jobs) != {job_name} or jobs[job_name][0] is not None:
+        raise ValueError("the caller must have one plain job block")
+    job = caller_entries(jobs[job_name][1], 4)
+    if "environment" in job or "environment" in root or "secrets" in root:
+        raise ValueError("only the native callee may bind the environment")
+    if names:
+        if "secrets" not in job:
+            raise ValueError("signer requires an explicit target-specific secret map")
+        mode, secret_lines = job.pop("secrets")
+        expected = {name: ("${{ secrets." + name + " }}", []) for name in names}
+        if mode is not None or caller_entries(secret_lines, 6) != expected:
+            raise ValueError("signer must forward exactly the reviewed same-name secret references")
+    elif "secrets" in job:
+        raise ValueError("unsigned caller must not pass secrets")
+    for value, children in (*root.values(), *job.values()):
+        outside_map = "\n".join([value or "", *children])
+        # Scan all remaining text: quoted braces can appear before a secret reference.
+        if re.search(r"(?im)^\s*environment:|\bsecrets\b", outside_map):
+            raise ValueError("secret bindings belong only in the signer map")
 
 
 def job_conditions(jobs):
@@ -188,8 +237,49 @@ class TrustedSourcePreparation(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertNotRegex(executable, r"(?im)^\s*(?:-\s*)?uses:\s*[^\n]*cache")
                 self.assertNotRegex(executable, r"(?im)^\s*[^\s:#]*cache[^\s:#]*:")
-                self.assertNotRegex(executable, r"(?im)^\s*(?:environment|secrets):")
-                self.assertNotIn("secrets.", executable)
+
+    def test_signer_forwards_exactly_the_reviewed_secret_names(self):
+        signer = (ROOT / ".github/workflows/nightly-sign.yml").read_text()
+        assert_caller_secrets(signer, "release", SIGNER_SECRETS)
+
+    def test_signer_refuses_missing_extra_alias_duplicate_or_inherited_secrets(self):
+        signer = (ROOT / ".github/workflows/nightly-sign.yml").read_text()
+        header = "    secrets:\n"
+        linux = "      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}\n"
+        self.assertIn(linux, signer)
+        mutations = {
+            "missing name": signer.replace(linux, ""),
+            "extra name": signer + "      EXTRA: ${{ secrets.EXTRA }}\n",
+            "renamed source": signer.replace(linux, linux.replace("secrets.LINUX_SIGNING_KEY", "secrets.APPLE_ID")),
+            "duplicate name": signer.replace(linux, linux + linux),
+            "duplicate map": signer + header + linux,
+            "quoted duplicate map": signer + '    "secrets": inherit\n',
+            "inherit": signer.split(header)[0] + "    secrets: inherit\n",
+            "yaml alias": signer.replace(linux, "      LINUX_SIGNING_KEY: *other\n"),
+            "yaml merge": signer + "      <<: *other\n",
+            "environment": signer + "    environment: release\n",
+            "secret outside map": signer.replace("${{ inputs.producer_run_id }}", "${{ secrets.APPLE_ID }}"),
+        }
+        for change, source in mutations.items():
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                assert_caller_secrets(source, "release", SIGNER_SECRETS)
+
+    def test_unsigned_caller_has_no_secrets(self):
+        producer = (ROOT / ".github/workflows/nightly.yml").read_text()
+        assert_caller_secrets(producer, "unsigned", set())
+        for suffix in ("    secrets: {}\n", "    secrets: inherit\n",
+                       "    secrets:\n      EXTRA: ${{ secrets.EXTRA }}\n",
+                       "      extra: ${{ secrets['EXTRA'] }}\n", "      secrets: inherit\n"):
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                assert_caller_secrets(producer + suffix, "unsigned", set())
+
+    def test_unsigned_caller_refuses_secret_after_format_brace(self):
+        producer = (ROOT / ".github/workflows/nightly.yml").read_text()
+        # This inert fixture is never dispatched; the brace is part of the format string.
+        env = "env:\n  EXAMPLE: ${{ format('value {0}', secrets.EXAMPLE_ONLY) }}\n\n"
+        source = producer.replace("jobs:\n", env + "jobs:\n", 1)
+        with self.assertRaisesRegex(ValueError, "secret bindings belong only in the signer map"):
+            assert_caller_secrets(source, "unsigned", set())
 
 
 class NightlyTrustAnchors(unittest.TestCase):

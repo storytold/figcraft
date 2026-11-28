@@ -4,10 +4,10 @@
   "repository_id": 1412112308,
   "producer_workflow_id": 429731005,
   "producer_workflow_path": ".github/workflows/nightly.yml",
-  "producer_tooling_revision": "be00e5ccd18b68e950c8a08532f2230e7c3d0cba",
-  "producer_workflow_ref": "storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@be00e5ccd18b68e950c8a08532f2230e7c3d0cba",
+  "producer_tooling_revision": "bf94b15b708089b95c4e2d1c978e66ecf1f2f4f3",
+  "producer_workflow_ref": "storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@bf94b15b708089b95c4e2d1c978e66ecf1f2f4f3",
   "signer_workflow_path": ".github/workflows/nightly-sign.yml",
-  "signer_tooling_revision": "be00e5ccd18b68e950c8a08532f2230e7c3d0cba",
+  "signer_tooling_revision": "bf94b15b708089b95c4e2d1c978e66ecf1f2f4f3",
   "release_branch": "nightly-signer",
   "manual_actors": [
     "bflatastic",
