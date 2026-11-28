@@ -104,6 +104,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "get_node",
     "design_context",
     "export_assets",
+    "compare_design",
     "component_mappings",
     "sync_mappings",
     "select",
@@ -130,6 +131,7 @@ const DOCUMENT_TOOLS: &[&str] = &[
     "get_node",
     "design_context",
     "export_assets",
+    "compare_design",
     "component_mappings",
     "sync_mappings",
     "select",
@@ -291,6 +293,21 @@ fn tools() -> Vec<Value> {
                 &[],
             ),
             false,
+        ),
+        tool(
+            "compare_design",
+            "Compare with the design",
+            "Compare a capture you made of the built page with a frame, on this computer. Size the browser to the `viewport` it returns (the frame's size in CSS pixels), capture the page to a file, and call this again. It names the layers that differ, largest first and each on the deepest layer it belongs to, as a position, colour or content difference with the expected and actual colours and any offset. A layer is listed once at least 2% of its own pixels differ, so an empty list doesn't mean every pixel matches. Fix those; don't aim for a pixel score, because fonts and antialiasing always differ a little between renderers.",
+            obj(
+                json!({
+                    "id": id_schema("The frame, component or instance (default the first selected layer; any other kind of layer is refused)"),
+                    "image": string("The capture: a PNG, JPEG or WebP file, absolute or relative to where this server runs"),
+                    "density": num("Device pixels per CSS pixel (default from the widths)"),
+                    "tolerance": num("How different a pixel must be to count, out of 255 (default 24)")
+                }),
+                &["image"],
+            ),
+            true,
         ),
         tool(
             "component_mappings",
@@ -523,6 +540,20 @@ fn export_assets(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResu
     exec(b, "file.exportAssets", Value::Object(params)).map(|v| ToolResult::json(&v))
 }
 
+/// `inspect.compare` on a capture file, made absolute here: an attached app runs in another folder.
+fn compare_design(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let image = s_arg(a, "image")?.filter(|i| !i.trim().is_empty()).ok_or("`image` required: the capture of the built page")?;
+    let path = std::path::absolute(image).map_err(|e| format!("image: {e}"))?;
+    let mut params = Map::new();
+    for key in ["id", "density", "tolerance"] {
+        if let Some(v) = a.get(key) {
+            params.insert(key.into(), v.clone());
+        }
+    }
+    params.insert("path".into(), json!(path.to_string_lossy()));
+    exec(b, "inspect.compare", Value::Object(params)).map(|v| ToolResult::json(&v))
+}
+
 /// `codeConnect.list`, checking source files against `root`, else where this server runs.
 fn component_mappings(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
     let mut params = a.clone();
@@ -690,6 +721,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "get_node" => get_node(b, &a),
         "design_context" => design_context(b, &a),
         "export_assets" => export_assets(b, &a),
+        "compare_design" => compare_design(b, &a),
         "component_mappings" => component_mappings(b, &a),
         "sync_mappings" => sync_mappings(b, &a),
         "select" => select(b, &a),

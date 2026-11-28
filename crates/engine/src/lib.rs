@@ -74,6 +74,7 @@ pub use dev::devcompare;
 pub use dev::devinspect;
 pub use dev::responsive;
 pub use dev::tailwind;
+pub use dev::visual_compare;
 pub use extensions::plugin_directory;
 pub use extensions::plugins;
 pub use extensions::widgets;
@@ -725,3 +726,5 @@ mod paste_properties_tests;
 mod selection_reorder_tests;
 #[cfg(test)]
 mod selection_spacing_tests;
+#[cfg(test)]
+mod visual_compare_tests;
