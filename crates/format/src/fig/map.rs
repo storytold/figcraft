@@ -78,6 +78,8 @@ pub(super) fn to_rest_for(msg: &Kv, name: &str, max_nodes: usize, board: bool) -
         mapped.networks.into_iter().map(|n| serde_json::to_value(n?).ok().and_then(|v| crate::rest::network(&v))).collect();
     if board {
         native_board_shapes(msg, &mut mapped.json, &mut mapped.warnings);
+        let native = native_board_connectors(msg, &mut mapped.json);
+        uncount(&mut mapped.warnings, "connector layers import as vectors", native);
     }
     (mapped.json, mapped.warnings, networks)
 }
@@ -196,6 +198,123 @@ fn apply_native_board_shape(rest_node: &mut Value, origin: &str, shape: BoardSha
     if let Some(style) = label.get_mut("style").and_then(Value::as_object_mut) {
         style.insert("textAutoResize".into(), serde_json::json!("HEIGHT"));
         style.insert("textAlignHorizontal".into(), serde_json::json!("CENTER"));
+    }
+}
+
+/// A record's `guid` as the `session:local` origin the mapped layers carry.
+fn origin(guid: &Kv) -> Option<String> {
+    let (session, local) = guid.get("sessionID").and_then(Kv::f64).zip(guid.get("localID").and_then(Kv::f64))?;
+    Some(format!("{}:{}", session as u64, local as u64))
+}
+
+/// Every mapped layer of `json` (bounded by `max_nodes` already), depth first.
+fn each_layer(json: &mut Value, f: &mut impl FnMut(&mut Value)) {
+    if json.get(craft_fig::rest::FIG_SOURCE_FIELD).is_some() {
+        f(json);
+    }
+    match json {
+        Value::Object(fields) => fields.values_mut().for_each(|child| each_layer(child, f)),
+        Value::Array(items) => items.iter_mut().for_each(|child| each_layer(child, f)),
+        _ => {}
+    }
+}
+
+/// A mapped layer's source origin.
+fn layer_origin(layer: &Value) -> Option<&str> {
+    layer.get(craft_fig::rest::FIG_SOURCE_FIELD)?.get("origin")?.as_str()
+}
+
+/// A whiteboard file's connectors are native board connectors: the line the shared mapper drew
+/// stays, and the connector is attached to the layers it joins, so FigCraft routes it again when
+/// they move. Only a connector drawn as one line on the page itself is adapted: a free end's
+/// point is in its parent's space, the page's only there, and one with a label is a frame holding
+/// its line and label, which stays as it is.
+/// Returns how many it attached.
+fn native_board_connectors(msg: &Kv, json: &mut Value) -> usize {
+    let Some(changes) = msg.get("nodeChanges") else { return 0 };
+    let ty = |n: &Kv| n.get("type").and_then(Kv::str).map(str::to_owned);
+    let pages: std::collections::HashSet<String> =
+        changes.list().iter().filter(|n| ty(n).as_deref() == Some("CANVAS")).filter_map(|n| origin(n.get("guid")?)).collect();
+    let mut connectors = std::collections::HashMap::new();
+    for node in changes.list() {
+        if ty(node).as_deref() != Some("CONNECTOR")
+            || node.get("parentIndex").and_then(|p| p.get("guid")).and_then(origin).is_none_or(|p| !pages.contains(&p))
+        {
+            continue;
+        }
+        let Some(id) = node.get("guid").and_then(origin) else { continue };
+        let end = |key: &str| -> Option<Value> {
+            let e = node.get(key)?;
+            let Some(target) = e.get("endpointNodeID").and_then(origin) else {
+                let p = e.get("position")?;
+                return Some(serde_json::json!({"x": p.get("x").and_then(Kv::f64)?, "y": p.get("y").and_then(Kv::f64)?}));
+            };
+            let magnet = e.get("magnet").and_then(Kv::str);
+            let side = match magnet {
+                Some("TOP") => "top",
+                Some("RIGHT") => "right",
+                Some("BOTTOM") => "bottom",
+                Some("LEFT") => "left",
+                _ => "auto",
+            };
+            let mut out = serde_json::json!({"node": target, "side": side});
+            // Without a magnet the end sits where it was put on the layer.
+            if matches!(magnet, None | Some("NONE"))
+                && let Some(r) = e.get("relativePosition")
+                && let Some((x, y)) = r.get("x").and_then(Kv::f64).zip(r.get("y").and_then(Kv::f64))
+            {
+                out["at"] = serde_json::json!([x, y]);
+            }
+            Some(out)
+        };
+        let routing = match node.get("connectorLineStyle").and_then(Kv::str) {
+            Some("ELBOWED") => "elbow",
+            Some("CURVED") => "curved",
+            _ => "straight",
+        };
+        if let Some((from, to)) = end("connectorStart").zip(end("connectorEnd")) {
+            connectors.insert(id, serde_json::json!({"type": "connector", "from": from, "to": to, "routing": routing}));
+        }
+    }
+    if connectors.is_empty() {
+        return 0;
+    }
+    // The mapped layers' REST ids by origin: a connector's ends name the layers it joins by them.
+    let mut ids = std::collections::HashMap::new();
+    let mut attached = 0;
+    each_layer(json, &mut |layer| {
+        if let (Some(origin), Some(id)) = (layer_origin(layer), layer.get("id").and_then(Value::as_str)) {
+            ids.entry(origin.to_owned()).or_insert_with(|| id.to_owned());
+        }
+    });
+    each_layer(json, &mut |layer| {
+        if layer["type"] != "VECTOR" {
+            return;
+        }
+        let Some(mut board) = layer_origin(layer).and_then(|o| connectors.get(o)).cloned() else { return };
+        for key in ["from", "to"] {
+            if let Some(node) = board[key].get("node").and_then(Value::as_str) {
+                match ids.get(node) {
+                    Some(id) => board[key]["node"] = Value::String(id.clone()),
+                    // A layer left out (or not a layer here) leaves the connector a plain line.
+                    None => return,
+                }
+            }
+        }
+        layer["board"] = board;
+        attached += 1;
+    });
+    attached
+}
+
+/// Take `n` off the count of warning `what` (`what (×count)`, or `what` once), dropping it at none.
+fn uncount(warnings: &mut Vec<String>, what: &str, n: usize) {
+    let Some(i) = warnings.iter().position(|w| w.starts_with(what)) else { return };
+    let count = warnings[i].strip_prefix(what).and_then(|r| r.trim().strip_prefix("(×")?.strip_suffix(')')?.parse::<usize>().ok()).unwrap_or(1);
+    match count.saturating_sub(n) {
+        0 => _ = warnings.remove(i),
+        1 => warnings[i] = what.to_string(),
+        left => warnings[i] = format!("{what} (×{left})"),
     }
 }
 
