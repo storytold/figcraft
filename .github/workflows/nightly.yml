@@ -1,8 +1,9 @@
 name: FigCraft unsigned nightly
 
-# Enabled for supervised manual runs by the reviewed manual actors only; no schedule yet.
-# A later explicit opt-in may add a cadence (and a completion dispatcher with it).
+# Automated nightly schedule (02:30 UTC) plus supervised manual runs by the reviewed manual actors.
 on:
+  schedule:
+    - cron: '30 2 * * *'
   workflow_dispatch:
 
 permissions:
