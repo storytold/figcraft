@@ -117,6 +117,22 @@ pub(crate) fn replace(dst: &mut Pixmap, at: (i32, i32), src: &Pixmap, clip: Opti
     fx::overlap_rows(dst, at, src, |dp, sp, r, c0| {
         let Some((m, (mx, my))) = clip else { return dp.copy_from_slice(sp) };
         let (mw, mh, my) = (i64::from(m.width()), i64::from(m.height()), r + i64::from(my));
+        // Most rows of a clip lie wholly inside it (or outside): copied (or kept) in one piece.
+        let cols = (dp.len() / 4) as i64;
+        let first = c0 + i64::from(mx);
+        if my >= 0
+            && my < mh
+            && first >= 0
+            && first + cols <= mw
+            && let Some(row) = m.data().get((my * mw + first) as usize..(my * mw + first + cols) as usize)
+        {
+            if row.iter().all(|k| *k == 255) {
+                return dp.copy_from_slice(sp);
+            }
+            if row.iter().all(|k| *k == 0) {
+                return;
+            }
+        }
         for (c, (d, s)) in (c0..).zip(dp.chunks_exact_mut(4).zip(sp.chunks_exact(4))) {
             let mx = c + i64::from(mx);
             let k = if mx >= 0 && my >= 0 && mx < mw && my < mh { u32::from(m.data().get((my * mw + mx) as usize).copied().unwrap_or(0)) } else { 0 };

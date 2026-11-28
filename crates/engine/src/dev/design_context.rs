@@ -178,7 +178,14 @@ fn code(doc: &Document, id: NodeId) -> Vec<Value> {
         .filter_map(|l| {
             let lang = CodeLang::from_id(&l.language)?;
             let snippet = code_connect::connected_code(doc, id, lang, l)?;
-            Some(json!({"language": l.language, "importPath": l.import_path, "name": l.name, "code": snippet}))
+            // The snippet already holds the template and the values it maps.
+            let mut v = code_connect::link_fields(l);
+            if let Some(o) = v.as_object_mut() {
+                o.remove("template");
+                o.remove("values");
+            }
+            v["code"] = json!(snippet);
+            Some(v)
         })
         .collect()
 }
@@ -355,7 +362,7 @@ fn components_json(doc: &Document, ids: &BTreeSet<NodeId>) -> Value {
             v["description"] = json!(description);
         }
         if !n.code_links.is_empty() {
-            v["codeLinks"] = camel(serde_json::to_value(&n.code_links).unwrap_or(Value::Null));
+            v["codeLinks"] = json!(n.code_links.iter().map(code_connect::link_fields).collect::<Vec<_>>());
         }
         out.insert(id.to_string(), v);
     }
@@ -427,9 +434,12 @@ fn design_context(s: &mut Session, p: &Value) -> Result<Value> {
         }
         nodes.extend(layer(doc, *id, depth, cap, &mut used));
     }
-    let mut missing = vec![
-        json!({"what": "responsive behaviour", "why": "the file stores no breakpoints: sizes are as designed here, and constraints, sizing and annotations are all it says about other widths"}),
-    ];
+    // Only what the designer stated about other sizes; without it, the gap is named.
+    let responsive = crate::responsive::context(doc, &ids);
+    let mut missing = Vec::new();
+    if responsive["explicit"] != true {
+        missing.push(json!({"what": "responsive behaviour", "why": "the file stores no breakpoints: sizes are as designed here, and constraints, sizing and annotations are all it says about other widths"}));
+    }
     let (joined, complete) = referenced(doc, &used.variables, &used.styles, MAX_VARIABLES);
     let variables = variables_json(doc, &joined, &mut missing);
     let styles = styles_json(doc, &used.styles, &mut missing);
@@ -450,6 +460,7 @@ fn design_context(s: &mut Session, p: &Value) -> Result<Value> {
         "components": components,
         "fonts": fonts,
         "assets": assets,
+        "responsive": responsive,
         "missing": missing,
     });
     if used.left_out > 0 || used.cut_by_depth {
@@ -466,7 +477,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.designContext",
         "Design context",
-        "{ids? | id? (those layers), scope?: selection|page|document (default the selection, or the page with nothing selected), depth? (default 32), maxNodes? (default 2000)}  everything needed to build them, in one read  → {version, document, target {source, ids, layers}, nodes [{id, name, type, explicit, derived?, tokens?, unsupported? [{property, why}], code?, children?, childCount?}], variables, styles, components, fonts, assets, missing [{what, why}], truncated?}",
+        "{ids? | id? (those layers), scope?: selection|page|document (default the selection, or the page with nothing selected), depth? (default 32), maxNodes? (default 2000)}  everything needed to build them, in one read  → {version, document, target {source, ids, layers}, nodes [{id, name, type, explicit, derived?, tokens?, unsupported? [{property, why}], code?, children?, childCount?}], variables, styles, components, fonts, assets, responsive {explicit, versions, rules, truncated?}, missing [{what, why}], truncated?}",
         false,
         design_context
     )]

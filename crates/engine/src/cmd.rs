@@ -101,6 +101,8 @@ fn registry() -> &'static Registry {
         list.extend(crate::codegen::specs());
         list.extend(crate::devinspect::specs());
         list.extend(crate::design_context::specs());
+        list.extend(crate::asset_handoff::specs());
+        list.extend(crate::responsive::specs());
         list.extend(crate::component_codegen::specs());
         list.extend(crate::playground::specs());
         list.extend(crate::code_connect::specs());
@@ -108,6 +110,7 @@ fn registry() -> &'static Registry {
         list.extend(crate::dev_resources::specs());
         list.extend(crate::dev_measurements::specs());
         list.extend(crate::distance::specs());
+        list.extend(crate::design::specs());
         list.extend(crate::collab::specs());
         list.extend(crate::branches::specs());
         list.extend(crate::plugins::specs());

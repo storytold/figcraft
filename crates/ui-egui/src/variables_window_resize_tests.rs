@@ -1,5 +1,5 @@
 //! The Local variables window resizes from its edges and corners, height as well as width, stops at
-//! a minimum size, and keeps its size when it is closed and opened again (#2354).
+//! a minimum size, and keeps its size when it is closed and opened again (#2354); wider, it shows more mode columns (#2572).
 
 use egui::{Event, Id, Pos2, Rect, vec2};
 use figcraft_engine::Session;
@@ -122,4 +122,36 @@ fn a_resized_variables_window_keeps_its_size_when_reopened() {
     }
     let again = rect(&u);
     assert!((again.width() - resized.width()).abs() < 1.0 && (again.height() - resized.height()).abs() < 1.0, "{resized:?} -> {again:?}");
+}
+
+/// How many mode column headings of the table are in view (painted inside their clip, which the
+/// table's scroll area sets).
+fn mode_columns(u: &mut Ui) -> usize {
+    let window = rect(u);
+    let out = u.frame_output(vec![]);
+    out.shapes
+        .iter()
+        .filter(|c| matches!(&c.shape, egui::Shape::Text(t) if t.galley.text().starts_with("Mode ") && c.clip_rect.contains(t.pos) && window.contains(t.pos)))
+        .count()
+}
+
+#[test]
+fn a_wider_variables_window_shows_more_mode_columns() {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "v00", "type": "number", "value": 1})).unwrap();
+    for k in 2..=6 {
+        s.execute("variable.addMode", &json!({"collection": "Theme", "name": format!("Mode {k}")})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    let before = mode_columns(&mut u);
+    let room = u.screen.x - rect(&u).max.x - 20.0;
+    drag_corner(&mut u, vec2(room, 0.0));
+    let after = mode_columns(&mut u);
+    assert!(after > before, "the wider table shows more mode columns: {before} -> {after}");
+    assert!(after < 6, "the rest of the six modes scroll into view: {after} shown");
 }

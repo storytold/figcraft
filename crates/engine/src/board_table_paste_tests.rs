@@ -26,6 +26,13 @@ fn spreadsheet_text_makes_rows_of_cells() {
 }
 
 #[test]
+fn carriage_returns_end_rows_without_adding_an_extra_row() {
+    assert_eq!(cells("Name\tRole\rAda\tLead\r"), rows(&[&["Name", "Role"], &["Ada", "Lead"]]));
+    assert_eq!(cells("Name\tRole\r\r"), rows(&[&["Name", "Role"], &[""]]), "an intentional empty row stays");
+    assert_eq!(cells(&"a\tb\r".repeat(MAX_ROWS)).len(), MAX_ROWS, "the final separator doesn't count toward the row limit");
+}
+
+#[test]
 fn quoted_cells_hold_tabs_line_breaks_and_quotes() {
     let text = "\"a\tb\"\t\"line 1\nline 2\"\t\"say \"\"hi\"\"\"\n\"\"\tplain \"quote\"";
     assert_eq!(cells(text), rows(&[&["a\tb", "line 1\nline 2", "say \"hi\""], &["", "plain \"quote\""]]));

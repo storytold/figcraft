@@ -1,7 +1,7 @@
 //! The pointer on the canvas: each engine cursor ([`figcraft_engine::tools::Cursor`]) as one of
 //! the system's cursors, or as a small glyph FigCraft draws at the pointer with the system's
 //! hidden (a rotate cursor turned to its corner, the pen's states, the eyedropper, the comment
-//! pin, the crosshair of the shape and Text tools). The glyphs are original, drawn from lines and the code-drawn icons: no cursor images.
+//! pin, the crosshair of the shape and Text tools, the ink tools' round tip). The glyphs are original, drawn from lines and the code-drawn icons: no cursor images.
 
 use egui::{Color32, CursorIcon, Painter, Pos2, Shape, Stroke, pos2, vec2};
 use figcraft_engine::tools::{Cursor, PenCursor};
@@ -20,6 +20,12 @@ pub enum Glyph {
     /// A plus open at the centre, for the shape and Text tools (the system's follows the
     /// system's pointer colour, and a white one is lost on a white frame).
     Crosshair,
+    /// The ink tools' tip: a dot of `radius` in the ink's colour, ringed light and dark so it
+    /// shows on any page; no colour (the Eraser) draws just the ring.
+    Dot {
+        color: Option<Color32>,
+        radius: f32,
+    },
 }
 
 /// What the pointer shows.
@@ -62,6 +68,8 @@ pub fn of(cursor: Cursor) -> Shown {
         Cursor::Pointer => System(CursorIcon::PointingHand),
         Cursor::Eyedropper => Drawn(Glyph::Eyedropper),
         Cursor::Comment => Drawn(Glyph::Comment),
+        // The canvas gives it the tool's colour and width (`ink_tip`).
+        Cursor::Ink => ink((Some(figcraft_color::Color::BLACK), 0.0)),
         Cursor::NotAllowed => System(CursorIcon::NotAllowed),
     }
 }
@@ -88,7 +96,7 @@ impl Shown {
 
     /// A name for it (`ui.inspect`): the CSS cursor names where there is one ("default",
     /// "nwse-resize", "copy"), and "rotate" (with its angle), "pen", "pen-close", "pen-add",
-    /// "pen-bend", "eyedropper", "comment" and "crosshair" for the drawn ones.
+    /// "pen-bend", "eyedropper", "comment", "crosshair" and "ink" for the drawn ones.
     pub fn name(self) -> String {
         match self {
             Shown::System(i) => match i {
@@ -118,6 +126,7 @@ impl Shown {
             Shown::Drawn(Glyph::Eyedropper) => "eyedropper".into(),
             Shown::Drawn(Glyph::Comment) => "comment".into(),
             Shown::Drawn(Glyph::Crosshair) => "crosshair".into(),
+            Shown::Drawn(Glyph::Dot { .. }) => "ink".into(),
         }
     }
 
@@ -129,6 +138,28 @@ impl Shown {
         }
     }
 }
+
+/// The smallest and largest dot the ink cursor draws (radius, points): a hairline still shows, and
+/// a wide stroke zoomed in doesn't cover the view.
+const MIN_DOT: f32 = 1.5;
+const MAX_DOT: f32 = 128.0;
+
+/// The ink cursor for tip `(color, width on screen)` ([`figcraft_engine::Session::ink_tip`]).
+pub fn ink(tip: (Option<figcraft_color::Color>, f64)) -> Shown {
+    let radius = if tip.1.is_finite() { (tip.1 as f32 / 2.0).clamp(MIN_DOT, MAX_DOT) } else { MIN_DOT };
+    Shown::Drawn(Glyph::Dot { color: tip.0.map(crate::theme::c32), radius })
+}
+
+pub fn sampled_swatch(ctx: &egui::Context, at: Pos2, color: Color32) {
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas_cursor_swatch")));
+    let centre = at + vec2(SWATCH_OFFSET, SWATCH_OFFSET);
+    painter.circle_filled(centre, SWATCH_RADIUS + 2.0, INK);
+    painter.circle_filled(centre, SWATCH_RADIUS + 1.0, EDGE);
+    painter.circle_filled(centre, SWATCH_RADIUS, color);
+}
+
+pub(crate) const SWATCH_OFFSET: f32 = 16.0;
+pub(crate) const SWATCH_RADIUS: f32 = 8.0;
 
 /// Dark lines over a light edge: readable on any page and artwork.
 pub(crate) const INK: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x1E);
@@ -214,6 +245,15 @@ pub fn paint(painter: &Painter, at: Pos2, glyph: Glyph) {
             }
         }
         // The dropper's tip and the pin's tail, at the bottom left of their icons, are the hot spots.
+        Glyph::Dot { color: Some(c), radius } => {
+            painter.circle_filled(at, radius, c);
+            painter.circle_stroke(at, radius + 0.5, Stroke::new(1.0, EDGE));
+            painter.circle_stroke(at, radius + 1.5, Stroke::new(1.0, INK));
+        }
+        Glyph::Dot { color: None, radius } => {
+            painter.circle_stroke(at, radius, Stroke::new(3.0, EDGE));
+            painter.circle_stroke(at, radius, Stroke::new(1.0, INK));
+        }
         Glyph::Eyedropper => icon(painter, at - vec2(2.5, 13.5), Icon::Eyedropper),
         Glyph::Comment => icon(painter, at - vec2(2.5, 13.5), Icon::Comment),
     }

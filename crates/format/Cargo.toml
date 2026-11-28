@@ -22,6 +22,7 @@ sha2 = { workspace = true }
 image = { workspace = true }
 craft-penpot = { workspace = true }
 craft-sketch = { workspace = true }
+craft-zip = { workspace = true }
 craft-fig = { workspace = true }
 craft-figcraft-format = { workspace = true }
 craft-figma-rest = { workspace = true }

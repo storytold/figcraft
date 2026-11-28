@@ -368,10 +368,16 @@ fn padding_at(handles: &[(usize, Rect, f64)], pos: Pos2) -> Option<(usize, Rect,
         .copied()
 }
 
-/// Alt links opposing sides, Alt+Shift all four. Shift alone retains the existing axis gesture.
+/// Alt links opposing sides, Alt+Shift all four; Shift alone snaps instead (see `dragged_value`).
 /// Painting and editing share this rule so the highlighted sides are exactly those that change.
 fn padding_affects(side: usize, candidate: usize, modifiers: egui::Modifiers) -> bool {
-    candidate == side || (modifiers.alt && modifiers.shift) || ((modifiers.alt || modifiers.shift) && candidate == (side + 2) % 4)
+    candidate == side || (modifiers.alt && (modifiers.shift || candidate == (side + 2) % 4))
+}
+
+/// A dragged padding or gap value: whole pixels, or multiples of the big nudge when `snap`.
+fn dragged_value(app: &FigApp, value: f64, delta: f64, snap: bool) -> f64 {
+    let step = if snap { app.session.prefs.nudge_big } else { 1.0 };
+    (((value + delta) / step).round() * step).max(0.0)
 }
 
 fn al_zones(app: &FigApp) -> Option<Zones> {
@@ -529,9 +535,10 @@ fn draw_crop(app: &FigApp, painter: &egui::Painter, id: NodeId, img: &ImagePaint
 
 /// Draw the handles.
 pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
-    // Crop mode ends when a colour picker opens, or when its layer leaves the selection or its fill
-    // is no longer a Crop image (an undo).
-    if app.ui.crop.is_some() && (app.ui.picker.is_some() || crop_target(app).is_none()) {
+    // Crop mode ends when a colour picker opens, when its layer leaves the selection or its fill
+    // is no longer a Crop image (an undo), or when the layer's points are being edited.
+    let editing_points = app.session.ds().is_ok_and(|d| d.vector_edit.is_some());
+    if app.ui.crop.is_some() && (app.ui.picker.is_some() || crop_target(app).is_none() || editing_points) {
         app.ui.crop = None;
     }
     let app = &*app;
@@ -697,8 +704,8 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> Input {
         }
     }
     if let Some((id, fills, index, _, rect)) = crop_target(app) {
-        // Crop mode: the layer's own resize handles crop it (the pointer events carry Cmd/Ctrl).
-        if app.ui.crop.is_some() && on_resize_handle(app, pos) {
+        // The layer's own resize handles resize/crop the layer, not the crop handles.
+        if on_resize_handle(app, pos) {
             return Input::Ignored;
         }
         let Some(c) = crop_corners(app, id, rect) else { return Input::Ignored };
@@ -805,7 +812,7 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, modifiers: egui::Modifiers) {
                 2 => start.y - pos.y,
                 _ => pos.x - start.x,
             }) / zoom;
-            let v = (value + d).round().max(0.0);
+            let v = dragged_value(app, *value, d, modifiers.shift && !modifiers.alt);
             let props: serde_json::Map<String, serde_json::Value> = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]
                 .iter()
                 .enumerate()
@@ -821,13 +828,13 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, modifiers: egui::Modifiers) {
                 let (dx, dy) = (u.0 - start.0, u.1 - start.1);
                 (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
             } else {
-                // Scale about the opposite corner, keeping the image's aspect ratio unless Shift.
+                // Scale about the opposite corner, keeping the image's aspect ratio with Shift.
                 let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
                 let (ax, ay) = corners.get((*which + 2) % 4).copied().unwrap_or((x0, y0));
                 let (cx, cy) = corners.get(*which).copied().unwrap_or((x1, y1));
                 let (ow, oh) = (cx - ax, cy - ay);
                 let (mut nw, mut nh) = (u.0 - ax, u.1 - ay);
-                if !modifiers.shift {
+                if modifiers.shift {
                     // Node aspect matters: the unit box is not square in pixels.
                     let Some(n) = app.session.doc().ok().and_then(|d| d.node(*id)).cloned() else { return };
                     let k = ((nw * n.width).abs() / (ow * n.width).abs().max(1e-9)).max((nh * n.height).abs() / (oh * n.height).abs().max(1e-9));
@@ -850,7 +857,7 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, modifiers: egui::Modifiers) {
         }
         Drag::Gap { id, start, value, vertical, key } => {
             let d = f64::from(if *vertical { pos.y - start.y } else { pos.x - start.x }) / zoom;
-            let v = (value + d).round().max(0.0);
+            let v = dragged_value(app, *value, d, modifiers.shift);
             // Dragging an auto gap fixes it at what the drag makes of the distance it had.
             let mut props = json!({ *key: v });
             match (*key, app.session.doc().ok().and_then(|d| d.node(*id)).and_then(|n| n.layout.as_ref())) {

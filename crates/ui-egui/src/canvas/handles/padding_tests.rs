@@ -1,7 +1,7 @@
 //! Padding bands follow the content box, including the frame's inside stroke.
 
-use egui::{Event, Rect, vec2};
-use figcraft_doc::NodeId;
+use egui::{Event, Pos2, Rect, Vec2, vec2};
+use figcraft_doc::{AutoLayout, NodeId};
 use figcraft_engine::{Session, params::id_of};
 use serde_json::json;
 
@@ -175,9 +175,7 @@ fn padding_drag_starts_only_on_the_central_handle_and_undoes_in_one_step() {
 
 #[test]
 fn every_padding_grip_has_a_resize_cursor_and_links_the_requested_sides() {
-    for modifiers in
-        [egui::Modifiers::NONE, egui::Modifiers::ALT, egui::Modifiers::SHIFT, egui::Modifiers { alt: true, shift: true, ..Default::default() }]
-    {
+    for modifiers in [egui::Modifiers::NONE, egui::Modifiers::ALT, egui::Modifiers { alt: true, shift: true, ..Default::default() }] {
         for side in 0..4 {
             let (mut u, f) = scene();
             let center = al_zones(&u.app).unwrap().bands[side].1.center();
@@ -197,7 +195,7 @@ fn every_padding_grip_has_a_resize_cursor_and_links_the_requested_sides() {
                 expected = [value; 4];
             } else {
                 expected[side] = value;
-                if modifiers.alt || modifiers.shift {
+                if modifiers.alt {
                     expected[(side + 2) % 4] = value;
                 }
             }
@@ -205,6 +203,39 @@ fn every_padding_grip_has_a_resize_cursor_and_links_the_requested_sides() {
             u.app.run("edit.undo", json!({}));
             assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().layout.as_ref().unwrap().padding, [10.0, 20.0, 30.0, 40.0]);
         }
+    }
+}
+
+/// Shift snaps a dragged padding side or gap to multiples of the big nudge, leaving the other sides.
+#[test]
+fn shift_dragging_padding_and_gap_snaps_to_the_big_nudge() {
+    let (mut u, f) = scene();
+    for _ in 0..2 {
+        u.app.run("shape.rectangle", json!({"parent": f, "width": 40, "height": 20}));
+    }
+    u.app.run("select.set", json!({"ids": [f]}));
+    u.app.run("pref.nudge", json!({"big": 8}));
+    let big = u.app.session.prefs.nudge_big;
+    let zoom = u.app.session.ds().unwrap().view.zoom as f32;
+    let layout = |u: &Ui| u.app.session.doc().unwrap().node(f).unwrap().layout.clone().unwrap();
+    let zones = al_zones(&u.app).unwrap();
+    // Top padding grows downward, the horizontal gap rightward; 7 is past the nearest multiple below.
+    // Where to press, how far to drag, and the value that drag changes.
+    type Case = (Pos2, Vec2, fn(&AutoLayout) -> f64);
+    let cases: [Case; 2] = [(zones.bands[0].1.center(), vec2(0.0, 7.0), |l| l.padding[0]), (zones.gaps[0].rect.center(), vec2(7.0, 0.0), |l| l.gap)];
+    for (from, delta, value) in cases {
+        let before = layout(&u);
+        u.frame(vec![Event::PointerMoved(from)]);
+        u.button(from, true);
+        let to = from + delta * zoom;
+        u.frame_with(vec![Event::PointerMoved(to)], egui::Modifiers::SHIFT);
+        u.button(to, false);
+        let after = layout(&u);
+        let (old, new) = (value(&before), value(&after));
+        assert_eq!(new % big, 0.0, "snapped to a multiple of the big nudge");
+        assert_eq!(new, ((old + 7.0) / big).round() * big);
+        assert_ne!(new, old + 7.0);
+        assert_eq!(after.padding[1..], before.padding[1..], "Shift no longer links the opposite side");
     }
 }
 

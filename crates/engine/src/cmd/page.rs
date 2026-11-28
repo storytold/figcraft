@@ -5,7 +5,7 @@ use figcraft_doc::{Document, Guide, NodeId, NodeKind};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::{boolean, color, id, req_index, req_num, req_string, string};
+use crate::params::{boolean, color, id, req_id, req_index, req_num, req_string, string};
 use crate::{Session, bad, spec};
 
 /// After a page edit: the file keeps a page that isn't a divider, and the canvas shows one (the
@@ -24,9 +24,43 @@ fn settle(s: &mut Session, cmd: &str) -> crate::Result<()> {
     Ok(())
 }
 
+/// `page.setBackground`: a colour, or a colour variable the page's background follows in the
+/// page's variable mode (#2343). Setting a colour detaches the variable.
+fn set_background(s: &mut Session, p: &Value) -> crate::Result<Value> {
+    let cmd = "page.setBackground";
+    let var = match p.get("color") {
+        Some(Value::Object(o)) => match (o.len(), o.get("$var").and_then(Value::as_str)) {
+            (1, Some(name)) if !name.is_empty() => Some(name),
+            _ => return Err(bad(cmd, "`color`: a `$var` wrapper takes only `$var`, a variable id or name")),
+        },
+        _ => None,
+    };
+    let c = if var.is_some() { None } else { Some(color(p, "color").ok_or_else(|| bad(cmd, "`color`: a colour or {$var: variable}"))?) };
+    let id = page_target(s, cmd, p)?;
+    let doc = s.doc_mut()?;
+    match (var, c) {
+        (Some(name), _) => {
+            let vid = super::variables::resolve_strict(cmd, doc, name)?;
+            super::styles::bind_variable(cmd, doc, &[id], "background", Some(&vid))?;
+            super::styles::apply_bindings_to(doc, Some(&std::iter::once(id).collect()));
+        }
+        (None, Some(c)) => {
+            super::styles::bind_variable(cmd, doc, &[id], "background", None)?;
+            if let NodeKind::Page { background, .. } = &mut doc.get_mut(id)?.kind {
+                *background = c;
+            }
+        }
+        (None, None) => {}
+    }
+    ok()
+}
+
 /// The page a command targets: the explicit `id` (which must be a page) or the open page.
 fn page_target(s: &Session, cmd: &str, p: &Value) -> crate::Result<NodeId> {
-    let Some(target) = id(p, "id") else { return s.page() };
+    let target = match p.get("id") {
+        None | Some(Value::Null) => s.page()?,
+        Some(_) => req_id(cmd, p, "id")?,
+    };
     if !s.doc()?.pages.contains(&target) {
         return Err(bad(cmd, format!("{target} is not a page")));
     }
@@ -126,25 +160,21 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"id": np}))
         }),
         spec!("page.move", "Move page", "{id?, index}", true, |s, p| {
-            let id = id(p, "id").unwrap_or(s.page()?);
             let k = req_index("page.move", p, "index")?;
+            let id = page_target(s, "page.move", p)?;
             let doc = s.doc_mut()?;
-            if !doc.pages.contains(&id) {
-                return Err(bad("page.move", format!("{id} is not a page")));
-            }
             doc.pages.retain(|x| *x != id);
             let k = k.min(doc.pages.len());
             doc.pages.insert(k, id);
             ok()
         }),
-        spec!("page.setBackground", "Page background", "{id?, color}", true, |s, p| {
-            let c = color(p, "color").ok_or_else(|| bad("page.setBackground", "`color` required"))?;
-            let id = page_target(s, "page.setBackground", p)?;
-            if let NodeKind::Page { background, .. } = &mut s.doc_mut()?.get_mut(id)?.kind {
-                *background = c;
-            }
-            ok()
-        }),
+        spec!(
+            "page.setBackground",
+            "Page background",
+            "{id?, color (a colour, or {$var: colour variable id or name} to bind it; a colour detaches a bound one)}",
+            true,
+            set_background
+        ),
         spec!(
             "page.setOpening",
             "Set as opening page",

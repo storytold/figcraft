@@ -97,6 +97,8 @@ impl Session {
         let before = self.ds().ok().map(|d| (d.doc.clone(), d.selection.clone(), d.page, d.uid));
         // Cut and copy write the clipboard before a later check can refuse the command.
         let clipboard_before = self.clipboard.clone();
+        // A failed command must not count a document selection made by a nested batch.
+        let selection_revision_before = self.document_selection_revision;
         // An inner command of a batch can panic while the outer group is still open; remember the
         // context so the panic does not clear the group's buffered events.
         let group_depth_before = self.group_depth;
@@ -107,9 +109,9 @@ impl Session {
             .and_then(|v| self.check_live_access(id, &before).map(|()| v))
             .and_then(|v| self.check_finite_geometry(id, &before).map(|()| v))
             // Normalising is part of the command: a panic in it rolls the edit back too (#1085).
-            .and_then(|v| {
+            .and_then(|mut v| {
                 guard::run(id, || {
-                    self.normalize_edit(spec, &before);
+                    self.normalize_edit(spec, &before, &mut v);
                     Ok(v)
                 })
             });
@@ -141,6 +143,7 @@ impl Session {
                     ds.page = page;
                 }
                 self.clipboard = clipboard_before;
+                self.document_selection_revision = selection_revision_before;
             }
         }
         self.after_comment_command(id, params, &result, group_depth_before, pending_events_before);
@@ -229,18 +232,26 @@ impl Session {
 
     /// Normalise what a command changed in the document it ran on (text boxes, groups, instances,
     /// auto layout…).
-    fn normalize_edit(&mut self, spec: &CommandSpec, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) {
+    fn normalize_edit(&mut self, spec: &CommandSpec, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>, result: &mut Value) {
         let Some((bdoc, _, _, uid)) = before else { return };
+        let deletes = spec.id == "edit.delete" || (spec.id == "edit.repeat" && self.last_command.as_ref().is_some_and(|(id, _)| id == "edit.delete"));
         let Some(ds) = self.docs.iter_mut().find(|d| d.uid == *uid) else { return };
         // Saving may adopt the chosen filename as the document title. The encoded snapshot is
         // already final; normalising it again would detach it from the saved baseline.
         if !Arc::ptr_eq(&ds.doc, bdoc) && !matches!(spec.id, "file.save" | "file.saveAs") {
             normalize(ds.doc_mut(), bdoc);
+            if deletes {
+                cmd::edit::report_orphaned_instances(result, bdoc, &ds.doc);
+            }
         }
     }
 
     /// Bookkeeping after a successful command (normalised already): push undo, bump revision.
     fn after_command(&mut self, spec: &CommandSpec, before: Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) {
+        // Count executed commands, including nested ones; scanning input JSON cannot account for failures.
+        if Self::command_shows_document(spec.id) {
+            self.document_selection_revision = self.document_selection_revision.wrapping_add(1);
+        }
         let Some((bdoc, bsel, bpage, uid)) = before else {
             if let Ok(ds) = self.ds_mut() {
                 ds.revision += 1;

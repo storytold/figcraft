@@ -339,6 +339,67 @@ fn a_truncated_text_keeps_truncating_when_its_box_is_resized() {
 }
 
 #[test]
+fn a_fixed_size_text_keeps_the_height_it_is_created_with() {
+    // #2184: a fixed-size text created with a top-level `height` keeps it; `props` are applied
+    // after the text is measured, so the measured height used to overwrite it.
+    use figcraft_doc::TextAutoResize;
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let style = || json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24});
+    let create = |s: &mut Session, params: Value| id(s.execute("node.create", &params).unwrap());
+    let mut base_style = style().as_object().unwrap().clone();
+    for (mode, want) in [("none", TextAutoResize::None), ("truncate", TextAutoResize::Truncate)] {
+        base_style.insert("textAutoResize".into(), json!(mode));
+        let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": Value::Object(base_style.clone())}));
+        assert_eq!(size(&s, t), (200.0, 100.0), "mode {mode}");
+        assert_eq!(resize_mode(&s, t), want, "mode {mode} stays");
+    }
+    // #2184 follow-up: with the proportions locked, the height reapply must not rescale the
+    // top-level width (a lone height would be treated as a linked resize).
+    let mut props = style().as_object().unwrap().clone();
+    props.insert("textAutoResize".into(), json!("none"));
+    props.insert("constrainProportions".into(), json!(true));
+    let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": Value::Object(props)}));
+    assert_eq!(size(&s, t), (200.0, 100.0), "a locked height reapply keeps the width");
+    assert_eq!(resize_mode(&s, t), TextAutoResize::None);
+    // A `height` inside `props` wins over the top-level one.
+    let mut props = style().as_object().unwrap().clone();
+    props.insert("textAutoResize".into(), json!("none"));
+    props.insert("height".into(), json!(30));
+    let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": Value::Object(props)}));
+    assert_eq!(size(&s, t).1, 30.0, "props height wins");
+    assert_eq!(resize_mode(&s, t), TextAutoResize::None);
+    // Auto-height text still measures its own height, ignoring the top-level one.
+    let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": style()}));
+    assert_eq!(resize_mode(&s, t), TextAutoResize::Height);
+    assert_eq!(size(&s, t), (200.0, 24.0), "one line tall, not 100");
+    // Auto-width text still measures both sides.
+    let t = create(&mut s, json!({"type": "text", "text": "Title", "height": 100, "props": style()}));
+    assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight);
+    assert_eq!(size(&s, t), (40.0, 24.0), "as wide as its line and one line tall");
+}
+
+#[test]
+fn a_locked_height_reapply_keeps_the_requested_horizontal_sizing() {
+    // The width pin re-fixes the horizontal axis; a `sizingH: "fill"` set by the props must
+    // survive it in an auto layout row that has another child (so fill is not inferred).
+    use figcraft_doc::Sizing;
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"width": 300, "height": 200})).unwrap());
+    s.execute("node.set", &json!({"id": f, "props": {"layout": "horizontal", "padding": 10, "gap": 10}})).unwrap();
+    let _sibling = id(s.execute("node.create", &json!({"type": "rect", "parent": f, "width": 50, "height": 50})).unwrap());
+    let t = id(s
+        .execute(
+            "node.create",
+            &json!({"type": "text", "parent": f, "text": "Title", "width": 120, "height": 80,
+                    "props": {"textAutoResize": "none", "sizingH": "fill", "constrainProportions": true}}),
+        )
+        .unwrap());
+    assert_eq!(s.doc().unwrap().node(t).unwrap().child_layout.sizing_h, Sizing::Fill, "the props' fill survives the height reapply");
+    assert_eq!(size(&s, t).1, 80.0, "the height still lands");
+}
+
+#[test]
 fn max_lines_on_auto_height_text_hugs_that_many_lines() {
     // #1377: an auto-height text with max lines grows up to that many lines and ends in an
     // ellipsis; the layer reports its max lines.
@@ -647,6 +708,62 @@ fn superscript_and_subscript_are_synthesised_without_glyphs_for_them() {
     s.execute("node.set", &json!({"id": t, "props": {"textCase": "original"}})).unwrap();
     s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": null, "subs": false}})).unwrap();
     assert_eq!(glyphs(&s), plain, "off again");
+}
+
+#[test]
+fn a_range_of_characters_is_raised_or_lowered_on_its_own() {
+    // #2338: a footnote marker, "ab(1)" with only "(1)" raised, through `text.style`.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "ab(1)", json!({"fontFamily": font, "fontSize": 40}));
+    let glyphs = |s: &Session| -> Vec<(f64, f64)> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.glyphs.iter().map(|g| (g.size, g.y)).collect()
+    };
+    let raised = |g: &[(f64, f64)], p: &[(f64, f64)]| g.len() == p.len() && g.iter().zip(p).all(|(g, p)| g.0 < p.0 && g.1 < p.1);
+    let plain = glyphs(&s);
+    assert_eq!(plain.len(), 5);
+    s.execute("text.style", &json!({"id": t, "start": 2, "end": 5, "textPosition": "superscript"})).unwrap();
+    let g = glyphs(&s);
+    assert_eq!(g[..2], plain[..2], "the chars before stay on the line");
+    assert!(raised(&g[2..], &plain[2..]), "smaller and raised: {g:?} against {plain:?}");
+    s.execute("text.style", &json!({"id": t, "start": 2, "end": 5, "textPosition": "subscript"})).unwrap();
+    let g = glyphs(&s);
+    assert!(g[2..].iter().zip(&plain[2..]).all(|(g, p)| g.0 < p.0 && g.1 > p.1), "smaller and lowered: {g:?} against {plain:?}");
+
+    // The layer's `sups` move onto its chars, so a range set to none sits on the line.
+    s.execute("text.style", &json!({"id": t, "textPosition": "none"})).unwrap();
+    assert_eq!(glyphs(&s), plain);
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": true}})).unwrap();
+    s.execute("text.style", &json!({"id": t, "start": 0, "end": 2, "textPosition": "none"})).unwrap();
+    let g = glyphs(&s);
+    assert_eq!(g[..2], plain[..2], "set to none despite the layer's sups");
+    assert!(raised(&g[2..], &plain[2..]), "the rest still raised: {g:?} against {plain:?}");
+    assert!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().features.is_empty(), "the chars hold the position now");
+
+    // A text style keeps the position and raises the chars it's applied to.
+    let u = text(&mut s, "ab(1)", json!({"fontFamily": font, "fontSize": 40}));
+    s.execute("style.create", &json!({"type": "text", "name": "Note", "value": {"fontFamily": font, "fontSize": 40, "position": "superscript"}}))
+        .unwrap();
+    s.execute("style.apply", &json!({"ids": [u], "style": "Note", "start": 2, "end": 5})).unwrap();
+    let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(u).unwrap()).unwrap();
+    let g: Vec<(f64, f64)> = l.glyphs.iter().map(|g| (g.size, g.y)).collect();
+    assert_eq!(g[..2], plain[..2]);
+    assert!(raised(&g[2..], &plain[2..]), "the style's chars raised: {g:?} against {plain:?}");
+
+    // A style that sets no position leaves the chars' own, and they stay linked to it when the
+    // layer's `sups` move onto them.
+    let v = text(&mut s, "ab(1)", json!({"fontFamily": font, "fontSize": 40}));
+    s.execute("style.create", &json!({"type": "text", "name": "Body", "value": {"fontFamily": font, "fontSize": 40}})).unwrap();
+    s.execute("style.apply", &json!({"ids": [v], "style": "Body"})).unwrap();
+    s.execute("text.setFeatures", &json!({"ids": [v], "features": {"sups": true}})).unwrap();
+    s.execute("text.style", &json!({"id": v, "start": 0, "end": 2, "textPosition": "none"})).unwrap();
+    let linked = |s: &Session| s.doc().unwrap().node(v).unwrap().kind.text().unwrap().spans().iter().all(|(_, _, st)| st.style_id.is_some());
+    assert!(linked(&s), "still linked to Body");
+    s.execute("style.apply", &json!({"ids": [v], "style": "Body"})).unwrap();
+    let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(v).unwrap()).unwrap();
+    let g: Vec<(f64, f64)> = l.glyphs.iter().map(|g| (g.size, g.y)).collect();
+    assert!(g[..2] == plain[..2] && raised(&g[2..], &plain[2..]), "applying Body again keeps the positions: {g:?}");
 }
 
 /// A synthetic monospaced TrueType font (outline-less glyphs, every printable ASCII character 500 of
@@ -959,4 +1076,43 @@ fn setting_characters_as_a_command_never_renames_the_layer() {
     assert_eq!(layer_name(&s, t), "Title");
     s.execute("node.set", &json!({"id": t, "props": {"characters": "Site em 7 dias"}})).unwrap();
     assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("Site em 7 dias", "Title"), "the field keeps its name");
+}
+
+fn top_middle(s: &Session, t: NodeId) -> (f64, f64) {
+    let doc = s.doc().unwrap();
+    let p = doc.world_transform(t) * figcraft_geom::kurbo::Point::new(doc.node(t).unwrap().width / 2.0, 0.0);
+    (p.x, p.y)
+}
+
+#[test]
+fn centred_auto_width_text_grows_and_shrinks_both_ways() {
+    let font = test_mono_font();
+    for (src, rotation) in [("ANCHOR TEST\nabc", 0.0), ("abc", 0.0), ("abc", 90.0)] {
+        let mut s = Session::new();
+        let t = text(&mut s, src, json!({"fontSize": 40, "fontFamily": font, "textAlign": "center", "textAutoResize": "widthAndHeight"}));
+        s.execute("node.set", &json!({"id": t, "props": {"x": 200, "y": 50, "rotation": rotation}})).unwrap();
+        let anchor = top_middle(&s, t);
+        let w0 = size(&s, t).0;
+        begin(&mut s, t, Some(src.chars().count()), false).unwrap();
+        for c in "defghijklmnopqrstuvwxyz".chars() {
+            crate::textedit::insert(&mut s, &c.to_string()).unwrap();
+            assert_near(top_middle(&s, t), anchor, &format!("{src:?} at {rotation}°: typing {c}"));
+        }
+        assert!(size(&s, t).0 > w0 + 1e-6, "{src:?} at {rotation}°: typing grows the text");
+        for _ in 0..23 {
+            key(&mut s, "Backspace", false, false, false).unwrap();
+            assert_near(top_middle(&s, t), anchor, &format!("{src:?} at {rotation}°: deleting"));
+        }
+        assert!((size(&s, t).0 - w0).abs() < 1e-6, "back to the starting width");
+    }
+}
+
+#[test]
+fn left_aligned_auto_width_text_still_grows_to_the_right() {
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "abc", json!({"fontSize": 40, "fontFamily": font, "textAutoResize": "widthAndHeight"}));
+    let left = s.doc().unwrap().world_transform(t);
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abcdefghijklmnop"}})).unwrap();
+    assert_eq!(s.doc().unwrap().world_transform(t), left);
 }
