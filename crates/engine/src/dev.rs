@@ -10,3 +10,4 @@ pub mod devcompare;
 pub mod devinspect;
 pub mod responsive;
 pub mod tailwind;
+pub mod visual_compare;

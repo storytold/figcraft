@@ -416,6 +416,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
 | `export_assets {ids?, dir?, dryRun?}` | Write the selection's images and vectors into `dir` as files named by their content: see [Asset handoff](#asset-handoff). |
+| `compare_design {image, id?, density?, tolerance?}` | Compare a capture of the built page with a frame, on this computer: see [Visual verification](#visual-verification). |
 | `component_mappings {ids?, unmapped?, root?}` | Which code component each design component is: `import`, `name`, `source` (and `sourceFound` under `root`, default the server's folder), a ready `snippet`, `properties` with variants, and `values` that need translating. |
 | `sync_mappings {direction, path?}` | Apply a code repository's `figcraft.connect.json` to the open design (`import`) or write the design's mappings to it (`export`); `path` defaults to that file in the server's folder. |
 | `select {ids}` | Replace the selection (`[]` deselects). |
@@ -485,6 +486,44 @@ and hidden layers stay out. It reads what `inspect.assets` finds, up to 200 laye
 
 Fonts are never exported. The file holds only family and style names, and `design_context` lists them
 under `fonts`. Their licences are for the project to check.
+
+### Visual verification
+
+`compare_design` (the command `inspect.compare {id?, path | data}`) checks a built page against the
+frame it was built from (a frame, a component or an instance; any other layer, given or selected, is
+refused, since its result would look like a real answer), one at a time, on this computer, with a
+capture the agent's own browser tools made. FigCraft doesn't drive a browser, and no image leaves the
+computer through it.
+
+1. Read the frame's size from `design_context` (or `get_node`): its width and height are the
+   browser's viewport in CSS pixels. Each result repeats it as `viewport`.
+2. Size the browser to it and capture the page to a file, for example with Playwright:
+   `await page.setViewportSize({width: 1440, height: 900}); await page.screenshot({path: "shot.png"})`.
+3. Call `compare_design {id: <the frame's id>, image: "shot.png"}` (absolute or relative to where the MCP server runs; the
+   file is read like any other, inside the automation roots when they are set).
+4. Fix the layers in `differences` and repeat from step 2.
+
+| Key | Meaning |
+|---|---|
+| `differences` | The layers that differ, largest first and at most 100, each on the deepest layer it belongs to: `id`, `name`, `type`, `kind`, `percent` (of the layer's own area), `expected` and `actual` mean colours, `offset` and `note` |
+| `kind` | `position` with `offset` in CSS pixels, `color`, or `content` for anything else |
+| `note` | On text: check the font, size and line height first. Text is held to twice the tolerance, since fonts and antialiasing differ between renderers |
+| `total` | How many layers differ, listed or not |
+| `capture` | `width`, `height`, `density` (device pixels per CSS pixel, from the widths unless given), `sameSize`, `cssWidth`, `cssHeight`. A page that isn't the frame's size is the first thing to fix |
+| `changedPercent` | How much of the frame differs, to one decimal. Not a score: fonts and antialiasing always differ a little |
+| `truncated` | `maxLayers` when the frame has more than 5,000 visible layers: those past it weren't looked at. `matchedByBox`: how many layers were matched by their whole box, not the shape they draw (past 300 drawn), so a see-through part of one may hide a difference of a layer under it |
+
+`tolerance` (default 24 of 255) is how different a pixel must be to count. A layer is listed only
+when at least 2% of the pixels it owns (those no layer above it claims) differ by more than that, so
+a smaller difference, such as a few stray pixels or a thin line on a large background, isn't listed,
+and `changedPercent`, rounded to one decimal, can read 0 for it. Moves of more than 16 compared
+pixels show as `content`. Only the area both images have is compared, so content scrolled out of the
+capture needs a full-page capture. A clean result (`total` 0) says only that no layer looked at
+differs by that 2% in the area compared; it doesn't verify the rest of the frame (see
+`capture.sameSize` and `truncated`), and it isn't proof the pages are identical.
+Images are compared at up to 2,000 pixels a side, the larger of the frame and the capture setting
+the scale. Each layer claims the pixels it draws on, so a see-through part of a shape leaves a
+difference to the layer under it.
 
 ### Compact layer trees
 
