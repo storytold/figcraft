@@ -14,9 +14,7 @@ on:
         type: string
         default: ""
 
-permissions:
-  contents: write
-  packages: write
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -48,6 +46,9 @@ jobs:
         run: bash packaging/macos/dmg-test.sh
   release:
     needs: [credits, dmg-test]
+    permissions:
+      contents: write
+      packages: write
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
