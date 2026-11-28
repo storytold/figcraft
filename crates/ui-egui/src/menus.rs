@@ -94,7 +94,7 @@ pub fn invoke(app: &mut FigApp, id: &str) {
         }
         "file.open" => app.open_dialog(),
         // From the keyboard, a menu or the Actions palette, typing goes on in what was made.
-        "board.nextSticky" | "board.mindMapAdd" | "board.mindMap" => {
+        "board.nextSticky" | "board.mindMapAdd" | "board.mindMap" | "board.codeBlock" => {
             app.run(id, json!({"edit": true}));
         }
         "help.checkForUpdates" | "app.checkForUpdates" => crate::updates_ui::check(app),

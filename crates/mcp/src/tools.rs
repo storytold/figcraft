@@ -19,8 +19,10 @@ impl ToolResult {
     pub fn text(t: impl Into<String>) -> Self {
         Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: false }
     }
+    /// Compact JSON: indentation is whitespace the agent pays for in tokens on every result, and
+    /// a layer tree's indentation can be more than half of its text.
     pub fn json(v: &Value) -> Self {
-        Self::text(serde_json::to_string_pretty(v).unwrap_or_default())
+        Self::text(serde_json::to_string(v).unwrap_or_default())
     }
     pub fn error(t: impl Into<String>) -> Self {
         Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: true }
@@ -142,7 +144,7 @@ const DOCUMENT_TOOLS: &[&str] = &[
 pub fn tool_definitions() -> Vec<Value> {
     let mut tools = tools();
     let document = id_schema(
-        "The open file to act on: its `id` (from run_command doc.list, or the `document` open_file and inspect_document return) or its path. Default: the file in front. The tab in front stays in front; with an attached app, a screenshot of the window needs the file in front",
+        "The open file to act on: its `id` (from run_command doc.list, or the `document` open_file and inspect_document return) or its path. Default: the file in front. Reads and edits keep the front tab; explicit file/tab switches and proto.present/proto.preview show the requested file. With an attached app, a screenshot of the window needs the file in front",
     );
     for t in &mut tools {
         if t.get("name").and_then(Value::as_str).is_some_and(|n| DOCUMENT_TOOLS.contains(&n))
@@ -191,7 +193,7 @@ fn tools() -> Vec<Value> {
         tool(
             "create_node",
             "Create layer",
-            "Create a layer (engine `node.create`) and return its id and inspected properties. Coordinates are page units, y down; x/y are relative to the parent frame (the page when there is none, so then they are page coordinates; groups don't count). Inside an auto-layout frame the position is decided by the layout. The new layer becomes the selection.",
+            "Create a layer (engine `node.create`) and return its id and inspected properties. Coordinates are page units, y down; x/y are relative to the parent frame (the page when there is none, so then they are page coordinates; groups don't count). Inside an auto-layout frame the position is decided by the layout. The new layer becomes the selection. `warnings` reports a fontStyle that draws in another face.",
             obj(
                 json!({
                     "type": {"type": "string", "enum": ["frame", "rectangle", "ellipse", "polygon", "star", "line", "arrow", "text", "vector", "section", "component", "slice"], "description": "Layer type"},
@@ -813,8 +815,13 @@ fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult
     }
     let r = exec(b, "node.create", Value::Object(params))?;
     let id = r.get("id").cloned().ok_or("node.create returned no id")?;
+    let warnings = r.get("warnings").cloned();
     let node = b.call("node.get", json!({"id": id, "depth": 0}))?;
-    Ok(ToolResult::json(&json!({"id": id, "node": node})))
+    let mut out = json!({"id": id, "node": node});
+    if let Some(w) = warnings {
+        out["warnings"] = w;
+    }
+    Ok(ToolResult::json(&out))
 }
 
 fn set_properties(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
@@ -884,14 +891,15 @@ fn budget(a: &Map<String, Value>) -> Result<(usize, usize), String> {
 }
 
 /// What a value's text block would take on the wire. It is sent as a text block, so it is measured
-/// pretty-printed *and* escaped -- escaping adds about a tenth.
+/// as [`ToolResult::json`] writes it *and* escaped -- escaping adds about a tenth.
 fn wire_size(value: &Value) -> usize {
-    let text = serde_json::to_string_pretty(value).unwrap_or_default();
+    let text = serde_json::to_string(value).unwrap_or_default();
     serde_json::to_string(&text).map_or(text.len(), |s| s.len())
 }
 
 /// The document at `depth`, and what its text block would take on the wire. The tree is sent as a
-/// text block, so it is measured pretty-printed *and* escaped -- escaping adds about a tenth.
+/// text block, so it is measured as [`ToolResult::json`] writes it *and* escaped -- escaping adds
+/// about a tenth.
 fn inspect_at(b: &mut dyn Backend, depth: u64, all: bool, options: &Value) -> Result<(Value, usize), String> {
     let mut params = options.clone();
     params["depth"] = json!(depth);

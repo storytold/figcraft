@@ -368,10 +368,16 @@ fn padding_at(handles: &[(usize, Rect, f64)], pos: Pos2) -> Option<(usize, Rect,
         .copied()
 }
 
-/// Alt links opposing sides, Alt+Shift all four. Shift alone retains the existing axis gesture.
+/// Alt links opposing sides, Alt+Shift all four; Shift alone snaps instead (see `dragged_value`).
 /// Painting and editing share this rule so the highlighted sides are exactly those that change.
 fn padding_affects(side: usize, candidate: usize, modifiers: egui::Modifiers) -> bool {
-    candidate == side || (modifiers.alt && modifiers.shift) || ((modifiers.alt || modifiers.shift) && candidate == (side + 2) % 4)
+    candidate == side || (modifiers.alt && (modifiers.shift || candidate == (side + 2) % 4))
+}
+
+/// A dragged padding or gap value: whole pixels, or multiples of the big nudge when `snap`.
+fn dragged_value(app: &FigApp, value: f64, delta: f64, snap: bool) -> f64 {
+    let step = if snap { app.session.prefs.nudge_big } else { 1.0 };
+    (((value + delta) / step).round() * step).max(0.0)
 }
 
 fn al_zones(app: &FigApp) -> Option<Zones> {
@@ -806,7 +812,7 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, modifiers: egui::Modifiers) {
                 2 => start.y - pos.y,
                 _ => pos.x - start.x,
             }) / zoom;
-            let v = (value + d).round().max(0.0);
+            let v = dragged_value(app, *value, d, modifiers.shift && !modifiers.alt);
             let props: serde_json::Map<String, serde_json::Value> = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]
                 .iter()
                 .enumerate()
@@ -851,7 +857,7 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, modifiers: egui::Modifiers) {
         }
         Drag::Gap { id, start, value, vertical, key } => {
             let d = f64::from(if *vertical { pos.y - start.y } else { pos.x - start.x }) / zoom;
-            let v = (value + d).round().max(0.0);
+            let v = dragged_value(app, *value, d, modifiers.shift);
             // Dragging an auto gap fixes it at what the drag makes of the distance it had.
             let mut props = json!({ *key: v });
             match (*key, app.session.doc().ok().and_then(|d| d.node(*id)).and_then(|n| n.layout.as_ref())) {

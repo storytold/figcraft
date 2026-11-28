@@ -1116,6 +1116,36 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8], max_bytes: usize) -> Result<T, 
     from_postcard(body)
 }
 
+/// Read a server message, including the original welcome without a reconnect secret.
+/// `serde(default)` handles absent JSON fields, but postcard reports EOF for that missing
+/// final field. Accept only a complete legacy welcome, including its explicit access level;
+/// malformed messages, partial secrets and trailing bytes still fail closed.
+pub fn decode_server(bytes: &[u8], max_bytes: usize) -> Result<ServerMsg, Error> {
+    let error = match decode(bytes, max_bytes) {
+        Ok(msg) => return Ok(msg),
+        Err(error) => error,
+    };
+    let Some(body) = bytes.strip_prefix(&[WIRE_VERSION, 0]) else { return Err(error) };
+    if bytes.len() > max_bytes {
+        return Err(error);
+    }
+    #[derive(Deserialize)]
+    struct LegacyWelcome {
+        session: u64,
+        client_id: u32,
+        seq: u64,
+        catch_up: CatchUp,
+        processed: Processed,
+        peers: Vec<Peer>,
+        access: Access,
+    }
+    let Ok(LegacyWelcome { session, client_id, seq, catch_up, processed, peers, access }) = from_postcard(body) else {
+        return Err(error);
+    };
+    // Zero is the existing sentinel for a host that supplied no reconnect credential.
+    Ok(ServerMsg::Welcome { session, client_id, seq, catch_up, processed, peers, access, secret: 0 })
+}
+
 /// One postcard value that fills `body` (no trailing bytes).
 fn from_postcard<T: DeserializeOwned>(body: &[u8]) -> Result<T, Error> {
     let (msg, rest) = postcard::take_from_bytes::<T>(body).map_err(|e| Error::Decode(e.to_string()))?;

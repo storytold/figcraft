@@ -321,6 +321,9 @@ Or in a project's `.mcp.json`:
   `textDecorationOffset` (`auto`, px, or `"10%"` of the font size; the offset runs from the baseline
   down to an underline's top edge), `textDecorationSkipInk` (underlines break around descenders) and
   `textDecorationColor` (a colour, or `auto` for the text's) are character props too.
+  `textPosition` (`none`, `superscript`, `subscript`) is one as well, so `text.style` with
+  `start`/`end` raises or lowers only those chars; it wins over the layer's `sups` / `subs`
+  features, which move onto the chars the first time a position is set.
 - **Wrap style** (`auto`, `balance`, `pretty`) works at three levels: `wrapStyle` on `node.set`
   sets the layer (every paragraph); with `start`/`end` it sets the paragraphs those chars touch,
   and a paragraph's own style beats the layer's. `text.wrapStyle` sets the selected paragraphs while
@@ -407,7 +410,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `list_commands {filter?}` | Every command: id, label, menu, shortcut, undoable, params doc. |
 | `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, Leptos, Vue, SwiftUI, Jetpack Compose, ArkUI or Flutter for a layer; components take their properties as parameters and instances are calls, see Developer Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML, React, Leptos and Vue, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}` or a colour calculation (`{alpha}`, `{mix}`), `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Developer Mode below)). |
 | `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`), which keeps one copy of the document however many steps there are (an `edit.undo` step undoes the batch's edits so far together); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: name it with `"as": "card"` and `{"$ref": "card"}` anywhere in a later step's params becomes the `id` in its result (`{"$step": n}` does the same by zero-based position); `"field"` takes another key or a slash path such as `ids/0` (see Step references below). |
-| `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. |
+| `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. `warnings` reports a fontStyle that draws in another face. |
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
@@ -655,7 +658,8 @@ one undo step and returns the ids it made:
 - Tools for `pointer`: `tool.sticky {color?}`, `tool.shape {shape?}`, `tool.connector {style?: straight|elbow|curved}`
   (drag from one object to another), `tool.marker {color?}`, `tool.highlighter {color?}`,
   `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`, `tool.mindMap` (a click places a mind map, the first node's text starting
-  there, and types in it); Text and Section are the usual tools.
+  there, and types in it), `tool.codeBlock` (a click places a code block centred there and types in
+  it); Text and Section are the usual tools.
 
 ```json
 {"command": "file.newBoard", "params": {"name": "Retro"}}
@@ -743,7 +747,7 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   (`Shift+Cmd+\`) switch the right panel's tab or hide the left sidebar in the app (no-ops headless).
 - `doc.nextTab` / `doc.previousTab` (`Ctrl+Tab` / `Ctrl+Shift+Tab`): the next or previous open file.
 - Board tools (boards only): `tool.sticky` (`Q`), `tool.shape` (`B`), `tool.connector` (`X`),
-  `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), and
+  `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), `tool.codeBlock` (`` ` ``), and
   `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky; on a mind map node it
   makes the node's next sibling) and `board.mindMapAdd` (`Cmd/Ctrl+Enter` on a mind map node, also
   while typing in one). Keys no design-file shortcut uses; on a design file they refuse.
@@ -1565,9 +1569,12 @@ change where the next edit lands. `run_command`, `batch`, `create_node`, `set_pr
 `inspect_document`, `get_node`, `select`, `export`, `screenshot`, `save_file`, `undo` and `redo`
 take an optional `document`: the file's `id` (in `run_command {command: "doc.list"}`, and the `id`
 of the `document` outline `open_file` and `inspect_document` return) or the path of an open file.
-The call acts on that file and the tab in front stays in front, unless the command itself opens or
-switches to another file (`file.open`, `file.new`, `doc.switch`), as it would without `document`. A
-file that isn't open is an error. `doc.list` gives an agent each open file's `id`, name and state, not`nwhere it is on disk (#1117). `screenshot {window}` captures what the window shows, so it
+The call acts on that file and ordinary reads and edits keep the tab in front. Explicit file/tab
+commands (`file.open`, `file.new`, `doc.switch`, `doc.nextTab`, `doc.previousTab`) and player commands
+(`proto.present`, `proto.preview`) keep the requested file in front, including successful commands
+inside a batch. Failed groups discard their UI requests and explicit selection. A
+file that isn't open is an error. `doc.list` gives an agent each open file's `id`, name and state, not
+where it is on disk (#1117). `screenshot {window}` captures what the window shows, so it
 needs the file in front. Over the control channel, `engine.execute`, `document.inspect`,
 `node.get` and `ui.render` take the same `document`; other methods refuse one naming a file behind
 the tab in front. Headless sessions take it too.

@@ -84,7 +84,7 @@ static ROWS: &[Row] = &[
     // Essential
     doc(Essential, "Open the actions menu", &["Cmd+K", "Cmd+/"], &[], Bound("app.actions"), "Cmd+/ is in the keyboard layout tables"),
     doc(Essential, "Open the keyboard shortcuts panel", &["Ctrl+Shift+?"], &[], Bound("help.shortcuts"), "Control on macOS too (Shift+Cmd+? is the system's Help search)"),
-    doc(Essential, "Show or hide the interface", &["Cmd+\\"], &[], Bound("view.toggleUi"), ""),
+    doc(Essential, "Show or hide the interface", &["Cmd+\\", "Cmd+."], &[], Bound("view.toggleUi"), "Cmd+. works too"),
     doc(Essential, "Find layers and text", &["Cmd+F"], &[], Bound("edit.findReplace"), ""),
     doc(Essential, "Chat at your cursor in a live session", &["/"], &[], Bound("collab.cursorChat"), ""),
     doc(Essential, "Sample a colour", &["I", "Ctrl+C"], &["I"], Bound("edit.pickColor"), "Control+C on macOS only (Ctrl+C copies elsewhere)"),
@@ -129,6 +129,7 @@ static ROWS: &[Row] = &[
     pin(Tools, "tool.highlighter", &["U"], &[]),
     pin(Tools, "tool.eraser", &["E"], &[]),
     pin(Tools, "tool.stamp", &["W"], &[]),
+    pin(Tools, "tool.codeBlock", &["`"], &[]),
     pin(Tools, "board.nextSticky", &["Shift+Cmd+Enter"], &[]),
     pin(Tools, "board.mindMapAdd", &["Cmd+Enter"], &[]),
     // Vector edit mode
@@ -257,6 +258,7 @@ static ROWS: &[Row] = &[
     pin(Edit, "edit.redo", &["Shift+Cmd+Z"], &[]),
     pin(Edit, "edit.cut", &["Cmd+X"], &[]),
     pin(Edit, "file.import", &["Shift+Cmd+I"], &[]),
+    pin(Edit, "edit.copyLink", &["Cmd+L"], &[]),
     // Transform
     doc(Transform, "Flip horizontally", &["Shift+H"], &[], Bound("object.flipH"), ""),
     doc(Transform, "Flip vertically", &["Shift+V"], &[], Bound("object.flipV"), ""),
@@ -418,7 +420,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (137, 136, 1, 0, 2, 58));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (137, 136, 1, 0, 2, 60));
 }
 
 #[test]

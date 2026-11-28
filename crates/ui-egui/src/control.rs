@@ -1469,7 +1469,13 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let layers_generation = app.session.clipboard.layers_generation;
             let agent = p.get("agent").and_then(Value::as_str);
+            let selection_before = app.session.document_selection_revision();
             let r = in_document(app, p, |s| s.execute_as(agent, cmd, &params).map_err(|e| e.to_string()));
+            // Like clicking a tab, explicitly selecting a file moves the presenter out of the foreground.
+            if r.is_ok() && app.session.document_selection_revision() != selection_before {
+                crate::tabs::pause_present(app);
+                app.ui.home = false;
+            }
             app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             app.invalidate_synthetic_copy(layers_generation);
             // Programmatic calls never open dialogs.

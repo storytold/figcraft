@@ -2,7 +2,7 @@ use super::menu::{blend_menu, context_popup, menu_check, menu_item, menu_popup, 
 use super::stroke::stroke_settings;
 use super::{
     Align2, BlendMode, CornerRadius, Document, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, ListDrag, MaskType, Node, NodeId, NodeKind, Paint,
-    PaintKind, Rect, Sense, Stroke, StrokeAlign, StyleSlot, Tip, Tokens, Ui, Value, VariableType, common, icons, json, moved_index, pos2, regular,
+    PaintKind, Rect, Sense, StrokeAlign, StyleSlot, Tip, Tokens, Ui, Value, VariableType, common, icons, json, moved_index, pos2, regular,
     removed_index, style_picker, tr, trf, vec2, widgets,
 };
 use crate::property_rows::PropertyKind;
@@ -501,24 +501,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
             match &p.kind {
                 PaintKind::Solid { .. } if bound.is_some() => {
                     let (key, name) = bound.clone().unwrap_or_default();
-                    let chip = Rect::from_min_max(pos2(text_r.min.x - 2.0, r.min.y + 3.0), pos2(text_r.max.x - 20.0, r.max.y - 3.0));
-                    child.painter().rect_filled(chip, CornerRadius::same(4), t.hover);
-                    child.painter().rect_stroke(chip, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                    let short = name.rsplit('/').next().unwrap_or(&name).to_string();
-                    child.painter().with_clip_rect(chip.shrink2(vec2(5.0, 0.0))).text(
-                        pos2(chip.min.x + 5.0, r.center().y),
-                        Align2::LEFT_CENTER,
-                        short,
-                        regular(11.0),
-                        t.text,
-                    );
-                    let _ = child.interact(chip, Id::unique(("bound_paint", fills, i)), Sense::hover()).on_hover_text(&name);
-                    let dr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
-                    let dresp = child.interact(dr, Id::unique(("detach_paint", fills, i)), Sense::click()).tip(tr("Detach variable"));
-                    icons::paint(child.painter(), dr.shrink(3.0), Icon::Detach, t.icon_secondary);
-                    if dresp.clicked() {
-                        app.run("variable.bind", json!({"ids": ids, "field": key, "variable": null}));
-                    }
+                    crate::variable_ui::paint_chip(app, child, &ids, &key, &name, text_r, Id::unique(("bound_paint", fills, i)));
                 }
                 PaintKind::Solid { color } => {
                     if let Some(h) = widgets::text_field_inline(

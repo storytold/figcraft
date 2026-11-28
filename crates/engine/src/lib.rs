@@ -126,6 +126,8 @@ pub use view_state::ViewState;
 pub struct Session {
     pub docs: Vec<DocState>,
     pub active: usize,
+    /// Explicit file-selection revision; command rollback restores it along with the selection.
+    document_selection_revision: u64,
     pub clipboard: Clipboard,
     /// Edit ▸ Set default properties: what new shapes and text drawn with the tools take.
     pub default_props: DefaultProps,
@@ -476,6 +478,8 @@ mod online_tests;
 mod open_issues_tests;
 #[cfg(test)]
 mod outline_options_tests;
+#[cfg(test)]
+mod page_background_variable_tests;
 #[cfg(test)]
 mod page_clipboard_tests;
 #[cfg(test)]

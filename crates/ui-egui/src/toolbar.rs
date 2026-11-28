@@ -90,7 +90,7 @@ const GROUPS: &[Group] = &[
     Group::tools("comment", tr_noop("Comment"), &[(ToolId::Comment, Icon::Comment)]),
 ];
 
-/// A board's toolbar: moving around, ink, stickies, shapes, connectors, text, sections, stamps.
+/// A board's toolbar: moving around, ink, stickies, shapes, connectors, text and code, sections, stamps.
 const BOARD_GROUPS: &[Group] = &[
     Group::tools("bmove", tr_noop("Move tools"), &[(ToolId::Move, Icon::Move), (ToolId::Hand, Icon::Hand)]),
     Group::tools(
@@ -106,7 +106,8 @@ const BOARD_GROUPS: &[Group] = &[
         options: Options::Shapes,
     },
     Group::tools("connector", tr_noop("Connector"), &[(ToolId::Connector, Icon::Connector)]),
-    Group::tools("text", tr_noop("Text"), &[(ToolId::Text, Icon::Text)]),
+    // Its own key: a design file's text group remembers other tools.
+    Group::tools("btext", tr_noop("Text tools"), &[(ToolId::Text, Icon::Text), (ToolId::CodeBlock, Icon::Code)]),
     Group::tools("section", tr_noop("Section"), &[(ToolId::Section, Icon::Section)]),
     Group { key: "stamp", name: tr_noop("Stamps"), tools: &[(ToolId::Stamp, Icon::Stamp)], options: Options::Stamps },
     Group::tools("comment", tr_noop("Comment"), &[(ToolId::Comment, Icon::Comment)]),
@@ -186,6 +187,7 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
         mode_switcher(app, ui, x, cy, t);
     }
     ui.set_clip_rect(outer_clip);
+    crate::canvas::ink_bar::show(app, ui, rect);
     help_button(app, ui, canvas, rect, t);
 }
 

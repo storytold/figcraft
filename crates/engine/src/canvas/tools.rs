@@ -70,10 +70,11 @@ pub enum ToolId {
     Eraser,
     Stamp,
     MindMap,
+    CodeBlock,
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 28] = [
+    pub const ALL: [ToolId; 29] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -102,6 +103,7 @@ impl ToolId {
         ToolId::Eraser,
         ToolId::Stamp,
         ToolId::MindMap,
+        ToolId::CodeBlock,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -133,6 +135,7 @@ impl ToolId {
             ToolId::Eraser => "eraser",
             ToolId::Stamp => "stamp",
             ToolId::MindMap => "mindMap",
+            ToolId::CodeBlock => "codeBlock",
         }
     }
     /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
@@ -173,6 +176,7 @@ impl ToolId {
             ToolId::Eraser => "Eraser",
             ToolId::Stamp => "Stamp",
             ToolId::MindMap => "Mind map",
+            ToolId::CodeBlock => "Code block",
         }
     }
 
@@ -188,6 +192,7 @@ impl ToolId {
                 | ToolId::Eraser
                 | ToolId::Stamp
                 | ToolId::MindMap
+                | ToolId::CodeBlock
         )
     }
     /// The tool's key (from [`crate::keymap`]; empty when it has none).
@@ -295,6 +300,9 @@ pub enum Cursor {
     Pointer,
     Eyedropper,
     Comment,
+    /// The Pencil, Marker, Highlighter and Eraser: a round tip the canvas draws in the ink's colour
+    /// and width (`Session::ink_tip`).
+    Ink,
     /// What the gesture is doing will be undone when it ends (an edit only a main component can
     /// make).
     NotAllowed,
@@ -322,10 +330,11 @@ impl ToolId {
             ToolId::Pen => Cursor::Pen(PenCursor::New),
             ToolId::Comment => Cursor::Comment,
             ToolId::Eyedropper => Cursor::Eyedropper,
+            ToolId::Pencil | ToolId::Marker | ToolId::Highlighter | ToolId::Eraser => Cursor::Ink,
             // Text on a path acts only over a path, where it shows the I-beam.
             ToolId::Move | ToolId::Scale | ToolId::TextOnPath => Cursor::Default,
-            // The other tools make something where they are pressed: shapes, frames, slices, pencil
-            // strokes, a new text (over a text the Text tool shows the I-beam instead).
+            // The other tools make something where they are pressed: shapes, frames, slices, a new
+            // text (over a text the Text tool shows the I-beam instead).
             _ => Cursor::Crosshair,
         }
     }
@@ -633,6 +642,8 @@ pub struct ToolState {
     pub labels: Vec<(NodeId, [Point; 4])>,
     /// The brush the Pencil draws with (`tool.pencilBrush`; `None`: a plain stroke).
     pub pencil_brush: Option<figcraft_doc::Brush>,
+    /// The ink new Pencil strokes get (`tool.ink`).
+    pub pencil_ink: Ink,
     /// The board tools' colours and choices.
     pub board: crate::board::BoardTool,
     /// The eyedropper samples for a colour picker (`edit.pickColor` with `apply: false`): the
@@ -655,7 +666,32 @@ pub struct ToolState {
     pub(crate) selections_before_last_two_presses: [Option<(Point, Vec<NodeId>)>; 2],
 }
 
+/// A drawing tool's ink (`tool.ink`): the colour and stroke weight its new strokes get. A colour
+/// of `None` is the Pencil's own: black, or white on a dark page or frame (#1741).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Ink {
+    pub color: Option<figcraft_color::Color>,
+    pub weight: f64,
+}
+
+impl Default for Ink {
+    fn default() -> Self {
+        Ink { color: None, weight: PENCIL_STROKE.1 }
+    }
+}
+
 impl ToolState {
+    /// The ink `tool` draws with now; `None` for a tool that draws no ink.
+    pub fn ink(&self, tool: ToolId) -> Option<Ink> {
+        let b = &self.board;
+        match tool {
+            ToolId::Pencil => Some(self.pencil_ink),
+            ToolId::Marker => Some(Ink { color: Some(b.marker), weight: b.marker_weight }),
+            ToolId::Highlighter => Some(Ink { color: Some(b.highlighter), weight: b.highlighter_weight }),
+            _ => None,
+        }
+    }
+
     pub fn busy(&self) -> bool {
         !matches!(self.gesture, Gesture::None)
     }

@@ -211,6 +211,45 @@ fn the_first_node_carries_the_map_and_a_child_moved_by_hand_goes_back_or_swaps()
     assert!(same(bx(&s, kids3[1]).center().y, bx(&s, root).center().y - 72.0));
 }
 
+/// Move `n` so its middle lands on `onto`'s middle.
+fn drop_on(s: &mut Session, n: NodeId, onto: NodeId) {
+    let d = bx(s, onto).center() - bx(s, n).center();
+    s.execute("transform.move", &json!({"ids": [n], "dx": d.x, "dy": d.y})).unwrap();
+}
+
+#[test]
+fn a_node_dropped_on_another_node_becomes_its_child_with_its_own() {
+    // "Dropping a node on another node makes it that node's child, with its subtree."
+    let mut s = board();
+    let (root, [a, b, c], _) = map(&mut s);
+    let grandchild = id(&s.execute("board.mindMapAdd", &json!({"id": c})).unwrap(), "id");
+    let depth = s.undo_depth().0;
+    drop_on(&mut s, c, a);
+    assert_eq!(arrives_from(&s, c), Some(a), "c hangs from a now");
+    assert_eq!(arrives_from(&s, grandchild), Some(c), "and keeps its own child");
+    assert_eq!(kids(s.doc().unwrap(), root), [a, b]);
+    assert!(bx(&s, c).x0 > bx(&s, a).x1 && same(bx(&s, c).center().y, bx(&s, a).center().y), "laid out in a's column: {:?}", bx(&s, c));
+    assert!(bx(&s, grandchild).x0 > bx(&s, c).x1, "its child follows it");
+    let line = s.doc().unwrap().nodes().find(|l| matches!(&l.board, Some(BoardItem::Connector(k)) if k.branch && k.to.node() == Some(c))).unwrap().id;
+    assert!(near(drawn(&s, line)[0], Point::new(bx(&s, a).x1 + END_GAP, bx(&s, a).center().y)), "the branch leaves a");
+    assert_eq!(s.undo_depth().0, depth + 1, "one undo step");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(arrives_from(&s, c), Some(root));
+    assert_eq!(kids(s.doc().unwrap(), root), [a, b, c]);
+
+    // A drop on a node under the moved one, or on its own parent, changes nothing.
+    let was = places(&s, &[a, b, c, grandchild]);
+    drop_on(&mut s, c, grandchild);
+    assert_eq!(arrives_from(&s, c), Some(root));
+    assert_eq!(places(&s, &[a, b, c, grandchild]), was, "it goes back");
+    drop_on(&mut s, c, root);
+    assert_eq!(arrives_from(&s, c), Some(root));
+    // The first node has no branch to move: it carries its map instead.
+    drop_on(&mut s, root, b);
+    assert_eq!(arrives_from(&s, root), None);
+    second_pass_is_a_no_op(&s);
+}
+
 #[test]
 fn a_deleted_node_leaves_its_children_in_place_and_takes_its_branches() {
     let mut s = board();

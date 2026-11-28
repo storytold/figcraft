@@ -3,7 +3,7 @@
 //! board tools' flyouts share.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, NodeId, NodeKind, Routing, Stamp, StrokeCap};
+use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, CodeLanguage, NodeId, NodeKind, Routing, Stamp, StrokeCap};
 use figcraft_engine::ToolId;
 use figcraft_engine::board::{BoardTool, STICKY_SIZES, TEXT_SIZES};
 use figcraft_engine::board_grid::GridStyle;
@@ -66,9 +66,10 @@ pub(crate) fn choices(options: Options, board: &BoardTool, current: ToolId) -> V
     }
 }
 
-/// A board colour's name as the UI says it.
-fn color_label(name: &str) -> &'static str {
+/// A board or ink colour's name as the UI says it.
+pub(crate) fn color_label(name: &str) -> &'static str {
     match name {
+        "black" => tr_noop("Black"),
         "yellow" => tr_noop("Yellow"),
         "orange" => tr_noop("Orange"),
         "red" => tr_noop("Red"),
@@ -121,6 +122,8 @@ struct Has {
     /// Every selected board object is a connector: the colour part offers any colour too.
     only_lines: bool,
     table: bool,
+    /// The first selected code block's language: the bar ends in the language menu.
+    code: Option<CodeLanguage>,
 }
 
 /// The selected connectors' line as the bar shows it (the first one's), and their ids.
@@ -180,20 +183,25 @@ fn has(app: &FigApp) -> Option<Has> {
             }
             Some(BoardItem::Label { .. }) => h.text = true,
             Some(BoardItem::Table) => h.table = true,
-            Some(BoardItem::Stamp { .. } | BoardItem::CodeBlock { .. }) | None => {}
+            Some(BoardItem::CodeBlock { language }) => {
+                h.code.get_or_insert(*language);
+            }
+            Some(BoardItem::Stamp { .. }) | None => {}
         }
     }
     h.only_lines = h.connector.is_some() && !others;
-    (h.color || h.text || h.connector.is_some() || h.table).then_some(h)
+    (h.color || h.text || h.connector.is_some() || h.table || h.code.is_some()).then_some(h)
 }
 
 const CELL: f32 = 28.0;
-const SWATCH: f32 = 20.0;
-const GAP: f32 = 4.0;
+pub(crate) const SWATCH: f32 = 20.0;
+pub(crate) const GAP: f32 = 4.0;
 /// The room each part takes after its controls (the divider and the gap around it).
 const PART_END: f32 = 8.0;
 /// The sticky size menu's width: its name ("Extra large") and the chevron.
 const STICKY_W: f32 = 96.0;
+/// The language menu's width: its name ("JavaScript") and the chevron.
+const LANGUAGE_W: f32 = 104.0;
 
 impl Has {
     /// The bar's width for these parts.
@@ -219,6 +227,9 @@ impl Has {
         }
         if self.table {
             w += crate::board_picker::TABLE_PART_W;
+        }
+        if self.code.is_some() {
+            w += LANGUAGE_W + PART_END;
         }
         w
     }
@@ -252,12 +263,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let at = place(sel, size, app.canvas.rect);
     let t = Tokens::get(ctx);
     egui::Area::new(egui::Id::unique("board_bar")).fixed_pos(at).order(egui::Order::Middle).show(ctx, |ui| {
-        let (rect, _) = ui.allocate_exact_size(size, Sense::click());
-        a11y::container_bounds(ui, rect);
-        let p = ui.painter();
-        p.rect_filled(rect.expand(2.0).translate(vec2(0.0, 1.0)), CornerRadius::same(12), Color32::from_black_alpha(18));
-        p.rect_filled(rect, CornerRadius::same(10), t.panel);
-        p.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, t.border), StrokeKind::Inside);
+        let rect = bar(ui, size, &t);
         let cy = rect.center().y;
         let mut x = rect.min.x + 8.0;
         if h.color {
@@ -275,10 +281,24 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         if h.table {
             x = crate::board_picker::table_part(app, ui, x, cy, &t);
         }
+        if let Some(language) = h.code {
+            x = language_part(app, ui, language, pos2(x, cy), &t);
+        }
         if let Some(line) = &h.connector {
             line_part(app, ui, line, pos2(x, cy), &t);
         }
     });
+}
+
+/// A floating bar `size` big where `ui` starts (its shadow, panel and border); its rect.
+pub(crate) fn bar(ui: &mut Ui, size: egui::Vec2, t: &Tokens) -> Rect {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::click());
+    a11y::container_bounds(ui, rect);
+    let p = ui.painter();
+    p.rect_filled(rect.expand(2.0).translate(vec2(0.0, 1.0)), CornerRadius::same(12), Color32::from_black_alpha(18));
+    p.rect_filled(rect, CornerRadius::same(10), t.panel);
+    p.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    rect
 }
 
 /// The board colours from `x` (`board.setColor`), and for connectors `lines` any colour in the
@@ -312,7 +332,7 @@ fn color_part(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens, li
 }
 
 /// A small colour wheel: the button for any colour.
-fn paint_wheel(p: &egui::Painter, c: Pos2, r: f32) {
+pub(crate) fn paint_wheel(p: &egui::Painter, c: Pos2, r: f32) {
     const STEPS: usize = 12;
     let at = |i: usize| {
         let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;
@@ -417,6 +437,29 @@ fn sticky_size_part(app: &mut FigApp, ui: &mut Ui, size: f64, at: Pos2, t: &Toke
         }
     });
     divider(ui, t, at.x + STICKY_W, at.y)
+}
+
+/// The code language menu at `at` (its left edge and middle), showing `language`:
+/// `board.setLanguage` on the selected blocks; where the next part starts.
+fn language_part(app: &mut FigApp, ui: &mut Ui, language: CodeLanguage, at: Pos2, t: &Tokens) -> f32 {
+    let r = Rect::from_min_size(pos2(at.x, at.y - CELL / 2.0), vec2(LANGUAGE_W, CELL));
+    let tip = tr("Language");
+    let resp = ui.interact(r, ui.scope_id().with("bb_language"), Sense::click()).on_hover_text(tip);
+    a11y::menu_button(&resp, &format!("{tip} {}", tr(language.label())), a11y::menu_open(&resp));
+    if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+    }
+    ui.painter().text(pos2(r.min.x + 8.0, at.y), egui::Align2::LEFT_CENTER, tr(language.label()), semibold(11.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 9.0, at.y), vec2(12.0, 12.0)), Icon::Chevron, t.icon_secondary);
+    crate::right::menu_popup(&resp).show(|ui| {
+        for l in CodeLanguage::ALL {
+            if crate::right::menu_check(ui, l == language, tr(l.label()), "") {
+                app.run("board.setLanguage", json!({"language": l.id()}));
+                ui.close();
+            }
+        }
+    });
+    divider(ui, t, at.x + LANGUAGE_W, at.y)
 }
 
 /// A start or end point menu's width: the end's picture and the menu's chevron.
