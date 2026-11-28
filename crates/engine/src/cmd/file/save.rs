@@ -99,7 +99,7 @@ impl FileSnapshot {
     /// as of the snapshot, and edits since stay unsaved. False (nothing written) when the document
     /// was closed, saved, reverted or given another path since: the bytes are out of date.
     pub fn save(self, s: &mut Session, bytes: &[u8]) -> Result<bool> {
-        let Some(ds) = s.docs.iter_mut().find(|d| d.uid == self.uid && d.path == self.path && Arc::ptr_eq(&d.saved_doc, &self.saved)) else {
+        let Some(ds) = self.tab(s) else {
             return Ok(false);
         };
         let path = self.path.as_deref().ok_or(EngineError::NoDocument)?;
@@ -107,6 +107,27 @@ impl FileSnapshot {
         refuse_overwriting_changes(ds, path)?;
         write(path, bytes)?;
         ds.note_on_disk();
+        Ok(self.saved_as_of(s))
+    }
+
+    /// The bytes of this snapshot reached their destination some time after it was taken (a page
+    /// hosting the browser build confirmed it stored them): the file is saved as of the snapshot,
+    /// and edits made since stay unsaved, as [`save`](Self::save) leaves them. False (nothing
+    /// changes) when the tab was closed, saved, reverted or given another path since.
+    pub fn delivered(self, s: &mut Session) -> bool {
+        self.saved_as_of(s)
+    }
+
+    /// The tab this snapshot was taken of, unless it was closed, saved, reverted or given another
+    /// path since.
+    fn tab<'a>(&self, s: &'a mut Session) -> Option<&'a mut DocState> {
+        s.docs.iter_mut().find(|d| d.uid == self.uid && d.path == self.path && Arc::ptr_eq(&d.saved_doc, &self.saved))
+    }
+
+    /// Mark the tab (and its branch tabs) saved as of this snapshot; false when [`tab`](Self::tab)
+    /// finds none.
+    fn saved_as_of(self, s: &mut Session) -> bool {
+        let Some(ds) = self.tab(s) else { return false };
         // The history or branches may have changed since: then they still count as unsaved.
         if ds.revision == self.revision {
             ds.versions_changed = false;
@@ -114,7 +135,7 @@ impl FileSnapshot {
         ds.saved_doc = self.doc;
         ds.revision += 1;
         branch_tabs_saved(s, self.uid);
-        Ok(true)
+        true
     }
 }
 

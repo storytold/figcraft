@@ -298,6 +298,8 @@ mod datafill_tests;
 #[cfg(test)]
 mod default_props_tests;
 #[cfg(test)]
+mod delivered_save_tests;
+#[cfg(test)]
 mod design_context_tests;
 #[cfg(test)]
 mod design_paste_tests;
