@@ -868,7 +868,7 @@ mod caret_tests {
     use figcraft_doc::{Node, NodeId, NodeKind, StyleRun, TextData};
 
     fn text(chars: &str, fills: Vec<Paint>) -> Node {
-        let mut n = Node::new(NodeId(1), NodeKind::Text(TextData { characters: chars.into(), ..TextData::default() }), "Text", 100.0, 20.0);
+        let mut n = Node::new(NodeId(1), NodeKind::Text(TextData { characters: chars.into(), ..TextData::default() }.into()), "Text", 100.0, 20.0);
         n.fills = fills;
         n
     }

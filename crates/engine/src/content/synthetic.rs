@@ -15,7 +15,7 @@ pub const SCREEN_GAP: f64 = 80.0;
 pub const PER_SCREEN: usize = 50;
 
 fn text(content: &str) -> NodeKind {
-    NodeKind::Text(figcraft_doc::TextData::new(content))
+    NodeKind::Text(figcraft_doc::TextData::new(content).into())
 }
 
 fn ellipse() -> NodeKind {

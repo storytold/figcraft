@@ -44,7 +44,7 @@ pub(crate) fn add_text(doc: &mut Document, parent: NodeId, text: &str, size: f64
         ..TextData::default()
     };
     td.style.font_size = size;
-    let id = add(doc, parent, NodeKind::Text(td), name, (0.0, 0.0), (width.max(1.0), size * 1.4), |n| {
+    let id = add(doc, parent, NodeKind::Text(td.into()), name, (0.0, 0.0), (width.max(1.0), size * 1.4), |n| {
         n.fills = vec![Paint::solid(color)];
         n.child_layout.sizing_h = Sizing::Fill;
     })?;
@@ -297,7 +297,7 @@ fn make_shape(
         });
         n.board = Some(BoardItem::Shape { shape });
     })?;
-    add(doc, id, NodeKind::Vector { network: VectorNetwork::from_path(&shape.path(w, h)) }, "Outline", (0.0, 0.0), size, |n| {
+    add(doc, id, NodeKind::Vector { network: VectorNetwork::from_path(&shape.path(w, h)).into() }, "Outline", (0.0, 0.0), size, |n| {
         n.fills = vec![Paint::solid(color)];
         n.strokes = vec![Paint::solid(line_shade(color))];
         n.stroke.weight = 1.5;
@@ -359,7 +359,7 @@ pub(super) fn stamp_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     for part in stamp.mark() {
         let path = figcraft_geom::BezPath::from_svg(part.d).map_err(|e| EngineError::Other(format!("stamp mark: {e}")))?;
-        add(doc, id, NodeKind::Vector { network: VectorNetwork::from_path(&path) }, "Mark", (0.0, 0.0), (STAMP_SIZE, STAMP_SIZE), |n| {
+        add(doc, id, NodeKind::Vector { network: VectorNetwork::from_path(&path).into() }, "Mark", (0.0, 0.0), (STAMP_SIZE, STAMP_SIZE), |n| {
             if part.filled {
                 n.fills = vec![Paint::solid(Color::WHITE)];
             } else {

@@ -6,6 +6,7 @@ use crate::props::{
     StrokeProps,
 };
 use crate::proto::{Interaction, Overflow, ScrollPosition};
+use crate::shared::Shared;
 use crate::styles::{CollectionId, ModeId, StyleRefs, VariableId};
 use crate::text::TextData;
 use crate::vector::VectorNetwork;
@@ -78,9 +79,6 @@ pub fn ordered_props<'a>(props: &'a BTreeMap<String, PropDef>, order: &[String])
 }
 
 /// What a node is, with per-type data.
-// Text sets the size; the lint counts the gap to the next largest variant, which grew only because
-// Page's guides moved to the node (#1476).
-#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum NodeKind {
@@ -120,9 +118,9 @@ pub enum NodeKind {
     },
     Line,
     Vector {
-        network: VectorNetwork,
+        network: Shared<VectorNetwork>,
     },
-    Text(TextData),
+    Text(Shared<TextData>),
     BooleanOp {
         op: BoolOp,
     },

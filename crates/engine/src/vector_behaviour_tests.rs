@@ -323,7 +323,7 @@ fn ex_to_vector(doc: &mut figcraft_doc::Document, id: NodeId) {
     let (path, _) = figcraft_render::node_outline(doc, n).unwrap();
     let mut network = VectorNetwork::from_path(&path);
     network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
-    doc.get_mut(id).unwrap().kind = NodeKind::Vector { network };
+    doc.get_mut(id).unwrap().kind = NodeKind::Vector { network: network.into() };
 }
 
 /// How far `path` strays from `from`: the largest distance from a point sampled along `path` to
@@ -365,7 +365,7 @@ fn simplify_keeps_nearly_collinear_points_near_them() {
         {
             let n = s.doc_mut().unwrap().get_mut(id).unwrap();
             n.transform = figcraft_geom::Affine::IDENTITY;
-            n.kind = NodeKind::Vector { network };
+            n.kind = NodeKind::Vector { network: network.into() };
         }
         let before = net(&s, id);
         ex(&mut s, "vector.simplify", json!({"ids": [id], "tolerance": 0.75}));

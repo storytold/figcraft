@@ -17,11 +17,11 @@ fn cleared_range_hyperlink_round_trip() {
     let mut text = TextData { characters: "AB".into(), ..Default::default() };
     text.style.link = Some(url.clone());
     text.restyle(1, 2, |style| style.link = None);
-    document.create(page, NodeKind::Text(text), "Cleared", 0.0, 0.0, 100.0, 30.0).unwrap();
+    document.create(page, NodeKind::Text(text.into()), "Cleared", 0.0, 0.0, 100.0, 30.0).unwrap();
 
     let mut control = TextData { characters: "AB".into(), ..Default::default() };
     control.restyle(1, 2, |style| style.link = Some(url.clone()));
-    document.create(page, NodeKind::Text(control), "Explicit", 0.0, 40.0, 100.0, 30.0).unwrap();
+    document.create(page, NodeKind::Text(control.into()), "Explicit", 0.0, 40.0, 100.0, 30.0).unwrap();
 
     let expected = vec![Some(url.clone()), None];
     assert_eq!(links(&document, "Cleared"), expected);

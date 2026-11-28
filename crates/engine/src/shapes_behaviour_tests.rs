@@ -236,7 +236,7 @@ fn corner_smoothing_follows_the_documented_rules() {
         (NodeKind::Star { count: 5, inner_ratio: 0.4 }, true, "stars"),
         (
             NodeKind::Vector {
-                network: figcraft_doc::VectorNetwork::from_points(&[Point::ZERO, Point::new(10.0, 0.0), Point::new(10.0, 10.0)], true),
+                network: figcraft_doc::VectorNetwork::from_points(&[Point::ZERO, Point::new(10.0, 0.0), Point::new(10.0, 10.0)], true).into(),
             },
             true,
             "vector networks that are closed shapes",
