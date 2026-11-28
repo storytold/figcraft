@@ -111,17 +111,17 @@ fn typed_text_is_a_number_arithmetic_or_an_edit_relative_to_the_value() {
 }
 
 #[test]
-fn a_scrub_moves_a_step_a_point_ten_with_shift_and_a_tenth_with_alt() {
+fn a_scrub_moves_half_a_step_a_point_ten_times_that_with_shift_and_a_tenth_with_alt() {
     // (points dragged, the field's step, Shift, Alt) → how far the value moves
     let rows = [
-        ((25.0, 1.0, false, false), 25.0),
-        ((-25.0, 1.0, false, false), -25.0),
-        ((10.0, 1.0, true, false), 100.0),
-        ((20.0, 1.0, false, true), 2.0),
-        ((20.0, 1.0, true, true), 20.0),
-        ((10.0, 0.1, false, false), 1.0),
-        ((10.0, 0.1, true, false), 10.0),
-        ((10.0, 10.0, false, false), 100.0),
+        ((25.0, 1.0, false, false), 12.5),
+        ((-25.0, 1.0, false, false), -12.5),
+        ((10.0, 1.0, true, false), 50.0),
+        ((20.0, 1.0, false, true), 1.0),
+        ((20.0, 1.0, true, true), 10.0),
+        ((10.0, 0.1, false, false), 0.5),
+        ((10.0, 0.1, true, false), 5.0),
+        ((10.0, 10.0, false, false), 50.0),
         ((0.0, 1.0, true, false), 0.0),
     ];
     for ((dx, step, shift, alt), want) in rows {
@@ -308,7 +308,7 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
     let (mut u, a, _) = setup();
     let toast = |u: &Ui| u.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
     // (rise in points, how far 40 points of scrub move X, the notice)
-    for (rise, want, notice) in [(150.0, 80.0, "2x"), (0.0, 40.0, ""), (-150.0, 20.0, "1/2"), (-300.0, 10.0, "1/4"), (40.0, 40.0, "")] {
+    for (rise, want, notice) in [(150.0, 40.0, "2x"), (0.0, 20.0, ""), (-150.0, 10.0, "1/2"), (-300.0, 5.0, "1/4"), (40.0, 20.0, "")] {
         let x0 = geom(&u, a).0;
         u.app.ui.toast = None;
         scrub_at_height(&mut u, "X", rise, 40.0);
@@ -319,7 +319,7 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
             assert!(toast(&u).contains(notice), "rise {rise}: the notice says {}", toast(&u));
         }
     }
-    // Speeds compose with the modifiers' rates: 2x with Shift is twenty steps a point.
+    // Speeds compose with the modifiers' rates: 2x with Shift is ten steps a point.
     let x0 = geom(&u, a).0;
     let from = label(&mut u, "X");
     let shift = Modifiers { shift: true, ..Modifiers::NONE };
@@ -333,7 +333,7 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
     let to = pos2(up.x + 10.0, up.y);
     u.frame_with(vec![Event::PointerMoved(to), press(false, to)], shift);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0 - x0, 200.0, "ten points at 2x with Shift");
+    assert_eq!(geom(&u, a).0 - x0, 100.0, "ten points at 2x with Shift");
     // The pointer reported gone from the window (egui's PointerGone) with the button still down
     // keeps the speed it had: no notice of 1x, and the scrub goes on at 2x once it is back.
     let x0 = geom(&u, a).0;
@@ -356,7 +356,7 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
     let to = pos2(up.x + 30.0, up.y);
     u.frame_with(vec![Event::PointerMoved(to), press(false, to)], m);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0 - x0, 40.0, "ten points before and ten after the pointer was gone, at 2x both");
+    assert_eq!(geom(&u, a).0 - x0, 20.0, "ten points before and ten after the pointer was gone, at 2x both");
 }
 
 #[test]
@@ -366,11 +366,11 @@ fn scrubbing_the_label_moves_the_value_and_is_one_undo_step() {
     let alt = Modifiers { alt: true, ..Modifiers::NONE };
     // (field, points, modifiers, x after): X starts at 10.
     let rows = [
-        ("X", 25.0, Modifiers::NONE, 35.0),
-        ("X", 10.0, shift, 135.0),
-        ("X", 20.0, alt, 137.0),
-        ("X", -37.0, Modifiers::NONE, 100.0),
-        ("X", -8.0, shift, 20.0),
+        ("X", 24.0, Modifiers::NONE, 22.0),
+        ("X", 10.0, shift, 72.0),
+        ("X", 20.0, alt, 73.0),
+        ("X", -36.0, Modifiers::NONE, 55.0),
+        ("X", -8.0, shift, 15.0),
     ];
     for (name, dx, m, want) in rows {
         let steps = undo_steps(&u);
@@ -379,18 +379,18 @@ fn scrubbing_the_label_moves_the_value_and_is_one_undo_step() {
         assert_eq!(undo_steps(&u), steps + 1, "one undo step for the whole scrub");
     }
     u.app.run("edit.undo", json!({}));
-    assert_eq!(geom(&u, a).0, 100.0, "undo takes back the last scrub alone");
+    assert_eq!(geom(&u, a).0, 55.0, "undo takes back the last scrub alone");
     // A few points aren't a drag yet (a click on the label), then it counts from the press.
     // Alt gives tenths (the field shows them); the fraction stays under a plain scrub.
     let width = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().width;
-    scrub(&mut u, "Width", 7.0, alt);
-    assert_eq!(width(&u), 40.7);
+    scrub(&mut u, "Width", 8.0, alt);
+    assert_eq!(width(&u), 40.4);
     scrub(&mut u, "Width", 8.0, Modifiers::NONE);
-    assert_eq!(width(&u), 48.7);
-    // Fractional fields: opacity moves a percent a point, rotation a degree.
-    scrub(&mut u, "Opacity", -30.0, Modifiers::NONE);
+    assert_eq!(width(&u), 44.4);
+    // Fractional fields: opacity moves half a percent a point, rotation half a degree.
+    scrub(&mut u, "Opacity", -60.0, Modifiers::NONE);
     assert_eq!(u.app.session.doc().unwrap().node(a).unwrap().opacity, 0.7);
-    scrub(&mut u, "Rotation", 15.0, Modifiers::NONE);
+    scrub(&mut u, "Rotation", 30.0, Modifiers::NONE);
     let rot = figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(a).unwrap().transform);
     assert!((rot.abs() - 15.0).abs() < 1e-6, "rotation {rot}");
     // A press on the label that doesn't move changes nothing.
@@ -470,7 +470,7 @@ fn the_rotation_field_shows_and_sets_the_rotation_on_the_page() {
     assert_eq!(field(&mut u, "Rotation").1, "18°");
     // Scrubbing is one undo step.
     let steps = undo_steps(&u);
-    scrub(&mut u, "Rotation", 15.0, Modifiers::NONE);
+    scrub(&mut u, "Rotation", 30.0, Modifiers::NONE);
     assert!((page(&u, r) - 33.0).abs() < 1e-6, "{}", page(&u, r));
     assert_eq!(undo_steps(&u), steps + 1);
     // Mixed: layers in differently turned parents agree when their page angles do.
@@ -554,6 +554,14 @@ fn arithmetic_commits_tab_moves_on_and_escape_restores() {
     // With the keyboard on a field and nothing typed, the arrows step it.
     key(&mut u, Key::ArrowUp, Modifiers::NONE);
     assert_eq!(geom(&u, a).0, 78.0);
+    // An editor opened from the keyboard is the same one Tab stop in both directions.
+    for (first, mods) in [("X", Modifiers::NONE), ("Y", Modifiers::SHIFT)] {
+        assert_eq!(focused_name(&u.ctx), first);
+        key(&mut u, Key::Enter, Modifiers::NONE);
+        assert!(u.ctx.text_edit_focused(), "Enter opens the editor of {first}");
+        key(&mut u, Key::Tab, mods);
+        assert_eq!(focused_name(&u.ctx), if first == "X" { "Y" } else { "X" }, "one Tab from the editor of {first}");
+    }
 }
 
 /// Answers a Save as dialog with `path`, once, and counts the dialogs asked for.
@@ -669,7 +677,7 @@ fn scrubbing_colour_picker_fields_is_live_and_one_undo_step() {
     let steps = undo_steps(&u);
     let from = lead(&u, Id::unique(("cp_f", "r")));
     drag(&mut u, from, -20.0, Modifiers::NONE);
-    assert_eq!((rgba(&u)[0], undo_steps(&u)), (r0 - 20, steps + 1), "R");
+    assert_eq!((rgba(&u)[0], undo_steps(&u)), (r0 - 10, steps + 1), "R");
     // Committing adds a recent colour row and can lift the anchored picker. Settle its layout.
     for _ in 0..3 {
         u.frame(vec![]);
@@ -783,7 +791,7 @@ fn scrubbing_a_prototype_delay_sets_it_once_when_let_go() {
         figcraft_doc::proto::Trigger::AfterDelay { ms } => ms,
         _ => panic!("still after a delay"),
     };
-    assert_eq!((ms, undo_steps(&u)), (800, steps + 1));
+    assert_eq!((ms, undo_steps(&u)), (650, steps + 1));
 }
 
 /// Asserts scrubbing the scale panel's width scales the layer live in one undo step.
@@ -796,7 +804,7 @@ fn scrubbing_the_scale_panel_width_scales_live_in_one_undo_step() {
     let from = lead(&u, Id::unique("scale_w"));
     drag(&mut u, from, 20.0, Modifiers::NONE);
     let (_, _, w, h) = geom(&u, a);
-    assert_eq!((w, h, undo_steps(&u)), (60.0, 45.0, steps + 1), "40×30 scaled to a width of 60");
+    assert_eq!((w, h, undo_steps(&u)), (50.0, 37.5, steps + 1), "40×30 scaled to a width of 50");
 }
 
 /// A 100 x 100 rectangle at the origin, selected, in a Ui with the Move tool.
@@ -1350,43 +1358,37 @@ fn a_deferred_field_save_does_not_retarget_a_closed_moved_or_foreign_owner() {
 }
 
 /// A save prepared for A must not force its cached X editor into B when routing changes the
-/// presented document before the fields draw, even though both panels use the same widget ID.
+/// presented document before the fields draw, even though both panels use the same widget ID. The
+/// control channel is the route that presents B in the save's pass: a click on B's tab cannot, as
+/// the runtime ends a pass at a pointer press and the click lands in the next one.
 #[test]
 fn a_prepared_field_save_cannot_commit_into_a_same_pass_replacement_document() {
-    for route in ["control", "tab"] {
-        for save_as in [false, true] {
-            for discard in [false, true] {
-                prepared_save_cannot_enter_a_replacement(route, save_as, discard);
-            }
+    for save_as in [false, true] {
+        for discard in [false, true] {
+            prepared_save_cannot_enter_a_replacement(save_as, discard);
         }
     }
 }
 
-/// The save shortcut's key events (and, routing by tab, a click on the tab at `tab_at`), with the modifiers held.
-fn save_events(route: &str, save_as: bool, tab_at: egui::Pos2) -> (Vec<Event>, Modifiers) {
+/// The save shortcut's key events, with the modifiers held.
+fn save_events(save_as: bool) -> (Vec<Event>, Modifiers) {
     let mut modifiers = if cfg!(target_os = "macos") { Modifiers::COMMAND } else { Modifiers::COMMAND.plus(Modifiers::CTRL) };
     if save_as {
         modifiers = modifiers.plus(Modifiers::SHIFT);
     }
-    let mut events = vec![
+    let events = vec![
         Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: true, repeat: false, modifiers },
         Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: false, repeat: false, modifiers },
     ];
-    if route == "tab" {
-        events.push(Event::PointerMoved(tab_at));
-        for pressed in [true, false] {
-            events.push(Event::PointerButton { pos: tab_at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
-        }
-    }
     (events, modifiers)
 }
 
-/// One route/save-as/discard combination of the same-pass replacement test: a save prepared for A
-/// must not commit A's cached X editor into B when routing presents B before the fields draw,
-/// even though both panels use the same widget ID.
-fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard: bool) {
+/// One save-as/discard combination of the same-pass replacement test: a save prepared for A must
+/// not commit A's cached X editor into B when routing presents B before the fields draw, even
+/// though both panels use the same widget ID.
+fn prepared_save_cannot_enter_a_replacement(save_as: bool, discard: bool) {
     let (mut u, a, _) = setup();
-    let dir = std::env::temp_dir().join(format!("figcraft-field-save-owner-{}-{route}-{save_as}-{discard}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("figcraft-field-save-owner-{}-{save_as}-{discard}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (path, other, copy) = (dir.join("a.figcraft"), dir.join("b.figcraft"), dir.join("copy.figcraft"));
     u.app.session.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
@@ -1399,7 +1401,6 @@ fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard:
     u.app.session.execute("select.set", &json!({"ids": [b]})).unwrap();
     let other_index = u.app.session.active;
     let other_uid = u.app.session.ds().unwrap().uid;
-    let other_name = u.app.session.doc().unwrap().name.clone();
     let other_model = u.app.session.ds().unwrap().doc.clone();
     let before_switch_revision = u.app.session.ds().unwrap().revision;
     let other_history = u.app.session.undo_depth();
@@ -1414,15 +1415,7 @@ fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard:
     assert_eq!(other_revision, before_switch_revision + 1, "the setup switch advances only B's command revision");
     let asked = std::rc::Rc::new(std::cell::Cell::new(0));
     u.app.services = Box::new(SaveAsPicker { path: Some(copy.clone()), asked: asked.clone() });
-    let output = u.frame_output(vec![]);
-    let nodes = output.platform_output.accesskit_update.unwrap().nodes;
-    let tab = nodes
-        .iter()
-        .map(|(_, node)| node)
-        .find(|node| node.role() == Role::Tab && node.label() == Some(other_name.as_str()))
-        .expect("the actual B tab");
-    let bounds = tab.bounds().unwrap();
-    let tab_at = pos2(((bounds.x0 + bounds.x1) / 2.0) as f32, ((bounds.y0 + bounds.y1) / 2.0) as f32);
+    u.frame(vec![]);
     let (at, _) = field(&mut u, "X");
     click(&mut u, at);
     assert_eq!(u.ctx.memory(|m| m.focused()), Some(Id::unique("pos_x").with("te")));
@@ -1431,20 +1424,15 @@ fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard:
     assert_eq!(u.ctx.data(|d| d.get_temp::<String>(Id::unique("pos_x").with("editing"))), Some("77".into()));
     assert_eq!(geom(&u, a).0, 10.0, "A's raw draft is not committed yet");
     assert_eq!(u.app.session.ds().unwrap().uid, owner, "the save begins with A presented");
-    let reply = if route == "control" {
-        let (reply, rx) = std::sync::mpsc::channel();
-        u.app.control_queue.push(crate::ControlRequest {
-            id: json!("same-pass-switch"),
-            method: "engine.execute".into(),
-            params: json!({"command": "doc.switch", "params": {"index": other_index}, "window": 0}),
-            reply,
-            state: Default::default(),
-        });
-        Some(rx)
-    } else {
-        None
-    };
-    let (events, modifiers) = save_events(route, save_as, tab_at);
+    let (reply, rx) = std::sync::mpsc::channel();
+    u.app.control_queue.push(crate::ControlRequest {
+        id: json!("same-pass-switch"),
+        method: "engine.execute".into(),
+        params: json!({"command": "doc.switch", "params": {"index": other_index}, "window": 0}),
+        reply,
+        state: Default::default(),
+    });
+    let (events, modifiers) = save_events(save_as);
     if discard {
         let mut events = events;
         events.insert(0, Event::ModifiersChanged(modifiers));
@@ -1452,13 +1440,11 @@ fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard:
     } else {
         u.frame_with(events, modifiers);
     }
-    if let Some(reply) = reply {
-        let reply = reply.try_recv().expect("real control::drain acknowledged doc.switch in this pass");
-        assert!(reply.result.is_ok(), "{:?}", reply.result);
-    }
+    let reply = rx.try_recv().expect("real control::drain acknowledged doc.switch in this pass");
+    assert!(reply.result.is_ok(), "{:?}", reply.result);
     let unchanged = |u: &Ui| {
         assert_eq!(u.app.session.ds().unwrap().uid, other_uid, "the real same-pass route presents B");
-        assert_eq!(geom(u, b), (200.0, 40.0, 30.0, 30.0), "A's draft cannot enter B's field: route={route}, save_as={save_as}, discard={discard}");
+        assert_eq!(geom(u, b), (200.0, 40.0, 30.0, 30.0), "A's draft cannot enter B's field: save_as={save_as}, discard={discard}");
         assert!(std::sync::Arc::ptr_eq(&u.app.session.ds().unwrap().doc, &other_model), "B's model is untouched");
         assert_eq!(u.app.session.ds().unwrap().revision, other_revision);
         assert_eq!(u.app.session.undo_depth(), other_history, "B's undo/redo history is unchanged");
@@ -1644,10 +1630,10 @@ fn the_page_background_opacity_field_sets_the_page_colour_alpha() {
     type_into(&mut u, "Opacity", "50", Key::Enter);
     assert!(near(page_bg(&u).a, 0.5), "{:?}", page_bg(&u));
     assert_eq!(undo_steps(&u), steps + 1, "one undo step for the commit");
-    // No label is drawn, so the field's leading strip scrubs it: a percent a point, live, and one
+    // No label is drawn, so the field's leading strip scrubs it: half a percent a point, live, and one
     // undo step for the whole drag.
     let edge = lead(&u, Id::unique("pagebg_a"));
-    drag(&mut u, edge, -25.0, Modifiers::NONE);
+    drag(&mut u, edge, -50.0, Modifiers::NONE);
     assert!(near(page_bg(&u).a, 0.25), "{:?}", page_bg(&u));
     assert_eq!(undo_steps(&u), steps + 2, "one undo step for the whole scrub");
     u.app.run("edit.undo", json!({}));
@@ -1680,7 +1666,7 @@ fn the_page_background_opacity_field_sets_the_page_colour_alpha() {
 
 /// "You can also hover the input field itself and hold down the modifier key: Mac: ⌥ Option
 /// Windows: Alt" to scrub it (Adjust alignment, rotation, position, and dimensions). Alt is what
-/// makes the drag a scrub there, not the fine rate: a point moves a step, as on the label. Without
+/// makes the drag a scrub there, not the fine rate: a point moves half a step, as on the label. Without
 /// Alt a drag on the field is no click, so it neither edits nor moves anything.
 #[test]
 fn alt_held_over_a_field_scrubs_it() {
@@ -1691,13 +1677,13 @@ fn alt_held_over_a_field_scrubs_it() {
     // a drag only once it has seen Alt; egui assigns a press by the frame before it).
     let alt = Modifiers { alt: true, ..Modifiers::NONE };
     u.frame_with(vec![Event::PointerMoved(at)], alt);
-    drag(&mut u, at, 25.0, alt);
-    assert_eq!(geom(&u, a).0, 35.0, "a step a point: X from 10");
+    drag(&mut u, at, 24.0, alt);
+    assert_eq!(geom(&u, a).0, 22.0, "half a step a point: X from 10");
     assert_eq!(undo_steps(&u), steps + 1, "one undo step for the whole scrub");
-    assert_eq!(field(&mut u, "X").1, "35", "the field shows it and isn't editing");
+    assert_eq!(field(&mut u, "X").1, "22", "the field shows it and isn't editing");
     let (at, _) = field(&mut u, "X");
     drag(&mut u, at, 25.0, Modifiers::NONE);
-    assert_eq!(geom(&u, a).0, 35.0, "without Alt the field doesn't scrub");
+    assert_eq!(geom(&u, a).0, 22.0, "without Alt the field doesn't scrub");
     assert_eq!(undo_steps(&u), steps + 1);
     // Alt let go before the button still ends the scrub with its undo step.
     let (at, _) = field(&mut u, "X");
@@ -1710,7 +1696,7 @@ fn alt_held_over_a_field_scrubs_it() {
     let to = pos2(at.x + 20.0, at.y);
     u.frame_with(vec![Event::PointerMoved(to), press(false, Modifiers::NONE, to)], Modifiers::NONE);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0, 55.0, "twenty more");
+    assert_eq!(geom(&u, a).0, 32.0, "ten more");
     assert_eq!(undo_steps(&u), steps + 2, "committed when the button went up, without Alt");
     // Without Alt the field doesn't take the drag at all (a touch swipe over it is the panel's to
     // scroll): the press is a click of the field's, not a drag.
@@ -1722,7 +1708,7 @@ fn alt_held_over_a_field_scrubs_it() {
     assert!(!u.ctx.is_being_dragged(field_id), "a plain press on the field isn't a drag of the field's");
     u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y)), press(false, Modifiers::NONE, pos2(at.x + 10.0, at.y))], Modifiers::NONE);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0, 55.0, "nothing scrubbed");
+    assert_eq!(geom(&u, a).0, 32.0, "nothing scrubbed");
     // With Alt held over it, the field does take the drag.
     let (at, _) = field(&mut u, "X");
     u.frame_with(vec![Event::PointerMoved(at)], alt);
@@ -1731,7 +1717,7 @@ fn alt_held_over_a_field_scrubs_it() {
     assert!(u.ctx.is_being_dragged(field_id), "with Alt the drag is the field's");
     u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y)), press(false, alt, pos2(at.x + 10.0, at.y))], alt);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0, 65.0, "ten more");
+    assert_eq!(geom(&u, a).0, 37.0, "five more");
 }
 
 #[test]

@@ -124,7 +124,10 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     }
     // Selection.
     let editing = ds.text_edit.clone();
-    if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() {
+    // While the colour picker is being used on the selection, hide its frame and handles so the
+    // colour being picked shows on the layer itself (a text's coloured selection would hide it
+    // too).
+    if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() && !app.picker_hides_selection(painter.ctx()) {
         size_label = selection_overlay(app, painter, ds, &doc, &sel, zoom);
     }
     if app.session.tool.tool == ToolId::ShapeBuilder
@@ -171,22 +174,27 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     labels
 }
 
+/// The pixel grid's lines: one screen pixel wide, a light grey at a fifth of its strength, so
+/// they darken white and lighten a dark canvas or fill alike. Measured in Figma (2026-11-24):
+/// 242 on white and 78 on a grey of 50, which this grey gives.
+pub(crate) const PIXEL_GRID: Color32 = Color32::from_rgba_unmultiplied_const(190, 190, 190, 51);
+
 /// Pixel grid at high zoom.
 fn pixel_grid(app: &FigApp, painter: &egui::Painter) {
     let r = app.canvas.rect;
     let p0 = app.to_page(r.min);
     let p1 = app.to_page(r.max);
-    let col = Color32::from_black_alpha(18);
+    let line = stroke(PIXEL_GRID, 1.0 / painter.pixels_per_point());
     let mut x = p0.x.floor();
     while x <= p1.x {
-        let s = app.to_screen(x, 0.0).x;
-        painter.line_segment([pos2(s, r.min.y), pos2(s, r.max.y)], stroke(col, 1.0));
+        let s = painter.round_to_pixel_center(app.to_screen(x, 0.0).x);
+        painter.line_segment([pos2(s, r.min.y), pos2(s, r.max.y)], line);
         x += 1.0;
     }
     let mut y = p0.y.floor();
     while y <= p1.y {
-        let s = app.to_screen(0.0, y).y;
-        painter.line_segment([pos2(r.min.x, s), pos2(r.max.x, s)], stroke(col, 1.0));
+        let s = painter.round_to_pixel_center(app.to_screen(0.0, y).y);
+        painter.line_segment([pos2(r.min.x, s), pos2(r.max.x, s)], line);
         y += 1.0;
     }
 }
@@ -268,12 +276,16 @@ fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Do
     let preedit = app.preedit_view();
     let edoc: &Document = preedit.map(|p| &*p.doc).unwrap_or(doc);
     let Some(text) = TextOnScreen::of(edoc, te.id) else { return };
+    // While the colour picker is being used on this text, its frame and coloured selection hide
+    // too: the selection colour tinted the very characters whose colour is being chosen. The
+    // caret stays.
+    let picking = app.picker_hides_selection(painter.ctx());
     let layout = &text.layout;
-    if let Some(q) = node_quad(app, edoc, te.id) {
+    if !picking && let Some(q) = node_quad(app, edoc, te.id) {
         quad(painter, q, stroke(accent(painter), 1.0));
     }
     let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
-    if a != b && preedit.is_none() {
+    if a != b && preedit.is_none() && !picking {
         for q in text.selection(app, a, b) {
             painter.add(Shape::convex_polygon(q.to_vec(), accent(painter).gamma_multiply(0.3), Stroke::NONE));
         }
@@ -401,24 +413,25 @@ fn selection_overlay(
         // Mode: no handles either.
         // Crop mode draws its own marks on the box instead (`handles::crop_marks`).
         let cropping = app.ui.crop.is_some();
+        // A code block keeps only its width: handles on its left and right edges instead of corners.
+        let width_only = figcraft_engine::board::is_one_code_block(doc, sel);
         let handles = if cropping || measuring || app.session.tool.dev_mode || connector.is_some() || geo.locked {
             0
         } else if is_line {
             2
-        } else if tiny {
+        } else if tiny || width_only {
             0
         } else {
             4
         };
-        size_label = transform_box(
-            app,
-            painter,
-            b.map(|p| app.to_screen(p.x, p.y)),
-            col,
-            sel.len() > 1,
-            handles,
-            (!measuring && connector.is_none()).then_some(label),
-        );
+        let q = b.map(|p| app.to_screen(p.x, p.y));
+        size_label = transform_box(app, painter, q, col, sel.len() > 1, handles, (!measuring && connector.is_none()).then_some(label));
+        if width_only && !(cropping || measuring || app.session.tool.dev_mode || geo.locked) {
+            // Edges run top, right, bottom, left from the corners tl, tr, br, bl.
+            for (a, c) in [(q[1], q[2]), (q[3], q[0])] {
+                edge_handle(painter, a, c, col);
+            }
+        }
         // Its path handles, one for each portion that can be dragged.
         let paths = if app.session.tool.dev_mode { Vec::new() } else { figcraft_engine::board::selected_connector_handles(doc, sel, zoom) };
         for (_, at) in paths {
@@ -492,9 +505,9 @@ fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
         let pts: Vec<Pos2> = ov.pen.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
         if app.session.tool.tool == ToolId::Pencil {
             // The stroke it will make, in its colour and weight (at least a point when zoomed out):
-            // white over a dark page or frame, as the stroke will be (#1741).
-            let (default, weight) = figcraft_engine::tools::PENCIL_STROKE;
-            let color = ov.pen_color.unwrap_or(default);
+            // white over a dark page or frame, as the stroke will be (#1741), or the ink chosen (#2395).
+            let weight = app.session.tool.pencil_ink.weight;
+            let color = ov.pen_color.unwrap_or(figcraft_engine::tools::PENCIL_STROKE.0);
             painter.add(Shape::line(pts, stroke(doc_c32(painter.ctx(), color), ((weight * zoom) as f32).max(1.0))));
         } else {
             for [x0, y0, x1, y1] in &ov.pen_handles {
@@ -573,6 +586,14 @@ fn transform_box(
         return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
     }
     None
+}
+
+/// A handle on the middle of the box edge from `a` to `b` on screen: a white bar along it.
+fn edge_handle(painter: &egui::Painter, a: Pos2, b: Pos2, col: Color32) {
+    let along = (b - a).normalized();
+    let (u, n) = (along * 9.0, along.rot90() * 3.0);
+    let c = a + (b - a) / 2.0;
+    painter.add(Shape::convex_polygon(vec![c - u - n, c + u - n, c + u + n, c - u + n], Color32::WHITE, stroke(col, 1.0)));
 }
 
 /// Blue dashed guides showing how a selected layer is pinned within its parent frame, and a short

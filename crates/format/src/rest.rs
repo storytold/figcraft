@@ -32,6 +32,8 @@ mod gamepad_tests;
 mod grid_track_tests;
 #[cfg(test)]
 mod import_regression_tests;
+#[cfg(test)]
+mod pattern_tests;
 pub(crate) mod props;
 pub(crate) mod proto;
 #[cfg(test)]
@@ -46,6 +48,7 @@ mod variables;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use figcraft_doc::color::{Paint, PaintKind};
 use figcraft_doc::geom::{Affine, BezPath, Rect, Shape};
 use figcraft_doc::proto::Flow;
 use figcraft_doc::{
@@ -61,18 +64,18 @@ pub use variables::export as export_variables;
 pub const MAX_NODES: usize = 200_000;
 /// Deepest layer nesting followed.
 const MAX_DEPTH: usize = 256;
-/// Private .fig provenance, consumed only by the `.fig` import ([`import_with_networks`]).
-pub(crate) const FIG_SOURCE_FIELD: &str = "_figSource";
-/// Hidden .fig library context; accepted only by the `.fig` import ([`import_with_networks`]).
-pub(crate) const FIG_LIBRARY_CONTEXTS_FIELD: &str = "_figLibraryContexts";
-/// Ids of mains in a `.fig` file that its layer cap kept out; read only by the `.fig` import.
-pub(crate) const FIG_CAPPED_MAINS_FIELD: &str = "_figCappedMains";
+/// The `.fig` mapping's private handoffs, read only by the `.fig` import ([`import_with_networks`]).
+pub(crate) use craft_fig::rest::{FIG_CAPPED_MAINS_FIELD, FIG_LIBRARY_CONTEXTS_FIELD, FIG_SOURCE_FIELD};
 /// Longest SVG path string read from one geometry entry.
 const MAX_PATH_BYTES: usize = 4 << 20;
 /// Most path elements in one vector.
 const MAX_PATH_ELEMENTS: usize = 200_000;
-/// Most distinct warnings reported.
-pub(crate) const MAX_WARNINGS: usize = 200;
+#[cfg(test)]
+pub(crate) use craft_figma_rest::MAX_WARNINGS;
+/// Distinct warnings in first-seen order, with repeat counts (at most 200). The
+/// import report reads the `(×n)` suffix off before it looks the note up in the catalogue, so a
+/// counted note is still translated (`ui-egui`'s `note_text`).
+pub(crate) use craft_figma_rest::Warnings;
 /// Most shared style definitions read.
 const MAX_STYLES: usize = 10_000;
 /// Image key used for image fills without an `imageRef`.
@@ -348,41 +351,6 @@ fn children(v: &Value) -> &[Value] {
     v.get("children").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default()
 }
 
-/// Distinct warnings in first-seen order, with repeat counts. Shared with the `.fig` mapper
-/// (`crate::fig::map`), whose notes repeat per layer in the same way.
-#[derive(Default)]
-pub(crate) struct Warnings {
-    list: Vec<(String, usize)>,
-    index: BTreeMap<String, usize>,
-}
-
-impl Warnings {
-    pub(crate) fn add(&mut self, msg: String) {
-        if let Some(i) = self.index.get(&msg) {
-            if let Some(e) = self.list.get_mut(*i) {
-                e.1 += 1;
-            }
-        } else if self.list.len() < MAX_WARNINGS {
-            self.index.insert(msg.clone(), self.list.len());
-            self.list.push((msg, 1));
-        }
-    }
-
-    /// The notes met so far, without their counts, for the tests that ask whether one was met
-    /// (the product reads them through [`Self::finish`], with the counts).
-    #[cfg(test)]
-    pub(crate) fn seen(&self) -> impl Iterator<Item = &str> {
-        self.list.iter().map(|(msg, _)| msg.as_str())
-    }
-
-    /// The notes, each with `(×n)` after it where it was met more than once. The import report
-    /// reads that suffix off before it looks the note up in the catalogue, so a counted note is
-    /// still translated (`ui-egui`'s `note_text`).
-    pub(crate) fn finish(self) -> Vec<String> {
-        self.list.into_iter().map(|(m, n)| if n > 1 { format!("{m} (×{n})") } else { m }).collect()
-    }
-}
-
 /// The coordinate spaces a child is placed in: its parent's (`world`) and that of the nearest
 /// ancestor that is not a group or boolean (`frame`), both relative to the page.
 #[derive(Clone, Copy)]
@@ -457,6 +425,9 @@ pub(crate) struct Ctx<'a> {
     max_nodes: usize,
     /// Mains the `.fig` file has but its layer cap kept out ([`FIG_CAPPED_MAINS_FIELD`]).
     capped_mains: BTreeSet<String>,
+    /// The REST ids of the layers pattern paints tile, by the number each paint holds until
+    /// [`Self::link_patterns`].
+    pattern_sources: Vec<String>,
 }
 
 impl<'a> Ctx<'a> {
@@ -488,6 +459,7 @@ impl<'a> Ctx<'a> {
             networks: Vec::new(),
             max_nodes: MAX_NODES,
             capped_mains: BTreeSet::new(),
+            pattern_sources: Vec::new(),
         }
     }
 
@@ -1118,6 +1090,9 @@ impl<'a> Ctx<'a> {
 
     /// Cross-references that need every layer imported first.
     fn finish(&mut self) {
+        // First: instances resolved below copy layers, and a copy re-points the patterns it
+        // carries by node id, which these aren't yet.
+        self.link_patterns();
         // A `.fig` import (its sources are taken below) noted each missing image already.
         let fig = self.fig_sources.is_some();
         self.resolve_swap_defaults();
@@ -1165,6 +1140,59 @@ impl<'a> Ctx<'a> {
         if unused > 0 {
             let (s, verb) = if unused == 1 { ("", "was") } else { ("s", "were") };
             self.warn(format!("{unused} style{s} that no layer uses {verb} skipped (the file JSON carries style values only on layers)"));
+        }
+    }
+
+    /// Point each pattern paint at the layer it tiles ([`props::pattern`]); one whose layer
+    /// wasn't imported is dropped.
+    fn link_patterns(&mut self) {
+        if self.pattern_sources.is_empty() {
+            return;
+        }
+        let sources: Vec<Option<u64>> = std::mem::take(&mut self.pattern_sources).iter().map(|id| self.ids.get(id).map(|n| n.0)).collect();
+        let mut missing = 0usize;
+        let mut link = |paints: &mut Vec<Paint>| {
+            paints.retain_mut(|p| match &mut p.kind {
+                PaintKind::Pattern(pt) => match usize::try_from(pt.source).ok().and_then(|i| sources.get(i).copied().flatten()) {
+                    Some(id) => {
+                        pt.source = id;
+                        true
+                    }
+                    None => {
+                        missing += 1;
+                        false
+                    }
+                },
+                _ => true,
+            });
+        };
+        let is_pattern = |p: &Paint| matches!(p.kind, PaintKind::Pattern(_));
+        let with: Vec<NodeId> = self
+            .doc
+            .nodes()
+            .filter(|n| {
+                n.fills.iter().chain(&n.strokes).any(is_pattern)
+                    || matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().filter_map(|r| r.fills.as_ref()).flatten().any(is_pattern))
+            })
+            .map(|n| n.id)
+            .collect();
+        for id in with {
+            let Some(n) = self.doc.node_mut(id) else { continue };
+            link(&mut n.fills);
+            link(&mut n.strokes);
+            if let NodeKind::Vector { network } = &mut n.kind {
+                for fills in network.regions.iter_mut().filter_map(|r| r.fills.as_mut()) {
+                    link(fills);
+                }
+            }
+        }
+        for style in &mut self.doc.styles {
+            if let StyleKind::Paint { paints } = &mut style.kind {
+                link(paints);
+            }
+        }
+        if missing > 0 {
+            self.warn(format!("{missing} pattern paint(s) tile a layer that wasn't imported and were skipped"));
         }
     }
 

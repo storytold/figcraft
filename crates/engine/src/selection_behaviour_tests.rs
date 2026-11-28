@@ -109,6 +109,42 @@ fn sorted(mut v: Vec<NodeId>) -> Vec<NodeId> {
 }
 
 #[test]
+fn clicking_a_device_background_after_its_nested_button_selects_the_device() {
+    let mut s = Session::new();
+    let device = id(&ex(&mut s, "frame.create", json!({"x": 132, "y": -148, "width": 440, "height": 956})));
+    let button = id(&ex(&mut s, "frame.create", json!({"parent": device, "x": 155, "y": 30, "width": 130, "height": 34})));
+    rect(&mut s, 10.0, 5.0, Some(button));
+    ex(&mut s, "layout.add", json!({"ids": [button], "direction": "horizontal"}));
+    ex(&mut s, "select.set", json!({"ids": [button]}));
+    let before = s.doc().unwrap().clone();
+    let history = s.undo_depth();
+    s.pointer(&ev(PointerKind::Down, 352.0, 330.0, NONE)).unwrap();
+    assert_eq!(s.selection(), vec![device], "the parent is selected on press");
+    // Small pointer jitter must not turn the click into a zero-sized marquee.
+    s.pointer(&ev(PointerKind::Move, 353.0, 330.0, NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 353.0, 330.0, NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Hover, 353.0, 330.0, NONE)).unwrap();
+    assert_eq!(s.selection(), vec![device], "the parent stays selected after release and hover");
+    assert_eq!(*s.doc().unwrap(), before);
+    assert_eq!(s.undo_depth(), history, "selection adds no edit history");
+}
+
+#[test]
+fn dragging_a_device_background_after_its_child_still_marquees_and_closes_cleanly() {
+    let mut s = Session::new();
+    let k = scene(&mut s);
+    ex(&mut s, "select.set", json!({"ids": [k.d]}));
+    drag(&mut s, (390.0, 290.0), (190.0, 10.0), NONE);
+    assert_eq!(s.selection(), vec![k.n], "a background drag selects the nested frame");
+    assert!(s.ds().unwrap().interaction.is_none(), "a marquee leaves no move snapshot behind");
+    ex(&mut s, "node.set", json!({"id": k.n, "props": {"opacity": 0.5}}));
+    click(&mut s, 30.0, 130.0, NONE);
+    assert_eq!(s.doc().unwrap().node(k.n).unwrap().opacity, 0.5, "the next click keeps the edit");
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc().unwrap().node(k.n).unwrap().opacity, 1.0, "the edit retains its undo step");
+}
+
+#[test]
 fn clicking_selects_by_the_documented_rules() {
     let mut s = Session::new();
     let k = scene(&mut s);
@@ -130,6 +166,9 @@ fn clicking_selects_by_the_documented_rules() {
         ((520.0, 120.0), NONE, vec![], vec![k.r2], "a locked layer can't be selected on the canvas: the click goes to what is under it"),
         ((520.0, 220.0), NONE, vec![k.r], vec![], "a hidden layer can't be selected on the canvas (empty canvas deselects)"),
         ((390.0, 290.0), NONE, vec![k.r], vec![], "the background of a top-level frame with layers is like the canvas: a click deselects"),
+        ((390.0, 290.0), NONE, vec![k.c], vec![k.f], "clicking the containing frame's background steps out from its child"),
+        ((390.0, 290.0), NONE, vec![k.d], vec![k.f], "stepping out works from a deeper descendant too"),
+        ((390.0, 290.0), NONE, vec![], vec![], "without a selected descendant the background remains canvas-like"),
         ((390.0, 290.0), NONE, vec![k.f], vec![k.f], "a selected top-level frame stays selected when its background is clicked"),
         ((390.0, 290.0), CMD, vec![], vec![k.f], "silent: Cmd/Ctrl-click on a frame's background selects the frame (the deepest layer there)"),
         ((640.0, 40.0), NONE, vec![], vec![k.empty], "an empty top-level frame is selected by a click on it"),
@@ -139,6 +178,151 @@ fn clicking_selects_by_the_documented_rules() {
         click(&mut s, p.0, p.1, m);
         assert_eq!(sorted(s.selection()), sorted(after), "{why}");
     }
+}
+
+/// A screen with a device chrome overlay: the top-level frame `screen` (0,0 390×844) holds a text
+/// at (40,200), the rectangle `content` (40,300) and, above them, `inst`, an unfilled instance of
+/// a component the size of the screen with a status bar (`status`) at the top and a home
+/// indicator at the bottom, nothing in between.
+struct Chrome {
+    screen: NodeId,
+    text: NodeId,
+    content: NodeId,
+    inst: NodeId,
+    status: NodeId,
+}
+
+fn device_chrome(s: &mut Session) -> Chrome {
+    let screen = id(&ex(s, "frame.create", json!({"x": 0, "y": 0, "width": 390, "height": 844})));
+    let text = id(&ex(s, "text.create", json!({"text": "Hello", "x": 40, "y": 200, "parent": screen})));
+    let content = rect(s, 40.0, 300.0, Some(screen));
+    let chrome = id(&ex(s, "frame.create", json!({"x": 600, "y": 0, "width": 390, "height": 844})));
+    ex(s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 390, "height": 47, "parent": chrome}));
+    ex(s, "shape.rectangle", json!({"x": 128, "y": 830, "width": 134, "height": 5, "parent": chrome}));
+    ex(s, "node.set", json!({"ids": [chrome], "props": {"fills": []}}));
+    let comp = id(&ex(s, "component.create", json!({"ids": [chrome]})));
+    let inst = id(&ex(s, "instance.create", json!({"component": comp, "x": 0, "y": 0, "parent": screen})));
+    let status = s.doc().unwrap().node(inst).unwrap().children[0];
+    ex(s, "select.none", json!({}));
+    Chrome { screen, text, content, inst, status }
+}
+
+/// Observed in the reference app with synthetic files: with Cmd/Ctrl held, a frame, component
+/// or instance nested in another layer is hit only where it has a visible fill (its stroke and
+/// its empty box let the pick through to the layers under it), while a plain click still picks
+/// it by its box. A device chrome overlay shows it: a status bar and a home indicator in an
+/// unfilled instance the size of the screen, over the screen's content.
+#[test]
+fn cmd_click_reaches_through_an_unfilled_nested_frame() {
+    let mut s = Session::new();
+    let Chrome { screen, content, inst, status, .. } = device_chrome(&mut s);
+    let unfilled = json!([]);
+    let filled = json!([{"type": "solid", "color": "#FFFFFF"}]);
+    let hidden = json!([{"type": "solid", "color": "#FFFFFF", "visible": false}]);
+    let clear = json!([{"type": "solid", "color": "#FFFFFF", "opacity": 0}]);
+    // (the instance's fills, point, modifiers, selection after, derivation)
+    let rows: Vec<(&Value, (f64, f64), Mods, NodeId, &str)> = vec![
+        (&unfilled, (60.0, 320.0), CMD, content, "Cmd/Ctrl-click reaches the layer under the unfilled instance"),
+        (&unfilled, (200.0, 600.0), CMD, screen, "with nothing under it there, the top-level frame is picked"),
+        (&unfilled, (200.0, 20.0), CMD, status, "a layer inside the instance is still the deepest layer"),
+        (&unfilled, (60.0, 320.0), NONE, inst, "a plain click still picks the instance by its box"),
+        (&filled, (200.0, 600.0), CMD, inst, "a visible fill makes the instance the deepest layer there"),
+        (&filled, (60.0, 320.0), CMD, inst, "and hides the layer under it"),
+        (&hidden, (60.0, 320.0), CMD, content, "a hidden fill paints nothing"),
+        (&clear, (60.0, 320.0), CMD, content, "a fill at 0% paints nothing"),
+    ];
+    for (fills, p, m, after, why) in rows {
+        ex(&mut s, "node.set", json!({"ids": [inst], "props": {"fills": fills}}));
+        ex(&mut s, "select.none", json!({}));
+        click(&mut s, p.0, p.1, m);
+        assert_eq!(s.selection(), vec![after], "{why}");
+    }
+    ex(&mut s, "node.set", json!({"ids": [inst], "props": {"fills": []}}));
+    ex(&mut s, "stroke.add", json!({"ids": [inst]}));
+    ex(&mut s, "select.none", json!({}));
+    click(&mut s, 0.5, 600.0, CMD);
+    assert_eq!(s.selection(), vec![screen], "a frame's stroke doesn't count: the pick goes through it too");
+    s.pointer(&ev(PointerKind::Hover, 60.0, 320.0, CMD)).unwrap();
+    assert_eq!(s.ds().unwrap().hover, Some(content), "hover with Cmd/Ctrl held shows what a Cmd/Ctrl-click picks");
+    s.pointer(&ev(PointerKind::Hover, 60.0, 320.0, NONE)).unwrap();
+    assert_eq!(s.ds().unwrap().hover, Some(inst), "and without it, what a click picks");
+    // The instance being selected doesn't stop the pick: the press isn't on it there.
+    for (p, after, why) in [
+        ((60.0, 320.0), content, "with the instance selected, Cmd/Ctrl-click still reaches the layer under it"),
+        ((200.0, 600.0), screen, "and on an empty spot there, the top-level frame"),
+    ] {
+        ex(&mut s, "select.set", json!({"ids": [inst]}));
+        click(&mut s, p.0, p.1, CMD);
+        assert_eq!(s.selection(), vec![after], "{why}");
+    }
+
+    // A plain nested frame does the same. A frame directly in a section is a board, like a
+    // top-level frame: it keeps its box.
+    let card = id(&ex(&mut s, "frame.create", json!({"x": 1000, "y": 0, "width": 300, "height": 300})));
+    let inside = rect(&mut s, 20.0, 20.0, Some(card));
+    let veil = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 300, "parent": card})));
+    ex(&mut s, "node.set", json!({"ids": [veil], "props": {"fills": []}}));
+    let sec = id(&ex(&mut s, "node.create", json!({"type": "section", "x": 2000, "y": 0, "width": 400, "height": 400})));
+    let board = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 50, "y": 50, "width": 100, "height": 100, "parent": sec})));
+    ex(&mut s, "node.set", json!({"ids": [board], "props": {"fills": []}}));
+    for (p, after, why) in [
+        ((1040.0, 40.0), inside, "an unfilled nested frame lets the pick through like an instance"),
+        ((2100.0, 100.0), board, "Cmd/Ctrl-click on the background of a frame in a section picks the frame"),
+    ] {
+        ex(&mut s, "select.none", json!({}));
+        click(&mut s, p.0, p.1, CMD);
+        assert_eq!(s.selection(), vec![after], "{why}");
+    }
+}
+
+/// With no board under it (a frame in a group on the page), a Cmd/Ctrl press in an unfilled
+/// frame's empty part reaches nothing, whether the frame is selected or not: it starts a marquee
+/// there and doesn't move the frame.
+#[test]
+fn a_cmd_press_through_a_selected_unfilled_frame_onto_nothing_starts_a_marquee() {
+    let gesture = |selected: bool| {
+        let mut s = Session::new();
+        let veil = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 200})));
+        ex(&mut s, "node.set", json!({"ids": [veil], "props": {"fills": []}}));
+        let dot = rect(&mut s, 300.0, 0.0, None);
+        ex(&mut s, "object.group", json!({"ids": [veil, dot]}));
+        let before: Vec<NodeId> = if selected { vec![veil] } else { vec![] };
+        ex(&mut s, "select.set", json!({"ids": before}));
+        drag(&mut s, (100.0, 100.0), (150.0, 150.0), CMD);
+        let at = s.doc().unwrap().world_bounds(veil).unwrap();
+        (s.selection(), (at.x0, at.y0))
+    };
+    let (unselected, at) = gesture(false);
+    assert_eq!(at, (0.0, 0.0), "unselected, the press starts a marquee");
+    let (selected, at) = gesture(true);
+    assert_eq!(at, (0.0, 0.0), "selected, the frame doesn't move either: the press isn't on it");
+    assert_eq!(selected, unselected, "and the marquee picks the same layers");
+}
+
+/// A click and a double-click with `m` held on the middle of the layer `pick` chooses, in a fresh
+/// device chrome scene.
+fn double_click_on(m: Mods, pick: fn(&Chrome) -> NodeId) -> (Session, Chrome) {
+    let mut s = Session::new();
+    let k = device_chrome(&mut s);
+    let p = s.doc().unwrap().world_bounds(pick(&k)).unwrap().center();
+    click(&mut s, p.x, p.y, m);
+    s.pointer(&ev(PointerKind::DoubleClick, p.x, p.y, m)).unwrap();
+    (s, k)
+}
+
+/// Observed in the reference app with synthetic files: Cmd/Ctrl + double-click reaches a layer
+/// under an unfilled overlay like a Cmd/Ctrl-click and edits it at once (a text goes into text
+/// editing, a shape into vector edit mode). A plain double-click picks the overlay, which is
+/// caught by its box and has nothing inside there to enter.
+#[test]
+fn cmd_double_click_edits_the_layer_under_an_unfilled_instance() {
+    let (s, k) = double_click_on(CMD, |k| k.text);
+    assert_eq!(s.ds().unwrap().text_edit.as_ref().map(|t| t.id), Some(k.text), "Cmd/Ctrl + double-click on a text edits it");
+    let (s, k) = double_click_on(CMD, |k| k.content);
+    assert_eq!(s.ds().unwrap().vector_edit.as_ref().map(|v| v.id), Some(k.content), "on a shape, it edits the shape's points");
+    let (s, k) = double_click_on(NONE, |k| k.text);
+    assert_eq!(s.selection(), vec![k.inst], "a plain double-click picks the overlay");
+    assert!(s.ds().unwrap().text_edit.is_none(), "and edits nothing");
 }
 
 /// The operand of boolean `u` under x (its children are the two rectangles).
@@ -522,4 +706,72 @@ fn shift_click_takes_a_layer_out_where_nothing_can_move() {
     assert!(s.pointer(&ev(PointerKind::Down, 520.0, 20.0, SHIFT)).is_err(), "a version being viewed can't be edited");
     s.pointer(&ev(PointerKind::Up, 520.0, 20.0, SHIFT)).unwrap();
     assert_eq!(s.selection(), vec![k.empty], "Shift-click still takes the layer out");
+}
+
+/// A top-level 300 x 300 frame with a filled 100 x 100 rectangle at (50, 50) and a nested 100 x 100
+/// frame at (180, 180) holding a 40 x 40 rectangle at (200, 200).
+fn frame_with_child(s: &mut Session) -> (NodeId, NodeId, NodeId, NodeId) {
+    let f = id(&ex(s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 300})));
+    let c = id(&ex(s, "shape.rectangle", json!({"x": 50, "y": 50, "width": 100, "height": 100, "parent": f})));
+    let n = id(&ex(s, "frame.create", json!({"x": 180, "y": 180, "width": 100, "height": 100, "parent": f})));
+    let gc = id(&ex(s, "shape.rectangle", json!({"x": 200, "y": 200, "width": 40, "height": 40, "parent": n})));
+    (f, c, n, gc)
+}
+
+#[test]
+fn a_drag_from_a_child_of_a_selected_frame_moves_the_frame() {
+    let mut s = Session::new();
+    let (f, c, _n, gc) = frame_with_child(&mut s);
+    let sib = id(&ex(&mut s, "shape.rectangle", json!({"x": 90, "y": 90, "width": 30, "height": 30})));
+    let at = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap().origin();
+    let local = |s: &Session, i: NodeId| {
+        let d = s.doc().unwrap();
+        let n = d.node(i).unwrap();
+        let c = n.transform.as_coeffs();
+        (c[4], c[5])
+    };
+    let c_local = local(&s, c);
+    // (selection before, press point, modifiers, selection after, the layers that move by (10, 10), derivation)
+    let rows: Vec<(Vec<NodeId>, (f64, f64), Mods, Vec<NodeId>, Vec<NodeId>, &str)> = vec![
+        (vec![f], (60.0, 60.0), NONE, vec![f], vec![f, c, gc], "a drag from a child of the selected frame moves the frame"),
+        (vec![f], (220.0, 220.0), NONE, vec![f], vec![f, c, gc], "a drag from a grandchild moves the top-level frame"),
+        (vec![], (60.0, 60.0), NONE, vec![c], vec![c], "with nothing selected the child is picked and moved"),
+        (vec![f], (60.0, 60.0), CMD, vec![c], vec![c], "Cmd picks the deepest layer and moves it"),
+        (vec![f], (100.0, 100.0), NONE, vec![sib], vec![sib], "a sibling painted above the frame takes the press"),
+    ];
+    for (before, from, m, after, moved, why) in rows {
+        let all = [f, c, gc, sib];
+        let home: Vec<Point> = all.iter().map(|i| at(&s, *i)).collect();
+        ex(&mut s, "select.set", json!({"ids": before}));
+        drag(&mut s, from, (from.0 + 10.0, from.1 + 10.0), m);
+        assert_eq!(sorted(s.selection()), sorted(after), "{why}");
+        for (i, h) in all.iter().zip(&home) {
+            // The frame carries its children: they move in the world, not in their local space.
+            let d = if moved.contains(i) { 10.0 } else { 0.0 };
+            assert_eq!(at(&s, *i), Point::new(h.x + d, h.y + d), "{why}");
+        }
+        assert_eq!(local(&s, c), if moved == [c] { (c_local.0 + 10.0, c_local.1 + 10.0) } else { c_local }, "{why}: the child's local position");
+        assert!(s.undo().unwrap(), "{why}: one undo step");
+        for (i, h) in all.iter().zip(&home) {
+            assert_eq!(at(&s, *i), *h, "{why}: undo restores");
+        }
+    }
+}
+
+#[test]
+fn a_click_on_a_child_of_a_selected_frame_selects_the_child() {
+    let mut s = Session::new();
+    let (f, c, n, gc) = frame_with_child(&mut s);
+    let home = s.doc().unwrap().world_bounds(c).unwrap().origin();
+    for (p, want) in [((60.0, 60.0), c), ((190.0, 190.0), n)] {
+        ex(&mut s, "select.set", json!({"ids": [f]}));
+        click(&mut s, p.0, p.1, NONE);
+        assert_eq!(s.selection(), vec![want], "a click selects the layer inside the selected frame");
+    }
+    assert_eq!(s.doc().unwrap().world_bounds(c).unwrap().origin(), home, "nothing moved");
+    let _ = gc;
+    s.tool.dev_mode = true;
+    ex(&mut s, "select.set", json!({"ids": [f]}));
+    click(&mut s, 60.0, 60.0, NONE);
+    assert_eq!(s.selection(), vec![c], "in Dev Mode too");
 }

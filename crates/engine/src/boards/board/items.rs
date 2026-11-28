@@ -26,7 +26,7 @@ pub(super) fn add(
 }
 
 /// A soft shadow under stickies and stamps.
-fn soft_shadow() -> Effect {
+pub(super) fn soft_shadow() -> Effect {
     Effect {
         kind: EffectKind::DropShadow(Shadow { color: Color::new(0.0, 0.0, 0.0, 0.16), offset: (0.0, 2.0), radius: 6.0, ..Shadow::default() }),
         visible: true,
@@ -142,14 +142,21 @@ pub(super) fn next_sticky(s: &mut Session, p: &Value) -> Result<Value> {
     let from = id(p, "id")
         .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
         .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
-        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky or a shape first".into()))?;
+        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky, a shape, a code block or a mind map node first".into()))?;
     let n = doc.get(from)?;
+    if let Some(BoardItem::CodeBlock { language }) = n.board {
+        return super::code::next_block(s, from, language, p);
+    }
+    if n.board == Some(BoardItem::MindNode) {
+        // A mind map node gets its next sibling (#2226), as a shape gets the next shape joined to it.
+        return super::mindmap::mind_map_add(s, &json!({"id": from, "relation": "sibling", "edit": boolean(p, "edit").unwrap_or(false)}));
+    }
     if matches!(n.board, Some(BoardItem::Shape { .. })) {
         // A shape gets the next one joined to it, as the "+" beside it makes (#1597).
         return add_connected(s, p);
     }
     if !matches!(n.board, Some(BoardItem::Sticky { .. })) {
-        return Err(bad(cmd, "that isn't a sticky or a shape"));
+        return Err(bad(cmd, "that isn't a sticky, a shape, a code block or a mind map node"));
     }
     let color = n.fills.iter().find_map(Paint::solid_color).unwrap_or(s.tool.board.sticky);
     let parent = n.parent.ok_or_else(|| bad(cmd, "that sticky has no parent"))?;
@@ -374,7 +381,9 @@ pub(super) fn ink_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     require(s, cmd)?;
     let high = boolean(p, "highlighter").unwrap_or(false);
     let color = color_param(cmd, p)?.unwrap_or(if high { s.tool.board.highlighter } else { s.tool.board.marker });
-    let (weight, opacity) = if high { HIGHLIGHTER } else { MARKER };
+    let opacity = if high { HIGHLIGHTER.1 } else { MARKER.1 };
+    let b = &s.tool.board;
+    let weight = super::weight_param(cmd, p)?.unwrap_or(if high { b.highlighter_weight } else { b.marker_weight });
     if get(p, "path").is_none() && get(p, "points").is_none() {
         return Err(bad(cmd, "`path` or `points` is required"));
     }

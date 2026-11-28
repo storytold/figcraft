@@ -21,6 +21,8 @@ use crate::EngineError;
 /// The first node's text size and the other nodes'.
 const MIND_ROOT_SIZE: f64 = 24.0;
 const MIND_NODE_SIZE: f64 = 16.0;
+/// The first node's height with one line of text (the mind map tool centres it on the click).
+pub(super) const MIND_ROOT_H: f64 = MIND_ROOT_SIZE * MIND_LINE_HEIGHT / 100.0;
 /// The line height of every node's text, in percent, and the letter spacing of the first node's
 /// and the others' (percent of the size).
 const MIND_LINE_HEIGHT: f64 = 150.0;
@@ -197,15 +199,40 @@ pub(super) fn mind_map_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": root, "text": label, "children": made}))
 }
 
+/// What `board.mindMapAdd` adds to when it is given no `id`: the owner of the text being typed in,
+/// else the first selected layer (or the board object whose text that is).
+fn target(s: &Session) -> Option<NodeId> {
+    let doc = s.doc().ok()?;
+    let editing = s.ds().ok()?.text_edit.as_ref().map(|t| t.id);
+    editing.and_then(|t| owner_of_text(doc, t)).or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
+}
+
+/// The mind map node `board.mindMapAdd` would add to with no `id` (the UI asks before it binds a key).
+pub fn mind_node_target(s: &Session) -> Option<NodeId> {
+    let doc = s.doc().ok()?;
+    target(s).filter(|n| doc.node(*n).is_some_and(|n| n.board == Some(BoardItem::MindNode)))
+}
+
+/// The sibling `dir` places after `node` (1: below, -1: above) among the children of its branch's
+/// parent on its side, around the ends; `None` when no branch arrives at `node`.
+pub fn mind_sibling(doc: &Document, node: NodeId, dir: i64) -> Option<NodeId> {
+    if !is_board(doc) {
+        return None;
+    }
+    let bs = branches(doc);
+    let a = arriving(&bs, node)?;
+    let sibs = map_children(doc, &bs, a.parent, a.left);
+    let at = sibs.iter().position(|n| *n == node)? as i64;
+    let len = sibs.len() as i64;
+    sibs.get((at + dir).rem_euclid(len.max(1)) as usize).copied()
+}
+
 pub(super) fn mind_map_add(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "board.mindMapAdd";
     require(s, cmd)?;
     let editing = s.ds()?.text_edit.as_ref().map(|t| t.id);
     let doc = s.doc()?;
-    let from = id(p, "id")
-        .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
-        .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
-        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a mind map node first".into()))?;
+    let from = id(p, "id").or_else(|| target(s)).ok_or_else(|| EngineError::Disabled(cmd.into(), "select a mind map node first".into()))?;
     let n = doc.get(from)?;
     if n.board != Some(BoardItem::MindNode) {
         return Err(bad(cmd, "that isn't a mind map node"));
@@ -296,6 +323,50 @@ fn prune_branches(doc: &mut Document, before: &Document, touched: &BTreeSet<Node
     stirred
 }
 
+/// Whether `node` hangs (at any depth) under `top`. A chain of branches longer than there are
+/// branches is a loop, which counts as yes.
+fn hangs_under(bs: &[Branch], node: NodeId, top: NodeId) -> bool {
+    let mut at = node;
+    for _ in 0..=bs.len() {
+        let Some(b) = arriving(bs, at) else { return false };
+        if b.parent == top {
+            return true;
+        }
+        at = b.parent;
+    }
+    true
+}
+
+/// A node that moved by itself (a drag, a nudge) and whose middle is now on another node becomes
+/// that node's child, with everything under it: its branch leaves the new parent ("Dropping a node
+/// on another node makes it that node's child"). A first node, with no branch arriving, and a
+/// drop on a node under the moved one change nothing. The layers whose places follow are stirred.
+fn regraft(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+    let mut stirred = BTreeSet::new();
+    let is_node = |doc: &Document, id: NodeId| doc.node(id).is_some_and(|n| n.board == Some(BoardItem::MindNode));
+    for &id in touched {
+        let moved = is_node(doc, id) && before.node(id).zip(doc.node(id)).is_some_and(|(b, n)| b.transform != n.transform);
+        let Some(mid) = doc.world_bounds(id).map(|r| r.center()).filter(|_| moved) else { continue };
+        let bs = branches(doc);
+        let Some(a) = arriving(&bs, id) else { continue };
+        let page = doc.page_of(id);
+        let onto = doc
+            .nodes()
+            .map(|n| n.id)
+            .filter(|t| *t != id && is_node(doc, *t) && doc.page_of(*t) == page && doc.world_bounds(*t).is_some_and(|r| r.contains(mid)))
+            .find(|t| !hangs_under(&bs, *t, id));
+        let Some(onto) = onto.filter(|t| *t != a.parent) else { continue };
+        let left = map_side(&bs, onto);
+        let (out, back) = if left { (Side::Left, Side::Right) } else { (Side::Right, Side::Left) };
+        if let Some(BoardItem::Connector(c)) = doc.node_mut(a.line).and_then(|n| n.board.as_mut()) {
+            c.from = End::Node { node: onto, side: out, at: None };
+            c.to = End::Node { node: id, side: back, at: None };
+            stirred.extend([a.parent, onto, id]);
+        }
+    }
+    stirred
+}
+
 /// The boxes of the map under `root`, breadth first (so a parent always comes before its
 /// children), and the connectors that hold it together. `None`: a box is missing, or the map has
 /// more than [`MIND_MAX_NODES`] nodes (it is left as it is).
@@ -339,8 +410,9 @@ fn shift(doc: &mut Document, id: NodeId, d: Point) {
 
 /// After layout and before connectors follow: the maps an edit touched are laid out again from
 /// their first nodes (a map that is already in place is not written to, so the pass is idempotent).
-/// A branch that no longer joins two layers of its page is removed first: the only structural
-/// write, and what makes a deleted node's children float free and a detached node stay detached.
+/// A branch that no longer joins two layers of its page is removed first, which makes a deleted
+/// node's children float free and a detached node stay detached; then a node dropped on another
+/// node hangs from it ([`regraft`]). Those are the only structural writes.
 pub(crate) fn settle_mind_maps(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) {
     if !is_board(doc) || touched.is_empty() {
         return;
@@ -349,7 +421,8 @@ pub(crate) fn settle_mind_maps(doc: &mut Document, before: &Document, touched: &
     if !doc.nodes().any(|n| matches!(&n.board, Some(BoardItem::Connector(c)) if c.branch)) {
         return;
     }
-    let stirred = prune_branches(doc, before, touched);
+    let mut stirred = prune_branches(doc, before, touched);
+    stirred.extend(regraft(doc, before, touched));
     let bs = branches(doc);
     if bs.is_empty() {
         return;

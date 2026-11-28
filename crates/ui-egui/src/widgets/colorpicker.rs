@@ -52,6 +52,10 @@ pub enum PickerTarget {
         id: String,
         index: usize,
     },
+    /// The ink a drawing tool's new strokes get (`tool.ink`).
+    Ink {
+        tool: figcraft_engine::ToolId,
+    },
     /// A colour field of a plugin's panel or parameters form. A drag only shows `pending`; the
     /// plugin hears of the colour when the drag ends.
     PluginField {
@@ -114,6 +118,10 @@ fn current_paint(app: &FigApp, target: &PickerTarget) -> Option<Paint> {
             _ => None,
         },
         PickerTarget::Style { id, index } => style_paints(doc, id)?.get(*index).cloned(),
+        PickerTarget::Ink { tool } => {
+            let ink = app.session.tool.ink(*tool)?;
+            Some(Paint::solid(ink.color.unwrap_or(figcraft_engine::tools::PENCIL_STROKE.0)))
+        }
         PickerTarget::PluginField { plugin, control, pending } => {
             let hex = match pending {
                 Some(hex) => hex.clone(),
@@ -157,6 +165,10 @@ fn paint_command(app: &FigApp, target: &PickerTarget, paint: &Paint) -> Option<(
                 *slot = paint.clone();
             }
             ("style.update", json!({"style": id, "value": paints}))
+        }
+        PickerTarget::Ink { tool } => {
+            let c = paint.solid_color().unwrap_or(Color::BLACK);
+            ("tool.ink", json!({"tool": tool.id(), "color": c.to_css_hex()}))
         }
     })
 }
@@ -760,21 +772,6 @@ fn blend_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &mut P
     });
 }
 
-/// The layer and fill index to crop on the canvas (`image.crop`) when Crop is chosen for `target`:
-/// one layer's image fill as the Fill section shows it (a text's characters' shared fills
-/// included). Strokes, several layers at once and the regions selected in vector edit mode have
-/// no crop mode, so for them Crop only sets the paint's mode.
-pub(crate) fn crop_on_canvas(app: &FigApp, target: &PickerTarget) -> Option<(NodeId, usize)> {
-    let PickerTarget::Paint { fills: true, index, ids } = target else { return None };
-    let [id] = ids[..] else { return None };
-    if figcraft_engine::vectoredit::selected_region_fills(&app.session, id).is_some() {
-        return None;
-    }
-    let doc = app.session.doc().ok()?;
-    let shown = figcraft_engine::cmd::lists::character_fills(doc.node(id)?)?;
-    matches!(shown.get(*index)?.kind, PaintKind::Image(_)).then_some((id, *index))
-}
-
 /// The image paint's scale mode, rotation, colour profile, presets and filter sliders.
 fn image_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &mut Paint, mut img: ImagePaint, t: &Tokens) {
     ui.horizontal(|ui| {
@@ -788,25 +785,18 @@ fn image_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &
                 (tr("Tile"), ImageScaleMode::Tile),
             ] {
                 if crate::right::menu_item(ui, l, "") {
-                    match crop_on_canvas(app, target).filter(|_| m == ImageScaleMode::Crop) {
-                        // Crop for a layer's own image fill is Crop image (#2150): the picture keeps
-                        // its place and crop mode takes the canvas, closing the picker, so its
-                        // handles crop it as they do when crop mode comes from the menu.
-                        Some((id, index)) => {
-                            app.run("image.crop", json!({"ids": [id], "index": index}));
-                        }
-                        None => {
-                            img.scale_mode = m;
-                            paint.kind = PaintKind::Image(img.clone());
-                            write(app, target, paint, false);
-                        }
-                    }
+                    img.scale_mode = m;
+                    paint.kind = PaintKind::Image(img.clone());
+                    write(app, target, paint, false);
                     ui.close();
                 }
             }
         });
         if icons::button(ui, Icon::Rotate, 24.0, false, tr("Rotate 90°")).clicked() {
             img.rotation = (img.rotation + 1) % 4;
+            if img.scale_mode == ImageScaleMode::Crop {
+                img.crop = None;
+            }
             paint.kind = PaintKind::Image(img.clone());
             write(app, target, paint, false);
         }
@@ -999,6 +989,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let stale = match &target {
         PickerTarget::Paint { ids, .. } | PickerTarget::Effect { ids, .. } => *ids != app.session.selection(),
         PickerTarget::TextRange { id, .. } => !app.session.selection().contains(id),
+        PickerTarget::Ink { tool } => *tool != app.session.tool.tool,
         _ => false,
     };
     let current = if stale { None } else { current_paint(app, &target) };
@@ -1056,14 +1047,22 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         // Paint type.
         if !matches!(
             target,
-            PickerTarget::Effect { .. } | PickerTarget::PageBackground | PickerTarget::Variable { .. } | PickerTarget::PluginField { .. }
+            PickerTarget::Effect { .. }
+                | PickerTarget::PageBackground
+                | PickerTarget::Variable { .. }
+                | PickerTarget::PluginField { .. }
+                | PickerTarget::Ink { .. }
         ) {
             paint_type_row(ui, app, &target, &mut paint);
         }
         // The paint's own blend mode, with the paints and layers under it.
         if !matches!(
             target,
-            PickerTarget::Effect { .. } | PickerTarget::PageBackground | PickerTarget::Variable { .. } | PickerTarget::PluginField { .. }
+            PickerTarget::Effect { .. }
+                | PickerTarget::PageBackground
+                | PickerTarget::Variable { .. }
+                | PickerTarget::PluginField { .. }
+                | PickerTarget::Ink { .. }
         ) {
             blend_row(ui, app, &target, &mut paint);
         }

@@ -69,10 +69,12 @@ pub enum ToolId {
     Highlighter,
     Eraser,
     Stamp,
+    MindMap,
+    CodeBlock,
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 27] = [
+    pub const ALL: [ToolId; 29] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -100,6 +102,8 @@ impl ToolId {
         ToolId::Highlighter,
         ToolId::Eraser,
         ToolId::Stamp,
+        ToolId::MindMap,
+        ToolId::CodeBlock,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -130,6 +134,8 @@ impl ToolId {
             ToolId::Highlighter => "highlighter",
             ToolId::Eraser => "eraser",
             ToolId::Stamp => "stamp",
+            ToolId::MindMap => "mindMap",
+            ToolId::CodeBlock => "codeBlock",
         }
     }
     /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
@@ -169,6 +175,8 @@ impl ToolId {
             ToolId::Highlighter => "Highlighter",
             ToolId::Eraser => "Eraser",
             ToolId::Stamp => "Stamp",
+            ToolId::MindMap => "Mind map",
+            ToolId::CodeBlock => "Code block",
         }
     }
 
@@ -176,7 +184,15 @@ impl ToolId {
     pub fn on_boards(self) -> bool {
         matches!(
             self,
-            ToolId::Sticky | ToolId::BoardShape | ToolId::Connector | ToolId::Marker | ToolId::Highlighter | ToolId::Eraser | ToolId::Stamp
+            ToolId::Sticky
+                | ToolId::BoardShape
+                | ToolId::Connector
+                | ToolId::Marker
+                | ToolId::Highlighter
+                | ToolId::Eraser
+                | ToolId::Stamp
+                | ToolId::MindMap
+                | ToolId::CodeBlock
         )
     }
     /// The tool's key (from [`crate::keymap`]; empty when it has none).
@@ -284,6 +300,9 @@ pub enum Cursor {
     Pointer,
     Eyedropper,
     Comment,
+    /// The Pencil, Marker, Highlighter and Eraser: a round tip the canvas draws in the ink's colour
+    /// and width (`Session::ink_tip`).
+    Ink,
     /// What the gesture is doing will be undone when it ends (an edit only a main component can
     /// make).
     NotAllowed,
@@ -311,10 +330,11 @@ impl ToolId {
             ToolId::Pen => Cursor::Pen(PenCursor::New),
             ToolId::Comment => Cursor::Comment,
             ToolId::Eyedropper => Cursor::Eyedropper,
+            ToolId::Pencil | ToolId::Marker | ToolId::Highlighter | ToolId::Eraser => Cursor::Ink,
             // Text on a path acts only over a path, where it shows the I-beam.
             ToolId::Move | ToolId::Scale | ToolId::TextOnPath => Cursor::Default,
-            // The other tools make something where they are pressed: shapes, frames, slices, pencil
-            // strokes, a new text (over a text the Text tool shows the I-beam instead).
+            // The other tools make something where they are pressed: shapes, frames, slices, a new
+            // text (over a text the Text tool shows the I-beam instead).
             _ => Cursor::Crosshair,
         }
     }
@@ -431,6 +451,9 @@ pub(crate) enum Gesture {
         additive: bool,
         base: Vec<NodeId>,
         within: Option<NodeId>,
+        /// A click stepping out of a selected descendant picks its frame. Wait for a real drag
+        /// before replacing that selection with the marquee's contents.
+        pending_click: bool,
     },
     Move {
         start: Point,
@@ -441,8 +464,8 @@ pub(crate) enum Gesture {
         /// A Shift-press on this selected layer: it leaves the selection on release, unless the
         /// press became a drag.
         deselect: Option<NodeId>,
-        /// A press on one layer of a multi-selection that keeps the selection to drag it all: a
-        /// release without a drag selects just this layer.
+        /// A press on one layer of a multi-selection, or on a layer inside a selected one, that
+        /// keeps the selection to drag it all: a release without a drag selects just this layer.
         keep: Option<NodeId>,
     },
     Resize {
@@ -541,6 +564,27 @@ fn at_45_degrees(last: Point, p: Point) -> Point {
     last + Vec2::from_angle(ang) * v.hypot()
 }
 
+/// Add where the pointer is to a Pencil (Marker, Highlighter) stroke: a sample once it has moved
+/// half a screen pixel, or with Shift one straight segment from where the stroke started, at the
+/// nearest 45° step, as the Line tool and the Pen keep theirs (#2447).
+fn pencil_add(points: &mut Vec<Point>, pressure: &mut Vec<Option<f32>>, ev: &PointerEvent) {
+    let min = 0.5 / ev.zoom.max(1e-6);
+    if ev.shift
+        && let (Some(&start), Some(&first)) = (points.first(), pressure.first())
+    {
+        let end = at_45_degrees(start, ev.p());
+        points.truncate(1);
+        pressure.truncate(1);
+        if (end - start).hypot() > min {
+            points.push(end);
+            pressure.push(ev.pressure.or(first));
+        }
+    } else if points.last().is_none_or(|l| (*l - ev.p()).hypot() > min) {
+        points.push(ev.p());
+        pressure.push(ev.pressure);
+    }
+}
+
 /// The handles a pen path shows while it is drawn ([`Overlay::pen_handles`]): the last anchor's in
 /// and out handles and the one before's out handle, those that aren't zero.
 fn pen_handles(points: &[(Point, Vec2, Vec2)]) -> Vec<[f64; 4]> {
@@ -598,6 +642,8 @@ pub struct ToolState {
     pub labels: Vec<(NodeId, [Point; 4])>,
     /// The brush the Pencil draws with (`tool.pencilBrush`; `None`: a plain stroke).
     pub pencil_brush: Option<figcraft_doc::Brush>,
+    /// The ink new Pencil strokes get (`tool.ink`).
+    pub pencil_ink: Ink,
     /// The board tools' colours and choices.
     pub board: crate::board::BoardTool,
     /// The eyedropper samples for a colour picker (`edit.pickColor` with `apply: false`): the
@@ -614,10 +660,52 @@ pub struct ToolState {
     pub place_at: Option<Point>,
     /// The document (uid) and page the crosshair was shown on.
     pub(crate) place_on: Option<(u64, NodeId)>,
+    /// The last two Move or Scale presses, oldest first: where each was and the selection just
+    /// before it. A Shift double-click works from the selection its first click found. A press
+    /// with another tool clears them, and so does the double-click that uses them.
+    pub(crate) selections_before_last_two_presses: [Option<(Point, Vec<NodeId>)>; 2],
+}
+
+/// A drawing tool's ink (`tool.ink`): the colour and stroke weight its new strokes get. A colour
+/// of `None` is the Pencil's own: black, or white on a dark page or frame (#1741).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Ink {
+    pub color: Option<figcraft_color::Color>,
+    pub weight: f64,
+}
+
+impl Default for Ink {
+    fn default() -> Self {
+        Ink { color: None, weight: PENCIL_STROKE.1 }
+    }
 }
 
 impl ToolState {
+    /// The ink `tool` draws with now; `None` for a tool that draws no ink.
+    pub fn ink(&self, tool: ToolId) -> Option<Ink> {
+        let b = &self.board;
+        match tool {
+            ToolId::Pencil => Some(self.pencil_ink),
+            ToolId::Marker => Some(Ink { color: Some(b.marker), weight: b.marker_weight }),
+            ToolId::Highlighter => Some(Ink { color: Some(b.highlighter), weight: b.highlighter_weight }),
+            _ => None,
+        }
+    }
+
     pub fn busy(&self) -> bool {
         !matches!(self.gesture, Gesture::None)
+    }
+
+    /// Whether the gesture under way pans the canvas when the pointer holds near the viewport's
+    /// edge (#2015): moving layers once past the drag slop, the selection box once it has grown
+    /// past it, and drawing a shape once it exists. Resizing, rotating, panning, text and vector
+    /// edits don't. `zoom`: screen px per page unit.
+    pub fn autopans(&self, zoom: f64) -> bool {
+        match &self.gesture {
+            Gesture::Move { moved, .. } => *moved,
+            Gesture::Marquee { .. } => self.overlay.marquee.is_some_and(|[x0, y0, x1, y1]| ((x1 - x0).hypot(y1 - y0) * zoom) >= DRAG_SLOP_PX),
+            Gesture::Draw { id, .. } => id.is_some(),
+            _ => false,
+        }
     }
 }

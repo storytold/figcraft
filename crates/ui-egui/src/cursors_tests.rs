@@ -41,6 +41,7 @@ fn every_engine_cursor_has_a_system_cursor_or_a_glyph() {
         (Cursor::Pointer, System(CursorIcon::PointingHand), "pointer"),
         (Cursor::Eyedropper, Drawn(Glyph::Eyedropper), "eyedropper"),
         (Cursor::Comment, Drawn(Glyph::Comment), "comment"),
+        (Cursor::Ink, crate::cursors::ink((Some(figcraft_color::Color::BLACK), 0.0)), "ink"),
         (Cursor::NotAllowed, System(CursorIcon::NotAllowed), "not-allowed"),
     ];
     for (cursor, shown, name) in rows {
@@ -236,4 +237,53 @@ fn a_layers_row_that_takes_no_drop_shows_not_allowed() {
     assert_eq!(out.platform_output.cursor_icon, CursorIcon::Grabbing);
     u.frame(vec![Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
     u.button(o, false);
+}
+
+/// The Marker's cursor on a board, as the canvas draws it: a dot in the ink's colour, wider for
+/// a heavier stroke, ringed light and dark; the Eraser's is a ring (#2641).
+#[test]
+fn the_ink_tools_show_a_dot_in_the_inks_colour_and_width() {
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let p = u.app.canvas.rect.center();
+    let dot = |u: &mut Ui, weight: f64| {
+        u.app.run("tool.ink", json!({"tool": "marker", "color": "#336699", "weight": weight}));
+        u.app.run("tool.set", json!({"tool": "marker"}));
+        at(u, p, &[], Modifiers::NONE);
+        match u.app.canvas.cursor {
+            Some(Shown::Drawn(Glyph::Dot { color, radius })) => (color, radius),
+            other => panic!("not a dot: {other:?}"),
+        }
+    };
+    let (color, thin) = dot(&mut u, 2.0);
+    assert_eq!(color, Some(egui::Color32::from_rgb(0x33, 0x66, 0x99)));
+    let (_, wide) = dot(&mut u, 20.0);
+    assert!(wide > thin, "{wide} > {thin}");
+    assert_eq!(u.app.canvas.cursor.map(Shown::icon), Some(CursorIcon::None), "the system's pointer is hidden under it");
+    u.app.run("tool.set", json!({"tool": "eraser"}));
+    at(&mut u, p, &[], Modifiers::NONE);
+    assert!(matches!(u.app.canvas.cursor, Some(Shown::Drawn(Glyph::Dot { color: None, .. }))), "{:?}", u.app.canvas.cursor);
+
+    // Drawn: the ink's dot, a white ring outside it and a dark ring outside that.
+    let at = pos2(50.0, 40.0);
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("dot_test"));
+        crate::cursors::paint(&ui.ctx().layer_painter(layer), at, Glyph::Dot { color, radius: 5.0 });
+    });
+    out.textures_delta.clear();
+    let circles: Vec<_> = out
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::epaint::Shape::Circle(c) => Some((c.radius, c.fill, c.stroke.color)),
+            _ => None,
+        })
+        .collect();
+    let fill = circles.iter().find(|c| Some(c.1) == color).expect("the ink's dot");
+    let white = circles.iter().find(|c| c.2 == egui::Color32::WHITE).expect("a white ring");
+    let dark = circles.iter().find(|c| c.2 == crate::cursors::INK).expect("a dark ring");
+    assert!(fill.0 < white.0 && white.0 < dark.0, "{circles:?}");
 }

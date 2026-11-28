@@ -62,6 +62,13 @@ fn key_triggers_fire_for_their_key_or_combination() {
         ("space", "Space", none, true, "names in any case"),
         ("Return", "Enter", none, true, "common other names of keys"),
         ("←", "ArrowLeft", none, true, "arrow glyphs"),
+        // Window names, saved names and arrow glyphs are equivalent in both directions.
+        ("ArrowRight", "Right", none, true, "saved arrow and egui key name"),
+        ("Left", "ArrowLeft", none, true, "reverse alias matching"),
+        ("↑", "Up", none, true, "arrow glyph and window key name"),
+        ("Shift+ArrowDown", "Down", shift, true, "arrow with a modifier"),
+        ("Shift+ArrowDown", "Down", none, false, "the modifier is still required"),
+        ("ArrowRight", "Left", none, false, "different directions do not match"),
         ("Shift+Space", "Space", shift, true, "a named key in a combination"),
         ("J", "K", none, false, "another key"),
     ];

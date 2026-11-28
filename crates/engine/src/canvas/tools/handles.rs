@@ -201,7 +201,9 @@ pub fn handle_at(doc: &Document, sel: &[NodeId], p: Point, zoom: f64) -> Option<
     let corners = selection_box(doc, sel)?;
     // Lines (zero height) only get end handles.
     let is_line = sel.len() == 1 && sel.first().and_then(|i| doc.node(*i)).is_some_and(|n| matches!(n.kind, NodeKind::Line));
-    handle_at_corners(&corners, p, zoom, is_line)
+    // A code block keeps only its width: no corners, top or bottom to drag.
+    let width_only = crate::board::is_one_code_block(doc, sel);
+    handles_among(&corners, p, zoom, is_line, &|h| !width_only || matches!(h, Handle::Edge(1 | 3)))
 }
 
 /// Half the side of the square the canvas draws on each corner of the handle box (screen pixels,
@@ -233,6 +235,12 @@ pub fn box_sides_px(corners: &[Point; 4], zoom: f64) -> (f64, f64) {
 /// Which handle of the box with `corners` (tl, tr, br, bl in page coordinates) is under `p`;
 /// `is_line` keeps only the two end handles.
 pub fn handle_at_corners(corners: &[Point; 4], p: Point, zoom: f64, is_line: bool) -> Option<Handle> {
+    handles_among(corners, p, zoom, is_line, &|_| true)
+}
+
+/// [`handle_at_corners`] with only the corners and edges `resizes` allows (the rotation zones stay),
+/// so one left out never hides an allowed one near it.
+fn handles_among(corners: &[Point; 4], p: Point, zoom: f64, is_line: bool, resizes: &dyn Fn(Handle) -> bool) -> Option<Handle> {
     let tol = HANDLE_PX / zoom.max(1e-6);
     // Inside the box, handles reach in at most a quarter of its shorter side, so that a press in
     // the middle of a small layer moves it; outside it they reach as far as ever.
@@ -246,7 +254,7 @@ pub fn handle_at_corners(corners: &[Point; 4], p: Point, zoom: f64, is_line: boo
             .enumerate()
             .filter(|(i, _)| !(is_line && *i >= 2))
             .map(|(i, c)| ((*c - p).hypot(), Handle::Corner(i as u8)))
-            .filter(|(d, _)| *d <= corner_reach),
+            .filter(|(d, h)| *d <= corner_reach && resizes(*h)),
     );
     if corner.is_some() {
         return corner;
@@ -257,7 +265,7 @@ pub fn handle_at_corners(corners: &[Point; 4], p: Point, zoom: f64, is_line: boo
             let (a, b) = (corners.get(i)?, corners.get((i + 1) % 4)?);
             let near = figcraft_geom::kurbo::Line::new(*a, *b).nearest(p, 0.001);
             let d = near.distance_sq.sqrt();
-            (d <= edge_reach && near.t > 0.05 && near.t < 0.95).then_some((d, Handle::Edge(i as u8)))
+            (d <= edge_reach && near.t > 0.05 && near.t < 0.95 && resizes(Handle::Edge(i as u8))).then_some((d, Handle::Edge(i as u8)))
         }));
         if edge.is_some() {
             return edge;

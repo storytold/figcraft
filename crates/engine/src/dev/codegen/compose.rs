@@ -1,7 +1,8 @@
 use super::swift::one_line;
 use super::{
-    CodeLang, Color, Ctx, GradientKind, LayoutMode, Node, NodeId, NodeKind, PADDING, Paint, PaintKind, drop_shadow, first_fill, gradient_axis,
-    gradient_stops, indent, literal, named, native_gradient_kind, num, radius, stroke_color, visible_fills,
+    CodeLang, Color, Ctx, GradientKind, ImageScaleMode, LayoutMode, Node, NodeId, NodeKind, PADDING, Paint, PaintKind, drop_shadow, first_fill,
+    gradient_axis, gradient_stops, image_asset, indent, literal, named, native_gradient_kind, num, paints_a_box, pattern_notes, radius, stroke_color,
+    visible_fills,
 };
 use figcraft_doc::Document;
 
@@ -61,17 +62,33 @@ fn compose_gradient(g: &figcraft_color::Gradient, w: f64, h: f64, opacity: f32) 
     }
 }
 
-/// One paint (the one at document index `i`) as the first argument of `background`; `None` for an
-/// image or pattern. Only a solid at index 0 takes the `fill` variable's name.
-fn compose_paint(doc: &Document, n: &Node, i: usize, p: &Paint) -> Option<String> {
-    match &p.kind {
+/// One paint (the one at document index `i`) as the modifier drawing it in `shape`; `None` for a
+/// pattern (see [`pattern_notes`]). Only a solid at index 0 takes the `fill` variable's name. An
+/// image is its asset as a drawable, `image_` first since a resource name can't start with a digit.
+fn compose_paint(doc: &Document, n: &Node, i: usize, p: &Paint, shape: &str) -> Option<String> {
+    let background = match &p.kind {
         PaintKind::Solid { .. } => {
             let c = kotlin_color(p.solid_color()?);
-            Some(if i == 0 { bound(doc, n, &["fill"], c) } else { c })
+            if i == 0 { bound(doc, n, &["fill"], c) } else { c }
         }
-        PaintKind::Gradient(g) => Some(compose_gradient(g, n.width, n.height, p.opacity)),
-        PaintKind::Image(_) | PaintKind::Pattern(_) => None,
-    }
+        PaintKind::Gradient(g) => compose_gradient(g, n.width, n.height, p.opacity),
+        PaintKind::Image(img) => {
+            let drawable = format!("R.drawable.image_{}", image_asset(doc, img).0);
+            let alpha = if p.opacity < 1.0 { format!(", alpha = {}f", num(f64::from(p.opacity))) } else { String::new() };
+            return Some(match img.scale_mode {
+                ImageScaleMode::Tile => format!(
+                    ".background(ShaderBrush(ImageShader(ImageBitmap.imageResource({drawable}), TileMode.Repeated, TileMode.Repeated)), {shape}{alpha})"
+                ),
+                // `paint` draws past the bounds when it crops, so the shape clips it.
+                mode => format!(
+                    ".clip({shape}).paint(painterResource({drawable}), contentScale = ContentScale.{}{alpha})",
+                    if mode == ImageScaleMode::Fit { "Fit" } else { "Crop" }
+                ),
+            });
+        }
+        PaintKind::Pattern(_) => return None,
+    };
+    Some(format!(".background({background}, {shape})"))
 }
 
 /// The Modifier chain for a layer (size, shadow, background, border, alpha, padding).
@@ -81,8 +98,8 @@ fn modifier(doc: &Document, n: &Node, shape: &str, padding: bool) -> String {
         m.push_str(&format!(".shadow({}.dp, {shape})", num(s.radius / 2.0)));
     }
     // Each background draws and lets the rest of the chain draw over it: bottom fill first.
-    for b in visible_fills(n).filter_map(|(i, p)| compose_paint(doc, n, i, p)) {
-        m.push_str(&format!(".background({b}, {shape})"));
+    for b in visible_fills(n).filter_map(|(i, p)| compose_paint(doc, n, i, p, shape)) {
+        m.push_str(&b);
     }
     if let Some(c) = stroke_color(n) {
         m.push_str(&format!(
@@ -135,6 +152,9 @@ fn compose_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String) {
     if let Some(call) = call {
         out.push_str(&call);
         return;
+    }
+    if paints_a_box(n) {
+        out.push_str(&pattern_notes(n, &pad));
     }
     let shape = if radius(n) > 0.0 {
         format!("RoundedCornerShape({})", bound_dp(doc, n, &["cornerRadius"], radius(n)))

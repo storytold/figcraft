@@ -48,7 +48,7 @@ fn fill_text(d: &mut Document, parent: NodeId) -> NodeId {
 }
 
 #[test]
-fn hug_parent_treats_fill_children_as_fixed() {
+fn hug_parent_treats_fill_along_the_flow_as_fixed_and_takes_the_line_across() {
     let mut d = Document::new("t");
     let p = page(&d);
     let f = al(&mut d, p, LayoutMode::Horizontal, (10.0, 10.0), (Sizing::Hug, Sizing::Hug));
@@ -56,17 +56,18 @@ fn hug_parent_treats_fill_children_as_fixed() {
     let b = rect(&mut d, f, 30.0, 40.0);
     sizing(&mut d, b, Sizing::Fill, Sizing::Fill);
     layout_frame(&mut d, f, &NoMeasure);
-    // Nothing to fill: the fill child keeps its size and the frame gets the content size.
-    assert_eq!(size(&d, f), (90.0, 40.0));
-    assert_eq!(pos(&d, b), (60.0, 0.0, 30.0, 40.0));
-    // Vertical, fill on the cross axis.
+    // Nothing to fill along the flow: the fill child keeps its width. Across it the frame keeps
+    // hugging and the child takes the line, the 20 of the sibling.
+    assert_eq!(size(&d, f), (90.0, 20.0));
+    assert_eq!(pos(&d, b), (60.0, 0.0, 30.0, 20.0));
+    // Vertical, fill on the cross axis: the child is as wide as the widest sibling.
     let g = al(&mut d, p, LayoutMode::Vertical, (10.0, 10.0), (Sizing::Hug, Sizing::Hug));
     let c = rect(&mut d, g, 60.0, 20.0);
     sizing(&mut d, c, Sizing::Fill, Sizing::Fixed);
     rect(&mut d, g, 40.0, 30.0);
     layout_frame(&mut d, g, &NoMeasure);
-    assert_eq!(size(&d, g), (60.0, 60.0));
-    assert_eq!(size(&d, c), (60.0, 20.0));
+    assert_eq!(size(&d, g), (40.0, 60.0));
+    assert_eq!(size(&d, c), (40.0, 20.0));
 }
 
 #[test]
@@ -375,6 +376,89 @@ fn fill_in_a_plain_frame_behaves_as_fixed() {
     assert!(coherent_sizing(&mut d, r));
     let cl = &d.node(r).unwrap().child_layout;
     assert_eq!((cl.sizing_h, cl.sizing_v), (Sizing::Fixed, Sizing::Fixed));
+}
+
+/// Fill is kept across a hugging flow (the child takes the line), turned Fixed along it, and
+/// turned Fixed across a wrapping row that hugs that axis (Fill height is not offered there).
+#[test]
+fn coherent_sizing_keeps_fill_across_a_hugging_flow() {
+    let mut d = Document::new("t");
+    let p = page(&d);
+    let cl = |d: &Document, id: NodeId| {
+        let c = &d.node(id).unwrap().child_layout;
+        (c.sizing_h, c.sizing_v)
+    };
+    // Vertical stack hugging its width: the main axis is the height, so Fill width (across) stays.
+    let v = al(&mut d, p, LayoutMode::Vertical, (100.0, 100.0), (Sizing::Hug, Sizing::Fixed));
+    let a = rect(&mut d, v, 10.0, 10.0);
+    sizing(&mut d, a, Sizing::Fill, Sizing::Fill);
+    assert!(!coherent_sizing(&mut d, v));
+    assert_eq!(cl(&d, a), (Sizing::Fill, Sizing::Fill));
+    // Both axes hugged: along the flow (height) Fill is fixed, across it (width) it stays.
+    sizing(&mut d, v, Sizing::Hug, Sizing::Hug);
+    assert!(coherent_sizing(&mut d, v));
+    assert_eq!(cl(&d, a), (Sizing::Fill, Sizing::Fixed));
+    // Horizontal row hugging both: the width (main) is fixed, the height (across) stays Fill.
+    let h = al(&mut d, p, LayoutMode::Horizontal, (100.0, 100.0), (Sizing::Hug, Sizing::Hug));
+    let b = rect(&mut d, h, 10.0, 10.0);
+    sizing(&mut d, b, Sizing::Fill, Sizing::Fill);
+    assert!(coherent_sizing(&mut d, h));
+    assert_eq!(cl(&d, b), (Sizing::Fixed, Sizing::Fill));
+    // A wrapping row hugging its height: Fill height is not offered, so it is fixed.
+    let w = al(&mut d, p, LayoutMode::Horizontal, (120.0, 100.0), (Sizing::Fixed, Sizing::Hug));
+    layout_mut(&mut d, w).wrap = true;
+    let c = rect(&mut d, w, 10.0, 10.0);
+    sizing(&mut d, c, Sizing::Fixed, Sizing::Fill);
+    assert!(coherent_sizing(&mut d, w));
+    assert_eq!(cl(&d, c), (Sizing::Fixed, Sizing::Fixed));
+    // The same wrapping row with a fixed height keeps Fill height.
+    sizing(&mut d, w, Sizing::Fixed, Sizing::Fixed);
+    sizing(&mut d, c, Sizing::Fixed, Sizing::Fill);
+    assert!(!coherent_sizing(&mut d, w));
+    assert_eq!(cl(&d, c), (Sizing::Fixed, Sizing::Fill));
+    // A grid keeps the old rule on both axes.
+    let g = al(&mut d, p, LayoutMode::Grid, (100.0, 100.0), (Sizing::Hug, Sizing::Hug));
+    let e = rect(&mut d, g, 10.0, 10.0);
+    sizing(&mut d, e, Sizing::Fill, Sizing::Fill);
+    assert!(coherent_sizing(&mut d, g));
+    assert_eq!(cl(&d, e), (Sizing::Fixed, Sizing::Fixed));
+    // No flow parent: Fixed, as before.
+    let r = rect(&mut d, p, 10.0, 10.0);
+    sizing(&mut d, r, Sizing::Fill, Sizing::Fill);
+    assert!(coherent_sizing(&mut d, r));
+    assert_eq!(cl(&d, r), (Sizing::Fixed, Sizing::Fixed));
+}
+
+/// Fill across the flow of a hugging frame, with nesting: a hugging frame child fills the line,
+/// a nested layout is laid out at the new size, and a text that fills the width of a hugging
+/// stack reflows to its new height before the stack hugs.
+#[test]
+fn fill_across_a_hugging_line_lays_out_nested_children_and_reflowing_text() {
+    let mut d = Document::new("t");
+    let p = page(&d);
+    // Row hugging both: a nested frame filling the height takes the 40 px of its tall sibling and
+    // its own children keep their places (they are laid out again at the new size).
+    let row = al(&mut d, p, LayoutMode::Horizontal, (10.0, 10.0), (Sizing::Hug, Sizing::Hug));
+    layout_mut(&mut d, row).gap = 0.0;
+    let inner = al(&mut d, row, LayoutMode::Horizontal, (30.0, 20.0), (Sizing::Fixed, Sizing::Fill));
+    layout_mut(&mut d, inner).cross_align = CrossAlign::Max;
+    let dot = rect(&mut d, inner, 10.0, 10.0);
+    rect(&mut d, row, 50.0, 40.0);
+    layout_frame(&mut d, row, &NoMeasure);
+    assert_eq!(size(&d, row), (80.0, 40.0));
+    assert_eq!(size(&d, inner), (30.0, 40.0));
+    assert_eq!(pos(&d, dot), (0.0, 30.0, 10.0, 10.0), "laid out again at 40 high, bottom aligned");
+    // Vertical stack hugging both: a text filling the width beside a 60 wide rectangle wraps to
+    // the line (60), and the stack hugs the height of the wrapped text.
+    let col = al(&mut d, p, LayoutMode::Vertical, (10.0, 10.0), (Sizing::Hug, Sizing::Hug));
+    layout_mut(&mut d, col).gap = 0.0;
+    let t = fill_text(&mut d, col);
+    rect(&mut d, col, 60.0, 30.0);
+    // 150 wide natural, 20 high lines: at 60 wide it needs 3 lines.
+    let m = FakeMeasure([(t, (150.0, 20.0, 15.0))].into_iter().collect());
+    layout_frame(&mut d, col, &m);
+    assert_eq!(size(&d, t), (60.0, 60.0));
+    assert_eq!(size(&d, col), (60.0, 90.0));
 }
 
 #[test]

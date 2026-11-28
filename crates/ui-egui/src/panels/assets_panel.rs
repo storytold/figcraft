@@ -37,9 +37,9 @@ const MAX_THUMBS: usize = 600;
 const THUMBS_PER_FRAME: usize = 8;
 /// Layers compared per component when checking whether its thumbnail is stale.
 const MAX_COMPARED: usize = 20_000;
-/// Look for changed library files this often (seconds) while the panel shows.
+/// Look for changed library files this often (seconds).
 const LIBRARY_REFRESH: f64 = 2.0;
-/// Ask team libraries' servers for newer versions this often (seconds) while the panel shows.
+/// Ask team libraries' servers for newer versions this often (seconds).
 // shortcut: polled (a few bytes when nothing changed); a server push needs a connection per
 // library, worth it once libraries are used beyond the Assets panel.
 const SERVER_REFRESH: f64 = 30.0;
@@ -278,33 +278,42 @@ fn build_listing(app: &FigApp, doc: &Document, q: &str, key: (u64, String, u64))
     Listing { key, local: foldered("", local), local_styles, libraries, updates }
 }
 
-/// Re-read enabled library files that changed on disk (throttled).
-fn refresh_libraries(app: &mut FigApp, ui: &Ui) {
+/// Re-read enabled library files that changed on disk (throttled), every logic tick whether or not
+/// the Assets panel shows, so the style pickers list library styles too. A library this file
+/// hasn't tried to read yet (just opened or added) is read at once.
+pub(crate) fn refresh_libraries(app: &mut FigApp, ctx: &egui::Context) {
     let Ok(doc) = app.session.doc() else { return };
     if doc.libraries.enabled.is_empty() {
         return;
     }
     let paths: Vec<String> = doc.libraries.enabled.iter().map(|l| l.path.clone()).collect();
     let id = Id::unique("asset_libraries_checked");
-    let now = ui.input(|i| i.time);
-    let last: Option<f64> = ui.data(|d| d.get_temp(id));
-    if last.is_none_or(|l| now - l >= LIBRARY_REFRESH) {
+    // The paths the last read tried: one that was refused (too large, not on this computer) is
+    // never cached, and would otherwise be tried again every frame.
+    let tried_id = Id::unique("asset_libraries_tried");
+    let now = ctx.input(|i| i.time);
+    let last: Option<f64> = ctx.data(|d| d.get_temp(id));
+    let tried: Vec<String> = ctx.data(|d| d.get_temp(tried_id)).unwrap_or_default();
+    let unread_here = paths.iter().any(|p| !is_server_link(p) && app.session.libraries.cached(p).is_none() && !tried.contains(p));
+    if unread_here || last.is_none_or(|l| now - l >= LIBRARY_REFRESH) {
         for p in &paths {
             let _ = app.session.libraries.load(p);
         }
-        ui.data_mut(|d| d.insert_temp(id, now));
+        ctx.data_mut(|d| {
+            d.insert_temp(id, now);
+            d.insert_temp(tried_id, paths.clone());
+        });
         // Team libraries: in the background, at once for one not fetched yet.
         let sid = Id::unique("asset_server_libraries_checked");
-        let fetched: Option<f64> = ui.data(|d| d.get_temp(sid));
+        let fetched: Option<f64> = ctx.data(|d| d.get_temp(sid));
         // Only the ones you added or checked: a file can't make the app contact a server (#1097).
         let team: Vec<&String> = paths.iter().filter(|p| is_server_link(p) && app.session.library_allowed(p)).collect();
         let unread = team.iter().any(|p| app.session.libraries.cached(p).is_none());
         if !team.is_empty() && (unread || fetched.is_none_or(|l| now - l >= SERVER_REFRESH)) {
             app.session.refresh_server_libraries();
-            ui.data_mut(|d| d.insert_temp(sid, now));
+            ctx.data_mut(|d| d.insert_temp(sid, now));
         }
     }
-    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(LIBRARY_REFRESH));
 }
 
 /// The search field with the libraries button; returns the lowercase query.
@@ -577,12 +586,15 @@ fn render_thumbs(ui: &Ui, w: f32, thumbs: &mut Thumbs, wanted: &[(Source, NodeId
     }
 }
 
-/// Draw the Assets panel: refresh libraries, switch to the libraries view when asked,
-/// otherwise cache a listing keyed by revision, query and library state, render local and
+/// Draw the Assets panel: repaint every `LIBRARY_REFRESH` while the file has libraries (so a
+/// library changed on disk shows; the app's tick reads it), switch to the libraries view when
+/// asked, otherwise cache a listing keyed by revision, query and library state, render local and
 /// enabled-library assets with reused thumbnails, and dispatch place, style, hide, toggle
 /// and drag actions.
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
-    refresh_libraries(app, ui);
+    if app.session.doc().is_ok_and(|d| !d.libraries.enabled.is_empty()) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(LIBRARY_REFRESH));
+    }
     if app.ui.libraries {
         libraries_view(app, ui);
         return;
@@ -1008,63 +1020,109 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
         });
         app.run_background(&ui.ctx().clone(), USAGE, json!({"days": period.unwrap_or(days)}), done);
     }
-    let Some(v) = shown else {
-        ui.add_space(8.0);
-        return;
-    };
+    match shown {
+        Some(v) => usage_answer(ui, w, usage_id, &v),
+        None => ui.add_space(8.0),
+    }
+}
+
+/// Show usage's answer `v`: what uses the library, the period's insertions and detachments and
+/// the rows of the list chosen (the choice kept with `id`).
+pub(crate) fn usage_answer(ui: &mut Ui, w: f32, id: Id, v: &Value) {
+    let days = v["days"].as_u64().unwrap_or(USAGE_PERIODS[0].0);
     let files = v["files"].as_array().map_or(0, Vec::len);
     let instances = v["instances"].as_u64().unwrap_or(0);
-    let files_n = |n: u64| trn("{n} files", n as usize, &[]);
-    let instances_n = |n: u64| trn("{n} instances", n as usize, &[]);
-    // Detached instances, beside what they are counted with (a server from before them keeps none).
     let known = v["detachesKnown"].as_bool().unwrap_or(false);
-    let with_detached = |used: String, n: u64| {
-        if known && n > 0 { trf("{used} · {detached}", &[("used", &used), ("detached", &trn("{n} detached", n as usize, &[]))]) } else { used }
-    };
     let used = trf("Used in {files} · {instances}", &[("files", &files_n(files as u64)), ("instances", &instances_n(instances))]);
-    hint(ui, &with_detached(used, v["detached"].as_u64().unwrap_or(0)));
+    hint(ui, &with_detached(known, used, v["detached"].as_u64().unwrap_or(0)));
     if !known {
         hint(ui, tr("This server doesn't count detached instances"));
     }
-    let actions = v["actionsKnown"].as_bool().unwrap_or(false);
-    let inserted_n = |n: u64| trn("{n} inserted", n as usize, &[]);
-    if actions {
+    let Some(kind) = usage_kind(ui, w, id, v) else {
+        ui.add_space(8.0);
+        return;
+    };
+    if let Some((i, d)) = period_totals(v, kind) {
         let label = USAGE_PERIODS.iter().find(|p| p.0 == days).map_or(USAGE_PERIODS[0].2, |p| p.2);
-        let (i, d) = (v["insertions"].as_u64().unwrap_or(0), v["detachments"].as_u64().unwrap_or(0));
-        let counts = trf("{insertions} · {detachments}", &[("insertions", &inserted_n(i)), ("detachments", &trn("{n} detached", d as usize, &[]))]);
+        let counts = trf("{insertions} · {detachments}", &[("insertions", &inserted_n(i)), ("detachments", &detached_n(d))]);
         hint(ui, &trf("{period}: {counts}", &[("period", &tr(label)), ("counts", &counts)]));
     } else {
         hint(ui, tr("This server doesn't count insertions"));
     }
-    let Some(kind) = usage_kind(ui, w, usage_id, &v) else {
-        ui.add_space(8.0);
-        return;
-    };
-    if kind != "components" {
-        for a in v[kind].as_array().into_iter().flatten().take(USAGE_ROWS) {
-            let (n, f) = (a["layers"].as_u64().unwrap_or(0), a["files"].as_u64().unwrap_or(0));
-            let counts = trf("{instances} in {files}", &[("instances", &trn("{n} layers", n as usize, &[])), ("files", &files_n(f))]);
-            usage_row(ui, w, a["name"].as_str().unwrap_or(tr("(no longer published)")), &counts);
-        }
-        ui.add_space(8.0);
-        return;
+    if v["assetsKnown"].as_bool() == Some(true) && v[kind].as_array().is_none_or(Vec::is_empty) {
+        hint(ui, tr("Nothing counted yet"));
     }
+    if kind == "components" {
+        component_rows(ui, w, v, known);
+    } else {
+        asset_rows(ui, w, v, kind);
+    }
+    ui.add_space(8.0);
+}
+
+fn files_n(n: u64) -> String {
+    trn("{n} files", n as usize, &[])
+}
+
+fn instances_n(n: u64) -> String {
+    trn("{n} instances", n as usize, &[])
+}
+
+fn inserted_n(n: u64) -> String {
+    trn("{n} inserted", n as usize, &[])
+}
+
+fn detached_n(n: u64) -> String {
+    trn("{n} detached", n as usize, &[])
+}
+
+/// `used`, with the detached instances beside it (a server from before them keeps none: `known`).
+fn with_detached(known: bool, used: String, n: u64) -> String {
+    if known && n > 0 { trf("{used} · {detached}", &[("used", &used), ("detached", &detached_n(n))]) } else { used }
+}
+
+/// `used`, with the insertions counted in the period after it.
+fn with_inserted(used: String, n: u64) -> String {
+    if n > 0 { trf("{used} · {inserted}", &[("used", &used), ("inserted", &inserted_n(n))]) } else { used }
+}
+
+/// Show usage's rows for a style or variable list.
+fn asset_rows(ui: &mut Ui, w: f32, v: &Value, kind: &str) {
+    for a in v[kind].as_array().into_iter().flatten().take(USAGE_ROWS) {
+        let (n, f) = (a["layers"].as_u64().unwrap_or(0), a["files"].as_u64().unwrap_or(0));
+        let counts = trf("{instances} in {files}", &[("instances", &trn("{n} layers", n as usize, &[])), ("files", &files_n(f))]);
+        let counts = with_detached(true, with_inserted(counts, a["insertions"].as_u64().unwrap_or(0)), a["detachments"].as_u64().unwrap_or(0));
+        usage_row(ui, w, a["name"].as_str().unwrap_or(tr("(no longer published)")), &counts);
+    }
+}
+
+/// Show usage's rows for the components; `known`: the server counts detached instances.
+fn component_rows(ui: &mut Ui, w: f32, v: &Value, known: bool) {
+    let actions = v["actionsKnown"].as_bool().unwrap_or(false);
     for c in v["components"].as_array().into_iter().flatten().take(USAGE_ROWS) {
         let name = c["name"].as_str().unwrap_or(tr("(no longer published)"));
         let (n, f) = (c["instances"].as_u64().unwrap_or(0), c["files"].as_u64().unwrap_or(0));
         let gone = c["detached"].as_u64().unwrap_or(0);
         // A component only detached (no instances left anywhere) says just that.
         let right = if n == 0 && known && gone > 0 {
-            trn("{n} detached", gone as usize, &[])
+            detached_n(gone)
         } else {
-            with_detached(trf("{instances} in {files}", &[("instances", &instances_n(n)), ("files", &files_n(f))]), gone)
+            with_detached(known, trf("{instances} in {files}", &[("instances", &instances_n(n)), ("files", &files_n(f))]), gone)
         };
-        // Inserted in the period, after what the component counts in all.
-        let added = c["insertions"].as_u64().unwrap_or(0);
-        let right = if actions && added > 0 { trf("{used} · {inserted}", &[("used", &right), ("inserted", &inserted_n(added))]) } else { right };
-        usage_row(ui, w, name, &right);
+        let added = if actions { c["insertions"].as_u64().unwrap_or(0) } else { 0 };
+        usage_row(ui, w, name, &with_inserted(right, added));
     }
-    ui.add_space(8.0);
+}
+
+/// What the `kind` list of a Show usage answer adds up to in its period: insertions and
+/// detachments, `None` from a server that doesn't count them for that kind.
+pub(crate) fn period_totals(v: &Value, kind: &str) -> Option<(u64, u64)> {
+    let known = if kind == "components" { "actionsKnown" } else { "assetActionsKnown" };
+    (v[known].as_bool() == Some(true)).then(|| {
+        let rows = v[kind].as_array().map_or(&[][..], Vec::as_slice);
+        let sum = |key: &str| rows.iter().filter_map(|r| r[key].as_u64()).sum();
+        (sum("insertions"), sum("detachments"))
+    })
 }
 
 /// Which list Show usage shows: `components`, `styles` or `variables` (a choice kept with the
@@ -1092,11 +1150,7 @@ fn usage_kind(ui: &mut Ui, w: f32, id: Id, v: &Value) -> Option<&'static str> {
         });
     });
     ui.data_mut(|d| d.insert_temp(id, at));
-    let kind = KINDS.get(at)?.0;
-    if v[kind].as_array().is_none_or(Vec::is_empty) {
-        hint(ui, tr("Nothing counted yet"));
-    }
-    Some(kind)
+    Some(KINDS.get(at)?.0)
 }
 
 /// A Show usage row: two lines, as the counts don't leave a name room on one.

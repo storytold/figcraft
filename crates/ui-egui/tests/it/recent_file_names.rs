@@ -1,6 +1,6 @@
 //! Recent file rows keep their full accessible name.
 
-use egui::{Context, Id, Pos2, RawInput, Rect, accesskit::Role, vec2};
+use egui::{Id, Pos2, RawInput, Rect, accesskit::Role, vec2};
 use figcraft_engine::Session;
 use figcraft_ui_egui::{FigApp, NoServices};
 
@@ -13,13 +13,14 @@ fn row(view: &str, path: &str, prefix: &str, exclude: &str) -> (String, Option<S
     session.prefs.home_views.insert("recents".into(), view.into());
     let mut app = FigApp::new(session, Box::new(NoServices));
     app.ui.home = true;
-    let ctx = Context::default();
+    let ctx = figcraft_ui_egui::framework::headless_context();
     ctx.enable_accesskit();
     let mut found = None;
     for frame in 0..4 {
         if frame >= 2 {
             ctx.memory_mut(|m| m.request_focus(Id::unique(("home_recent_file", path))));
         }
+        app.before_input(&ctx);
         let mut out = ctx.run_ui(
             RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),

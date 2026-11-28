@@ -79,7 +79,10 @@ unknown id is an error.
 **Documents.** `engine.execute`, `document.inspect`, `node.get` and `ui.render` take an optional
 `document`: an open file's `id` (from `doc.list`, or `document.inspect`'s `id`) or its path. The
 request acts on that file without bringing its tab to the front; the tab in front comes back
-afterwards unless the command opened or switched to another file itself. A file that isn't open is
+afterwards unless the command explicitly opens or switches a file (`file.new`, `file.open`,
+`doc.switch`, `doc.nextTab`, `doc.previousTab`) or shows its prototype (`proto.present`,
+`proto.preview`). These commands keep the requested file in front even if it was already selected
+temporarily for this call; a failed command restores the previous tab. A file that isn't open is
 an error, and so is a `document` naming a file behind the tab in front on any other method
 (`ui.screenshot`, `ui.input`, `ui.key`… act on what the window shows). `doc.list` includes each file's
 `path` only when the call names no `agent`: an AI agent's calls (MCP sets `agent`) get ids and names.
@@ -195,6 +198,9 @@ layout (including grid `columnTracks` / `rowTracks`), sizing, `minWidth` / `maxW
 children), `gridCell` (a grid auto layout child's column, row and spans), clip, text properties,
 component/instance links, overrides, `slot` (a slot layer's property name), boundVariables, interactions, exports,
 `devStatus` (handoff status), `devChanged` (changed since it was marked ready for dev),
+`textAlignVertical`, `textCase`, `paragraphSpacing`, `paragraphIndent`, `features` (OpenType
+toggles), `startCap` and `endCap` (when not none), `variableModes` (a frame's collection → mode),
+`propertyReferences` (which component property controls a field), `exposedInstance`,
 `annotations` (Developer Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
 links to code: `[{language, importPath, name, template}]`), `devResources` (links for developers,
 its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Developer Mode measurements
@@ -236,7 +242,9 @@ zoom preview or the refined image (`canvas.quality`: `preview` or `refined`) and
 asking for a render to its preview and its refined image being handed to egui as the canvas
 texture (`canvas.previewLatencyMs`, `canvas.refineLatencyMs`, on a monotonic clock, rendering
 included in the browser too; the GPU upload and presenting the frame come after; `null` until
-there was one). `importReport` holds the Import report window's content (`{name, pages, layers, images, appended, placed, warnings, warningCount}`,
+there was one), and the share of the canvas only the page colour covered last frame, no render
+reaching it (`canvas.uncovered`, 0 to 1: past the canvas image the desktop shows a coarse image of the
+area around the view). `importReport` holds the Import report window's content (`{name, pages, layers, images, appended, placed, warnings, warningCount}`,
 `null` while none is open). The window opens only for a file the user opened or imported in the app
 (File ▸ Open or Import, Open recent, a recent file on the home screen, a drop, a paste, the system's open event).
 Emulated user input counts as the user's action: `ui.input` and `ui.key` (for example a Cmd+V paste or a click

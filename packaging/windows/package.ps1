@@ -24,9 +24,12 @@
 #>
 param(
   [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch = 'x64',
-  [switch] $SkipBuild
+  [switch] $SkipBuild,
+  [switch] $Nightly,
+  [switch] $BuildOnly
 )
 $ErrorActionPreference = 'Stop'
+if ($BuildOnly -and -not $Nightly) { throw '-BuildOnly is only for secret-free nightly compilation' }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 function Invoke-Native([string] $What, [scriptblock] $Block) {
@@ -53,8 +56,11 @@ $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
-if (-not $env:FIGCRAFT_BUILD_SHA) { $env:FIGCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
-if (-not $env:FIGCRAFT_BUILD_DATE) { $env:FIGCRAFT_BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+# Nightly requires the prepared commit and original run date explicitly; nightly.ps1 checks both.
+if (-not $Nightly) {
+  if (-not $env:FIGCRAFT_BUILD_SHA) { $env:FIGCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
+  if (-not $env:FIGCRAFT_BUILD_DATE) { $env:FIGCRAFT_BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+}
 
 # The headless CLI ships next to the app once apps/figcraft-cli exists.
 $HasCli = Test-Path (Join-Path $Root 'apps\figcraft-cli\Cargo.toml')
@@ -62,11 +68,22 @@ $Bins = @('figcraft'); if ($HasCli) { $Bins += 'figcraft-cli' }
 
 Write-Output "FigCraft $Version for Windows $Arch ($Target): $($Bins -join ', ')"
 
+if ($Nightly) {
+  & (Join-Path $PSScriptRoot 'nightly.ps1') -Arch $Arch -Version $Version -Target $Target -TargetDir $TargetDir -Dist $Dist -SkipBuild:$SkipBuild -BuildOnly:$BuildOnly
+  return
+}
+
 if (-not $SkipBuild) {
+  # The stable channel, explicitly: a leftover nightly value in the environment must not build a
+  # Nightly executable into this package.
+  $env:FIGCRAFT_BUILD_CHANNEL = 'stable'
   # Static CRT: no VC++ redistributable needed. Scoped to the target so host build scripts and
   # proc-macros are unaffected.
   $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
+  # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded: the MSI, the
+  # Launcher's ProductVersion check and the taskbar name all read them.
+  $env:FIGCRAFT_REQUIRE_WINRES = '1'
   $pkgs = @(); foreach ($b in $Bins) { $pkgs += @('-p', $b) }
   Invoke-Native "cargo build ($Target)" { cargo build --release --locked @pkgs --target $Target }
 }
@@ -89,6 +106,9 @@ foreach ($check in $checks) {
   if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
   Write-Output "ok $($check[0]): $Arch, PE subsystem $($h.Subsystem)"
+}
+if ((Get-Item -LiteralPath (Join-Path $Bin 'figcraft.exe')).VersionInfo.ProductName -eq 'FigCraft Nightly') {
+  throw 'a nightly executable cannot be packaged as stable'
 }
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue

@@ -152,6 +152,12 @@ impl<S: Socket> Driver<S> {
                     None => self.done = true,
                 }
             }
+            exchange::Next::Tell(events, then) => {
+                for e in events {
+                    self.inbox.push(e);
+                }
+                self.follow(*then, now);
+            }
         }
     }
 
@@ -229,7 +235,7 @@ impl<S: Socket> Driver<S> {
         if bytes.len() > self.cfg.limits.max_server_message {
             return self.end(too_large(&self.cfg.limits), now);
         }
-        let taken = match message::decode::<ServerMsg>(bytes, self.cfg.limits.max_server_message) {
+        let taken = match message::decode_server(bytes, self.cfg.limits.max_server_message) {
             // The join code's answer (or the team list's): join the file, on a new connection.
             Ok(ServerMsg::Resolved { file, token }) if self.cfg.lookup.is_some() => {
                 return match resolved(&mut self.cfg, file, token) {

@@ -62,7 +62,7 @@ impl Win {
     fn with_session(s: Session) -> Self {
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let app = FigApp::new(s, Box::new(Clipboard(recorded.clone())));
-        let mut win = Self { ctx: egui::Context::default(), app, time: 0.0, recorded };
+        let mut win = Self { ctx: crate::framework::headless_context(), app, time: 0.0, recorded };
         for _ in 0..3 {
             win.frame(vec![]);
         }
@@ -76,6 +76,7 @@ impl Win {
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
     }

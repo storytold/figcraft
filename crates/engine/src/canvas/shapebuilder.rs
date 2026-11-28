@@ -656,7 +656,7 @@ impl Session {
     fn builder_select(&mut self, ev: &PointerEvent) {
         let Ok(ds) = self.ds() else { return };
         let (doc, page, mut sel) = (ds.doc.clone(), ds.page, ds.selection.clone());
-        let Some(leaf) = self.hit(&doc, page, ev.p(), 2.0 / ev.zoom.max(1e-6)) else { return };
+        let Some(leaf) = self.hit_pick(&doc, page, ev.p(), 2.0 / ev.zoom.max(1e-6), ev.cmd) else { return };
         let t = figcraft_doc::geometry::select_target(&doc, leaf, &sel, ev.cmd);
         if ev.shift {
             if let Some(i) = sel.iter().position(|x| *x == t) {

@@ -150,18 +150,23 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
     let full = ui.max_rect();
     // Header: file name (or "Assets") + drafts + collapse.
     let (head, _) = ui.allocate_exact_size(vec2(full.width(), 64.0), Sense::hover());
+    // Laid out left to right, mirrored inside the header in a right-to-left window.
+    let rtl = crate::widgets::rtl(ui);
+    let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    let fx = |x: f32| crate::widgets::flip_x(rtl, head, x);
     if app.ui.left_tab == LeftTab::Assets {
-        ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 24.0), Align2::LEFT_CENTER, tr("Assets"), semibold(13.0), t.text);
+        ui.painter().text(pos2(fx(head.min.x + 16.0), head.min.y + 24.0), align, tr("Assets"), semibold(13.0), t.text);
     } else {
         let name = app.session.doc().map(|d| d.name.clone()).unwrap_or_default();
         let nr = Rect::from_min_max(pos2(head.min.x + 14.0, head.min.y + 14.0), pos2(head.max.x - 48.0, head.min.y + 34.0));
+        let nr = crate::widgets::flip_rect(rtl, head, nr);
         let start = std::mem::take(&mut app.ui.rename_file);
         if let (Some(new), _) = crate::widgets::rename_field(ui, Id::unique("filename"), &name, nr, semibold(13.0), start) {
             app.run("file.rename", json!({"name": new}));
         }
-        ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 46.0), Align2::LEFT_CENTER, tr("Drafts"), regular(11.0), t.text_secondary);
+        ui.painter().text(pos2(fx(head.min.x + 16.0), head.min.y + 46.0), align, tr("Drafts"), regular(11.0), t.text_secondary);
     }
-    let hr = Rect::from_center_size(pos2(head.max.x - 24.0, head.min.y + 24.0), vec2(24.0, 24.0));
+    let hr = Rect::from_center_size(pos2(fx(head.max.x - 24.0), head.min.y + 24.0), vec2(24.0, 24.0));
     // Minimize, by the file name: "click Minimize next to the file name to collapse the
     // navigation bar, left sidebar, and right sidebar" (Explore the navigation bar and left sidebar).
     let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Minimize"));
@@ -193,13 +198,17 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     }
     let w = ui.available_width();
     let (hr, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
-    let tresp = ui.interact(Rect::from_min_size(hr.min, vec2(w - 40.0, 40.0)), ui.scope_id().with("pages_toggle"), Sense::click());
+    let rtl = crate::widgets::rtl(ui);
+    let fx = |x: f32| crate::widgets::flip_x(rtl, hr, x);
+    let toggle = crate::widgets::flip_rect(rtl, hr, Rect::from_min_size(hr.min, vec2(w - 40.0, 40.0)));
+    let tresp = ui.interact(toggle, ui.scope_id().with("pages_toggle"), Sense::click());
     a11y::toggle(&tresp, tr("Pages"), app.ui.pages_open);
-    ui.painter().text(pos2(hr.min.x + 16.0, hr.center().y), Align2::LEFT_CENTER, tr("Pages"), semibold(11.0), t.text);
+    let start = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    ui.painter().text(pos2(fx(hr.min.x + 16.0), hr.center().y), start, tr("Pages"), semibold(11.0), t.text);
     if tresp.clicked() {
         app.ui.pages_open = !app.ui.pages_open;
     }
-    let sr = Rect::from_center_size(pos2(hr.max.x - 50.0, hr.center().y), vec2(24.0, 24.0));
+    let sr = Rect::from_center_size(pos2(fx(hr.max.x - 50.0), hr.center().y), vec2(24.0, 24.0));
     let sresp = ui.interact(sr, ui.scope_id().with("lsearch"), Sense::click()).tip(tr("Search pages"));
     if sresp.hovered() || app.ui.page_search {
         ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
@@ -213,7 +222,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
             app.ui.pages_open = true;
         }
     }
-    let ar = Rect::from_center_size(pos2(hr.max.x - 22.0, hr.center().y), vec2(24.0, 24.0));
+    let ar = Rect::from_center_size(pos2(fx(hr.max.x - 22.0), hr.center().y), vec2(24.0, 24.0));
     let aresp = ui.interact(ar, ui.scope_id().with("addpage"), Sense::click()).tip(tr("Add new page"));
     if aresp.hovered() {
         ui.painter().rect_filled(ar, CornerRadius::same(5), t.hover);
@@ -294,6 +303,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
             }
             if renaming {
                 let tr = Rect::from_min_max(pos2(r.min.x + 8.0, r.min.y + 4.0), pos2(r.max.x - 4.0, r.max.y - 4.0));
+                let tr = crate::widgets::flip_rect(rtl, r, tr);
                 let start = ui.data_mut(|d| d.remove_temp::<bool>(page_rename_start_id())).unwrap_or(false);
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
                 let (out, open) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start);
@@ -306,7 +316,8 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 }
             } else if !divider {
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
-                crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 10.0, r.center().y), &name, font, t.text, r.width() - 14.0);
+                let at = pos2(crate::widgets::flip_x(rtl, r, r.min.x + 10.0), r.center().y);
+                crate::bidi::paint_name_from(ui.painter(), at, rtl, &name, font, t.text, r.width() - 14.0);
             }
             if resp.clicked() && !divider {
                 select = Some(id);
@@ -330,6 +341,19 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 if ui.button(tr("Duplicate page")).clicked() {
                     if !crate::menus::dev_mode_refuses(app, "page.duplicate") {
                         app.run("page.duplicate", json!({"id": id}));
+                    }
+                    ui.close();
+                }
+                // Copy link to page (#2379); a divider can't be linked.
+                if !divider && ui.button(tr("Copy link to page")).clicked() {
+                    app.clipboard_set_text(&format!("figcraft://node/{}", id.0));
+                    app.toast(tr("Link copied"));
+                    ui.close();
+                }
+                // The page the file opens on, for everyone (#1817); a divider can't be one.
+                if !divider && ui.button(tr("Set as opening page")).clicked() {
+                    if !crate::menus::dev_mode_refuses(app, "page.setOpening") {
+                        app.run("page.setOpening", json!({"id": id}));
                     }
                     ui.close();
                 }
@@ -532,8 +556,9 @@ pub(crate) fn list_width(ui: &Ui) -> f32 {
 }
 
 /// A name's room on a row stops growing here: a name of thousands of characters (#1650) elides
-/// past it instead of making the list that wide.
-pub(crate) const NAME_ROOM: f32 = 1200.0;
+/// past it instead of making the list that wide. 400 pt still holds a long variant name
+/// (`Size=small, Type=primary, State=default, Icon=leading, Width=full`) in full.
+pub(crate) const NAME_ROOM: f32 = 400.0;
 
 /// A row's name: the layer's, or its kind's label when it has none.
 fn row_name(n: &figcraft_doc::Node) -> &str {
@@ -592,12 +617,22 @@ fn hides_children(n: &figcraft_doc::Node, dimmed: bool) -> bool {
     dimmed || !n.visible || n.hides_contents()
 }
 
+fn vertical_flow(n: &figcraft_doc::Node) -> bool {
+    n.layout.as_ref().is_some_and(|layout| layout.mode == figcraft_doc::LayoutMode::Vertical)
+}
+
+/// Follow a vertical flow from top to bottom; elsewhere start at the top of the stacking order.
+fn panel_children(n: &figcraft_doc::Node) -> impl Iterator<Item = &NodeId> {
+    let mut children = n.children.iter();
+    let forward = vertical_flow(n);
+    std::iter::from_fn(move || if forward { children.next() } else { children.next_back() })
+}
+
 fn collect(doc: &Document, id: NodeId, depth: usize, dimmed: bool, locked: bool, expanded: &BTreeSet<NodeId>, out: &mut Vec<Row>) {
     let Some(n) = doc.node(id) else { return };
     let dim_kids = !n.is_page() && hides_children(n, dimmed);
     let lock_kids = locked || n.locked;
-    // Layers panel lists top of the stack first.
-    for c in n.children.iter().rev() {
+    for c in panel_children(n) {
         let Some(cn) = doc.node(*c) else { continue };
         let has_kids = !cn.children.is_empty() || matches!(cn.kind, NodeKind::BooleanOp { .. });
         out.push(Row { id: *c, depth, has_kids, dimmed: dim_kids, locked_above: lock_kids });
@@ -607,10 +642,10 @@ fn collect(doc: &Document, id: NodeId, depth: usize, dimmed: bool, locked: bool,
     }
 }
 
-/// Layers whose name contains `q` (lowercase), top of the stack first, as a flat list.
+/// Layers whose name contains `q` (lowercase), in panel order as a flat list.
 fn matching(doc: &Document, id: NodeId, q: &str, out: &mut Vec<Row>) {
     let Some(n) = doc.node(id) else { return };
-    for c in n.children.iter().rev() {
+    for c in panel_children(n) {
         let Some(cn) = doc.node(*c) else { continue };
         let name = if cn.name.is_empty() { cn.kind.label() } else { cn.name.as_str() };
         if name.to_lowercase().contains(q) {
@@ -622,6 +657,14 @@ fn matching(doc: &Document, id: NodeId, q: &str, out: &mut Vec<Row>) {
             matching(doc, *c, q, out);
         }
     }
+}
+
+/// The range anchor while it is still part of the selection: selected itself, or covered by a
+/// selected frame (a range across parents selects the frame and not its children).
+fn live_anchor(app: &FigApp, sel: &[NodeId]) -> Option<NodeId> {
+    let a = app.ui.layer_anchor?;
+    let covered = || app.session.ds().is_ok_and(|ds| ds.doc.ancestors(a).iter().any(|p| sel.contains(p)));
+    (sel.contains(&a) || covered()).then_some(a)
 }
 
 /// Arrow keys while the layers panel has the keyboard: Up/Down select the row above or below
@@ -656,7 +699,7 @@ pub(crate) fn key_nav(app: &mut FigApp, key: egui::Key, shift: bool) -> bool {
             let Some((j, next)) = j.and_then(|j| rows.get(j).map(|r| (j, r.id))) else { return true };
             if shift {
                 // The rows from the anchor to the new one, with the moving end last.
-                let anchor = app.ui.layer_anchor.filter(|a| sel.contains(a)).unwrap_or(cur);
+                let anchor = live_anchor(app, &sel).unwrap_or(cur);
                 let a = rows.iter().position(|r| r.id == anchor).unwrap_or(i);
                 let ids: Vec<NodeId> = if a <= j {
                     rows.get(a..=j).unwrap_or_default().iter().map(|r| r.id).collect()
@@ -745,8 +788,18 @@ fn row_x0(rr: Rect, depth: usize) -> f32 {
 fn rename_field(app: &mut FigApp, ui: &mut Ui, id: NodeId, depth: usize, name: &str, r: Rect) -> Option<String> {
     let rr = r.shrink2(vec2(8.0, 0.0));
     let rect = Rect::from_min_max(pos2(row_x0(rr, depth) + 32.0, r.min.y + 4.0), pos2(rr.max.x - 4.0, r.max.y - 4.0));
+    let rect = crate::widgets::flip_rect(crate::widgets::rtl(ui), rr, rect);
     let start = app.ui.rename.is_some_and(|x| x.start);
     let (out, open) = crate::widgets::rename_field(ui, rename_id(id), name, rect, regular(11.0), start);
+    // Tab and Shift+Tab are the rename's own: they go on to the next and previous rows' names. The
+    // filter holds from the pass the field takes the keyboard, which `TextEdit::lock_focus` doesn't.
+    let editor = rename_id(id).with("te");
+    let keeps = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: false };
+    ui.memory_mut(|m| {
+        if m.has_focus(editor) {
+            m.request_focus_with_filter(editor, keeps);
+        }
+    });
     app.ui.rename = open.then_some(Rename { id, start: false });
     out
 }
@@ -848,7 +901,9 @@ fn drop_zone(ui: &mut Ui, p: egui::Pos2, rects: [Rect; 2], x0: f32, id: NodeId, 
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
     } else {
-        crate::widgets::insertion_line(ui.painter(), x0, rr.max.x, y);
+        // From the row's indent to its end: mirrored, from its end on the left to the indent.
+        let (a, b) = if crate::widgets::rtl(ui) { (rr.min.x, crate::widgets::flip_x(true, rr, x0)) } else { (x0, rr.max.x) };
+        crate::widgets::insertion_line(ui.painter(), a, b, y);
     }
     (zone, open, ui.input(|i| i.pointer.any_released()))
 }
@@ -896,7 +951,8 @@ fn select_clicked(app: &mut FigApp, rows: &[Row], sel: &[NodeId], id: NodeId, m:
     app.ui.pages_focus = None;
     let order: Vec<NodeId> = rows.iter().map(|r| r.id).collect();
     let pos = |x: NodeId| order.iter().position(|o| *o == x);
-    let anchor = app.ui.layer_anchor.filter(|a| sel.contains(a)).and_then(pos);
+    let live = live_anchor(app, sel);
+    let anchor = live.and_then(pos);
     if m.shift
         && let (Some(ai), Some(bi)) = (anchor, pos(id))
     {
@@ -907,6 +963,11 @@ fn select_clicked(app: &mut FigApp, rows: &[Row], sel: &[NodeId], id: NodeId, m:
             if !s.contains(x) {
                 s.push(*x);
             }
+        }
+        // A layer under a selected ancestor is covered by it, not a member of its own.
+        if let Ok(ds) = app.session.ds() {
+            let all = s.clone();
+            s.retain(|x| !ds.doc.ancestors(*x).iter().any(|a| all.contains(a)));
         }
         app.run("select.set", json!({"ids": s}));
     } else if m.shift || m.command {
@@ -933,42 +994,59 @@ fn select_clicked(app: &mut FigApp, rows: &[Row], sel: &[NodeId], id: NodeId, m:
 
 /// Drops `moving` on `target` (`zone`: 0 into it, -1 above, 1 below), unless Dev Mode refuses
 /// (a drag started in the design can end after a switch to it).
-fn drop_layers(app: &mut FigApp, doc: &Document, moving: &[NodeId], target: NodeId, zone: i8) {
+fn drop_layers(app: &mut FigApp, doc: &Document, rows: &[Row], moving: &[NodeId], target: NodeId, zone: i8) {
     if crate::menus::dev_mode_refuses(app, "node.reparent") {
         return;
     }
-    let ids = moving.to_vec();
-    match zone {
-        0 => {
-            app.run("node.reparent", json!({"ids": ids, "parent": target}));
-        }
-        z => {
-            // Above in the list = higher z = after the target among siblings.
-            if let Some(parent) = doc.node(target).and_then(|n| n.parent) {
-                let idx = doc.index_in_parent(target).unwrap_or(0);
-                let gap = if z < 0 { idx + 1 } else { idx };
-                // `index` is the final position: the dragged layers below the gap leave it.
-                let below = doc.node(parent).map_or(0, |p| p.children.iter().take(gap).filter(|c| ids.contains(c)).count());
-                app.run("node.reparent", json!({"ids": ids, "parent": parent, "index": gap - below}));
-            }
-        }
+    let parent = if zone == 0 { Some(target) } else { doc.node(target).and_then(|n| n.parent) };
+    let Some(parent) = parent.and_then(|id| doc.node(id)) else { return };
+    let forward = vertical_flow(parent);
+    let mut pending: BTreeSet<_> = moving.iter().copied().collect();
+    let index = (zone != 0).then(|| {
+        let idx = doc.index_in_parent(target).unwrap_or(0);
+        // Above means before the target in a vertical flow, after it in a stack.
+        let gap = if (zone < 0) != forward { idx + 1 } else { idx };
+        // `index` is the final position: the dragged layers below the gap leave it.
+        let below = parent.children.iter().take(gap).filter(|c| pending.contains(c)).count();
+        gap - below
+    });
+    // Keep the displayed order of the moved rows. A selection can include a layer outside
+    // the current list (for example, under a collapsed row); include it after the listed rows.
+    let mut ids: Vec<_> = rows.iter().map(|row| row.id).chain(moving.iter().copied()).filter(|id| pending.remove(id)).collect();
+    if !forward {
+        ids.reverse();
+    }
+    app.run("layers.reparent", json!({"ids": ids, "parent": parent.id, "index": index}));
+}
+
+/// The eye and padlock's span on a row (`rr`, the row inset 8 pt from each side) wider than the view:
+/// its end stops 8 pt inside the view's edge, where it is on a row as wide as the view, but never so
+/// far in that the buttons cover the row's disclosure triangle, icon or name start (`name_x`,
+/// unmirrored). Returns that row span (what [`eye_lock`] places them at the end of) and the
+/// buttons' 48 pt: the eye and padlock are 20 pt each, 4 pt from the end and 2 pt apart.
+fn row_buttons(rr: Rect, view: Rect, name_x: f32, rtl: bool) -> (Rect, Rect) {
+    if rtl {
+        let name_start = rr.min.x + rr.max.x - name_x;
+        let end = Rect::from_min_max(pos2(rr.min.x.max((view.min.x + 8.0).min(name_start - 48.0)), rr.min.y), rr.max);
+        return (end, Rect::from_x_y_ranges(end.min.x..=(end.min.x + 48.0), rr.y_range()));
+    }
+    let end = Rect::from_min_max(rr.min, pos2(rr.max.x.min((view.max.x - 8.0).max(name_x + 48.0)), rr.max.y));
+    (end, Rect::from_x_y_ranges((end.max.x - 48.0)..=end.max.x, rr.y_range()))
+}
+
+/// Where a row's name is drawn: the view, less the eye and padlock's `buttons` while they show, so
+/// a long name is clipped before them instead of drawn under them.
+fn name_clip(view: Rect, buttons: Rect, buttons_shown: bool, rtl: bool) -> Rect {
+    match (buttons_shown, rtl) {
+        (false, _) => view,
+        (true, false) => Rect::from_x_y_ranges(view.min.x..=view.max.x.min(buttons.min.x), view.y_range()),
+        (true, true) => Rect::from_x_y_ranges(view.min.x.max(buttons.max.x)..=view.max.x, view.y_range()),
     }
 }
 
-/// The eye and padlock of a row: painted when hovered (`over`, false in Dev Mode) or set, and, outside
-/// Dev Mode, clickable; a drag over them starts a sweep. Returns the layers whose eye / padlock was clicked.
-fn eye_lock(
-    ui: &mut Ui,
-    t: &Tokens,
-    rects: [Rect; 2],
-    row: &Row,
-    n: &figcraft_doc::Node,
-    over: bool,
-    dev: bool,
-    sweep: &mut Option<Sweep>,
-) -> (Option<NodeId>, Option<NodeId>) {
-    let [r, rr] = rects;
-    let (mut vis, mut lock) = (None, None);
+/// Whether row `r`'s layer shows as hidden and as locked: what a sweep in progress sets for the rows
+/// it took in, else the layer's own state. The row joins the sweep when the pointer is on it.
+fn swept_state(ui: &Ui, r: Rect, row: &Row, n: &figcraft_doc::Node, sweep: &mut Option<Sweep>) -> (bool, bool) {
     // A sweep across the eyes or padlocks takes in the rows the pointer passes.
     if let Some(sw) = sweep.as_mut()
         && !sw.ids.contains(&row.id)
@@ -979,14 +1057,33 @@ fn eye_lock(
         sw.ids.push(row.id);
     }
     let swept = |lock: bool| sweep.as_ref().filter(|sw| sw.lock == lock && sw.ids.contains(&row.id)).map(|sw| sw.on);
+    (swept(false).unwrap_or(!n.visible), swept(true).unwrap_or(n.locked))
+}
+
+/// The eye and padlock of a row, shown `hidden` and `locked` ([`swept_state`]): painted when hovered
+/// (`over`, false in Dev Mode) or set, and, outside Dev Mode, clickable; a drag over them starts a
+/// sweep. Returns the layers whose eye / padlock was clicked.
+fn eye_lock(
+    ui: &mut Ui,
+    t: &Tokens,
+    rects: [Rect; 2],
+    row: &Row,
+    n: &figcraft_doc::Node,
+    (hidden, locked): (bool, bool),
+    over: bool,
+    dev: bool,
+    sweep: &mut Option<Sweep>,
+) -> (Option<NodeId>, Option<NodeId>) {
+    let [r, rr] = rects;
+    let (mut vis, mut lock) = (None, None);
     // Lock / eye on hover (or when set); a layer in a locked one shows a faint padlock.
-    let hidden = swept(false).unwrap_or(!n.visible);
-    let locked = swept(true).unwrap_or(n.locked);
     // In Dev Mode they only show what is set.
     let show_lock = over || locked || row.locked_above;
     let show_eye = over || hidden;
-    let er = Rect::from_center_size(pos2(rr.max.x - 14.0, r.center().y), vec2(20.0, 20.0));
-    let lr = Rect::from_center_size(pos2(rr.max.x - 36.0, r.center().y), vec2(20.0, 20.0));
+    // At the row's end: its left in a mirrored panel.
+    let fx = |x: f32| crate::widgets::flip_x(crate::widgets::rtl(ui), rr, x);
+    let er = Rect::from_center_size(pos2(fx(rr.max.x - 14.0), r.center().y), vec2(20.0, 20.0));
+    let lr = Rect::from_center_size(pos2(fx(rr.max.x - 36.0), r.center().y), vec2(20.0, 20.0));
     if show_eye {
         icons::paint(ui.painter(), er.shrink(3.0), if hidden { Icon::EyeOff } else { Icon::Eye }, t.icon_secondary);
     }
@@ -1084,8 +1181,11 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
     }
     let w = ui.available_width();
     let (hr, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
-    ui.painter().text(pos2(hr.min.x + 16.0, hr.center().y), Align2::LEFT_CENTER, tr("Layers"), semibold(11.0), t.text);
-    let sr = Rect::from_center_size(pos2(hr.max.x - 22.0, hr.center().y), vec2(24.0, 24.0));
+    let rtl = crate::widgets::rtl(ui);
+    let fx = |x: f32| crate::widgets::flip_x(rtl, hr, x);
+    let start = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    ui.painter().text(pos2(fx(hr.min.x + 16.0), hr.center().y), start, tr("Layers"), semibold(11.0), t.text);
+    let sr = Rect::from_center_size(pos2(fx(hr.max.x - 22.0), hr.center().y), vec2(24.0, 24.0));
     let sresp = ui.interact(sr, ui.scope_id().with("layer_search_btn"), Sense::click()).tip(tr("Search layers"));
     if sresp.hovered() || app.ui.layer_search {
         ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
@@ -1156,7 +1256,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
     // The drag is over a row that takes no drop: the not-allowed cursor shows.
     let mut refused = false;
     // Only the rows in view are laid out and drawn; the rest is empty scroll space.
-    egui::ScrollArea::both().auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
+    // A mirrored list starts scrolled to its right end, where its rows start (#1904's wide rows);
+    // its own scroll state, so switching the UI language doesn't leave it at the left end.
+    egui::ScrollArea::both().id_salt(("layer_list", rtl)).auto_shrink([false, false]).stick_to_right(rtl).show_viewport(ui, |ui, viewport| {
         let pitch = ROW + ui.spacing().item_spacing.y;
         let top = ui.max_rect().top();
         let left = ui.max_rect().left();
@@ -1224,12 +1326,13 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             }
             let x0 = row_x0(rr, row.depth);
             // Expand triangle.
+            let fx = |x: f32| crate::widgets::flip_x(rtl, rr, x);
             if row.has_kids {
-                let tri = Rect::from_center_size(pos2(x0 + 6.0, r.center().y), vec2(14.0, 14.0));
+                let tri = Rect::from_center_size(pos2(fx(x0 + 6.0), r.center().y), vec2(14.0, 14.0));
                 let tresp = ui.interact(tri, ui.scope_id().with(("tri", row.id)), Sense::click());
                 let open = app.ui.expanded.contains(&row.id);
                 a11y::button(&tresp, if open { tr("Collapse") } else { tr("Expand") });
-                icons::paint(ui.painter(), tri.shrink(1.0), if open { Icon::Chevron } else { Icon::ChevronRight }, t.icon_secondary);
+                icons::paint(ui.painter(), tri.shrink(1.0), crate::widgets::disclosure_icon(open, rtl), t.icon_secondary);
                 if tresp.clicked() {
                     if ui.input(|i| i.modifiers.alt) {
                         deep = Some((row.id, !open));
@@ -1241,9 +1344,11 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             let icon = node_icon(&doc, row.id);
             let shown = n.visible && !row.dimmed;
             let icon_col = row_color(&t, is_comp || icon == Icon::Slot, shown, t.icon, t.text_tertiary);
-            let icon_rect = Rect::from_center_size(pos2(x0 + 22.0, r.center().y), vec2(14.0, 14.0));
+            let icon_rect = Rect::from_center_size(pos2(fx(x0 + 22.0), r.center().y), vec2(14.0, 14.0));
             icons::paint(ui.painter(), icon_rect, icon, icon_col);
             let name_x = x0 + 36.0;
+            let (buttons_end, buttons) = row_buttons(rr, ui.clip_rect(), name_x, rtl);
+            let toggles = swept_state(ui, r, row, n, &mut sweep);
             if app.ui.rename.is_some_and(|rn| rn.id == row.id) {
                 if let Some(new) = rename_field(app, ui, row.id, row.depth, &n.name, r) {
                     rename_done = Some((row.id, new));
@@ -1252,12 +1357,14 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 let col = row_color(&t, is_comp, shown, t.text, t.text_tertiary);
                 let font = name_font(&doc, page, n);
                 let name = row_name(n).to_string();
-                // Room left of the lock and eye buttons (the row is wide enough for the whole
+                // Room before the lock and eye buttons (the row is wide enough for the whole
                 // name, up to `NAME_ROOM`: a row widened by a deeper name gives no more).
                 let max_w = (rr.max.x - 56.0 - name_x).clamp(20.0, NAME_ROOM);
-                crate::bidi::paint_name(ui.painter(), pos2(name_x, r.center().y), &name, font, col, max_w);
+                let buttons_shown = (over && !dev) || toggles.0 || toggles.1 || row.locked_above;
+                let clip = name_clip(ui.clip_rect(), buttons, buttons_shown, rtl);
+                crate::bidi::paint_name_from(&ui.painter().with_clip_rect(clip), pos2(fx(name_x), r.center().y), rtl, &name, font, col, max_w);
             }
-            let (v, l) = eye_lock(ui, &t, [r, rr], row, n, over && !dev, dev, &mut sweep);
+            let (v, l) = eye_lock(ui, &t, [r, buttons_end], row, n, toggles, over && !dev, dev, &mut sweep);
             vis = v.or(vis);
             lock = l.or(lock);
             if resp.clicked() {
@@ -1353,7 +1460,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             d.remove::<(NodeId, f64)>(Id::unique("layer_drag_hold"));
         });
         if let (Some(_), Some((target, zone))) = (dragging, drop) {
-            drop_layers(app, &doc, &moving, target, zone);
+            drop_layers(app, &doc, &rows, &moving, target, zone);
         }
     }
     if let Ok(ds) = app.session.ds_mut() {

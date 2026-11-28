@@ -146,7 +146,8 @@ fn export_file_names_take_the_suffix_and_slashes_make_folders() {
 #[test]
 fn export_formats_and_what_each_keeps() {
     let mut s = Session::new();
-    let e = id(&ex(&mut s, "shape.ellipse", json!({"x": 0, "y": 0, "width": 40, "height": 40})));
+    let side = 128;
+    let e = id(&ex(&mut s, "shape.ellipse", json!({"x": 0, "y": 0, "width": side, "height": side})));
     set(&mut s, &[e], json!({"fills": ["#FF0000"]}));
     let png = export(&mut s, json!({"ids": [e], "format": "png"}));
     let jpg = export(&mut s, json!({"ids": [e], "format": "jpg"}));
@@ -162,10 +163,17 @@ fn export_formats_and_what_each_keeps() {
     for (bytes, sig, why) in rows {
         assert!(bytes.starts_with(sig), "{why}");
     }
-    assert_eq!(pixels(&png).get_pixel(0, 0)[3], 0, "PNG keeps transparency outside the circle");
-    let corner = *pixels(&jpg).get_pixel(0, 0);
-    assert!(corner[0] > 245 && corner[1] > 245 && corner[2] > 245, "JPG has no transparency: transparent areas are white");
-    let mid = *pixels(&jpg).get_pixel(20, 20);
+    let png = pixels(&png);
+    let jpg = pixels(&jpg);
+    // Keep the corner block clear of the ellipse so JPEG ringing at the edge does not affect the matte check.
+    for y in 0..8 {
+        for x in 0..8 {
+            assert_eq!(png.get_pixel(x, y)[3], 0, "PNG keeps transparency outside the circle at ({x}, {y})");
+            let corner = jpg.get_pixel(x, y);
+            assert!(corner.0[..3].iter().all(|&channel| channel > 245), "JPG composites onto white at ({x}, {y}): {corner:?}");
+        }
+    }
+    let mid = *jpg.get_pixel(side / 2, side / 2);
     assert!(mid[0] > 240 && mid[1] < 16 && mid[2] < 16, "docs silent: JPG quality is fixed and high (flat colours come back within a few levels)");
 }
 

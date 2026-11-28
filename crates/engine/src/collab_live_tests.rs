@@ -44,7 +44,11 @@ fn welcome_of(out: &[Outgoing], id: u32) -> ServerMsg {
 
 impl Room {
     pub(crate) fn new(doc: Document, n: usize, seed: u64) -> Room {
-        let mut room = Room { server: Server::new(doc, "t", Limits::default()), people: Vec::new(), rng: Rng::new(seed) };
+        Self::new_with_limits(doc, n, seed, Limits::default())
+    }
+
+    pub(crate) fn new_with_limits(doc: Document, n: usize, seed: u64, limits: Limits) -> Room {
+        let mut room = Room { server: Server::new(doc, "t", limits), people: Vec::new(), rng: Rng::new(seed) };
         for _ in 0..n {
             let mut s = Session::new();
             let script = Arc::new(Mutex::new(Script::default()));
@@ -73,7 +77,10 @@ impl Room {
                 Outgoing::All(m) => (m, (0..self.people.len()).collect()),
                 Outgoing::Others(id, m) => (m, (0..self.people.len()).filter(|i| self.people[*i].id != id).collect()),
             };
-            if !matches!(msg, ServerMsg::Changes(_) | ServerMsg::Reject { .. } | ServerMsg::Welcome { .. }) {
+            if !matches!(
+                msg,
+                ServerMsg::Changes(_) | ServerMsg::Reject { .. } | ServerMsg::Welcome { .. } | ServerMsg::Branches(_) | ServerMsg::Branch(_)
+            ) {
                 continue;
             }
             let to: Vec<usize> = to.into_iter().filter(|i| self.people[*i].online).collect();
@@ -127,7 +134,7 @@ impl Room {
     }
 
     /// Person `i`'s connection drops: what is in flight is lost; the link says it's reconnecting.
-    fn disconnect(&mut self, i: usize) {
+    pub(crate) fn disconnect(&mut self, i: usize) {
         let p = &mut self.people[i];
         p.up.clear();
         p.down.clear();
@@ -139,10 +146,11 @@ impl Room {
     }
 
     /// Person `i` is back: the link says hello with the client's id and last sequence number.
-    fn reconnect(&mut self, i: usize) {
+    pub(crate) fn reconnect(&mut self, i: usize) {
         let p = &mut self.people[i];
         let ClientMsg::Hello(mut h) = Client::hello("f", "t", "Person", "") else { panic!("not a hello") };
-        h.resume = p.s.live().client().map(Client::resume);
+        let main_uid = p.s.docs[crate::branches::file_tab(&p.s)].uid;
+        h.resume = p.s.live_of(main_uid).client().map(Client::resume);
         let (id, out) = self.server.join(h).unwrap();
         assert_eq!(id, p.id, "the same client");
         p.online = true;
@@ -551,4 +559,32 @@ fn leaving_the_session_goes_back_to_snapshot_undo() {
     assert_eq!(s.status()["undo"], 1);
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.doc().unwrap().node(r).unwrap().name, "Live");
+}
+
+/// #1817: the page a file opens on is a document property: setting it syncs to the server, so
+/// everyone who joins afterwards lands on it, and moves nobody's own view.
+#[test]
+fn the_opening_page_syncs_and_moves_no_ones_view() {
+    let mut room = Room::new(base(), 2, 7);
+    let first = room.server.document().first_page().unwrap();
+    let cover = NodeId(room.s(0).execute("page.add", &json!({"name": "Cover"})).unwrap()["id"].as_u64().unwrap());
+    room.settle();
+    room.check();
+    assert_eq!(room.s(1).page().unwrap(), first, "another person's page is their own");
+    room.s(0).execute("page.setOpening", &json!({"id": cover})).unwrap();
+    room.settle();
+    room.check();
+    assert_eq!(room.server.document().current_page, Some(cover), "the server's file opens on it now");
+    assert_eq!(room.s(1).page().unwrap(), first, "nobody's view moved");
+    assert_eq!(Session::with_document(room.server.document().clone()).page().unwrap(), cover, "whoever joins next lands on it");
+    // One undo step, the setter's.
+    assert_eq!(room.s(0).execute("edit.undo", &json!({})).unwrap()["undone"], true);
+    room.settle();
+    room.check();
+    assert_ne!(room.server.document().current_page, Some(cover), "undone for everyone");
+    assert_eq!(
+        Session::with_document(room.server.document().clone()).page().unwrap(),
+        first,
+        "whoever joins after the undo lands on the restored page"
+    );
 }
