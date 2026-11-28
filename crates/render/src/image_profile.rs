@@ -7,7 +7,6 @@
 use std::io::Cursor;
 
 use figcraft_color::ColorProfile;
-use image::{DynamicImage, ImageDecoder, ImageFormat, RgbaImage};
 use moxcms::{Chromaticity, ColorPrimaries, DataColorSpace, Layout, ParsingOptions, ProfileText, ToneReprCurve, TransformOptions, XyY};
 
 /// The most bytes an embedded profile may have; bigger ones are ignored.
@@ -30,41 +29,58 @@ impl Source {
         Source { name: Some("sRGB".into()), profile: None }
     }
 
-    /// The colour space of encoded image `bytes` (reads the headers only).
+    /// The colour space of encoded image `bytes` (reads the headers or embedded profile).
     pub fn of(bytes: &[u8]) -> Source {
-        image::ImageReader::new(Cursor::new(bytes))
-            .with_guessed_format()
-            .ok()
-            .and_then(|r| r.into_decoder().ok())
-            .map(|mut dec| Source::read(bytes, &mut dec))
-            .unwrap_or_default()
-    }
-
-    /// The colour space `dec`, a decoder of `bytes`, says the image is in.
-    /// shortcut: GIF and BMP profiles and a PNG `cICP` without `iCCP` are ignored (taken as sRGB);
-    /// read them if such files turn up.
-    pub(crate) fn read(bytes: &[u8], dec: &mut impl ImageDecoder) -> Source {
-        let format = image::guess_format(bytes).ok();
-        if !matches!(format, Some(ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP | ImageFormat::Tiff)) {
+        let Some(format) = craft_image_codecs::detect(bytes) else {
+            return Source::default();
+        };
+        if !matches!(
+            format,
+            craft_image_codecs::Format::Png | craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::WebP | craft_image_codecs::Format::Tiff
+        ) {
             return Source::default();
         }
-        match dec.icc_profile() {
-            Ok(Some(icc)) => from_icc(&icc),
-            _ if format == Some(ImageFormat::Png) => png_chunks(bytes),
-            _ => Source::default(),
+        let icc = craft_image_codecs::embedded_icc(bytes).ok().flatten();
+        Source::from_decoded(bytes, icc.as_deref())
+    }
+
+    /// The colour space of `bytes` given the ICC profile returned by `craft-image-codecs`.
+    /// shortcut: GIF and BMP profiles and a PNG `cICP` without `iCCP` are ignored (taken as sRGB);
+    /// read them if such files turn up.
+    pub(crate) fn from_decoded(bytes: &[u8], icc: Option<&[u8]>) -> Source {
+        let Some(format) = craft_image_codecs::detect(bytes) else {
+            return Source::default();
+        };
+        if !matches!(
+            format,
+            craft_image_codecs::Format::Png | craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::WebP | craft_image_codecs::Format::Tiff
+        ) {
+            return Source::default();
+        }
+        match icc {
+            Some(icc) => from_icc(icc),
+            None if format == craft_image_codecs::Format::Png => png_chunks(bytes),
+            None => Source::default(),
         }
     }
 
-    /// `img` (decoded from this source) converted into `target`; `None` when it's taken as sRGB.
-    pub(crate) fn convert(&self, img: &DynamicImage, target: ColorProfile) -> Option<RgbaImage> {
+    /// Whether this source uses a greyscale ICC profile.
+    pub(crate) fn is_gray(&self) -> bool {
+        self.profile.as_ref().is_some_and(|p| p.color_space == DataColorSpace::Gray)
+    }
+
+    /// `pixels` (8-bit `GrayAlpha` when `is_gray`, else `Rgba`) converted into `target`; `None`
+    /// when it's taken as sRGB.
+    pub(crate) fn convert_u8(&self, w: u32, h: u32, is_gray: bool, pixels: &[u8], target: ColorProfile) -> Option<Vec<u8>> {
         let src = self.profile.as_ref()?;
         let grey = src.color_space == DataColorSpace::Gray;
-        if grey && img.color().has_color() {
+        if grey && !is_gray {
             return None;
         }
-        let (layout, pixels) = if grey { (Layout::GrayAlpha, img.to_luma_alpha8().into_raw()) } else { (Layout::Rgba, img.to_rgba8().into_raw()) };
-        let mut out = RgbaImage::new(img.width(), img.height());
-        src.create_transform_8bit(layout, &working(target), Layout::Rgba, TransformOptions::default()).ok()?.transform(&pixels, &mut out).ok()?;
+        let layout = if grey { Layout::GrayAlpha } else { Layout::Rgba };
+        let len = usize::try_from(w).ok()?.checked_mul(usize::try_from(h).ok()?)?.checked_mul(4)?;
+        let mut out = vec![0u8; len];
+        src.create_transform_8bit(layout, &working(target), Layout::Rgba, TransformOptions::default()).ok()?.transform(pixels, &mut out).ok()?;
         Some(out)
     }
 }

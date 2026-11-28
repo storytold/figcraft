@@ -4,7 +4,7 @@ use figcraft_color::{Color, Paint};
 use figcraft_doc::{
     AutoLayout, Brush, ChildLayout, DecorationStyle, DevStatus, Document, Effect, GridTrack, LayoutMode, LetterSpacing, LineHeight, ListStyle,
     MAX_LIST_INDENT, MaskType, Node, NodeId, NodeKind, Sizing, StrokeCap, StrokeProps, TextAutoResize, TextCase, TextData, TextDecoration,
-    WidthPoint, WidthPreset, WidthProfile, style_weight, valid_axis_tag, valid_feature_tag,
+    TextPosition, WidthPoint, WidthPreset, WidthProfile, style_weight, valid_axis_tag, valid_feature_tag,
 };
 use figcraft_geom::{Affine, Point};
 use serde_json::{Map, Value, json};
@@ -23,7 +23,7 @@ clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, paddi
 mainAlign (min|center|max, or the auto gaps spaceBetween|spaceAround|spaceEvenly), crossAlign (min|center|max|baseline: first text baselines, horizontal layouts), contentAlign (wrapped lines: auto = packed where crossAlign says | spaceBetween), wrap (rows of a horizontal layout, columns of a vertical one), strokesIncluded (the frame's inside stroke takes up space), reverseZ (canvas stacking: true = first on top), \
 columnGap / rowGap (aliases of gap / crossGap), gridColumns, gridRows, columnTracks / rowTracks ([120 | \"1fr\" | \"auto\" | {sizing, value}]), \
 gridColumn / gridRow (0-based cell anchor, null = auto), gridColumnSpan, gridRowSpan, gridAlignH / gridAlignV (a grid child's alignment in its cell: min|center|max, auto/null = the frame's), sizingH / sizingV (fixed|hug|fill), \
-absolute (ignore auto layout; follows constraints), minWidth, maxWidth, minHeight, maxHeight (null removes), constraints {horizontal, vertical}, grids, exports, characters, fontFamily, fontStyle, \
+absolute (ignore auto layout; follows constraints), minWidth, maxWidth, minHeight, maxHeight (null removes), constraints {horizontal, vertical}, grids, exports, characters, fontFamily, fontStyle, fontWeight (a number: 400 Regular, 600 Semi Bold — the nearest face the family has), \
 fontSize, lineHeight (auto|px|\"150%\"), letterSpacing (px|\"2%\"), textAlign (left|center|right|justified), textAlignVertical, textAutoResize \
 (widthAndHeight|height|none|truncate), textDecoration, textDecorationStyle (solid|dotted|wavy), textDecorationThickness / textDecorationOffset \
 (auto|px|\"10%\" of the font size; the offset runs from the baseline down to an underline's top edge), textDecorationSkipInk (underlines break around descenders), \
@@ -980,6 +980,7 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
         | "letterSpacing"
         | "textDecoration"
         | "textCase"
+        | "textPosition"
         | "hyperlink"
         | "textFills"
         | "fontVariations"
@@ -1234,14 +1235,16 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
     if !unknown.is_empty() {
         return Err(bad(cmd, format!("unknown properties: {} (known: {KEYS})", unknown.join(", "))));
     }
-    // Inside an instance, record which property groups were overridden (an instance's own
-    // resizing, export settings and interactions are its own, not overrides).
+    // Inside an instance, record which property groups were overridden (an instance's own export
+    // settings and interactions are its own, not overrides). Its resizing is recorded like any
+    // layer's: the sync takes the main's Hug / Fixed unless it is overridden, and Reset instance
+    // clears it. Inferred: Figma was measured only with a typed width (kept); a resizing chosen
+    // from the dropdown is taken as an override the same way, as every property set on an
+    // instance in Figma is one.
     let own_root = matches!(doc.get(id)?.kind, NodeKind::Instance { .. }) && !crate::components::inside_instance(doc, id);
     let n = doc.get_mut(id)?;
     if n.source.is_some() {
-        for g in
-            props.keys().map(|k| override_group(k)).filter(|g| *g != "other" && !(own_root && matches!(*g, "resizing" | "exports" | "interactions")))
-        {
+        for g in props.keys().map(|k| override_group(k)).filter(|g| *g != "other" && !(own_root && matches!(*g, "exports" | "interactions"))) {
             n.overrides.insert(g.to_string());
         }
     }
@@ -1400,6 +1403,10 @@ pub fn apply_text_style(cmd: &str, t: &mut TextData, start: usize, end: usize, k
             let c: TextCase = enum_of(v).ok_or_else(|| bad(cmd, "textCase: original|upper|lower|title|smallCaps"))?;
             t.restyle(start, end, |s| s.case = c);
         }
+        "textPosition" => {
+            let p: TextPosition = enum_of(v).ok_or_else(|| bad(cmd, "textPosition: none|superscript|subscript"))?;
+            t.set_position(start, end, p);
+        }
         "hyperlink" => {
             let l = string_val(v);
             t.restyle(start, end, |s| s.link = l.clone());
@@ -1485,16 +1492,39 @@ fn set_sizing(cmd: &str, doc: &mut Document, id: NodeId, s: Sizing, horizontal: 
         }
         _ => {}
     }
-    // A child can't fill an axis its parent hugs: the parent becomes fixed at its current size.
-    // (The other way round, a parent that starts to hug fixes the children that filled it: see
-    // `figcraft_layout::coherent_sizing`, applied after every edit.)
+    // A child can't fill the axis its parent hugs along the flow: the parent becomes fixed at its
+    // current size. Across the flow the parent keeps hugging and the child takes the line's size
+    // (the largest sibling that doesn't fill); the parent becomes fixed only when no such sibling
+    // is left. (The other way round, a parent that starts to hug fixes the children that filled it
+    // along the flow: see `figcraft_layout::coherent_sizing`, applied after every edit.)
     if s == Sizing::Fill
         && let Some(p) = parent
     {
-        let cl = &mut doc.get_mut(p)?.child_layout;
-        let ps = if horizontal { &mut cl.sizing_h } else { &mut cl.sizing_v };
-        if *ps == Sizing::Hug {
-            *ps = Sizing::Fixed;
+        let pn = doc.get(p)?;
+        if figcraft_layout::wrapping_row_hugs_across(pn, horizontal) {
+            return Err(bad(cmd, "Fill container across a wrapping row is not offered"));
+        }
+        let along = match pn.layout.as_ref().map(|al| al.mode) {
+            Some(LayoutMode::Horizontal) => horizontal,
+            Some(LayoutMode::Vertical) => !horizontal,
+            _ => true,
+        };
+        let others_fill = figcraft_layout::flow_children(doc, p)
+            .into_iter()
+            .filter(|c| *c != id)
+            .all(|c| doc.node(c).is_some_and(|c| (if horizontal { c.child_layout.sizing_h } else { c.child_layout.sizing_v }) == Sizing::Fill));
+        if along || others_fill {
+            let cl = &mut doc.get_mut(p)?.child_layout;
+            let ps = if horizontal { &mut cl.sizing_h } else { &mut cl.sizing_v };
+            if *ps == Sizing::Hug {
+                *ps = Sizing::Fixed;
+                // An instance's own root, or a layer inside one, turned Fixed by this edit: that
+                // is its resizing now, an override, or the next rebuild from the main would take
+                // the main's Hug back and the child would stop filling.
+                if doc.get(p)?.source.is_some() {
+                    doc.get_mut(p)?.overrides.insert("resizing".to_string());
+                }
+            }
         }
     }
     // Start from the sizing the layer has in effect (an auto-width text hugs both axes), so the
@@ -1515,6 +1545,60 @@ fn set_sizing(cmd: &str, doc: &mut Document, id: NodeId, s: Sizing, horizontal: 
         };
     }
     Ok(())
+}
+
+/// The hugging parents that `props` setting Fill on `ids` may turn Fixed, as (parent, horizontal):
+/// taken before the edit, for [`fixed_notice`].
+pub(crate) fn hugging_parents(doc: &Document, ids: &[NodeId], props: &Map<String, Value>) -> Vec<(NodeId, bool)> {
+    let mut out = Vec::new();
+    for (horizontal, keys) in [(true, ["sizingH", "layoutSizingHorizontal"]), (false, ["sizingV", "layoutSizingVertical"])] {
+        if !keys.iter().any(|k| props.get(*k).and_then(sizing) == Some(Sizing::Fill)) {
+            continue;
+        }
+        for p in ids.iter().filter_map(|i| doc.node(*i)).filter_map(|n| n.parent) {
+            let hugs = doc
+                .node(p)
+                .is_some_and(|p| p.layout.is_some() && (if horizontal { p.child_layout.sizing_h } else { p.child_layout.sizing_v }) == Sizing::Hug);
+            if hugs && !out.contains(&(p, horizontal)) {
+                out.push((p, horizontal));
+            }
+        }
+    }
+    out
+}
+
+/// The children, as (child, horizontal), that fill an axis of a frame in `ids` which `props` sets
+/// to Hug: taken before the edit, for [`fixed_notice`] (the coherence pass turns them Fixed).
+pub(crate) fn filling_children(doc: &Document, ids: &[NodeId], props: &Map<String, Value>) -> Vec<(NodeId, bool)> {
+    let mut out = Vec::new();
+    for (horizontal, keys) in [(true, ["sizingH", "layoutSizingHorizontal"]), (false, ["sizingV", "layoutSizingVertical"])] {
+        if !keys.iter().any(|k| props.get(*k).and_then(sizing) == Some(Sizing::Hug)) {
+            continue;
+        }
+        for f in ids.iter().filter_map(|i| doc.node(*i)).filter(|n| n.layout.is_some() && n.kind.is_frame_like()) {
+            for c in f.children.iter().filter_map(|c| doc.node(*c)) {
+                let fills = (if horizontal { c.child_layout.sizing_h } else { c.child_layout.sizing_v }) == Sizing::Fill;
+                if fills && !out.contains(&(c.id, horizontal)) {
+                    out.push((c.id, horizontal));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The notice for the layers of [`hugging_parents`] or [`filling_children`] that the edit turned
+/// Fixed ("Height set to Fixed for Frame 1"), `None` when every one kept its sizing.
+pub(crate) fn fixed_notice(doc: &Document, before: &[(NodeId, bool)]) -> Option<String> {
+    let notes: Vec<String> = before
+        .iter()
+        .filter_map(|(p, horizontal)| {
+            let p = doc.node(*p)?;
+            let now = if *horizontal { p.child_layout.sizing_h } else { p.child_layout.sizing_v };
+            (now == Sizing::Fixed).then(|| format!("{} set to Fixed for {}", if *horizontal { "Width" } else { "Height" }, p.name))
+        })
+        .collect();
+    (!notes.is_empty()).then(|| notes.join("; "))
 }
 
 /// Resize a node's box from its top-left, applying constraints / group scaling to children.

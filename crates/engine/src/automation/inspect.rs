@@ -1,6 +1,8 @@
 //! Document inspection as JSON, so agents can verify their work without screenshots.
 
-use figcraft_doc::{Document, Node, NodeId, NodeKind, StrokeJoin, TextData, TextDecoration};
+use figcraft_doc::{
+    Document, Node, NodeId, NodeKind, StrokeCap, StrokeJoin, TextAlignV, TextCase, TextData, TextDecoration, TextPosition, TextStyle,
+};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -27,6 +29,7 @@ pub const NODE_KEYS: &[&str] = &[
     "constraints",
     "cornerRadius",
     "cornerSmoothing",
+    "dashCap",
     "dashes",
     "description",
     "devChanged",
@@ -34,12 +37,16 @@ pub const NODE_KEYS: &[&str] = &[
     "devResources",
     "devStatus",
     "effects",
+    "endCap",
     "exports",
+    "exposedInstance",
+    "features",
     "fills",
     "flows",
     "fontFamily",
     "fontSize",
     "fontStyle",
+    "fontWeight",
     "fontVariations",
     "gridCell",
     "grids",
@@ -76,13 +83,17 @@ pub const NODE_KEYS: &[&str] = &[
     "opacity",
     "operandOperation",
     "overrides",
+    "paragraphIndent",
+    "paragraphSpacing",
     "pluginData",
     "pointCount",
+    "propertyReferences",
     "rotation",
     "sectionContentsHidden",
     "segments",
     "sizing",
     "slot",
+    "startCap",
     "strokeAlign",
     "strokeJoin",
     "strokeSides",
@@ -91,7 +102,9 @@ pub const NODE_KEYS: &[&str] = &[
     "styledRuns",
     "styles",
     "textAlign",
+    "textAlignVertical",
     "textAutoResize",
+    "textCase",
     "textDecoration",
     "textDecorationColor",
     "textDecorationOffset",
@@ -100,8 +113,10 @@ pub const NODE_KEYS: &[&str] = &[
     "textDecorationThickness",
     "textDirection",
     "textPath",
+    "textPosition",
     "textStyleRanges",
     "type",
+    "variableModes",
     "vertices",
     "visible",
     "width",
@@ -263,6 +278,11 @@ fn paint_props(n: &Node, o: &mut serde_json::Map<String, Value>, options: &Inspe
         if !n.stroke.dashes.is_empty() {
             insert_prop(o, options, "dashes", || json!(n.stroke.dashes));
         }
+        for (k, cap) in [("startCap", n.stroke.cap_start), ("endCap", n.stroke.cap_end)] {
+            if cap != StrokeCap::None {
+                insert_prop(o, options, k, || json!(cap));
+            }
+        }
         if let Some(cap) = n.stroke.dash_cap {
             insert_prop(o, options, "dashCap", || json!(cap));
         }
@@ -383,6 +403,15 @@ fn dev_props(doc: &Document, n: &Node, o: &mut serde_json::Map<String, Value>, o
     if !n.bound.is_empty() {
         insert_prop(o, options, "boundVariables", || json!(n.bound));
     }
+    if !n.var_modes.is_empty() {
+        insert_prop(o, options, "variableModes", || json!(n.var_modes));
+    }
+    if !n.prop_refs.is_empty() {
+        insert_prop(o, options, "propertyReferences", || json!(n.prop_refs));
+    }
+    if n.exposed {
+        insert_prop(o, options, "exposedInstance", || json!(true));
+    }
     if !n.overrides.is_empty() {
         insert_prop(o, options, "overrides", || json!(n.overrides));
     }
@@ -410,6 +439,7 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
     });
     insert_prop(o, options, "fontFamily", || json!(t.style.font_family));
     insert_prop(o, options, "fontStyle", || json!(t.style.font_style));
+    insert_prop(o, options, "fontWeight", || json!(t.style.weight()));
     insert_prop(o, options, "fontSize", || json!(t.style.font_size));
     if !t.style.variations.is_empty() {
         insert_prop(o, options, "fontVariations", || json!(t.style.variations));
@@ -417,7 +447,19 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
     insert_prop(o, options, "lineHeight", || json!(t.style.line_height.label()));
     insert_prop(o, options, "letterSpacing", || json!(t.style.letter_spacing.label()));
     insert_prop(o, options, "textAlign", || json!(t.align_h));
+    if t.align_v != TextAlignV::default() {
+        insert_prop(o, options, "textAlignVertical", || json!(t.align_v));
+    }
     insert_prop(o, options, "textAutoResize", || json!(t.auto_resize));
+    case_props(&t.style, o, options);
+    for (k, v) in [("paragraphSpacing", t.paragraph_spacing), ("paragraphIndent", t.paragraph_indent)] {
+        if v != 0.0 {
+            insert_prop(o, options, k, || json!(v));
+        }
+    }
+    if !t.features.is_empty() {
+        insert_prop(o, options, "features", || json!(t.features));
+    }
     if t.max_lines > 0 {
         insert_prop(o, options, "maxLines", || json!(t.max_lines));
     }
@@ -485,6 +527,16 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
         if !linked.is_empty() {
             insert_prop(o, options, "textStyleRanges", || Value::Array(linked));
         }
+    }
+}
+
+/// The base style's case and position, when not the defaults.
+fn case_props(s: &TextStyle, o: &mut serde_json::Map<String, Value>, options: &InspectOptions) {
+    if s.case != TextCase::default() {
+        insert_prop(o, options, "textCase", || json!(s.case));
+    }
+    if s.position != TextPosition::None {
+        insert_prop(o, options, "textPosition", || json!(s.position));
     }
 }
 

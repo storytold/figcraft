@@ -700,10 +700,11 @@ pub fn db() -> &'static RwLock<FontDb> {
     raw_db()
 }
 
+/// Initialize and return the shared database, loading valid embedded faces exactly once.
 fn raw_db() -> &'static RwLock<FontDb> {
     DB.get_or_init(|| {
         let mut db = FontDb::default();
-        for f in CRAFT_FONTS {
+        for f in CRAFT_FONTS.iter() {
             if let Some(face) = Face::from_bytes(FontBytes::Static(f.bytes), 0, Some(f.family), Some(f.style)) {
                 db.add(face);
             }
@@ -1514,6 +1515,8 @@ fn public_family(family: &str) -> Option<String> {
     match hidden {
         "SF Compact" | "SF Compact Rounded" => Some(hidden.to_string()),
         "SF NS Rounded" => Some("SF Pro Rounded".into()),
+        // Apple's serif, also published as a download; macOS installs it as `.New York`.
+        "New York" => Some(hidden.to_string()),
         _ => None,
     }
 }

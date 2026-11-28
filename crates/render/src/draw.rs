@@ -207,46 +207,59 @@ fn side_strokes(n: &Node) -> Option<Arc<BezPath>> {
     }))
 }
 
+/// A plain stroke: no dashes, width profile or brush.
+fn plain_stroke(n: &Node) -> bool {
+    let props = &n.stroke;
+    props.dashes.is_empty() && props.profile().is_none() && props.brush.is_none()
+}
+
+/// Whether a closed node's inside/outside stroke is an even-odd ring of two outlines ([`ring`]).
+fn ring_stroke(n: &Node, closed: bool) -> bool {
+    let props = &n.stroke;
+    plain_stroke(n) && closed && props.align != StrokeAlign::Center
+        // An outside ring grows square corners as miters; other joins take the generic outline.
+        && !(props.align == StrokeAlign::Outside && props.join != StrokeJoin::Miter && n.corners.radii.contains(&0.0))
+}
+
+/// A rect's or full ellipse's outline moved `inset` inwards (outwards when negative), `None` for
+/// other shapes or one inset to nothing.
+fn ring(n: &Node, inset: f64) -> Option<BezPath> {
+    let (x0, y0, ww, hh) = (inset, inset, n.width - 2.0 * inset, n.height - 2.0 * inset);
+    if ww <= 0.0 || hh <= 0.0 {
+        return None;
+    }
+    match n.kind {
+        NodeKind::Rectangle
+        | NodeKind::Frame
+        | NodeKind::Component { .. }
+        | NodeKind::ComponentSet { .. }
+        | NodeKind::Instance { .. }
+        | NodeKind::Section { .. }
+            if n.corners.smoothing == 0.0 =>
+        {
+            let radii = n.corners.radii.map(|r| if r > 0.0 { (r - inset).max(0.0) } else { 0.0 });
+            let mut p = figcraft_geom::rounded_rect(ww, hh, radii, 0.0);
+            p.apply_affine(Affine::translate((x0, y0)));
+            Some(p)
+        }
+        NodeKind::Ellipse { sweep, inner, .. } if figcraft_geom::full_sweep(sweep) && inner == 0.0 => {
+            Some(figcraft_geom::kurbo::Ellipse::from_rect(Rect::new(x0, y0, x0 + ww, y0 + hh)).to_path(0.05))
+        }
+        _ => None,
+    }
+}
+
 /// The stroke area of a node in local coordinates.
 pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
-    let props = &n.stroke;
     if let Some(p) = side_strokes(n) {
         return p;
     }
     // Rect/ellipse inside/outside strokes without booleans: an even-odd ring of two outlines.
-    if props.dashes.is_empty() && props.profile().is_none() && props.brush.is_none() && closed && props.align != StrokeAlign::Center
-        // An outside ring grows square corners as miters; other joins take the generic outline.
-        && !(props.align == StrokeAlign::Outside && props.join != StrokeJoin::Miter && n.corners.radii.contains(&0.0))
-    {
-        let w = props.weight;
-        let ring = |inset: f64| -> Option<BezPath> {
-            let (x0, y0, ww, hh) = (inset, inset, n.width - 2.0 * inset, n.height - 2.0 * inset);
-            if ww <= 0.0 || hh <= 0.0 {
-                return None;
-            }
-            match n.kind {
-                NodeKind::Rectangle
-                | NodeKind::Frame
-                | NodeKind::Component { .. }
-                | NodeKind::ComponentSet { .. }
-                | NodeKind::Instance { .. }
-                | NodeKind::Section { .. }
-                    if n.corners.smoothing == 0.0 =>
-                {
-                    let radii = n.corners.radii.map(|r| if r > 0.0 { (r - inset).max(0.0) } else { 0.0 });
-                    let mut p = figcraft_geom::rounded_rect(ww, hh, radii, 0.0);
-                    p.apply_affine(Affine::translate((x0, y0)));
-                    Some(p)
-                }
-                NodeKind::Ellipse { sweep, inner, .. } if figcraft_geom::full_sweep(sweep) && inner == 0.0 => {
-                    Some(figcraft_geom::kurbo::Ellipse::from_rect(Rect::new(x0, y0, x0 + ww, y0 + hh)).to_path(0.05))
-                }
-                _ => None,
-            }
-        };
-        let (outer, inner) = match props.align {
-            StrokeAlign::Inside => (ring(0.0), ring(w)),
-            _ => (ring(-w), ring(0.0)),
+    if ring_stroke(n, closed) {
+        let w = n.stroke.weight;
+        let (outer, inner) = match n.stroke.align {
+            StrokeAlign::Inside => (ring(n, 0.0), ring(n, w)),
+            _ => (ring(n, -w), ring(n, 0.0)),
         };
         if let Some(mut o) = outer {
             if let Some(i) = inner {
@@ -256,6 +269,54 @@ pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
         }
     }
     cached_stroke_outline(n, path, closed)
+}
+
+/// What a closed node with outline `path` (filled by `rule`) fills under an inside or outside
+/// stroke that hides what is under it: out to the middle of the stroke, so the fill neither shows
+/// at the stroke's outer edge (a light fringe on an inside stroke) nor leaves a gap at its inner
+/// edge (what is behind showing between an outside stroke and the fill) (#2635). `None`: fill
+/// `path` as it is.
+pub(crate) fn fill_to_stroke_middle(n: &Node, path: &BezPath, rule: FillRule) -> Option<(Arc<BezPath>, FillRule)> {
+    let props = &n.stroke;
+    let opaque = n
+        .strokes
+        .iter()
+        .rev()
+        .find(|p| p.visible && p.opacity > 0.0)
+        .is_some_and(|p| p.blend == BlendMode::Normal && p.opacity >= 1.0 && matches!(p.kind, PaintKind::Solid { color } if color.a >= 1.0));
+    if !(opaque && plain_stroke(n) && props.sides.is_none() && props.align != StrokeAlign::Center && n.has_visible_stroke()) {
+        return None;
+    }
+    let half = match props.align {
+        StrokeAlign::Inside => props.weight / 2.0,
+        _ => -props.weight / 2.0,
+    };
+    if ring_stroke(n, true)
+        && let Some(r) = ring(n, half)
+    {
+        return Some((Arc::new(r), FillRule::Winding));
+    }
+    // shortcut: even-odd outlines (booleans, even-odd networks) keep filling as they are, until
+    // the boolean below reads them by their own rule.
+    if rule != FillRule::Winding {
+        return None;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    hash_path(path, &mut h);
+    ("fill to stroke middle", props.weight.to_bits(), props.align as u8, props.join as u8, props.miter_limit.to_bits()).hash(&mut h);
+    let key = h.finish();
+    let cached = locked(stroke_cache()).get(key);
+    let out = match cached {
+        Some(p) => p,
+        None => {
+            let centre = figcraft_pathops::stroke_center(path, props.weight, props);
+            let op = if half > 0.0 { figcraft_doc::BoolOp::Subtract } else { figcraft_doc::BoolOp::Union };
+            let p = Arc::new(figcraft_pathops::boolean_step(path, &centre, op).ok()?);
+            locked(stroke_cache()).insert(key, p.clone());
+            p
+        }
+    };
+    Some((out, FillRule::EvenOdd))
 }
 
 /// The stroke a boolean operand contributes: like [`stroke_area`], but never an even-odd ring
@@ -550,6 +611,12 @@ pub(crate) const MAX_REACH: f64 = 1e12;
 /// result (drop shadows from the blurred layer, a backdrop blurred with it), so the largest of
 /// those reaches comes on top. Each reach counts up to [`MAX_REACH`], so the sum stays finite.
 pub fn effect_margin(n: &Node) -> f64 {
+    margin_of(n, true)
+}
+
+/// [`effect_margin`], with or without what drop shadows reach (`drops`): shadows cast from the
+/// layer's outline ([`shadow::outline_caster`]) read none of its pixels.
+fn margin_of(n: &Node, drops: bool) -> f64 {
     let visible = || n.effects.iter().filter(|e| e.visible);
     let finite = |m: f64| if m.is_finite() { m.clamp(0.0, MAX_REACH) } else { 0.0 };
     let layer: f64 = visible()
@@ -563,7 +630,9 @@ pub fn effect_margin(n: &Node) -> f64 {
     let others = visible()
         .map(|e| match &e.kind {
             EffectKind::BackgroundBlur { .. } | EffectKind::Glass(_) => e.backdrop_radius() * 2.0,
-            EffectKind::DropShadow(s) => s.radius * 2.0 + s.spread.abs() * figcraft_doc::SPREAD_MITER_LIMIT + s.offset.0.abs() + s.offset.1.abs(),
+            EffectKind::DropShadow(s) if drops => {
+                s.radius * 2.0 + s.spread.abs() * figcraft_doc::SPREAD_MITER_LIMIT + s.offset.0.abs() + s.offset.1.abs()
+            }
             // Inner shadows cast from around a layer's pixels (groups, image fills with alpha; any
             // image counts here): a layer cut off at the view would cast one from the cut.
             EffectKind::InnerShadow(s)
@@ -711,6 +780,16 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     // Isolated layer covering the node's paint bounds, clipped to the visible area + margin. Its
     // origin can be negative (inside the margin); the size counts from there, or a layer starting
     // above or left of the pixmap came out short by the margin (a band missing at its far edge).
+    // Drop shadows cast from the layer's outline need none of its pixels: the layer then ends
+    // where the pixmap does (plus what its other effects read), however far the shadows reach.
+    let cast_outline = if ctx.lod || backdrop::has_effects(n) { None } else { shadow::outline_caster(ctx.doc, n) };
+    let view = match &cast_outline {
+        Some(_) => {
+            let m = (margin_of(n, false) * ctx.scale).min(MAX_EFFECT_MARGIN_PX);
+            Rect::new(0.0, 0.0, f64::from(pw), f64::from(ph)).inflate(m, m)
+        }
+        None => view,
+    };
     let vis = dev.intersect(view);
     let (x0, y0) = (vis.x0.floor(), vis.y0.floor());
     let (w, h) = (vis.x1.ceil() - x0, vis.y1.ceil() - y0);
@@ -782,7 +861,16 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         layer_effects(ctx, &mut layer, n, id, lxf);
     }
     // Drop shadows go under the layer, in effect-list order.
-    {
+    if let Some(outlines) = &cast_outline {
+        let cover = shadow::hiding_cover(ctx.doc, n);
+        for e in n.effects.iter().filter(|e| e.visible) {
+            if let EffectKind::DropShadow(s) = &e.kind
+                && let Some((sh, at)) = shadow::outline_drop_shadow(outlines, cover.as_deref().unwrap_or(outlines), s, xf, ctx.scale, (pw, ph), op)
+            {
+                composite(pix, at, &sh, op, s.blend);
+            }
+        }
+    } else {
         // Kept apart, the backdrop isn't in the layer yet: the shadows are cast from the content
         // with the layer effects it will get (a copy only when it gets some).
         let layer_fx =
@@ -887,6 +975,16 @@ fn fill_vector_regions(ctx: &Ctx, pix: &mut Pixmap, n: &Node, network: &figcraft
     }
 }
 
+/// Fills `n`'s closed outline `path` (by `rule`, drawn at `xf`) with `paints`, out to the middle of
+/// a stroke that hides it ([`fill_to_stroke_middle`]).
+fn fill_outline(ctx: &Ctx, pix: &mut Pixmap, n: &Node, paints: &[Paint], path: &BezPath, rule: FillRule, xf: Affine) {
+    let under = fill_to_stroke_middle(n, path, rule);
+    let (path, rule) = under.as_ref().map_or((path, rule), |(p, r)| (&**p, *r));
+    if let Some(tp) = ts_path(path) {
+        fill_with(pix, &tp, paints, n.width, n.height, xf, rule, ctx, None);
+    }
+}
+
 /// Fills, `over_fills`, children (clipped), strokes and text of a node, without opacity/effects.
 fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize, over_fills: OverFills) {
     let doc = ctx.doc;
@@ -933,8 +1031,8 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
             // strokes on top.
             for k in &keys {
                 let fills = layout.styles.get(*k).and_then(|s| s.fills.as_ref()).unwrap_or(&n.fills);
-                if let Some(tp) = by_style.get(k).and_then(ts_path) {
-                    fill_with(pix, &tp, fills, w, h, gxf, FillRule::Winding, ctx, None);
+                if let Some(path) = by_style.get(k) {
+                    fill_outline(ctx, pix, n, fills, path, FillRule::Winding, gxf);
                 }
                 for (_, item) in ink.iter().filter(|(style, _)| style == k) {
                     match item {
@@ -975,10 +1073,8 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
             if !splatted && closed {
                 if let Some(network) = styled_network {
                     fill_vector_regions(ctx, pix, n, network, xf);
-                } else if let Some((path, rule)) = &outline
-                    && let Some(tp) = ts_path(path)
-                {
-                    fill_with(pix, &tp, &n.fills, w, h, xf, *rule, ctx, None);
+                } else if let Some((path, rule)) = &outline {
+                    fill_outline(ctx, pix, n, &n.fills, path, *rule, xf);
                 }
             }
             if let Some(f) = over_fills {
@@ -1118,6 +1214,12 @@ fn draw_children_clipped(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, dept
     let (pw, ph) = (pix.width(), pix.height());
     let dev = device_rect(xf, n.local_rect());
     let Some(ir) = int_rect(dev, (pw, ph)) else { return };
+    // A clip that takes in the whole pixmap cuts nothing off here (a frame larger than the view,
+    // or than the band or patch of it being drawn): the children draw as they are.
+    if clip_covers(n, xf, (pw, ph)) {
+        draw_children(ctx, pix, n, xf, depth);
+        return;
+    }
     let Some(_held) = crate::layer_budget::Held::take(ir.width(), ir.height(), 1) else { return };
     let (lx, ly) = (ir.x(), ir.y());
     // The layer starts as what lies under it and goes back in its place through the clip:
@@ -1126,7 +1228,7 @@ fn draw_children_clipped(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, dept
     let Some(mut layer) = pix.clone_rect(ir) else { return };
     let lxf = Affine::translate((-f64::from(lx), -f64::from(ly))) * xf;
     let square_aligned = n.corners.uniform() == Some(0.0) && is_axis_aligned(xf);
-    let rect_clip = square_aligned && on_whole_pixels(dev);
+    let rect_clip = square_aligned && on_whole_pixels(dev, (pw, ph));
     // The clip (a rectangular one on whole pixels is the layer's own box) is known before the
     // children draw, so their backdrops are clipped the way the layer will be. An axis-aligned
     // square frame with fractional edges gets an anti-aliased mask of its box so its edge pixels
@@ -1177,8 +1279,70 @@ fn fract_ok(_v: f64) -> bool {
     true
 }
 
-/// Whether all four edges of the device rectangle `r` lie on whole pixels, up to the float noise
-/// `snap_px` forgives.
-fn on_whole_pixels(r: Rect) -> bool {
-    [r.x0, r.y0, r.x1, r.y1].into_iter().all(|v| (snap_px(v) - v.round()).abs() < 1e-9)
+#[cfg(test)]
+thread_local! {
+    /// Tests: no clip or shadow is skipped for taking in the whole pixmap ([`clip_covers`]).
+    pub(crate) static NO_COVER_SHORTCUTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the edges of the device rectangle `r` that cross a `size` pixmap lie on whole pixels,
+/// up to the float noise `snap_px` forgives. An edge at or past the pixmap's own cuts no pixel
+/// of it in part, wherever it lies.
+fn on_whole_pixels(r: Rect, size: (u32, u32)) -> bool {
+    let whole = |v: f64| (snap_px(v) - v.round()).abs() < 1e-9;
+    let (w, h) = (f64::from(size.0), f64::from(size.1));
+    (r.x0 <= 0.0 || whole(r.x0)) && (r.y0 <= 0.0 || whole(r.y0)) && (r.x1 >= w || whole(r.x1)) && (r.y1 >= h || whole(r.y1))
+}
+
+/// Whether the box of frame `n` (its rounded corners cut off), drawn at `xf`, takes in every
+/// pixel of a `size` pixmap: its clip then cuts nothing there. Errs towards `false`: smoothed
+/// corners count as cut off square.
+pub(crate) fn clip_covers(n: &Node, xf: Affine, size: (u32, u32)) -> bool {
+    #[cfg(test)]
+    if NO_COVER_SHORTCUTS.with(std::cell::Cell::get) {
+        return false;
+    }
+    let (w, h) = (n.width, n.height);
+    let det = xf.determinant();
+    if !(det.is_finite() && det.abs() > 1e-12 && w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return false;
+    }
+    let max_r = w.min(h) / 2.0;
+    let smooth = if n.corners.smoothing > 0.0 || !n.corners.smoothing.is_finite() { 1.0 } else { 0.0 };
+    // Top-left, top-right, bottom-right, bottom-left: the corner and its radius.
+    let r = n.corners.radii.map(|r| if r.is_finite() { r.clamp(0.0, max_r) } else { max_r });
+    let corners = [(0.0, 0.0, r[0]), (w, 0.0, r[1]), (w, h, r[2]), (0.0, h, r[3])];
+    let inside = |p: figcraft_geom::Point| {
+        if !(p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h) {
+            return false;
+        }
+        corners.iter().all(|(cx, cy, r)| {
+            let (dx, dy) = ((p.x - cx).abs(), (p.y - cy).abs());
+            let zone = r * (1.0 + smooth);
+            // Outside the corner's square, or (a round corner) within its arc.
+            dx >= zone || dy >= zone || (smooth == 0.0 && (r - dx).powi(2) + (r - dy).powi(2) <= r * r)
+        })
+    };
+    let inv = xf.inverse();
+    let (pw, ph) = (f64::from(size.0), f64::from(size.1));
+    [(0.0, 0.0), (pw, 0.0), (pw, ph), (0.0, ph)].into_iter().all(|p| inside(inv * figcraft_geom::Point::new(p.0, p.1)))
+}
+
+/// Whether point `p` (local) lies in the box of `n`, its rounded corners cut off. Errs towards
+/// `false`: smoothed corners count as cut off square.
+pub(crate) fn in_box(n: &Node, p: figcraft_geom::Point) -> bool {
+    let (w, h) = (n.width, n.height);
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h) {
+        return false;
+    }
+    let max_r = w.min(h) / 2.0;
+    let smooth = if n.corners.smoothing > 0.0 || !n.corners.smoothing.is_finite() { 1.0 } else { 0.0 };
+    // Top-left, top-right, bottom-right, bottom-left: the corner and its radius.
+    let r = n.corners.radii.map(|r| if r.is_finite() { r.clamp(0.0, max_r) } else { max_r });
+    [(0.0, 0.0, r[0]), (w, 0.0, r[1]), (w, h, r[2]), (0.0, h, r[3])].iter().all(|(cx, cy, r)| {
+        let (dx, dy) = ((p.x - cx).abs(), (p.y - cy).abs());
+        let zone = r * (1.0 + smooth);
+        // Outside the corner's square, or (a round corner) within its arc.
+        dx >= zone || dy >= zone || (smooth == 0.0 && (r - dx).powi(2) + (r - dy).powi(2) <= r * r)
+    })
 }

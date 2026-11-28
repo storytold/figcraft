@@ -17,7 +17,7 @@ use crate::i18n::{tr, trf, trn};
 use crate::icons::{self, Icon};
 use crate::list_drag::{ListDrag, move_flags, remove_flags};
 use crate::style_picker::{self, StyleSlot};
-use crate::theme::{Tokens, regular, semibold};
+use crate::theme::{COMPONENT, Tokens, regular, semibold};
 use crate::widgets::{self, Edit, FIELD_H, FieldEdit, Lead, PAD};
 use crate::{FigApp, RightTab};
 
@@ -259,14 +259,36 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     });
 }
 
+/// Whether the widget with the keyboard is a field drawn inside `panel`.
+fn field_focused_in(ctx: &egui::Context, panel: Rect) -> bool {
+    a11y::field_focused(ctx) && ctx.memory(|m| m.focused()).and_then(|f| ctx.read_response(f)).is_some_and(|r| panel.intersects(r.rect))
+}
+
+/// The layers the Design panel shows: the selection, except while one of its fields has the
+/// keyboard and for the pass after, when it shows the layers that field was edited for (while
+/// they are still there). A field commits when it lets go, and the click that takes the keyboard
+/// may select another layer first (a layers panel row draws before this panel): the field's text
+/// still goes to the layers it was typed for, not into the ones just selected.
+fn design_selection(app: &mut FigApp, ctx: &egui::Context) -> Vec<NodeId> {
+    let pass = ctx.cumulative_pass_nr();
+    let focused = app.ui.right_panel_rect.is_some_and(|panel| field_focused_in(ctx, panel));
+    let Ok(ds) = app.session.ds() else { return Vec::new() };
+    let held = app.ui.field_selection.as_ref().filter(|(at, ids)| at + 1 >= pass && !ids.is_empty() && ids.iter().all(|&n| ds.doc.node(n).is_some()));
+    let sel = held.map_or_else(|| ds.selection.clone(), |(_, ids)| ids.clone());
+    if focused {
+        app.ui.field_selection = Some((pass, sel.clone()));
+    }
+    sel
+}
+
 fn design(app: &mut FigApp, ui: &mut Ui) {
+    let sel = design_selection(app, ui.ctx());
     let Ok(ds) = app.session.ds() else { return };
     // The panel shows the document itself, not a live text preview over it.
     let doc = ds.text_preview.clone().unwrap_or_else(|| ds.doc.clone());
     // While a gesture only moves the selection, nothing the sections show changes but where it
     // is: they show the document it started from, so what they keep stays kept (#1571).
     let shown = crate::selection_cache::moved(ds).filter(|_| ds.text_preview.is_none()).map_or_else(|| doc.clone(), |(b, _)| b);
-    let sel = ds.selection.clone();
     let vector_edit = ds.vector_edit.clone();
     if sel.is_empty() {
         if app.session.tool.tool == figcraft_engine::ToolId::Scale {
@@ -335,10 +357,18 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     widgets::section_header(ui, tr("Page"), &[], false);
     // The new colour and, from a scrub, whether the scrub is over (live edits stay one undo step).
     let mut new_color: Option<(figcraft_color::Color, Option<bool>)> = None;
+    // The colour variable the background follows in the page's mode (#2343), as a fill shows one.
+    let bound = crate::variable_ui::bound_name(doc, &[page], "background");
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
+        let mut hex_area = None;
         let (sw, opacity) =
             widgets::paint_field(ui, Id::unique("pagebg_swatch"), Id::unique("pagebg_a"), &p, ui.available_width(), |child, text_r| {
+                if let Some(name) = &bound {
+                    crate::variable_ui::paint_chip(app, child, &[page], "background", name, text_r, Id::unique("pagebg_bound"));
+                    return;
+                }
+                hex_area = Some(text_r);
                 // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
                 // (`FF000080`; `FF0000FF` asks for opaque).
                 if let Some(h) = widgets::text_field_inline(child, Id::unique("pagebg"), &bg.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
@@ -349,6 +379,9 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
                     new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
                 }
             });
+        if let Some(area) = hex_area {
+            crate::variable_ui::bind_button(ui, area, &[page], "background", VariableType::Color);
+        }
         app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
         // The opacity: a field like every other opacity field, not a label (#1748).
         let alpha = |v: f64| bg.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);
@@ -410,11 +443,36 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     crate::export_panel::page_section(app, ui, doc, page);
 }
 
+/// One component or component set selected: it goes by its name, after its icon, in the header;
+/// its type shows on hover (#2347).
+fn named_component<'a>(doc: &'a Document, sel: &[NodeId]) -> Option<(&'a Node, Icon)> {
+    let [id] = sel else { return None };
+    let n = doc.node(*id)?;
+    match n.kind {
+        NodeKind::Component { .. } => Some((n, Icon::Component)),
+        NodeKind::ComponentSet { .. } => Some((n, Icon::ComponentSet)),
+        _ => None,
+    }
+}
+
+/// The header label's hover: a component's type (and its name when cut short), else the whole
+/// label when cut short.
+fn label_hover(resp: egui::Response, named: Option<&Node>, shown: &str, label: &str) -> egui::Response {
+    match named {
+        Some(n) if shown != label => resp.on_hover_text(format!("{} · {label}", tr(n.kind.label()))),
+        Some(n) => resp.on_hover_text(tr(n.kind.label())),
+        None if shown != label => resp.on_hover_text(label),
+        None => resp,
+    }
+}
+
 /// Draw the selection header: type name (or Mixed), frame/group conversion, orientation
 /// swap and frame presets, component/mask/boolean quick actions, and instance details.
 fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let t = Tokens::get(ui.ctx());
+    let named = named_component(doc, sel);
     let label = match common(doc, sel, |n| n.kind.label()) {
+        _ if named.is_some() => named.map(|(n, _)| n.name.clone()).unwrap_or_default(),
         Some(l) if sel.len() == 1 => tr(l).to_string(),
         // The plural ("Frames") is a key of its own.
         Some(l) => tr(&format!("{l}s")).to_string(),
@@ -435,32 +493,56 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     };
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
+    // Laid out left to right, then mirrored inside the header in a right-to-left window.
+    let rtl = widgets::rtl(ui);
+    let flip = |rect: Rect| widgets::flip_rect(rtl, r, rect);
     // Keep the type menu and frame actions together. A short label must not leave
     // the orientation icon floating in the middle of the header.
     // The handoff icon also fits beside the frame controls at the panel minimum.
-    let max_label_width = if is_frame { (w - 202.0).clamp(40.0, 120.0) } else { 92.0 };
-    let shown = if is_frame || is_group { widgets::elide_font(ui, &label, max_label_width, semibold(13.0)) } else { label.clone() };
-    let label_width = if is_frame || is_group { ui.painter().layout_no_wrap(shown.clone(), semibold(13.0), t.text).size().x + 28.0 } else { 120.0 };
-    let lr = Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 12.0), vec2(label_width, 24.0));
+    // A name keeps clear of the three quick actions on the right.
+    let max_label_width = if is_frame {
+        (w - 202.0).clamp(40.0, 120.0)
+    } else if named.is_some() {
+        (w - 132.0).clamp(40.0, 200.0)
+    } else {
+        92.0
+    };
+    let elided = is_frame || is_group || named.is_some();
+    let shown = if elided { widgets::elide_font(ui, &label, max_label_width, semibold(13.0)) } else { label.clone() };
+    let text_width = || ui.painter().layout_no_wrap(shown.clone(), semibold(13.0), t.text).size().x;
+    let label_width = match named {
+        Some(_) => text_width() + 38.0,
+        None if elided => text_width() + 28.0,
+        None => 120.0,
+    };
+    let lr_ltr = Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 12.0), vec2(label_width, 24.0));
+    let lr = flip(lr_ltr);
     let resp = ui.interact(lr, ui.scope_id().with("typedd"), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(lr, CornerRadius::same(5), t.hover);
     }
-    let resp = if shown == label { resp } else { resp.on_hover_text(&label) };
-    let label_rect = ui.painter().text(pos2(lr.min.x + 8.0, lr.center().y), Align2::LEFT_CENTER, &shown, semibold(13.0), t.text);
+    let resp = label_hover(resp, named.map(|(n, _)| n), &shown, &label);
+    // The component icon at the label's start, the text after it: from the right when mirrored.
+    let fx = |x: f32| widgets::flip_x(rtl, lr, x);
+    let text_x = match named {
+        Some((_, icon)) => {
+            icons::paint(ui.painter(), Rect::from_center_size(pos2(fx(lr.min.x + 14.0), lr.center().y), vec2(14.0, 14.0)), icon, COMPONENT);
+            lr.min.x + 26.0
+        }
+        None => lr.min.x + 8.0,
+    };
+    let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    let label_rect = ui.painter().text(pos2(fx(text_x), lr.center().y), align, &shown, semibold(13.0), t.text);
     if is_frame || is_group {
-        icons::paint(
-            ui.painter(),
-            Rect::from_center_size(pos2(label_rect.right() + 8.0, lr.center().y), vec2(10.0, 10.0)),
-            Icon::Chevron,
-            t.icon_secondary,
-        );
+        let chevron_x = if rtl { label_rect.left() - 8.0 } else { label_rect.right() + 8.0 };
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(chevron_x, lr.center().y), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
     }
     if is_group {
         menu_popup(&resp).width(180.0).show(|ui| kind_items(app, ui, false));
     }
     if is_frame {
-        let sr = Rect::from_min_size(pos2(lr.max.x + 2.0, r.center().y - 12.0), vec2(24.0, 24.0));
+        let sr_ltr = Rect::from_min_size(pos2(lr_ltr.max.x + 2.0, r.center().y - 12.0), vec2(24.0, 24.0));
+        let sr = flip(sr_ltr);
         let sresp = ui.interact(sr, ui.scope_id().with("swap_orient"), Sense::click()).tip(tr("Swap orientation"));
         if sresp.hovered() {
             ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
@@ -469,13 +551,14 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         if sresp.clicked() {
             app.run("frame.swapOrientation", json!({"ids": sel}));
         }
-        let fit_r = sr.translate(vec2(26.0, 0.0));
+        let fit_ltr = sr_ltr.translate(vec2(26.0, 0.0));
+        let fit_r = flip(fit_ltr);
         let fit_tip = crate::shortcuts::tip(tr("Fit to contents"), "object.resizeToFit");
         if widgets::icon_button_at(ui, ui.scope_id().with("frame_fit_contents"), fit_r, Icon::FitContents, fit_tip) {
             app.run("object.resizeToFit", json!({"ids": sel}));
         }
         if figcraft_engine::devinspect::has_status(doc, sel[0]) {
-            crate::section_panel::status_icon(app, ui, doc, sel, fit_r.translate(vec2(26.0, 0.0)));
+            crate::section_panel::status_icon(app, ui, doc, sel, flip(fit_ltr.translate(vec2(26.0, 0.0))));
         }
         let ids: Vec<NodeId> = sel.to_vec();
         menu_popup(&resp).width(260.0).show(|ui| {
@@ -509,7 +592,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         // With several layers the component button is a dropdown: a small chevron sits beside its icon.
         let dropdown = cmd == "component.create" && sel.len() > 1;
         let bw = if dropdown { 34.0 } else { 24.0 };
-        let br = Rect::from_min_size(pos2(x - bw, r.center().y - 12.0), vec2(bw, 24.0));
+        let br = flip(Rect::from_min_size(pos2(x - bw, r.center().y - 12.0), vec2(bw, 24.0)));
         let tip = if cmd == "bool.union" { label } else { crate::shortcuts::tip(label, cmd) };
         let bresp = ui.interact(br, ui.scope_id().with(("qa", cmd)), Sense::click()).tip(tip);
         if bresp.hovered() {
@@ -671,7 +754,7 @@ pub(crate) fn tidy_available(ctx: &egui::Context, doc: &Arc<Document>, sel: &[No
 fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let pv = position_values(ui.ctx(), doc, sel);
     let col = widgets::col_width(ui.available_width());
-    align_row(app, ui, sel, pv.can_align, pv.align_blocked, col);
+    align_row(app, ui, AlignTarget::Layers(sel), pv.can_align, pv.align_blocked, col);
     position_row(app, ui, doc, sel, &pv, col);
     rotation_row(app, ui, doc, sel, pv.rot, col);
     if pv.in_frame {
@@ -679,9 +762,24 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[No
     }
 }
 
-/// Alignment, and distribution and tidy up for three or more layers.
-fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, blocked: bool, col: f32) {
-    let ids = sel.to_vec();
+/// What the alignment row acts on.
+#[derive(Clone, Copy)]
+pub enum AlignTarget<'a> {
+    /// These layers (distribution and tidy up from three).
+    Layers(&'a [NodeId]),
+    /// The selected points in vector edit mode, this many of them (distribution from three, no
+    /// tidy up).
+    Points(usize),
+}
+
+/// Alignment, and distribution and tidy up for three or more layers (or the selected points).
+pub fn align_row(app: &mut FigApp, ui: &mut Ui, target: AlignTarget, can_align: bool, blocked: bool, col: f32) {
+    let (ids, count, points) = match target {
+        AlignTarget::Layers(sel) => (sel.to_vec(), sel.len(), false),
+        AlignTarget::Points(n) => (vec![], n, true),
+    };
+    // Points take the commands with no ids: they act on the selected points.
+    let params = || if points { json!({}) } else { json!({"ids": ids}) };
     widgets::sublabels(ui, tr("Alignment"), None);
     row(ui, 32.0, |ui| {
         let cmds = ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"];
@@ -707,24 +805,26 @@ fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, blo
         };
         picked.response.on_disabled_hover_text(why);
         if let Some(i) = picked.inner {
-            app.run(cmds[i], json!({"ids": ids}));
+            app.run(cmds[i], params());
         }
-        if sel.len() > 2 {
+        if count > 2 {
             let more = icons::button(ui, Icon::DistributeH, 24.0, false, tr("Distribute and tidy"));
             menu_popup(&more).show(|ui| {
-                let can_tidy = app.session.ds().is_ok_and(|ds| tidy_available(ui.ctx(), &ds.doc, &ids));
-                for (l, c, on) in [
+                let can_tidy = !points && app.session.ds().is_ok_and(|ds| tidy_available(ui.ctx(), &ds.doc, &ids));
+                let tidy = (tr("Tidy up"), "arrange.tidy", can_tidy);
+                let entries = [
                     (tr("Distribute horizontal spacing"), "distribute.horizontal", true),
                     (tr("Distribute vertical spacing"), "distribute.vertical", true),
-                    (tr("Tidy up"), "arrange.tidy", can_tidy),
-                ] {
+                ];
+                // Points have no tidy up.
+                for (l, c, on) in entries.into_iter().chain((!points).then_some(tidy)) {
                     let item = ui.add_enabled_ui(on, |ui| menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")));
                     if !on {
                         item.response
                             .on_disabled_hover_text(tr("Select a row, a column or a full grid of three or more layers, outside an auto layout flow"));
                     }
                     if item.inner {
-                        app.run(c, json!({"ids": ids}));
+                        app.run(c, params());
                         ui.close();
                     }
                 }

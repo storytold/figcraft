@@ -39,6 +39,7 @@ fn frame(ctx: &egui::Context, app: &mut FigApp, t: &mut f64) {
 fn frame_with(ctx: &egui::Context, app: &mut FigApp, t: &mut f64, events: Vec<egui::Event>) {
     *t += 1.0 / 60.0;
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(*t), events, ..Default::default() };
+    app.before_input(ctx);
     let mut out = ctx.run_ui(input, |ui| app.ui(ui));
     out.textures_delta.clear();
 }
@@ -53,7 +54,7 @@ fn picker_draws_every_view_and_commits_a_typed_name_on_close() {
     s.execute("select.set", &json!({"ids": [r]})).unwrap();
     s.execute("style.apply", &json!({"ids": [r], "style": "Brand/Primary", "target": "fill"})).unwrap();
     let mut app = FigApp::new(s, Box::new(NoServices));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut t = 0.0;
     for slot in [StyleSlot::Fill, StyleSlot::Stroke, StyleSlot::Effect, StyleSlot::Grid, StyleSlot::Text] {
         open_for_selection(&mut app, slot, None);
@@ -101,7 +102,7 @@ fn text_session() -> (Session, figcraft_doc::NodeId) {
 fn text_styles_preview_on_hover_and_apply_on_click() {
     let (s, t) = text_session();
     let mut app = FigApp::new(s, Box::new(NoServices));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut time = 0.0;
     open_for_selection(&mut app, StyleSlot::Text, None);
     for _ in 0..3 {
@@ -157,7 +158,7 @@ fn chars_linked_to_several_styles_show_mixed() {
     assert_eq!(text_link(&app, &doc, &[t]), Some(doc.style("Type/Heading").map(|s| s.id.clone())));
     // The panel draws the chip ("Mixed" when the edit spans both).
     figcraft_engine::textedit::set_caret(&mut app.session, 4, true).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut time = 0.0;
     for _ in 0..3 {
         frame(&ctx, &mut app, &mut time);
@@ -285,7 +286,7 @@ fn local_styles_list_draws_by_type_and_folder() {
         s.execute("style.create", &json!({"type": ty, "name": name, "value": value})).unwrap();
     }
     let mut app = FigApp::new(s, Box::new(NoServices));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut t = 0.0;
     // Nothing selected: the Design panel shows the page, with Local styles; a folder rename in
     // progress draws its field.
@@ -307,7 +308,7 @@ fn edit_local_for_test(app: &mut FigApp, ctx: &egui::Context) {
 /// Commits `typed` in the text style editor's field `field` ("ts_lh" / "ts_ls") with Enter and
 /// returns the redefined style, if any.
 fn commit_text_field(def: &TextStyle, field: &str, typed: &str) -> Option<TextStyle> {
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.data_mut(|d| d.insert_temp(Id::unique((field, "S")).with("editing"), typed.to_string()));
     let enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events: vec![enter], ..Default::default() };
@@ -571,4 +572,72 @@ fn style_picker_icon_buttons_paint_16pt() {
         });
         assert!(paints_icon_at_button_size(&painted, icon), "{icon:?} is not 16 pt");
     }
+}
+
+#[test]
+fn a_reopened_files_text_styles_picker_lists_its_librarys_styles_without_the_assets_tab() {
+    let dir = std::env::temp_dir().join(format!("figcraft-picker-library-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir).unwrap();
+    let (library, file) = (dir.join("ds.figcraft"), dir.join("site.figcraft"));
+    let mut publisher = Session::new();
+    publisher.execute("style.create", &json!({"type": "text", "name": "Display", "value": {"fontFamily": "Inter", "fontSize": 48}})).unwrap();
+    publisher.execute("library.publish", &json!({})).unwrap();
+    publisher.execute("file.saveAs", &json!({"path": library})).unwrap();
+    let mut site = Session::new();
+    site.execute("text.create", &json!({"text": "Hello", "x": 0, "y": 0})).unwrap();
+    site.execute("style.create", &json!({"type": "text", "name": "Body", "value": {"fontFamily": "Inter", "fontSize": 14}})).unwrap();
+    site.execute("library.add", &json!({"path": library})).unwrap();
+    site.execute("file.saveAs", &json!({"path": file})).unwrap();
+
+    let mut reopened = Session::new();
+    reopened.execute("file.open", &json!({"path": file})).unwrap();
+    let text = reopened.doc().unwrap().nodes().find(|n| matches!(n.kind, figcraft_doc::NodeKind::Text(_))).unwrap().id;
+    reopened.execute("select.set", &json!({"ids": [text]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(reopened);
+    open_for_selection(&mut u.app, StyleSlot::Text, None);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let texts = drawn_texts(&mut u);
+    let _ = std::fs::remove_dir_all(&dir);
+    let (display, body) = ("48/Auto", "14/Auto");
+    let shows = |texts: &[(String, Pos2)], s: &str| texts.iter().any(|(t, _)| t == s);
+    assert!(shows(&texts, display) && shows(&texts, body), "every source by default: {:?}", texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+
+    let choose = |u: &mut crate::layers_drag_tests::Ui, from: &str, to: &str| {
+        let at = text_at(&drawn_texts(u), from);
+        u.button(at, true);
+        u.button(at, false);
+        let texts = drawn_texts(u);
+        let item = texts.iter().rev().find(|(t, _)| t.trim_start_matches(['✓', ' ']) == to).unwrap_or_else(|| panic!("{to} in the menu")).1;
+        u.button(item, true);
+        u.button(item, false);
+        drawn_texts(u)
+    };
+    let texts = choose(&mut u, "All libraries", "This file");
+    assert!(shows(&texts, body) && !shows(&texts, display), "This file: its own styles only");
+    let texts = choose(&mut u, "This file", "Untitled");
+    assert!(shows(&texts, display) && !shows(&texts, body), "a library: its styles only");
+    assert!(u.app.ui.style_picker.is_some(), "choosing a source keeps the picker open");
+}
+
+#[test]
+fn a_library_that_cant_be_read_is_tried_again_only_after_the_refresh_interval() {
+    let mut s = Session::new();
+    s.doc_mut().unwrap().libraries_mut().enabled.push(figcraft_doc::LibraryLink {
+        id: "elsewhere".into(),
+        name: "Elsewhere".into(),
+        path: "file://server/share/ds.figcraft".into(),
+        relative: String::new(),
+        version: 0,
+    });
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    let checked = |u: &crate::layers_drag_tests::Ui| u.ctx.data(|d| d.get_temp::<f64>(Id::unique("asset_libraries_checked")));
+    u.frame(vec![]);
+    let first = checked(&u).expect("the first frame tries the library");
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    assert_eq!(checked(&u), Some(first), "a refused library doesn't make every frame read again");
 }

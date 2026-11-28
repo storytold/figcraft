@@ -127,6 +127,35 @@ fn hello_then_the_welcome_releases_presence() {
 }
 
 #[test]
+fn legacy_welcome_is_view_only_and_reconnects_with_a_fresh_hello() {
+    let mut w: ServerMsg = message::decode(&welcome(), usize::MAX).unwrap();
+    let ServerMsg::Welcome { access, secret, .. } = &mut w else { panic!("no welcome") };
+    *access = figcraft_collab::Access::View;
+    *secret = 0;
+    let mut legacy = encode(&w);
+    assert_eq!(legacy.pop(), Some(0));
+
+    let t0 = Instant::now();
+    let (mut d, inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    inbox.drain();
+    d.message(&legacy, t0);
+    assert!(!d.done());
+    assert!(inbox.drain().iter().any(|e| matches!(e, Event::Welcome { info, .. } if info.access == figcraft_collab::Access::View)));
+
+    d.closed(1006, "connection dropped", t0);
+    let again = d.deadline().unwrap();
+    d.tick(again);
+    d.opened(again);
+    let Some(ClientMsg::Hello(h)) = d.sock.sent.last() else { panic!("no hello") };
+    assert_eq!(h.resume, None, "old hosts must re-authenticate the link, not resume without a secret");
+    assert_eq!(h.token, TOKEN);
+    d.message(&legacy, again);
+    assert!(!d.done());
+    assert!(inbox.drain().iter().any(|e| matches!(e, Event::Welcome { info, .. } if info.access == figcraft_collab::Access::View)));
+}
+
+#[test]
 fn presence_is_throttled_and_quiet_connections_ping() {
     let t0 = Instant::now();
     let (mut d, _inbox) = start(Script::default(), t0);
