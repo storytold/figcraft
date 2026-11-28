@@ -562,6 +562,8 @@ mod proto_run_tests;
 #[cfg(test)]
 mod proto_tail_tests;
 #[cfg(test)]
+mod raw_tests;
+#[cfg(test)]
 mod reopen_tests;
 #[cfg(test)]
 mod responsive_tests;

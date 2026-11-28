@@ -192,7 +192,9 @@ figcraft-cli export app.figcraft -o handoff.fig
 By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.sketch` (Sketch 48 or newer, best effort),
 `.penpot` (Penpot 2.x archive, best effort), `.svg` (an editable frame: groups,
 shapes, text, gradients, masks and effects; `info` lists what it left out as `note:` lines), `.png/.jpg/.webp/.gif/.tif/.bmp`
-(an image layer). Outputs: `.figcraft`, `.json` (FigCraft JSON, pretty-printed), `.svg`,
+(an image layer), camera raw files (`.rw2`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.raf`, `.orf`, `.dng` and the other
+containers craft-raw reads: an image layer of the picture developed with the camera's as-shot white balance and a
+neutral tone curve; the document keeps that picture, not the raw file). Outputs: `.figcraft`, `.json` (FigCraft JSON, pretty-printed), `.svg`,
 `.png/.jpg/.webp` (the current page rendered at 1x with its background), `.pdf` (the current page's
 frames, one page each), `.fig` (the whole file, experimental, as `export --format fig`), `.penpot`
 (the whole file as a Penpot 2.x archive, as `export --format penpot`).

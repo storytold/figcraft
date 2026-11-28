@@ -640,7 +640,9 @@ fn picked_bytes(file: &serde_json::Value) -> Option<Vec<u8>> {
 /// Ask for an image file for `target`: layers' paints keep their fill mode, crop and position.
 fn upload_image(app: &mut FigApp, target: &PickerTarget) {
     let target = target.clone();
-    app.pick_file(tr("Choose image"), &IMAGE_FILES, true, move |app, file| {
+    // Camera raw files fill as the image they develop to.
+    let files: Vec<&str> = IMAGE_FILES.iter().chain(figcraft_format::raw::EXTENSIONS.iter()).copied().collect();
+    app.pick_file(tr("Choose image"), &files, true, move |app, file| {
         if let PickerTarget::Paint { fills, index, ids } = &target
             && !region_backed(app, &target)
         {

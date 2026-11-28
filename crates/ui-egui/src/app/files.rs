@@ -1,6 +1,6 @@
 use super::{
-    AUTO_SAVE_RETRY_SECS, AUTO_SAVE_SECS, AUTOSAVE_SECS, Arc, DialogFuture, FigApp, OPEN_EXTENSIONS, OsStr, Path, PathBuf, PendingDialog, PickFuture,
-    Picked, Poll, RepaintWaker, Services, TaskContext, Value, Waker, dialogs, i18n, json, repaint_in, windows,
+    AUTO_SAVE_RETRY_SECS, AUTO_SAVE_SECS, AUTOSAVE_SECS, Arc, DialogFuture, FigApp, OsStr, Path, PathBuf, PendingDialog, PickFuture, Picked, Poll,
+    RepaintWaker, Services, TaskContext, Value, Waker, dialogs, i18n, json, repaint_in, windows,
 };
 
 impl FigApp {
@@ -73,7 +73,7 @@ impl FigApp {
 
     pub fn open_dialog(&mut self) {
         // Opening needs no file in front: it goes ahead even if that file closed meanwhile.
-        self.pick_file(i18n::tr("Open"), OPEN_EXTENSIONS, false, |app, file| {
+        self.pick_file(i18n::tr("Open"), &super::open_extensions(), false, |app, file| {
             if app.run_user("file.open", file).is_some() {
                 app.ui.home = false;
             }
@@ -86,8 +86,10 @@ impl FigApp {
         } else {
             &["penpot", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig", "jam", "sketch"]
         };
+        // Camera raw files place as the image they develop to.
+        let exts: Vec<&str> = exts.iter().chain(figcraft_format::raw::EXTENSIONS.iter()).copied().collect();
         let title = if place { i18n::tr("Place image") } else { i18n::tr("Import") };
-        self.pick_file(title, exts, true, |app, file| {
+        self.pick_file(title, &exts, true, |app, file| {
             app.run_user("file.import", file);
         });
     }

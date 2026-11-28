@@ -21,6 +21,7 @@ pub mod fig;
 pub mod jpeg;
 pub mod library;
 pub mod penpot;
+pub mod raw;
 pub mod rest;
 pub mod sketch;
 pub mod thumbnail;
@@ -174,12 +175,28 @@ fn stored_dimensions(bytes: &[u8]) -> Result<(u32, u32), craft_image_codecs::Cod
     }
 }
 
-/// Register encoded image bytes with the document; returns the hash and pixel size.
+/// Register encoded image bytes with the document; returns the hash and pixel size. A camera raw
+/// file is developed first and the document keeps the developed picture (see [`raw`]).
 pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32), FormatError> {
+    let bytes = developed_if_raw(bytes)?;
     let (w, h) = stored_dimensions(&bytes).map_err(|e| FormatError::Corrupt(format!("unsupported image: {e}")))?;
     let hash = image_hash(&bytes);
     doc.images.insert(hash.clone(), ImageData { bytes: Arc::new(bytes), width: w, height: h });
     Ok((hash, w, h))
+}
+
+/// `bytes`, or the picture developed from them when they are a camera raw file. Camera makers
+/// write raw files in TIFF containers, so a TIFF the raw reader claims but can't develop stays the
+/// TIFF it is when it reads as one.
+fn developed_if_raw(bytes: Vec<u8>) -> Result<Vec<u8>, FormatError> {
+    if !raw::is_camera_raw(&bytes) {
+        return Ok(bytes);
+    }
+    match raw::develop(&bytes) {
+        Ok(developed) => Ok(developed.bytes),
+        Err(_) if stored_dimensions(&bytes).is_ok() => Ok(bytes),
+        Err(e) => Err(e),
+    }
 }
 
 /// Image bytes with their pixel size (0×0 when they can't be decoded).

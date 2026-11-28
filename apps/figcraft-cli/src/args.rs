@@ -14,7 +14,8 @@ use figcraft_doc::{PrintSettings, VdCompat};
 ///
 /// Files: .figcraft (native), .penpot (Penpot 2.x), .json (FigCraft or REST API file JSON), .fig
 /// (best effort; `info` lists what wasn't imported), .sketch (Sketch 48 or newer, best effort),
-/// .svg, .png/.jpg/.webp/.gif/.bmp (open as an image layer).
+/// .svg, .png/.jpg/.webp/.gif/.bmp (open as an image layer), camera raw files such as .rw2, .cr2,
+/// .cr3, .nef, .arw, .raf, .orf and .dng (developed as shot into an image layer).
 #[derive(Parser)]
 #[command(
     name = "figcraft-cli",
