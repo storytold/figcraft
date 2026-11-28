@@ -213,3 +213,33 @@ fn advanced_options_offer_a_color_profile_for_images() {
         assert!(!shown.iter().any(|s| s == "Color profile" || s.starts_with("Same as file")), "{f}: {shown:?}");
     }
 }
+
+/// When a slice has two export settings with opposite `contentsOnly`, each setting previews what
+/// it actually exports, and the Export panel lets the user switch between them.
+#[test]
+fn a_slice_previews_each_setting_independently_in_the_panel() {
+    let mut s = Session::new();
+    let new = |s: &mut Session, p: Value| NodeId(s.execute("node.create", &p).unwrap()["id"].as_u64().unwrap());
+    let f = new(&mut s, json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100, "props": {"fills": []}}));
+    let slice = new(&mut s, json!({"type": "slice", "x": 0, "y": 0, "width": 200, "height": 100, "parent": f}));
+    new(&mut s, json!({"type": "rectangle", "x": 0, "y": 0, "width": 200, "height": 100}));
+    s.execute("export.add", &json!({"ids": [slice], "setting": {"size": "1x", "contentsOnly": true}})).unwrap();
+    s.execute("export.add", &json!({"ids": [slice], "setting": {"size": "1x", "contentsOnly": false}})).unwrap();
+    let doc = s.doc().unwrap();
+    let exports = &doc.node(slice).unwrap().exports;
+    assert!(!paints(&crate::assets_panel::thumbnail_pixmap_for_setting(doc, slice, &exports[0], 200.0).unwrap()));
+    assert!(paints(&crate::assets_panel::thumbnail_pixmap_for_setting(doc, slice, &exports[1], 200.0).unwrap()));
+
+    s.execute("select.set", &json!({"ids": [slice]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    u.app.ui.export_thumb = true;
+    u.frame(vec![]);
+    let nodes = labelled(&mut u);
+    let sel = nodes.iter().find(|(l, _)| l == "1: 1x PNG").map(|n| n.1).unwrap_or_else(|| panic!("no setting selector in {nodes:?}"));
+    click(&mut u, sel);
+    let nodes = labelled(&mut u);
+    let second = nodes.iter().find(|(l, _)| l.trim() == "2: 1x PNG").map(|n| n.1).unwrap_or_else(|| panic!("no second setting in {nodes:?}"));
+    click(&mut u, second);
+    let idx: usize = u.ctx.data(|d| d.get_temp(egui::Id::unique("export_preview_index"))).unwrap_or(0);
+    assert_eq!(idx, 1, "preview switched to setting 2");
+}

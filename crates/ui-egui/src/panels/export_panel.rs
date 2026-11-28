@@ -69,11 +69,19 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId
     if mixed {
         widgets::note(ui, tr("Click + to replace mixed content"), t.text_secondary);
     }
+    let preview_idx_id = Id::unique("export_preview_index");
+    let mut preview_idx: usize = ui.data(|d| d.get_temp(preview_idx_id)).unwrap_or(0);
+    if !list.is_empty() && preview_idx >= list.len() {
+        preview_idx = list.len() - 1;
+    }
     for (i, e) in list.iter().enumerate() {
-        setting_row(app, ui, &ids, i, e, text, doc.color_profile);
+        if setting_row(app, ui, &ids, i, e, text, doc.color_profile) {
+            preview_idx = i;
+        }
     }
     let Some(first) = first else { return };
-    preview(app, ui, doc, first);
+    preview(app, ui, doc, first, &list, &mut preview_idx);
+    ui.data_mut(|d| d.insert_temp(preview_idx_id, preview_idx));
     let label = match (layers.len(), name) {
         (1, Some(name)) => trf("Export {name}", &[("name", &name)]),
         (k, _) => trn("Export {n} layers", k, &[]),
@@ -85,8 +93,10 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId
 
 /// One export setting: size (typed or picked; images only, SVG and PDF are vector), suffix,
 /// format, advanced options and remove; a PDF's print settings under it. `text`: every layer in
-/// `ids` is a text layer; `file`: the document's color profile.
-fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &ExportSetting, text: bool, file: ColorProfile) {
+/// `ids` is a text layer; `file`: the document's color profile. Returns whether the user
+/// interacted with this row (to focus its preview).
+fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &ExportSetting, text: bool, file: ColorProfile) -> bool {
+    let mut active = false;
     row(ui, 32.0, |ui| {
         // Tighter spacing so the advanced options and remove buttons fit beside the fields.
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -100,12 +110,14 @@ fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Expo
                 && ExportSize::parse(&s) != Some(e.size)
             {
                 app.run("export.update", json!({"ids": ids, "index": i, "size": s}));
+                active = true;
             }
         }
         if let Some(sfx) = widgets::text_field(ui, Id::unique(("export_suffix", i)), &e.suffix, suffix_w, tr("Suffix"))
             && sfx != e.suffix
         {
             app.run("export.update", json!({"ids": ids, "index": i, "suffix": sfx}));
+            active = true;
         }
         let mut resp = widgets::dropdown(ui, e.format.label(), format_w, None);
         if let Some(tip) = format_tip(e.format) {
@@ -120,11 +132,15 @@ fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Expo
                 };
                 if item.clicked() {
                     app.run("export.update", json!({"ids": ids, "index": i, "format": f.ext()}));
+                    active = true;
                     ui.close();
                 }
             }
         });
         let more = icons::button(ui, Icon::Dots, button, false, tr("Export settings"));
+        if more.clicked() {
+            active = true;
+        }
         egui::Popup::from_toggle_button_response(&more)
             .id(Id::unique(("export_more", i)))
             .width(216.0)
@@ -134,6 +150,7 @@ fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Expo
                     params["ids"] = json!(ids);
                     params["index"] = json!(i);
                     app.run("export.update", params);
+                    active = true;
                 }
             });
         if icons::button(ui, Icon::Minus, button, false, tr("Remove export setting")).clicked() {
@@ -143,6 +160,7 @@ fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Expo
     if e.format == ExportFormat::Pdf {
         print_row(app, ui, ids, i, &e.print);
     }
+    active
 }
 
 /// What a format's short label doesn't say ("XML" is an Android Vector Drawable), for its tooltip.
@@ -308,21 +326,32 @@ pub(crate) fn setting_params(setting: &ExportSetting) -> Value {
     params
 }
 
-/// The rendered preview, cached per layer and document revision.
+/// The rendered preview, cached per layer, preview-affecting options, and document revision.
 #[derive(Clone)]
 struct PreviewTex {
     id: NodeId,
+    contents_only: bool,
+    include_bounding_box: bool,
     revision: u64,
     at: f64,
     tex: Option<egui::TextureHandle>,
 }
 
-/// A "Preview" disclosure row; open, it shows the layer as it exports.
-fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
+fn setting_short_label(i: usize, e: &ExportSetting) -> String {
+    if e.format.is_raster() { format!("{}: {} {}", i + 1, e.size.label(), e.format.label()) } else { format!("{}: {}", i + 1, e.format.label()) }
+}
+
+/// A "Preview" disclosure row; open, it shows the layer as the active export setting exports it.
+fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId, settings: &[ExportSetting], preview_idx: &mut usize) {
     let t = Tokens::get(ui.ctx());
     let mut open = app.ui.export_thumb;
+    let active_idx = if settings.is_empty() { 0 } else { (*preview_idx).min(settings.len() - 1) };
+    *preview_idx = active_idx;
+    let setting = settings.get(active_idx).cloned().or_else(|| doc.node(id).and_then(|n| n.exports.first()).cloned()).unwrap_or_default();
     row(ui, 28.0, |ui| {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), FIELD_H), Sense::click());
+        let selector_w = if settings.len() > 1 { 80.0 } else { 0.0 };
+        let toggle_w = (ui.available_width() - selector_w).max(40.0);
+        let (r, resp) = ui.allocate_exact_size(vec2(toggle_w, FIELD_H), Sense::click());
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
@@ -339,6 +368,17 @@ fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
         if resp.clicked() {
             open = !open;
         }
+        if settings.len() > 1 {
+            let resp = widgets::dropdown(ui, &setting_short_label(active_idx, &setting), selector_w - 4.0, None);
+            menu_popup(&resp).show(|ui| {
+                for (i, s) in settings.iter().enumerate() {
+                    if crate::right::menu_check(ui, i == active_idx, &setting_short_label(i, s), "") {
+                        *preview_idx = i;
+                        ui.close();
+                    }
+                }
+            });
+        }
     });
     app.ui.export_thumb = open;
     if !open {
@@ -348,8 +388,9 @@ fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
     let now = ui.input(|i| i.time);
     let cache_id = Id::unique("export_preview_tex");
     let cached: Option<PreviewTex> = ui.data(|d| d.get_temp(cache_id));
-    let stale = cached.as_ref().is_none_or(|c| c.id != id || c.revision != revision);
-    let due = cached.as_ref().is_none_or(|c| c.id != id || now - c.at >= PREVIEW_REFRESH);
+    let same_opts = |c: &PreviewTex| c.id == id && c.contents_only == setting.contents_only && c.include_bounding_box == setting.include_bounding_box;
+    let stale = cached.as_ref().is_none_or(|c| !same_opts(c) || c.revision != revision);
+    let due = cached.as_ref().is_none_or(|c| !same_opts(c) || now - c.at >= PREVIEW_REFRESH);
     let tex = match cached {
         Some(c) if !stale || !due => {
             if stale {
@@ -359,8 +400,20 @@ fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
         }
         _ => {
             let px = ui.available_width() * ui.ctx().pixels_per_point();
-            let tex = crate::assets_panel::thumbnail(ui.ctx(), doc, id, px);
-            ui.data_mut(|d| d.insert_temp(cache_id, PreviewTex { id, revision, at: now, tex: tex.clone() }));
+            let tex = crate::assets_panel::thumbnail_for_setting(ui.ctx(), doc, id, &setting, px);
+            ui.data_mut(|d| {
+                d.insert_temp(
+                    cache_id,
+                    PreviewTex {
+                        id,
+                        contents_only: setting.contents_only,
+                        include_bounding_box: setting.include_bounding_box,
+                        revision,
+                        at: now,
+                        tex: tex.clone(),
+                    },
+                )
+            });
             tex
         }
     };
