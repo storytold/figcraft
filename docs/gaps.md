@@ -177,9 +177,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 ### 4. Interaction fidelity not compared tool by tool
 - **Missing:** a side-by-side pass of every tool and panel: cursors, modifier keys while dragging,
-  hover states, popovers, menus, snapping thresholds. Known: the Assets panel's export preview
-  follows a slice's first export setting, so a second setting with the other Ignore overlapping
-  layers value previews differently from what it exports.
+  hover states, popovers, menus, snapping thresholds.
 - **Landed (2026-10-11):** behaviour suites written from the public documentation for auto layout,
   selection and transform, text, and canvas navigation with rulers, guides, layout grids, outline
   mode and measuring, then (2026-10-12) comments and version history, and the layers and Assets
