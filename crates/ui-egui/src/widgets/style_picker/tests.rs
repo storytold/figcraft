@@ -29,7 +29,7 @@ fn names_split_into_folders() {
     for s in [StyleSlot::Fill, StyleSlot::Stroke, StyleSlot::Effect, StyleSlot::Grid, StyleSlot::Text] {
         assert_eq!(StyleSlot::parse(s.key()), Some(s));
     }
-    assert!(StyleSlot::Text.holds(&StyleKind::Text { style: Default::default() }) && StyleSlot::Text.has_grid());
+    assert!(StyleSlot::Text.holds(&StyleKind::Text { style: Default::default(), paragraph: Default::default() }) && StyleSlot::Text.has_grid());
 }
 
 fn frame(ctx: &egui::Context, app: &mut FigApp, t: &mut f64) {
@@ -39,6 +39,7 @@ fn frame(ctx: &egui::Context, app: &mut FigApp, t: &mut f64) {
 fn frame_with(ctx: &egui::Context, app: &mut FigApp, t: &mut f64, events: Vec<egui::Event>) {
     *t += 1.0 / 60.0;
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(*t), events, ..Default::default() };
+    app.before_input(ctx);
     let mut out = ctx.run_ui(input, |ui| app.ui(ui));
     out.textures_delta.clear();
 }
@@ -53,7 +54,7 @@ fn picker_draws_every_view_and_commits_a_typed_name_on_close() {
     s.execute("select.set", &json!({"ids": [r]})).unwrap();
     s.execute("style.apply", &json!({"ids": [r], "style": "Brand/Primary", "target": "fill"})).unwrap();
     let mut app = FigApp::new(s, Box::new(NoServices));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut t = 0.0;
     for slot in [StyleSlot::Fill, StyleSlot::Stroke, StyleSlot::Effect, StyleSlot::Grid, StyleSlot::Text] {
         open_for_selection(&mut app, slot, None);
@@ -101,7 +102,7 @@ fn text_session() -> (Session, figcraft_doc::NodeId) {
 fn text_styles_preview_on_hover_and_apply_on_click() {
     let (s, t) = text_session();
     let mut app = FigApp::new(s, Box::new(NoServices));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut time = 0.0;
     open_for_selection(&mut app, StyleSlot::Text, None);
     for _ in 0..3 {
@@ -157,7 +158,7 @@ fn chars_linked_to_several_styles_show_mixed() {
     assert_eq!(text_link(&app, &doc, &[t]), Some(doc.style("Type/Heading").map(|s| s.id.clone())));
     // The panel draws the chip ("Mixed" when the edit spans both).
     figcraft_engine::textedit::set_caret(&mut app.session, 4, true).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut time = 0.0;
     for _ in 0..3 {
         frame(&ctx, &mut app, &mut time);
@@ -194,6 +195,68 @@ fn a_click_in_the_colour_picker_keeps_the_style_editor_open() {
     );
 }
 
+/// #2043: the list follows its rows while the picker is open. A search that narrows it shrinks
+/// the popover, and clearing the search grows it back to the full list (egui offers an area the
+/// size it had last frame, so the list used to stay a few rows high).
+#[test]
+fn the_style_list_grows_back_after_a_search_narrows_it() {
+    use crate::layers_drag_tests::Ui;
+    let mut s = Session::new();
+    let r = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    for i in 0..30 {
+        let name = format!("Blue/{}", 100 + 10 * i);
+        s.execute("style.create", &json!({"type": "paint", "name": name, "value": [{"type": "solid", "color": "#0D99FF"}]})).unwrap();
+    }
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    open_for_selection(&mut u.app, StyleSlot::Fill, None);
+    let height = |u: &mut Ui| {
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        u.app.ui.style_picker_popover.as_ref().expect("the style picker shows").rect.height()
+    };
+    let open = height(&mut u);
+    assert!(open > 300.0, "the picker lists the styles: {open}");
+    u.app.ui.style_picker.as_mut().expect("open").query = "Blue/100".into();
+    let narrowed = height(&mut u);
+    assert!(narrowed < open - 100.0, "a search for one style shrinks it: {open} → {narrowed}");
+    u.app.ui.style_picker.as_mut().expect("open").query.clear();
+    let again = height(&mut u);
+    assert!((again - open).abs() < 1.0, "clearing the search grows it back: {open} → {again}");
+}
+
+/// #2043: egui keeps an area's size after it closes, so a picker opened once on a short list (the
+/// effect styles, none yet) opened again on the colour styles a few rows high.
+#[test]
+fn the_style_list_opened_after_a_short_one_shows_every_style_it_fits() {
+    use crate::layers_drag_tests::Ui;
+    let mut s = Session::new();
+    let r = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    for i in 0..30 {
+        let name = format!("Blue/{}", 100 + 10 * i);
+        s.execute("style.create", &json!({"type": "paint", "name": name, "value": [{"type": "solid", "color": "#0D99FF"}]})).unwrap();
+    }
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    let height = |u: &mut Ui, slot: StyleSlot| {
+        open_for_selection(&mut u.app, slot, None);
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        let h = u.app.ui.style_picker_popover.as_ref().expect("the style picker shows").rect.height();
+        u.app.ui.style_picker = None;
+        u.app.ui.style_picker_popover = None;
+        u.frame(vec![]);
+        h
+    };
+    let first = height(&mut u, StyleSlot::Fill);
+    let short = height(&mut u, StyleSlot::Effect);
+    assert!(short < first - 100.0, "no effect styles: {short}");
+    let again = height(&mut u, StyleSlot::Fill);
+    assert!((again - first).abs() < 1.0, "the colour styles as tall as the first time: {first} → {again}");
+}
+
 #[test]
 fn local_style_drops_move_into_the_folder_above() {
     let st = |id: &str, name: &str| Style {
@@ -223,7 +286,7 @@ fn local_styles_list_draws_by_type_and_folder() {
         s.execute("style.create", &json!({"type": ty, "name": name, "value": value})).unwrap();
     }
     let mut app = FigApp::new(s, Box::new(NoServices));
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     let mut t = 0.0;
     // Nothing selected: the Design panel shows the page, with Local styles; a folder rename in
     // progress draws its field.
@@ -245,7 +308,7 @@ fn edit_local_for_test(app: &mut FigApp, ctx: &egui::Context) {
 /// Commits `typed` in the text style editor's field `field` ("ts_lh" / "ts_ls") with Enter and
 /// returns the redefined style, if any.
 fn commit_text_field(def: &TextStyle, field: &str, typed: &str) -> Option<TextStyle> {
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     ctx.data_mut(|d| d.insert_temp(Id::unique((field, "S")).with("editing"), typed.to_string()));
     let enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
     let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events: vec![enter], ..Default::default() };
@@ -255,7 +318,7 @@ fn commit_text_field(def: &TextStyle, field: &str, typed: &str) -> Option<TextSt
         id: "S".into(),
         name: "S".into(),
         description: String::new(),
-        kind: StyleKind::Text { style: def.clone() },
+        kind: StyleKind::Text { style: def.clone(), paragraph: Default::default() },
         bound: Default::default(),
     };
     let mut out = ctx.run_ui(input, |ui| text_properties(ui, &doc, &style, def, &mut f));
@@ -300,8 +363,18 @@ fn text_variables_session(bind: bool) -> crate::layers_drag_tests::Ui {
         ("Body tracking", "number", json!(1)),
         ("Body font", "string", json!("Inter")),
         ("Body weight", "string", json!("Bold")),
+        ("Body weight number", "number", json!(700)),
     ] {
         s.execute("variable.create", &json!({"collection": "Type", "name": name, "type": ty, "values": {"Base": value}})).unwrap();
+    }
+    for (name, scope) in [
+        ("Body size", "FONT_SIZE"),
+        ("Body leading", "LINE_HEIGHT"),
+        ("Body tracking", "LETTER_SPACING"),
+        ("Body font", "FONT_FAMILY"),
+        ("Body weight number", "FONT_WEIGHT"),
+    ] {
+        s.execute("variable.update", &json!({"variable": name, "scopes": [scope]})).unwrap();
     }
     if bind {
         for (field, var) in [
@@ -393,6 +466,54 @@ fn text_style_editor_shows_bound_fields_as_variables_and_detaches_them() {
 }
 
 #[test]
+fn the_weight_menu_binds_a_number_variable_as_font_weight() {
+    let mut u = text_variables_session(false);
+    let left = editor_left(&mut u);
+    let in_editor = |u: &mut crate::layers_drag_tests::Ui| -> Vec<(String, Pos2)> {
+        drawn_texts(u).into_iter().filter(|(_, p)| p.x > left && p.x < left + W).collect()
+    };
+    let texts = in_editor(&mut u);
+    click(&mut u, text_at(&texts, "Regular"));
+    let texts = drawn_texts(&mut u);
+    click(&mut u, text_at(&texts, "Apply variable"));
+    assert!(crate::variable_ui::picker_open(&u.ctx), "the variable picker opens");
+    let texts = drawn_texts(&mut u);
+    assert!(texts.iter().any(|(t, _)| t == "Body weight"), "string variables are offered");
+    assert!(!texts.iter().any(|(t, _)| t == "Body font" || t == "Body leading"), "other fields' variables are not");
+    click(&mut u, text_at(&texts, "Body weight number"));
+    assert_eq!(bound_to(&u, "fontWeight").as_deref(), Some("Body weight number"));
+    assert_eq!(bound_to(&u, "fontStyle"), None);
+    let font_style = || {
+        let doc = u.app.session.doc().unwrap();
+        let Some(StyleKind::Text { style: def, .. }) = doc.style("Body").map(|s| s.kind.clone()) else { panic!("a text style") };
+        def.font_style
+    };
+    assert_eq!(font_style(), "Bold");
+    // The chip shows it in the style slot; clicking it lists the string variable too, and picking that
+    // replaces the number: fontStyle is bound and fontWeight is not.
+    for _ in 0..2 {
+        u.frame(vec![]);
+    }
+    let texts = in_editor(&mut u);
+    click(&mut u, text_at(&texts, "Body weight number"));
+    assert!(crate::variable_ui::picker_open(&u.ctx), "the chip opens the weight picker");
+    let texts = drawn_texts(&mut u);
+    assert!(texts.iter().any(|(t, _)| t == "Body weight"), "the string variable is offered beside the number one");
+    click(&mut u, text_at(&texts, "Body weight"));
+    assert_eq!(bound_to(&u, "fontStyle").as_deref(), Some("Body weight"));
+    assert_eq!(bound_to(&u, "fontWeight"), None, "the name replaced the number");
+    // The chip's detach button clears the binding.
+    for _ in 0..2 {
+        u.frame(vec![]);
+    }
+    let texts = in_editor(&mut u);
+    let chip = text_at(&texts, "Body weight");
+    click(&mut u, Pos2::new(left + (W - 8.0) / 2.0 - 11.0, chip.y));
+    assert_eq!(bound_to(&u, "fontStyle"), None, "the face name is detached");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+#[test]
 fn text_style_editor_binds_variables_from_its_fields() {
     let mut u = text_variables_session(false);
     let left = editor_left(&mut u);
@@ -401,7 +522,7 @@ fn text_style_editor_binds_variables_from_its_fields() {
     let size_row = text_at(&texts, "Size").y;
     let spacing = {
         let doc = u.app.session.doc().unwrap();
-        let Some(StyleKind::Text { style: def }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
+        let Some(StyleKind::Text { style: def, .. }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
         def.letter_spacing.label()
     };
     let in_editor: Vec<_> = texts.iter().filter(|(_, p)| p.x > left && p.x < left + W).cloned().collect();
@@ -415,7 +536,7 @@ fn text_style_editor_binds_variables_from_its_fields() {
         click(&mut u, Pos2::new(x, y));
         assert!(crate::variable_ui::picker_open(&u.ctx), "{field}: the variable picker opens");
         let texts = drawn_texts(&mut u);
-        assert!(!texts.iter().any(|(t, _)| t == "Body font"), "{field} offers number variables only");
+        assert!(!texts.iter().any(|(t, _)| t == "Body weight"), "{field} offers number variables only");
         click(&mut u, text_at(&texts, name));
         assert_eq!(bound_to(&u, field).as_deref(), Some(name));
     }
@@ -429,12 +550,94 @@ fn text_style_editor_binds_variables_from_its_fields() {
         assert!(crate::variable_ui::picker_open(&u.ctx), "{field}: the variable picker opens");
         let texts = drawn_texts(&mut u);
         // "Body size" shows once, on the size field's chip: the picker doesn't list it.
-        assert_eq!(texts.iter().filter(|(t, _)| t == "Body size").count(), 1, "{field} offers string variables only");
+        assert_eq!(texts.iter().filter(|(t, _)| t == "Body size").count(), 1, "{field} does not offer the size variable");
         click(&mut u, text_at(&texts, name));
         assert_eq!(bound_to(&u, field).as_deref(), Some(name));
     }
     let doc = u.app.session.doc().unwrap();
-    let Some(StyleKind::Text { style: def }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
+    let Some(StyleKind::Text { style: def, .. }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
     assert_eq!((def.font_size, def.font_style.as_str()), (18.0, "Bold"), "the style takes the variables' values");
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+/// The picker's 24 pt icon buttons paint their glyphs at 16 pt; a smaller button keeps a smaller one
+/// (#2238).
+#[test]
+fn style_picker_icon_buttons_paint_16pt() {
+    use crate::header_icon_size_tests::{painted_rects, paints_icon_at_button_size};
+    use crate::icons::Icon;
+    for icon in [Icon::Plus, Icon::Detach, Icon::ChevronLeft] {
+        let painted = painted_rects(None, |ui| {
+            menu_icon(ui, Rect::from_min_size(egui::pos2(20.0, 20.0), vec2(24.0, 24.0)), icon, "x", false);
+        });
+        assert!(paints_icon_at_button_size(&painted, icon), "{icon:?} is not 16 pt");
+    }
+}
+
+#[test]
+fn a_reopened_files_text_styles_picker_lists_its_librarys_styles_without_the_assets_tab() {
+    let dir = std::env::temp_dir().join(format!("figcraft-picker-library-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir).unwrap();
+    let (library, file) = (dir.join("ds.figcraft"), dir.join("site.figcraft"));
+    let mut publisher = Session::new();
+    publisher.execute("style.create", &json!({"type": "text", "name": "Display", "value": {"fontFamily": "Inter", "fontSize": 48}})).unwrap();
+    publisher.execute("library.publish", &json!({})).unwrap();
+    publisher.execute("file.saveAs", &json!({"path": library})).unwrap();
+    let mut site = Session::new();
+    site.execute("text.create", &json!({"text": "Hello", "x": 0, "y": 0})).unwrap();
+    site.execute("style.create", &json!({"type": "text", "name": "Body", "value": {"fontFamily": "Inter", "fontSize": 14}})).unwrap();
+    site.execute("library.add", &json!({"path": library})).unwrap();
+    site.execute("file.saveAs", &json!({"path": file})).unwrap();
+
+    let mut reopened = Session::new();
+    reopened.execute("file.open", &json!({"path": file})).unwrap();
+    let text = reopened.doc().unwrap().nodes().find(|n| matches!(n.kind, figcraft_doc::NodeKind::Text(_))).unwrap().id;
+    reopened.execute("select.set", &json!({"ids": [text]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(reopened);
+    open_for_selection(&mut u.app, StyleSlot::Text, None);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let texts = drawn_texts(&mut u);
+    let _ = std::fs::remove_dir_all(&dir);
+    let (display, body) = ("48/Auto", "14/Auto");
+    let shows = |texts: &[(String, Pos2)], s: &str| texts.iter().any(|(t, _)| t == s);
+    assert!(shows(&texts, display) && shows(&texts, body), "every source by default: {:?}", texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+
+    let choose = |u: &mut crate::layers_drag_tests::Ui, from: &str, to: &str| {
+        let at = text_at(&drawn_texts(u), from);
+        u.button(at, true);
+        u.button(at, false);
+        let texts = drawn_texts(u);
+        let item = texts.iter().rev().find(|(t, _)| t.trim_start_matches(['✓', ' ']) == to).unwrap_or_else(|| panic!("{to} in the menu")).1;
+        u.button(item, true);
+        u.button(item, false);
+        drawn_texts(u)
+    };
+    let texts = choose(&mut u, "All libraries", "This file");
+    assert!(shows(&texts, body) && !shows(&texts, display), "This file: its own styles only");
+    let texts = choose(&mut u, "This file", "Untitled");
+    assert!(shows(&texts, display) && !shows(&texts, body), "a library: its styles only");
+    assert!(u.app.ui.style_picker.is_some(), "choosing a source keeps the picker open");
+}
+
+#[test]
+fn a_library_that_cant_be_read_is_tried_again_only_after_the_refresh_interval() {
+    let mut s = Session::new();
+    s.doc_mut().unwrap().libraries_mut().enabled.push(figcraft_doc::LibraryLink {
+        id: "elsewhere".into(),
+        name: "Elsewhere".into(),
+        path: "file://server/share/ds.figcraft".into(),
+        relative: String::new(),
+        version: 0,
+    });
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    let checked = |u: &crate::layers_drag_tests::Ui| u.ctx.data(|d| d.get_temp::<f64>(Id::unique("asset_libraries_checked")));
+    u.frame(vec![]);
+    let first = checked(&u).expect("the first frame tries the library");
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    assert_eq!(checked(&u), Some(first), "a refused library doesn't make every frame read again");
 }

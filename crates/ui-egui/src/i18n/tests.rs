@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{Forms, LANGS, Lang, Plural, Text, chain, counted, fill, find, lookup, plural, plural_one, resolve};
+use super::{Forms, LANGS, Lang, Plural, Text, chain, counted, fill, find, lookup, plural, plural_one, resolve, writes_right_to_left};
 
 /// Keys looked up from data rather than written as `tr("…")` in the code: the main menu's
 /// submenu names (the engine's menu catalog) and labels of engine and document enums.
@@ -130,9 +130,10 @@ fn dynamic_labels() -> Vec<&'static str> {
     use figcraft_engine::keymap::{GESTURES, Group};
     let mut v: Vec<&'static str> = figcraft_engine::ToolId::ALL.iter().map(|t| t.label()).collect();
     v.extend(figcraft_engine::vectoredit::VTool::ALL.iter().map(|t| t.label()));
-    // Board shapes and stamps (the board tools' flyouts and the contextual bar).
+    // Board shapes, stamps and code languages (the board tools' flyouts and the contextual bar).
     v.extend(figcraft_doc::BoardShape::ALL.iter().map(|b| b.label()));
     v.extend(figcraft_doc::Stamp::ALL.iter().map(|b| b.label()));
+    v.extend(figcraft_doc::CodeLanguage::ALL.iter().map(|l| l.label()));
     v.extend(figcraft_engine::board_templates::TEMPLATES.iter().map(|t| t.name));
     v.extend(Group::ALL.iter().map(|g| g.label()));
     v.extend(GESTURES.iter().flat_map(|(_, label, mac, other)| [*label, *mac, *other]));
@@ -204,7 +205,33 @@ fn importer_notes() -> BTreeSet<String> {
             keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), &["warn("]));
         }
     }
+    // The `.fig` mapping itself is craft-fig's (`craft_fig::rest`); its notes are ours to translate.
+    let rest = craft_fig_src().join("rest");
+    for path in sources(&rest).into_iter().chain([rest.with_extension("rs")]) {
+        if !path.file_name().unwrap().to_string_lossy().contains("tests") {
+            keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), &["warn("]));
+        }
+    }
     keys
+}
+
+/// The `src` directory of the craft-fig sources this build uses, as Cargo resolved them.
+fn craft_fig_src() -> std::path::PathBuf {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    // Unfiltered, `cargo metadata` needs every target's packages (accesskit_ios, ...) in Cargo's
+    // cache, and `--offline` cannot fetch them; a build fetches only the host's. Filter to the host.
+    let version = std::process::Command::new(&cargo).arg("-vV").output().unwrap();
+    let version = String::from_utf8(version.stdout).unwrap();
+    let host = version.lines().find_map(|l| l.strip_prefix("host: ")).expect("cargo -vV names its host");
+    let out = std::process::Command::new(&cargo)
+        .args(["metadata", "--format-version", "1", "--offline", "--filter-platform", host])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "cargo metadata: {}", String::from_utf8_lossy(&out.stderr));
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let package = meta["packages"].as_array().unwrap().iter().find(|p| p["name"] == "craft-fig").expect("craft-fig is a dependency");
+    std::path::Path::new(package["manifest_path"].as_str().unwrap()).parent().unwrap().join("src")
 }
 
 /// The lookup functions whose first argument is a catalog key.
@@ -514,7 +541,7 @@ fn japanese_korean_chinese_and_vietnamese_have_no_plural_forms() {
     assert_eq!(code("system", Some("ja,en-US")), "ja");
     assert_eq!(LANGS[resolve("vi", None)].name, "Tiếng Việt");
     assert!(LANGS[resolve("vi", None)].draft);
-    for code in ["ja", "ko", "th", "zh-Hans", "vi"] {
+    for code in ["ja", "ko", "th", "zh-Hans", "zh-Hant", "vi"] {
         let lang = LANGS.iter().position(|l| l.code == code).unwrap();
         assert!(!plural_one(lang, 0) && !plural_one(lang, 1) && !plural_one(lang, 2), "{code}");
         let ones: Vec<_> = LANGS[lang].ui.iter().filter(|(_, t)| matches!(t, Text::Plural(Forms { one: Some(_), .. }))).map(|(k, _)| k).collect();
@@ -548,6 +575,59 @@ fn arabic_tags_and_count_neutral_forms() {
             }
         }
     }
+}
+
+#[test]
+fn right_to_left_languages_mirror_the_window() {
+    for code in ["ar", "ar-SA", "AR", "he", "he-IL", "fa", "ur", "ckb", "yi"] {
+        assert!(writes_right_to_left(code), "{code}");
+    }
+    for code in ["en", "", "es-419", "zh-Hans", "tr", "ru", "arn", "hey"] {
+        assert!(!writes_right_to_left(code), "{code}");
+    }
+    // Every catalog that mirrors is one of them, and the Arabic and Hebrew ones do.
+    assert!(LANGS.iter().any(|l| l.code == "ar" && writes_right_to_left(l.code)));
+    assert!(LANGS.iter().any(|l| l.code == "he" && writes_right_to_left(l.code)));
+    assert!(!writes_right_to_left(LANGS[0].code), "English reads left to right");
+}
+
+#[test]
+fn hebrew_tags_and_plurals() {
+    let he = LANGS.iter().position(|l| l.code == "he").expect("locales/he.toml is baked in");
+    assert_eq!(LANGS[he].name, "עברית");
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "iw", "iw-IL", "iw_IL.UTF-8"] {
+        assert_eq!(resolve(tag, None), he, "{tag}");
+        assert_eq!(resolve("system", Some(tag)), he, "{tag}");
+    }
+    assert!(!plural_one(he, 0) && plural_one(he, 1) && !plural_one(he, 2) && !plural_one(he, 5));
+    let singular = fill(counted(he, "{n} layers", 1), &[("n", &1)]);
+    let dual = fill(counted(he, "{n} layers", 2), &[("n", &2)]);
+    assert_eq!(singular, "1 שכבה");
+    assert_eq!(dual, "2 שכבות");
+}
+
+#[test]
+fn the_built_in_hebrew_face_draws_the_hebrew_catalog() {
+    if !figcraft_text::CRAFT_FONTS.iter().any(|f| f.family == "Noto Sans Hebrew" && f.style == "Regular") {
+        eprintln!("built without craft-fonts' Noto Sans Hebrew; skipping");
+        return;
+    }
+    let Some(face) = figcraft_text::face_with_char('א', &["Noto Sans Hebrew"]) else {
+        panic!("the supplied Noto Sans Hebrew face must draw Hebrew");
+    };
+    let he = &LANGS[LANGS.iter().position(|l| l.code == "he").unwrap()];
+    let letters: BTreeSet<char> = he
+        .ui
+        .iter()
+        .chain(he.commands)
+        .chain(he.menu)
+        .flat_map(|(_, t)| forms(t))
+        .flat_map(str::chars)
+        .filter(|c| matches!(u32::from(*c), 0x05D0..=0x05EA))
+        .collect();
+    assert!(letters.len() >= 27);
+    let missing: String = letters.iter().filter(|c| !face.has_char(**c)).collect();
+    assert!(missing.is_empty(), "Hebrew catalog glyphs missing from the embedded face: {missing:?}");
 }
 
 #[test]
@@ -594,17 +674,56 @@ fn the_built_in_georgian_face_draws_the_georgian_catalog() {
 }
 
 #[test]
-fn chinese_reads_simplified_and_traditional_has_no_catalog() {
+fn chinese_tags_pick_simplified_or_traditional() {
     let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
     for tag in ["zh-CN", "zh_CN.UTF-8", "zh-SG", "zh-Hans", "zh-Hans-CN", "zh-Hans-HK", "zh"] {
         assert_eq!(code("system", Some(tag)), "zh-Hans", "{tag}");
     }
-    // No Traditional Chinese catalog: English, never Simplified; else the next OS language.
-    for tag in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-TW", "zh_TW.UTF-8"] {
-        assert_eq!(code("system", Some(tag)), "en", "{tag}");
-        assert_eq!(code(tag, None), "en", "{tag}");
+    // Taiwan, Hong Kong, Macau and Hant read Traditional Chinese, never Simplified.
+    for tag in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-TW", "zh_TW.UTF-8", "zh-Hant-HK"] {
+        assert_eq!(code("system", Some(tag)), "zh-Hant", "{tag}");
+        assert_eq!(code(tag, None), "zh-Hant", "{tag}");
     }
-    assert_eq!(code("system", Some("zh-TW,ja-JP")), "ja");
+    // An explicit Hans still reads Simplified, whatever the region.
+    assert_eq!(code("system", Some("zh-Hans-TW")), "zh-Hans");
+    assert_eq!(code("system", Some("zh-TW,ja-JP")), "zh-Hant");
+    assert_eq!(code("system", Some("ja-JP,zh-TW")), "ja");
+}
+
+#[test]
+fn traditional_chinese_is_a_draft_in_the_taiwan_design_terms() {
+    let zh = LANGS.iter().position(|l| l.code == "zh-Hant").expect("locales/zh-Hant.toml is baked in");
+    assert_eq!(LANGS[zh].name, "繁體中文（台灣）");
+    assert!(LANGS[zh].draft, "a machine-drafted catalog stays a draft until a native speaker reviews it");
+    // Spot checks for the Taiwan design terms the catalog is written in.
+    assert!(matches!(lookup(zh, "Canvas"), Some(Text::Plain("畫布"))));
+    assert!(matches!(lookup(zh, "Layers"), Some(Text::Plain("圖層"))));
+    assert!(matches!(lookup(zh, "Frame"), Some(Text::Plain("框架"))));
+    assert!(matches!(lookup(zh, "Component"), Some(Text::Plain("元件"))));
+    assert!(matches!(lookup(zh, "Constraints"), Some(Text::Plain("約束"))));
+    assert!(matches!(lookup(zh, "Fill"), Some(Text::Plain("填色"))));
+    assert!(matches!(lookup(zh, "Stroke"), Some(Text::Plain("邊框"))));
+    assert!(matches!(lookup(zh, "Export"), Some(Text::Plain("匯出"))));
+    assert!(matches!(lookup(zh, "Version"), Some(Text::Plain("版本"))));
+    assert!(matches!(lookup(zh, "Prototype"), Some(Text::Plain("原型"))));
+}
+
+/// Changing the preference and reading it back keeps the Chinese tag; the tag still resolves to
+/// the same catalog after the preferences are saved and loaded (a restart).
+#[test]
+fn traditional_chinese_switches_and_the_preference_persists() {
+    let mut s = figcraft_engine::Session::new();
+    s.execute("pref.language", &serde_json::json!({"language": "zh-TW"})).unwrap();
+    assert_eq!(s.prefs.language, "zh-TW");
+    assert_eq!(LANGS[resolve(&s.prefs.language, None)].code, "zh-Hant");
+    let saved = serde_json::to_string(&s.prefs).unwrap();
+    let loaded: figcraft_engine::Prefs = serde_json::from_str(&saved).unwrap();
+    assert_eq!(loaded.language, "zh-TW");
+    assert_eq!(LANGS[resolve(&loaded.language, None)].code, "zh-Hant");
+    s.execute("pref.language", &serde_json::json!({"language": "zh-Hans"})).unwrap();
+    assert_eq!(LANGS[resolve(&s.prefs.language, None)].code, "zh-Hans");
+    s.execute("pref.language", &serde_json::json!({"language": "zh-Hant"})).unwrap();
+    assert_eq!(LANGS[resolve(&s.prefs.language, None)].code, "zh-Hant");
 }
 
 #[test]

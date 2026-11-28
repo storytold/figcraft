@@ -310,3 +310,52 @@ fn clicks_place_the_logical_caret_by_what_is_shown() {
     run(vec![Event::Text("א".into())], &mut text, &mut rect);
     assert_eq!(text, "שלוםא");
 }
+
+/// Scripts beyond Hebrew and Arabic (#2014): a String variable's Amharic value drew as boxes
+/// because the UI took system faces for two scripts only. Now every script in `SCRIPT_SAMPLES`
+/// with an installed face gets one, and the UI's fonts then have its glyphs. A machine without a
+/// face for a script skips that script (CI has few fonts); a face the UI's own fonts cover is not
+/// taken twice.
+#[test]
+fn other_scripts_take_an_installed_system_face() {
+    figcraft_text::scan_system_fonts();
+    let installed = |c: char| figcraft_text::face_with_char(c, &crate::bidi::SCRIPT_FAMILIES).is_some();
+    let mut taken = Vec::new();
+    let added = crate::bidi::script_fallbacks(&|_| false, &mut taken);
+    let scripts = [('\u{1200}', "Ethiopic"), ('\u{0915}', "Devanagari"), ('\u{0B95}', "Tamil"), ('\u{1000}', "Myanmar"), ('\u{0531}', "Armenian")];
+    let mut checked = 0;
+    for (c, script) in scripts {
+        if !installed(c) {
+            eprintln!("no {script} face on this system; skipping");
+            continue;
+        }
+        let families: Vec<&str> = taken.iter().map(|f| f.family.as_str()).collect();
+        assert!(taken.iter().any(|f| f.has_char(c)), "a face for {script} is taken: {families:?}");
+        checked += 1;
+    }
+    // A face that several scripts share is added once, under its system key.
+    let keys: Vec<&str> = added.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(keys.len(), taken.len(), "{keys:?}");
+    assert!(keys.iter().all(|k| k.starts_with("system-")), "{keys:?}");
+    let mut seen = keys.clone();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), keys.len(), "no face twice: {keys:?}");
+    // Nothing is taken for a script the UI's own fonts draw.
+    assert!(crate::bidi::script_fallbacks(&|_| true, &mut Vec::new()).is_empty());
+    if checked == 0 {
+        eprintln!("no face for any of the sampled scripts on this system; the UI font check was not run");
+        return;
+    }
+    // Through the whole font setup: the UI draws the letters of every script it found a face for.
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx, true, 0);
+    ctx.run_ui(RawInput::default(), |_| {}).textures_delta.clear();
+    ctx.fonts_mut(|f| {
+        for (c, script) in scripts {
+            if installed(c) {
+                assert!(f.has_glyph(&regular(11.0), c), "the UI fonts draw {script} ({c:?})");
+            }
+        }
+    });
+}

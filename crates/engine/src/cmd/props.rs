@@ -4,7 +4,7 @@ use figcraft_color::{Color, Paint};
 use figcraft_doc::{
     AutoLayout, Brush, ChildLayout, DecorationStyle, DevStatus, Document, Effect, GridTrack, LayoutMode, LetterSpacing, LineHeight, ListStyle,
     MAX_LIST_INDENT, MaskType, Node, NodeId, NodeKind, Sizing, StrokeCap, StrokeProps, TextAutoResize, TextCase, TextData, TextDecoration,
-    WidthPoint, WidthPreset, WidthProfile, style_weight, valid_axis_tag, valid_feature_tag,
+    TextPosition, WidthPoint, WidthPreset, WidthProfile, style_weight, valid_axis_tag, valid_feature_tag,
 };
 use figcraft_geom::{Affine, Point};
 use serde_json::{Map, Value, json};
@@ -16,20 +16,20 @@ use crate::{Result, bad};
 pub const STROKE_SIDES: [&str; 4] = ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"];
 
 /// Keys `node.set` understands (documented for agents).
-pub const KEYS: &str = "name, visible, locked, opacity (0-1 or \"50%\"), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), \
+pub const KEYS: &str = "name, visible, locked, opacity (0-1 or \"50%\"), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), absoluteRotation (degrees on the page: the layer's angle plus its parents', what the Design panel's field shows; one of the two per call), \
 fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour, {$var: variable id or name}, or \"none\"/null: no fill), strokes, stroke (colour, {$var: variable id or name}, or \"none\"/null: no stroke), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
 strokeCap / startCap / endCap, strokeJoin, miterAngle (degrees: sharper joins bevel; or miterLimit as a ratio), dashes [..], dashCap (none|round|square; null: dashes take startCap and endCap), widthProfile (preset uniform|wedge|taper|eye|rounded|pinch, [[t, scale], ...] or null), brush (preset id, {preset, spacing, sizeJitter, rotationJitter, scatter, seed} or null), cornerRadius (n or [tl,tr,br,bl]), cornerSmoothing (0-1), effects, \
 clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
 mainAlign (min|center|max, or the auto gaps spaceBetween|spaceAround|spaceEvenly), crossAlign (min|center|max|baseline: first text baselines, horizontal layouts), contentAlign (wrapped lines: auto = packed where crossAlign says | spaceBetween), wrap (rows of a horizontal layout, columns of a vertical one), strokesIncluded (the frame's inside stroke takes up space), reverseZ (canvas stacking: true = first on top), \
 columnGap / rowGap (aliases of gap / crossGap), gridColumns, gridRows, columnTracks / rowTracks ([120 | \"1fr\" | \"auto\" | {sizing, value}]), \
 gridColumn / gridRow (0-based cell anchor, null = auto), gridColumnSpan, gridRowSpan, gridAlignH / gridAlignV (a grid child's alignment in its cell: min|center|max, auto/null = the frame's), sizingH / sizingV (fixed|hug|fill), \
-absolute (ignore auto layout; follows constraints), minWidth, maxWidth, minHeight, maxHeight (null removes), constraints {horizontal, vertical}, grids, exports, characters, fontFamily, fontStyle, \
+absolute (ignore auto layout; follows constraints), minWidth, maxWidth, minHeight, maxHeight (null removes), constraints {horizontal, vertical}, grids, exports, characters, fontFamily, fontStyle, fontWeight (a number: 400 Regular, 600 Semi Bold — the nearest face the family has), \
 fontSize, lineHeight (auto|px|\"150%\"), letterSpacing (px|\"2%\"), textAlign (left|center|right|justified), textAlignVertical, textAutoResize \
 (widthAndHeight|height|none|truncate), textDecoration, textDecorationStyle (solid|dotted|wavy), textDecorationThickness / textDecorationOffset \
 (auto|px|\"10%\" of the font size; the offset runs from the baseline down to an underline's top edge), textDecorationSkipInk (underlines break around descenders), \
 textDecorationColor (colour, or auto/null: the text's), textCase (original|upper|lower|title|smallCaps), paragraphSpacing, paragraphIndent, \
 listStyle (none|bulleted|numbered; with start/end: the paragraphs those chars touch), indentation (list nesting level 0-8, same range rule), \
-listSpacing (px between list items, in place of paragraphSpacing), hangingPunctuation, hangingList (markers outside the box), leadingTrim (vertical trim: none|capHeight), maxLines, features ({tag: bool}, e.g. {\"liga\": false, \"tnum\": true}), \
+listSpacing (px between list items, in place of paragraphSpacing), wrapStyle (auto|balance|pretty; with start/end: the paragraphs those chars touch), hangingPunctuation, hangingList (markers outside the box), leadingTrim (vertical trim: none|capHeight), maxLines, features ({tag: bool}, e.g. {\"liga\": false, \"tnum\": true}), \
 fontVariations / variationSettings ({axis: number}, e.g. {\"wght\": 550, \"wdth\": 85}; null = none), \
 path (a vector's SVG path data: replaces its geometry, keeping the layer, its paints, styles and bindings; width/height in the same call scale it as \
 node.create does; its own box goes at the layer's x/y, or with x/y given, at x + its left edge and y + its top as node.create places it), pointCount, innerRadius, arcStart, arcSweep, \
@@ -39,6 +39,30 @@ group: how it combines with the operands below it; null: the group's), constrain
 /// CRLF, bare CR, U+2028 and U+2029 become LF, the only line ending text layout understands (editor insertion does the same).
 pub(crate) fn normalize_line_endings(s: &str) -> String {
     s.replace("\r\n", "\n").replace(['\r', '\u{2028}', '\u{2029}'], "\n")
+}
+
+/// The name a text layer derives from its characters: the first line, at most 64 characters, or
+/// None when that line is blank (a layer with no name of its own, which the Layers panel shows by
+/// its kind).
+///
+/// A layer whose name is this derived name is one nobody has renamed, so the editor keeps its name
+/// in step as the characters are typed ([`crate::textedit`]); any other name was chosen by the
+/// author and is kept. Commands never rename, so a layer named for its role keeps that name as a
+/// field key even when `characters` replace text that reads like it.
+pub(crate) fn text_layer_name(characters: &str) -> Option<String> {
+    let first: String = characters.lines().next().unwrap_or("").chars().take(64).collect();
+    (!first.trim().is_empty()).then_some(first)
+}
+
+/// Whether `name` is one a text layer was given for its characters rather than by its author, so
+/// the editor may keep it in step with them. Blank text leaves a layer named `""` when the Text
+/// tool draws it and `Text` when `node.create` makes it, and both read as unnamed in the panel.
+pub(crate) fn text_name_is_derived(name: &str, derived: Option<&String>) -> bool {
+    match derived {
+        Some(d) => name == d,
+        // `NodeKind::Text(_).label()`, which the panel falls back to for an unnamed layer.
+        None => name.is_empty() || name == "Text",
+    }
 }
 
 /// camelCase object keys → snake_case (accept the inspect/camel forms for serde-backed values).
@@ -85,10 +109,18 @@ pub fn effect_from(cmd: &str, p: &Value, key: &str) -> Result<Option<Effect>> {
     Ok(Some(effect))
 }
 
+/// Most keys an effect object may carry (the widest effect takes about a dozen).
+const MAX_EFFECT_KEYS: usize = 32;
+
 /// Refuse the keys of effect `given` that `parse` ignores, naming the keys the effect takes. Set to
 /// null, a key it reads fails to parse or changes the effect; a key it ignores changes nothing.
 fn refuse_ignored_effect_keys(cmd: &str, at: &str, given: &Value, parse: impl Fn(&Value) -> Option<Effect>) -> Result<()> {
     let Some(fields) = given.as_object() else { return Ok(()) };
+    // Each key is probed by reparsing the whole object without it: bounded, or a long list of
+    // unknown keys costs its length squared before it is refused.
+    if fields.len() > MAX_EFFECT_KEYS {
+        return Err(bad(cmd, format!("{at}: more than {MAX_EFFECT_KEYS} properties")));
+    }
     let parsed = parse(given);
     let ignored: Vec<&str> = fields
         .iter()
@@ -115,6 +147,8 @@ pub(crate) fn enum_of<T: serde::de::DeserializeOwned>(v: &Value) -> Option<T> {
     let norm: String = {
         let mut out = String::new();
         let mut up = false;
+        // Once, not per character: a long value made this quadratic before it was refused.
+        let no_lowercase = s.chars().all(|c| !c.is_lowercase() || !c.is_alphabetic());
         for (i, ch) in s.trim().chars().enumerate() {
             if ch == '_' || ch == '-' || ch == ' ' {
                 up = true;
@@ -125,7 +159,7 @@ pub(crate) fn enum_of<T: serde::de::DeserializeOwned>(v: &Value) -> Option<T> {
             } else if up {
                 out.extend(ch.to_uppercase());
                 up = false;
-            } else if s.chars().all(|c| !c.is_lowercase() || !c.is_alphabetic()) {
+            } else if no_lowercase {
                 out.extend(ch.to_lowercase());
             } else {
                 out.push(ch);
@@ -193,6 +227,9 @@ fn set_operand_op(doc: &mut Document, id: NodeId, v: &Value, cmd: &str) -> Resul
 }
 
 pub(crate) const WIDTH_PROFILE_HELP: &str = "widthProfile: a preset (uniform|wedge|taper|eye|rounded|pinch), points [[t (0-1 along the path), scale (× stroke weight)] | [t, left, right] (one-sided: each side's scale, looking along the path), ...] or [{t, scale} | {t, left, right}], {preset} | {points}, or null (uniform)";
+
+/// The stroke caps `strokeCap`, `startCap` and `endCap` take (every [`StrokeCap`]).
+pub(crate) const STROKE_CAP_HELP: &str = "none|round|square|lineArrow|triangleArrow|reversedTriangle|circleFilled|diamondFilled";
 
 pub(crate) const BRUSH_HELP: &str = "brush: a preset (taper|ink|ribbon|bristle: stretched; dots|stars|confetti|leaves: scattered), {preset, spacing? (× weight), sizeJitter? (0-1), rotationJitter? (0-1), scatter? (0-4 × weight), seed?}, or null (a plain stroke)";
 
@@ -376,6 +413,9 @@ fn layout_mut<'a>(cmd: &str, k: &str, n: &'a mut Node) -> Result<&'a mut AutoLay
 /// Replace a node's fills (or strokes). Bindings on the paints whose bound values the new list
 /// changed let go, as an explicit edit does (see `lists::rebind_edited_paint`).
 fn set_paints(n: &mut Node, fills: bool, paints: Vec<Paint>) {
+    if fills {
+        super::lists::take_character_fills(n);
+    }
     let old = std::mem::replace(if fills { &mut n.fills } else { &mut n.strokes }, paints);
     for (i, p) in old.iter().enumerate() {
         super::lists::rebind_edited_paint(n, fills, i, p);
@@ -416,7 +456,7 @@ fn apply_order(k: &str, v: &Value) -> u8 {
     match k {
         "path" | "width" | "height" | "w" | "h" => 0,
         "layout" | "layoutMode" => 1,
-        "rotation" => 3,
+        "rotation" | "absoluteRotation" => 3,
         "x" | "y" => 4,
         "fillStyle" | "strokeStyle" | "effectStyle" | "textStyle" | "gridStyle" => 5,
         "boundVariables" => 6,
@@ -437,15 +477,53 @@ fn layout_keys_beside_none(cmd: &str, props: &Map<String, Value>) -> Result<()> 
 }
 
 /// An explicit width (`is_w`) or height makes hugging or filling on that axis fixed, like typing
-/// into W or H.
-fn fix_axis(doc: &mut Document, id: NodeId, is_w: bool) -> Result<()> {
+/// into W or H; sized to the full space its auto layout parent has for it on that axis, the layer
+/// fills instead: "Child objects of an auto layout frame will also be set to Fill container if
+/// they are manually resized to the full available space of the parent frame" (Guide to auto
+/// layout).
+pub(crate) fn fix_axis(doc: &mut Document, id: NodeId, is_w: bool) -> Result<()> {
+    let sizing = if fills_available_space(doc, id, is_w) { Sizing::Fill } else { Sizing::Fixed };
     let n = doc.get_mut(id)?;
     if is_w {
-        n.child_layout.sizing_h = Sizing::Fixed;
+        n.child_layout.sizing_h = sizing;
     } else {
-        n.child_layout.sizing_v = Sizing::Fixed;
+        n.child_layout.sizing_v = sizing;
     }
     Ok(())
+}
+
+/// Whether `id`'s width (`is_w`) or height is the full space its auto layout parent has for it on
+/// that axis: the frame's size less its padding and an inside stroke included in the layout (the
+/// insets layout itself takes). Across the flow that is every child's room;
+/// along the flow only a lone child has it (beside siblings what is left depends on the gaps, the
+/// alignment and overflow, so a size that happens to match it is not "the full available
+/// space"). Never in a hugging or wrapping frame or a grid, or for a layer that ignores the layout.
+fn fills_available_space(doc: &Document, id: NodeId, is_w: bool) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    let Some(parent) = n.parent.and_then(|p| doc.node(p)) else { return false };
+    let Some(l) = &parent.layout else { return false };
+    if n.child_layout.absolute || l.wrap || l.mode == LayoutMode::Grid {
+        return false;
+    }
+    // A rotated layer's local size isn't the size layout gives it room for (its rotated bounds
+    // are): it stays Fixed rather than have Fill squash its geometry.
+    let [_, b, c, ..] = n.transform.as_coeffs();
+    if b.abs() > 1e-9 || c.abs() > 1e-9 {
+        return false;
+    }
+    let hugs = if is_w { parent.child_layout.sizing_h } else { parent.child_layout.sizing_v } == Sizing::Hug;
+    if hugs {
+        return false;
+    }
+    if (l.mode == LayoutMode::Horizontal) == is_w
+        && parent.children.iter().filter(|c| **c != id).filter_map(|c| doc.node(*c)).any(|c| c.visible && !c.child_layout.absolute)
+    {
+        return false;
+    }
+    let (pt, pr, pb, pl) = figcraft_layout::insets(parent, l);
+    let available = if is_w { parent.width - pl - pr } else { parent.height - pt - pb };
+    let size = if is_w { n.width } else { n.height };
+    available > 0.0 && (size - available).abs() < 0.01
 }
 
 /// The `geometry` properties of `apply`; `false` when `k` is not one of them.
@@ -459,10 +537,17 @@ fn apply_geometry(
     path_offset: &mut (f64, f64),
 ) -> Result<bool> {
     match k {
-        "path" => *path_offset = set_path(cmd, doc, id, v, props)?,
-        // A new path takes the size asked for as its scale (`set_path`); the size still fixes
-        // its auto layout axis.
-        "width" | "height" | "w" | "h" if props.contains_key("path") => fix_axis(doc, id, k.starts_with('w'))?,
+        "path" => {
+            *path_offset = set_path(cmd, doc, id, v, props)?;
+            // A size given beside the path is its scale (`set_path`), and still fixes or fills
+            // its auto layout axis, judged once the path has given the layer that size.
+            for (long, short, is_w) in [("width", "w", true), ("height", "h", false)] {
+                if props.contains_key(long) || props.contains_key(short) {
+                    fix_axis(doc, id, is_w)?;
+                }
+            }
+        }
+        "width" | "height" | "w" | "h" if props.contains_key("path") => {}
         "x" | "y" => {
             let val = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?;
             let val = val + if k == "x" { path_offset.0 } else { path_offset.1 };
@@ -509,6 +594,27 @@ fn apply_geometry(
             let deg = f64_of(v).ok_or_else(|| bad(cmd, "`rotation` must be degrees"))?;
             let n = doc.get_mut(id)?;
             n.transform = figcraft_geom::set_rotation_about_center(n.transform, n.width, n.height, deg);
+        }
+        "absoluteRotation" => {
+            let deg = f64_of(v).ok_or_else(|| bad(cmd, "`absoluteRotation` must be degrees"))?;
+            if props.contains_key("rotation") {
+                return Err(bad(cmd, "give one of `rotation` and `absoluteRotation`"));
+            }
+            let (w, h) = {
+                let n = doc.get(id)?;
+                (n.width, n.height)
+            };
+            let world = figcraft_geom::set_rotation_about_center(doc.world_transform(id), w, h, deg);
+            let parent = doc.get(id)?.parent;
+            let pw = parent.map(|p| doc.world_transform(p)).unwrap_or(figcraft_geom::Affine::IDENTITY);
+            let local = pw.inverse() * world;
+            if local.as_coeffs().iter().all(|c| c.is_finite()) {
+                doc.get_mut(id)?.transform = local;
+            } else {
+                // A degenerate parent can't be inverted: turn the local angle instead.
+                let n = doc.get_mut(id)?;
+                n.transform = figcraft_geom::set_rotation_about_center(n.transform, n.width, n.height, deg);
+            }
         }
         _ => return Ok(false),
     }
@@ -564,21 +670,29 @@ fn apply_look(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -> 
             st.sides = Some(sides);
         }
         "strokeCap" => {
-            let c: StrokeCap = enum_of(v).ok_or_else(|| bad(cmd, "unknown stroke cap"))?;
+            let c: StrokeCap = enum_of(v).ok_or_else(|| bad(cmd, format!("strokeCap: {STROKE_CAP_HELP}")))?;
             let n = doc.get_mut(id)?;
             n.stroke.cap_start = c;
             n.stroke.cap_end = c;
         }
-        "startCap" => doc.get_mut(id)?.stroke.cap_start = enum_of(v).ok_or_else(|| bad(cmd, "unknown stroke cap"))?,
-        "endCap" => doc.get_mut(id)?.stroke.cap_end = enum_of(v).ok_or_else(|| bad(cmd, "unknown stroke cap"))?,
+        "startCap" => doc.get_mut(id)?.stroke.cap_start = enum_of(v).ok_or_else(|| bad(cmd, format!("startCap: {STROKE_CAP_HELP}")))?,
+        "endCap" => doc.get_mut(id)?.stroke.cap_end = enum_of(v).ok_or_else(|| bad(cmd, format!("endCap: {STROKE_CAP_HELP}")))?,
         "strokeJoin" => doc.get_mut(id)?.stroke.join = enum_of(v).ok_or_else(|| bad(cmd, "strokeJoin: miter|bevel|round"))?,
-        "miterLimit" => doc.get_mut(id)?.stroke.miter_limit = f64_of(v).unwrap_or(4.0).clamp(1.0, 100.0),
+        "miterLimit" => doc.get_mut(id)?.stroke.miter_limit = f64_of(v).ok_or_else(|| bad(cmd, "`miterLimit` must be a number"))?.clamp(1.0, 100.0),
         "miterAngle" => {
             let deg = f64_of(v).ok_or_else(|| bad(cmd, "`miterAngle` must be degrees"))?;
             doc.get_mut(id)?.stroke.miter_limit = StrokeProps::miter_limit_for(deg);
         }
         "dashes" => {
-            let d: Vec<f64> = v.as_array().map(|a| a.iter().filter_map(f64_of).map(|x| x.max(0.0)).collect()).unwrap_or_default();
+            let d: Vec<f64> = if v.is_null() {
+                Vec::new()
+            } else {
+                let a = v.as_array().ok_or_else(|| bad(cmd, "`dashes` must be an array of numbers"))?;
+                a.iter()
+                    .map(|x| if x.is_boolean() { None } else { f64_of(x).map(|n| n.max(0.0)) })
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| bad(cmd, "`dashes` must be an array of numbers"))?
+            };
             doc.get_mut(id)?.stroke.dashes = d;
         }
         "dashCap" => {
@@ -614,7 +728,9 @@ fn apply_corners(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) 
                 *slot = r;
             }
         }
-        "cornerSmoothing" => doc.get_mut(id)?.corners.smoothing = f64_of(v).unwrap_or(0.0).clamp(0.0, 1.0),
+        "cornerSmoothing" => {
+            doc.get_mut(id)?.corners.smoothing = f64_of(v).ok_or_else(|| bad(cmd, "`cornerSmoothing` must be a number"))?.clamp(0.0, 1.0)
+        }
         "effects" => doc.get_mut(id)?.effects = effects_from(cmd, v)?,
         "clip" | "clipsContent" => doc.get_mut(id)?.clip = v.as_bool().ok_or_else(|| bad(cmd, "`clip` must be a boolean"))?,
         "isMask" => doc.get_mut(id)?.is_mask = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be a boolean")))?,
@@ -759,6 +875,14 @@ fn apply_sizing(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -
                 other => Some(f64_of(other).ok_or_else(|| bad(cmd, format!("`{k}` must be a number or null")))?.clamp(0.0, 1e7)),
             };
             set_limit(&mut doc.get_mut(id)?.child_layout, k, val);
+            // A text has a max height or a number of max lines, not both: a max height sets the
+            // lines back to Auto (Guide to auto layout).
+            if k == "maxHeight"
+                && val.is_some()
+                && let Some(t) = doc.get_mut(id)?.kind.text_mut()
+            {
+                t.max_lines = 0;
+            }
         }
         "columnTracks" | "gridColumnTracks" | "rowTracks" | "gridRowTracks" => {
             let a = v.as_array().ok_or_else(|| bad(cmd, format!("`{k}` must be an array of tracks")))?;
@@ -856,6 +980,7 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
         | "letterSpacing"
         | "textDecoration"
         | "textCase"
+        | "textPosition"
         | "hyperlink"
         | "textFills"
         | "fontVariations"
@@ -880,8 +1005,12 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
             text_mut(cmd, doc.get_mut(id)?)?.auto_resize =
                 enum_of(v).ok_or_else(|| bad(cmd, "textAutoResize: widthAndHeight|height|none|truncate"))?
         }
-        "paragraphSpacing" => text_mut(cmd, doc.get_mut(id)?)?.paragraph_spacing = f64_of(v).unwrap_or(0.0).max(0.0),
-        "paragraphIndent" => text_mut(cmd, doc.get_mut(id)?)?.paragraph_indent = f64_of(v).unwrap_or(0.0).max(0.0),
+        "paragraphSpacing" => {
+            text_mut(cmd, doc.get_mut(id)?)?.paragraph_spacing = f64_of(v).ok_or_else(|| bad(cmd, "`paragraphSpacing` must be a number"))?.max(0.0)
+        }
+        "paragraphIndent" => {
+            text_mut(cmd, doc.get_mut(id)?)?.paragraph_indent = f64_of(v).ok_or_else(|| bad(cmd, "`paragraphIndent` must be a number"))?.max(0.0)
+        }
         "listStyle" | "indentation" => {
             let t = text_mut(cmd, doc.get_mut(id)?)?;
             let (start, end) = range_of(props, t.char_count());
@@ -893,6 +1022,12 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
                 t.set_para_lists(start, end, |p| p.indent = d.clamp(0.0, f64::from(MAX_LIST_INDENT)) as u8);
             }
         }
+        "textDirection" | "direction" => {
+            let d: figcraft_doc::TextDirection = enum_of(v).ok_or_else(|| bad(cmd, "textDirection: auto|ltr|rtl"))?;
+            let t = text_mut(cmd, doc.get_mut(id)?)?;
+            let (start, end) = range_of(props, t.char_count());
+            t.set_para_lists(start, end, |p| p.direction = d);
+        }
         "listSpacing" => text_mut(cmd, doc.get_mut(id)?)?.list_spacing = f64_of(v).filter(|s| s.is_finite()).unwrap_or(0.0).clamp(0.0, 10_000.0),
         "hangingPunctuation" | "hangingList" => {
             let on = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be true or false")))?;
@@ -900,7 +1035,26 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
             *if k == "hangingList" { &mut t.hanging_list } else { &mut t.hanging_punctuation } = on;
         }
         "leadingTrim" => text_mut(cmd, doc.get_mut(id)?)?.leading_trim = enum_of(v).ok_or_else(|| bad(cmd, "leadingTrim: none|capHeight"))?,
-        "maxLines" => text_mut(cmd, doc.get_mut(id)?)?.max_lines = f64_of(v).unwrap_or(0.0).clamp(0.0, 10_000.0) as u32,
+        "wrapStyle" | "textWrap" => {
+            let w: figcraft_doc::WrapStyle = enum_of(v).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?;
+            let t = text_mut(cmd, doc.get_mut(id)?)?;
+            if props.contains_key("start") || props.contains_key("end") {
+                let (start, end) = range_of(props, t.char_count());
+                t.set_para_wrap_styles(start, end, w);
+            } else {
+                t.set_wrap_style(w);
+            }
+        }
+        "maxLines" => {
+            let lines = f64_of(v).unwrap_or(0.0).clamp(0.0, 10_000.0) as u32;
+            let n = doc.get_mut(id)?;
+            text_mut(cmd, n)?.max_lines = lines;
+            // A text has a max height or a number of max lines, not both: a number of lines takes
+            // the max height away (Guide to auto layout).
+            if lines > 0 {
+                n.child_layout.max_h = None;
+            }
+        }
         "features" | "textFeatures" | "fontFeatures" | "openTypeFeatures" => {
             let f = features_of(cmd, v)?;
             let t = text_mut(cmd, doc.get_mut(id)?)?;
@@ -1081,14 +1235,16 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
     if !unknown.is_empty() {
         return Err(bad(cmd, format!("unknown properties: {} (known: {KEYS})", unknown.join(", "))));
     }
-    // Inside an instance, record which property groups were overridden (an instance's own
-    // resizing, export settings and interactions are its own, not overrides).
+    // Inside an instance, record which property groups were overridden (an instance's own export
+    // settings and interactions are its own, not overrides). Its resizing is recorded like any
+    // layer's: the sync takes the main's Hug / Fixed unless it is overridden, and Reset instance
+    // clears it. Inferred: Figma was measured only with a typed width (kept); a resizing chosen
+    // from the dropdown is taken as an override the same way, as every property set on an
+    // instance in Figma is one.
     let own_root = matches!(doc.get(id)?.kind, NodeKind::Instance { .. }) && !crate::components::inside_instance(doc, id);
     let n = doc.get_mut(id)?;
     if n.source.is_some() {
-        for g in
-            props.keys().map(|k| override_group(k)).filter(|g| *g != "other" && !(own_root && matches!(*g, "resizing" | "exports" | "interactions")))
-        {
+        for g in props.keys().map(|k| override_group(k)).filter(|g| *g != "other" && !(own_root && matches!(*g, "exports" | "interactions"))) {
             n.overrides.insert(g.to_string());
         }
     }
@@ -1135,7 +1291,7 @@ pub fn override_group(k: &str) -> &'static str {
         "name" => "name",
         "characters" | "text" => "characters",
         "features" | "fontFeatures" | "openTypeFeatures" | "listStyle" | "indentation" | "listSpacing" | "maxLines" | "variationSettings"
-        | "hangingPunctuation" | "hangingList" => "textStyle",
+        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" | "textDirection" | "direction" => "textStyle",
         "cornerRadius" | "cornerSmoothing" | "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "corners",
         "width" | "height" | "w" | "h" => "size",
         "sizingH" | "sizingV" | "layoutSizingHorizontal" | "layoutSizingVertical" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "resizing",
@@ -1247,6 +1403,10 @@ pub fn apply_text_style(cmd: &str, t: &mut TextData, start: usize, end: usize, k
             let c: TextCase = enum_of(v).ok_or_else(|| bad(cmd, "textCase: original|upper|lower|title|smallCaps"))?;
             t.restyle(start, end, |s| s.case = c);
         }
+        "textPosition" => {
+            let p: TextPosition = enum_of(v).ok_or_else(|| bad(cmd, "textPosition: none|superscript|subscript"))?;
+            t.set_position(start, end, p);
+        }
         "hyperlink" => {
             let l = string_val(v);
             t.restyle(start, end, |s| s.link = l.clone());
@@ -1332,16 +1492,39 @@ fn set_sizing(cmd: &str, doc: &mut Document, id: NodeId, s: Sizing, horizontal: 
         }
         _ => {}
     }
-    // A child can't fill an axis its parent hugs: the parent becomes fixed at its current size.
-    // (The other way round, a parent that starts to hug fixes the children that filled it: see
-    // `figcraft_layout::coherent_sizing`, applied after every edit.)
+    // A child can't fill the axis its parent hugs along the flow: the parent becomes fixed at its
+    // current size. Across the flow the parent keeps hugging and the child takes the line's size
+    // (the largest sibling that doesn't fill); the parent becomes fixed only when no such sibling
+    // is left. (The other way round, a parent that starts to hug fixes the children that filled it
+    // along the flow: see `figcraft_layout::coherent_sizing`, applied after every edit.)
     if s == Sizing::Fill
         && let Some(p) = parent
     {
-        let cl = &mut doc.get_mut(p)?.child_layout;
-        let ps = if horizontal { &mut cl.sizing_h } else { &mut cl.sizing_v };
-        if *ps == Sizing::Hug {
-            *ps = Sizing::Fixed;
+        let pn = doc.get(p)?;
+        if figcraft_layout::wrapping_row_hugs_across(pn, horizontal) {
+            return Err(bad(cmd, "Fill container across a wrapping row is not offered"));
+        }
+        let along = match pn.layout.as_ref().map(|al| al.mode) {
+            Some(LayoutMode::Horizontal) => horizontal,
+            Some(LayoutMode::Vertical) => !horizontal,
+            _ => true,
+        };
+        let others_fill = figcraft_layout::flow_children(doc, p)
+            .into_iter()
+            .filter(|c| *c != id)
+            .all(|c| doc.node(c).is_some_and(|c| (if horizontal { c.child_layout.sizing_h } else { c.child_layout.sizing_v }) == Sizing::Fill));
+        if along || others_fill {
+            let cl = &mut doc.get_mut(p)?.child_layout;
+            let ps = if horizontal { &mut cl.sizing_h } else { &mut cl.sizing_v };
+            if *ps == Sizing::Hug {
+                *ps = Sizing::Fixed;
+                // An instance's own root, or a layer inside one, turned Fixed by this edit: that
+                // is its resizing now, an override, or the next rebuild from the main would take
+                // the main's Hug back and the child would stop filling.
+                if doc.get(p)?.source.is_some() {
+                    doc.get_mut(p)?.overrides.insert("resizing".to_string());
+                }
+            }
         }
     }
     // Start from the sizing the layer has in effect (an auto-width text hugs both axes), so the
@@ -1362,6 +1545,60 @@ fn set_sizing(cmd: &str, doc: &mut Document, id: NodeId, s: Sizing, horizontal: 
         };
     }
     Ok(())
+}
+
+/// The hugging parents that `props` setting Fill on `ids` may turn Fixed, as (parent, horizontal):
+/// taken before the edit, for [`fixed_notice`].
+pub(crate) fn hugging_parents(doc: &Document, ids: &[NodeId], props: &Map<String, Value>) -> Vec<(NodeId, bool)> {
+    let mut out = Vec::new();
+    for (horizontal, keys) in [(true, ["sizingH", "layoutSizingHorizontal"]), (false, ["sizingV", "layoutSizingVertical"])] {
+        if !keys.iter().any(|k| props.get(*k).and_then(sizing) == Some(Sizing::Fill)) {
+            continue;
+        }
+        for p in ids.iter().filter_map(|i| doc.node(*i)).filter_map(|n| n.parent) {
+            let hugs = doc
+                .node(p)
+                .is_some_and(|p| p.layout.is_some() && (if horizontal { p.child_layout.sizing_h } else { p.child_layout.sizing_v }) == Sizing::Hug);
+            if hugs && !out.contains(&(p, horizontal)) {
+                out.push((p, horizontal));
+            }
+        }
+    }
+    out
+}
+
+/// The children, as (child, horizontal), that fill an axis of a frame in `ids` which `props` sets
+/// to Hug: taken before the edit, for [`fixed_notice`] (the coherence pass turns them Fixed).
+pub(crate) fn filling_children(doc: &Document, ids: &[NodeId], props: &Map<String, Value>) -> Vec<(NodeId, bool)> {
+    let mut out = Vec::new();
+    for (horizontal, keys) in [(true, ["sizingH", "layoutSizingHorizontal"]), (false, ["sizingV", "layoutSizingVertical"])] {
+        if !keys.iter().any(|k| props.get(*k).and_then(sizing) == Some(Sizing::Hug)) {
+            continue;
+        }
+        for f in ids.iter().filter_map(|i| doc.node(*i)).filter(|n| n.layout.is_some() && n.kind.is_frame_like()) {
+            for c in f.children.iter().filter_map(|c| doc.node(*c)) {
+                let fills = (if horizontal { c.child_layout.sizing_h } else { c.child_layout.sizing_v }) == Sizing::Fill;
+                if fills && !out.contains(&(c.id, horizontal)) {
+                    out.push((c.id, horizontal));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The notice for the layers of [`hugging_parents`] or [`filling_children`] that the edit turned
+/// Fixed ("Height set to Fixed for Frame 1"), `None` when every one kept its sizing.
+pub(crate) fn fixed_notice(doc: &Document, before: &[(NodeId, bool)]) -> Option<String> {
+    let notes: Vec<String> = before
+        .iter()
+        .filter_map(|(p, horizontal)| {
+            let p = doc.node(*p)?;
+            let now = if *horizontal { p.child_layout.sizing_h } else { p.child_layout.sizing_v };
+            (now == Sizing::Fixed).then(|| format!("{} set to Fixed for {}", if *horizontal { "Width" } else { "Height" }, p.name))
+        })
+        .collect();
+    (!notes.is_empty()).then(|| notes.join("; "))
 }
 
 /// Resize a node's box from its top-left, applying constraints / group scaling to children.

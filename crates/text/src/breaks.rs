@@ -79,6 +79,15 @@ pub(crate) fn is_space(c: char) -> bool {
     class(c) == Class::Space
 }
 
+/// Whether justified text may widen the gap between `a` and the `b` after it (a space widens on
+/// its own): next to an ideograph, kana, Hangul or full-width form, which are written without
+/// spaces, so each is a word of its own, as for line breaking, wherever a line may break there (no
+/// gap before a closing mark or after an opening one).
+pub(crate) fn justify_between(a: char, b: char) -> bool {
+    let (ca, cb) = (class(a), class(b));
+    (ca == Class::Ideo || cb == Class::Ideo) && ca != Class::Space && break_between(a, b)
+}
+
 /// Whether `c` is in a script written without spaces between words that the line segmenter has
 /// word data for (UAX #14 class SA): Thai, Lao, Burmese (with the Myanmar extensions) and Khmer.
 fn writes_no_spaces(c: char) -> bool {

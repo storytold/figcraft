@@ -1,7 +1,8 @@
 use super::handles::SNAP_PX;
 use super::pen::take_enclosed;
 use super::{
-    Affine, Cursor, Gesture, Node, NodeId, NodeKind, Point, PointerEvent, Rect, Result, Session, StrokeCap, Targets, ToolId, Vec2, frame_at, textedit,
+    Affine, Cursor, Gesture, Node, NodeId, NodeKind, Point, PointerEvent, Rect, Result, Session, StrokeCap, Targets, ToolId, Vec2, frame_at,
+    pencil_add, textedit,
 };
 
 impl Session {
@@ -29,20 +30,36 @@ impl Session {
         let tool = self.tool.tool;
         let mut p = ev.p();
         let mut guides = Vec::new();
+        // Frames and sections land on whole pixels whatever the setting, also where a layer they
+        // snap to doesn't (see `snap::always_on_pixels`).
+        let board = matches!(tool, ToolId::Frame | ToolId::Section);
+        let pixel = board || self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
+        // The pixel grid first: snapping to layers comes after, so it wins on the axes it snaps.
+        if pixel {
+            p = Point::new(p.x.round(), p.y.round());
+        }
         if self.ds().map(|d| d.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl {
             let (dx, dy, g) = targets.snap_point(p.x, p.y, SNAP_PX / ev.zoom.max(1e-6));
             p.x += dx;
             p.y += dy;
             guides = g;
         }
-        let pixel = self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
+        if board {
+            p = Point::new(p.x.round(), p.y.round());
+        }
         let mut created = id;
         let page = self.page()?;
+        // Edit ▸ Set default properties: what new shapes take (not frames, sections, slices, lines
+        // or arrows, which keep their own look).
+        let defaults = if matches!(tool, ToolId::Rectangle | ToolId::Ellipse | ToolId::Polygon | ToolId::Star) {
+            self.default_props.shape.clone()
+        } else {
+            None
+        };
         self.preview(|doc, sel| {
-            let (mut a, mut b) = (start, p);
+            let (mut a, b) = (start, p);
             if pixel {
                 a = Point::new(a.x.round(), a.y.round());
-                b = Point::new(b.x.round(), b.y.round());
             }
             let pw = doc.world_transform(parent);
             let (kind, base) = match tool {
@@ -89,6 +106,13 @@ impl Session {
                 n.transform = pw.inverse() * Affine::translate((r.x0, r.y0));
             }
             doc.insert(n, parent, None)?;
+            if board {
+                crate::snap::settle_on_pixels(doc, nid)?;
+            }
+            if let Some(d) = &defaults {
+                // Best effort: a default the shape can't take leaves it as drawn.
+                let _ = crate::cmd::edit::apply_copied_props("edit.setDefaultProperties", doc, nid, d);
+            }
             *sel = vec![nid];
             created = Some(nid);
             let _ = page;
@@ -141,6 +165,11 @@ impl Session {
                             }
                             // A layer can't go into itself; it stays where it is.
                             let _ = d.reparent(*m, target, None);
+                            // Frames, sections and components land on whole pixels of the frame
+                            // they are dropped into too.
+                            if d.node(*m).is_some_and(crate::snap::always_on_pixels) {
+                                crate::snap::settle_on_pixels(d, *m)?;
+                            }
                         }
                         crate::normalize(ds.doc_mut(), &before);
                     }
@@ -162,10 +191,11 @@ impl Session {
                         let sel = self.selection().into_iter().filter(|x| *x != d).collect();
                         self.set_selection(sel);
                     } else if let Some(k) = keep {
-                        // A click (not a drag) on one layer of a multi-selection selects just it.
+                        // A click (not a drag) on one layer of a multi-selection, or on a layer
+                        // inside a selected one, selects just it.
                         let doc = self.doc()?.clone();
                         let sel = self.selection();
-                        if sel.len() > 1 && (sel.contains(&k) || sel.iter().any(|s| doc.is_ancestor(*s, k))) {
+                        if sel.as_slice() != [k] && (sel.contains(&k) || sel.iter().any(|s| doc.is_ancestor(*s, k))) {
                             self.set_selection(vec![k]);
                         }
                     }
@@ -209,6 +239,8 @@ impl Session {
                     crate::normalize(ds.doc_mut(), &before);
                 }
                 self.commit_interaction()?;
+                // A placement by the pointer takes the placement crosshair with it, as Enter does.
+                self.tool.place_at = None;
                 if !self.prefs.keep_tool {
                     self.set_tool(ToolId::Move);
                 }
@@ -221,11 +253,9 @@ impl Session {
             }
             Gesture::Pencil { mut points, mut pressure } => {
                 self.tool.overlay.pen.clear();
+                self.tool.overlay.pen_color = None;
                 // The stroke ends where the button came up, even without a move to get there.
-                if points.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
-                    points.push(ev.p());
-                    pressure.push(ev.pressure);
-                }
+                pencil_add(&mut points, &mut pressure, ev);
                 self.pencil_finish(&points, &pressure)?;
             }
             Gesture::Connect { from, start } => self.connect_up(ev, from, start)?,

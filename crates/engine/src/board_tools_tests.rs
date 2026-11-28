@@ -96,22 +96,31 @@ fn routes_take_named_sides_and_free_points() {
     let a = id(&s.execute("board.shape", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap(), "id");
     let b = id(&s.execute("board.shape", &json!({"x": 300, "y": 300, "width": 100, "height": 100})).unwrap(), "id");
     let doc = s.doc().unwrap();
-    let elbow = |from, to| route(doc, &figcraft_doc::Connector { from, to, routing: figcraft_doc::Routing::Elbow, path: None }).unwrap();
+    let elbow =
+        |from, to| route(doc, &figcraft_doc::Connector { from, to, routing: figcraft_doc::Routing::Elbow, path: None, branch: false }).unwrap();
     let side = |n, side| End::Node { node: n, side, at: None };
     let p = |x, y| End::Point { x, y };
     let pt = Point::new;
-    // Side to side: out, across halfway, in.
-    assert_eq!(elbow(side(a, Side::Right), side(b, Side::Left)), vec![pt(100.0, 50.0), pt(200.0, 50.0), pt(200.0, 350.0), pt(300.0, 350.0)]);
+    // Side to side: out (from END_GAP outside each side), across halfway, in.
+    assert_eq!(elbow(side(a, Side::Right), side(b, Side::Left)), vec![pt(104.0, 50.0), pt(200.0, 50.0), pt(200.0, 350.0), pt(296.0, 350.0)]);
     // A side and a top or bottom: one turn.
-    assert_eq!(elbow(side(a, Side::Right), side(b, Side::Top)), vec![pt(100.0, 50.0), pt(350.0, 50.0), pt(350.0, 300.0)]);
-    assert_eq!(elbow(side(a, Side::Bottom), side(b, Side::Left)), vec![pt(50.0, 100.0), pt(50.0, 350.0), pt(300.0, 350.0)]);
+    assert_eq!(elbow(side(a, Side::Right), side(b, Side::Top)), vec![pt(104.0, 50.0), pt(350.0, 50.0), pt(350.0, 296.0)]);
+    assert_eq!(elbow(side(a, Side::Bottom), side(b, Side::Left)), vec![pt(50.0, 104.0), pt(50.0, 350.0), pt(296.0, 350.0)]);
     // Two free points: the longer way first; in a line, no turns.
     assert_eq!(elbow(p(0.0, 0.0), p(100.0, 40.0)), vec![pt(0.0, 0.0), pt(50.0, 0.0), pt(50.0, 40.0), pt(100.0, 40.0)]);
     assert_eq!(elbow(p(0.0, 0.0), p(100.0, 0.0)), vec![pt(0.0, 0.0), pt(100.0, 0.0)]);
     // An automatic side faces the other end.
-    let straight =
-        route(doc, &figcraft_doc::Connector { from: side(a, Side::Auto), to: p(50.0, 500.0), routing: figcraft_doc::Routing::Straight, path: None });
-    assert_eq!(straight.unwrap(), vec![pt(50.0, 100.0), pt(50.0, 500.0)]);
+    let straight = route(
+        doc,
+        &figcraft_doc::Connector {
+            from: side(a, Side::Auto),
+            to: p(50.0, 500.0),
+            routing: figcraft_doc::Routing::Straight,
+            path: None,
+            branch: false,
+        },
+    );
+    assert_eq!(straight.unwrap(), vec![pt(50.0, 104.0), pt(50.0, 500.0)]);
     assert_eq!(Side::from_id("TOP"), Some(Side::Top));
     assert_eq!(Side::from_id("inside"), None);
     // The same place twice is refused, as are a side that doesn't exist and a point without numbers.
@@ -128,10 +137,10 @@ fn a_connector_follows_a_layer_whose_section_moves_and_ignores_unrelated_edits()
     let a = id(&s.execute("board.sticky", &json!({"x": 50, "y": 50, "parent": sec})).unwrap(), "id");
     let b = id(&s.execute("board.stamp", &json!({"x": 800, "y": 150})).unwrap(), "id");
     let c = id(&s.execute("board.connector", &json!({"from": a, "to": b, "style": "straight"})).unwrap(), "id");
-    assert!(near(drawn(&s, c)[0], Point::new(250.0, 150.0)));
+    assert!(near(drawn(&s, c)[0], Point::new(254.0, 150.0)));
     // Only the section is edited; the sticky inside it moves with it, and so does the connector.
     s.execute("transform.move", &json!({"ids": [sec], "dx": 0, "dy": 100})).unwrap();
-    assert!(near(drawn(&s, c)[0], Point::new(250.0, 250.0)), "{:?}", drawn(&s, c));
+    assert!(near(drawn(&s, c)[0], Point::new(254.0, 250.0)), "{:?}", drawn(&s, c));
     // An edit that touches neither end leaves the connector as it was.
     let before = s.doc().unwrap().node_arc(c).cloned().unwrap();
     s.execute("board.sticky", &json!({"x": 0, "y": 900})).unwrap();
@@ -157,9 +166,9 @@ fn styles_labels_and_their_refusals() {
     assert!(s.execute("board.label", &json!({"id": c, "text": ""})).unwrap()["label"].is_null());
     assert!(!s.doc().unwrap().contains(l));
     // What doesn't take a style or colour says so.
-    assert!(s.execute("board.setStyle", &json!({"ids": [a], "fontSize": 30})).is_err(), "stickies size their own text");
     assert!(s.execute("board.setStyle", &json!({"ids": [c], "fontSize": 0})).is_err());
     let st = id(&s.execute("board.stamp", &json!({"x": 0, "y": 0, "stamp": "check"})).unwrap(), "id");
+    assert!(s.execute("board.setStyle", &json!({"ids": [st], "fontSize": 30})).is_err(), "a stamp has no text to size");
     assert!(s.execute("board.setColor", &json!({"ids": [st], "color": "blue"})).is_err());
     assert!(s.execute("board.setColor", &json!({"ids": [a]})).is_err());
     assert!(s.execute("board.label", &json!({"id": a, "text": "x"})).is_err());
@@ -275,4 +284,82 @@ fn a_board_tool_left_on_presses_as_move_in_a_design_file() {
     s.pointer(&PointerEvent::at(PointerKind::Up, 50.0, 50.0, 1.0)).unwrap();
     assert_eq!(s.tool.tool, ToolId::Move);
     assert_eq!(s.selection(), vec![r], "the press selected as Move does");
+}
+
+/// #1916: a connector's start, END_GAP outside the layer it leaves, is a snap line for other layers
+/// but not for that layer, nor for a section holding it (both carry the connector along), and nor
+/// is the connector's label.
+#[test]
+fn a_connector_joined_to_a_moving_layer_or_its_section_is_no_snap_target() {
+    let mut s = board();
+    let sec = id(&s.execute("node.create", &json!({"type": "section", "x": 0, "y": 0, "width": 300, "height": 300})).unwrap(), "id");
+    let a = id(&s.execute("board.sticky", &json!({"x": 50, "y": 50, "parent": sec})).unwrap(), "id");
+    let b = id(&s.execute("board.stamp", &json!({"x": 800, "y": 150})).unwrap(), "id");
+    let c = id(&s.execute("board.connector", &json!({"from": a, "to": b, "style": "straight", "label": "to"})).unwrap(), "id");
+    // A layer the connector has nothing to do with.
+    let d = id(&s.execute("board.sticky", &json!({"x": 0, "y": 900})).unwrap(), "id");
+    let page = s.page().unwrap();
+    let start = drawn(&s, c)[0].x;
+    let label = crate::board::label_of(s.doc().unwrap(), c).unwrap();
+    let lx = s.doc().unwrap().world_bounds(label).unwrap().x0;
+    // A box whose left edge is 1 past a line snaps back by 1 when the line is a target.
+    let pull = |s: &Session, moving: &[NodeId], x: f64| {
+        let t = crate::snap::Targets::gather(s.doc().unwrap(), page, moving);
+        t.snap_rect(figcraft_geom::Rect::new(x + 1.0, 600.0, x + 9.0, 610.0), 4.0).0
+    };
+    assert_eq!((pull(&s, &[d], start), pull(&s, &[d], lx)), (-1.0, -1.0), "for an unrelated layer, the connector and its label snap");
+    assert_eq!(pull(&s, &[b], start), 0.0, "not for the layer it arrives at");
+    assert_eq!((pull(&s, &[sec], start), pull(&s, &[sec], lx)), (0.0, 0.0), "not for the section the connector leaves from");
+}
+
+/// The ink chosen for a drawing tool before drawing is the one its new strokes get, each tool
+/// keeping its own (#2395); `tool.ink` reads it back and refuses what no tool draws with.
+#[test]
+fn new_strokes_take_the_ink_chosen_before_drawing() {
+    use figcraft_color::Color;
+    use figcraft_doc::{Node, NodeKind};
+    // A stroke across at height `y` with `tool`; the newest vector afterwards.
+    let draw = |s: &mut Session, tool: &str, y: f64| -> Node {
+        s.execute("tool.set", &json!({"tool": tool})).unwrap();
+        for (k, x) in [(PointerKind::Down, 0.0), (PointerKind::Move, 50.0), (PointerKind::Move, 100.0), (PointerKind::Up, 150.0)] {
+            s.pointer(&PointerEvent::at(k, x, y, 1.0)).unwrap();
+        }
+        s.doc().unwrap().nodes().filter(|n| matches!(n.kind, NodeKind::Vector { .. })).max_by_key(|n| n.id).cloned().unwrap()
+    };
+    let color = |n: &Node| n.strokes.first().and_then(|p| p.solid_color());
+
+    // The Pencil, in a design file: chosen while it is the tool, so no `tool` is named.
+    let mut s = Session::new();
+    let plain = draw(&mut s, "pencil", 0.0);
+    let r = s.execute("tool.ink", &json!({"color": "blue", "weight": 6})).unwrap();
+    assert_eq!(r["tool"], "pencil");
+    let blue = draw(&mut s, "pencil", 100.0);
+    assert_ne!(color(&blue), color(&plain));
+    assert_eq!(color(&blue).map(|c| c.to_hex()), r["color"].as_str().map(|h| h.trim_start_matches('#').to_uppercase()));
+    assert!(blue.stroke.weight > plain.stroke.weight, "{} vs {}", blue.stroke.weight, plain.stroke.weight);
+    // A chosen colour holds on a dark page; auto goes back to white there.
+    s.execute("page.setBackground", &json!({"color": "#1E1E1E"})).unwrap();
+    assert_eq!(color(&draw(&mut s, "pencil", 200.0)), color(&blue));
+    s.execute("tool.ink", &json!({"tool": "pencil", "color": "auto"})).unwrap();
+    assert_eq!(color(&draw(&mut s, "pencil", 300.0)), Some(Color::WHITE));
+
+    // The Marker and Highlighter on a board, each with its own ink.
+    let mut s = board();
+    let marker = draw(&mut s, "marker", 0.0);
+    s.execute("tool.ink", &json!({"tool": "highlighter", "color": "#336699", "weight": 40})).unwrap();
+    let high = draw(&mut s, "highlighter", 100.0);
+    assert_eq!(color(&high).map(|c| c.to_hex()).as_deref(), Some("336699"));
+    assert!(high.stroke.weight > 20.0);
+    let marker2 = draw(&mut s, "marker", 200.0);
+    assert_eq!((color(&marker2), marker2.stroke.weight), (color(&marker), marker.stroke.weight), "the marker keeps its own ink");
+    assert_eq!(s.execute("tool.ink", &json!({"tool": "highlighter"})).unwrap()["weight"], 40.0, "read back");
+    // A stroke made headless takes the tool's ink too.
+    let r = s.execute("board.ink", &json!({"points": [[0, 400], [100, 400]], "highlighter": true})).unwrap();
+    assert_eq!(node(&s, id(&r, "id")).stroke.weight, 40.0);
+    // Refusals: a tool that draws no ink, a weight out of range, auto for a board tool.
+    for bad in [json!({"tool": "sticky", "color": "red"}), json!({"tool": "marker", "weight": 0}), json!({"tool": "marker", "color": "auto"})] {
+        assert!(s.execute("tool.ink", &bad).is_err(), "{bad}");
+    }
+    s.execute("tool.set", &json!({"tool": "move"})).unwrap();
+    assert!(s.execute("tool.ink", &json!({"color": "red"})).is_err(), "the Move tool draws no ink");
 }

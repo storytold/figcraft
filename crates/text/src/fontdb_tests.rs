@@ -139,7 +139,10 @@ fn macos_font_assets_are_found_in_the_asset_store() {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    let tmp = TempDir(std::env::temp_dir().join(format!("figcraft-font-assets-{}", std::process::id())));
+    // Created fresh: a directory or link already at this predictable name is refused, and not removed.
+    let root = std::env::temp_dir().join(format!("figcraft-font-assets-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tmp = TempDir(root);
     let store = tmp.0.join("AssetsV2");
     let fonts = store.join("com_apple_MobileAsset_Font7");
     let data = |kind: &std::path::Path| kind.join("0f1e2d.asset").join("AssetData");
@@ -264,32 +267,6 @@ fn every_platform_has_a_symbol_font_in_the_fallbacks() {
     assert!(at("Noto Sans") < at("Noto Sans Symbols") && at("DejaVu Sans") < at("Noto Sans Math"));
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
-#[test]
-fn user_font_dirs_follow_xdg_data_home() {
-    use std::ffi::OsString;
-    use std::path::PathBuf;
-    let dirs = |home: Option<&str>, data: Option<&str>| unix_user_font_dirs(home.map(OsString::from), data.map(OsString::from));
-    let paths = |items: &[&str]| items.iter().map(PathBuf::from).collect::<Vec<_>>();
-    assert_eq!(dirs(Some("/home/user"), Some("/custom user data")), paths(&["/home/user/.fonts", "/custom user data/fonts"]));
-    for data in [None, Some(""), Some("relative/data")] {
-        assert_eq!(dirs(Some("/home/user"), data), paths(&["/home/user/.fonts", "/home/user/.local/share/fonts"]));
-    }
-    assert_eq!(dirs(None, Some("/custom-data")), paths(&["/custom-data/fonts"]));
-    assert_eq!(dirs(None, None), paths(&[]));
-    assert_eq!(dirs(None, Some("relative")), paths(&[]));
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-#[test]
-fn user_font_dirs_preserve_non_utf8_paths() {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    let dirs = unix_user_font_dirs(Some(OsString::from_vec(b"/home/\xff".to_vec())), Some(OsString::from_vec(b"/data/\xfe".to_vec())));
-    assert_eq!(dirs[0].as_os_str().as_bytes(), b"/home/\xff/.fonts");
-    assert_eq!(dirs[1].as_os_str().as_bytes(), b"/data/\xfe/fonts");
-}
-
 #[test]
 fn the_scan_reads_font_files_without_an_extension() {
     // #298: Adobe Fonts keeps the fonts it activates in hidden files named by number. Any installed
@@ -399,10 +376,59 @@ fn font_bytes_load_into_the_db() {
         let families = load_font_bytes(f.bytes.to_vec());
         assert_eq!(families.len(), 1);
         assert!(families.iter().all(|f| has_family(f)));
-        let faces = db().read().unwrap().face_count();
+        // The global face count can grow here when another test finishes the concurrent system
+        // font scan. Count explicitly loaded faces from this family so the idempotency assertion
+        // stays isolated from unrelated installed fonts.
+        let loaded_faces = || {
+            let db = db().read().unwrap();
+            families
+                .iter()
+                .map(|family| db.faces.iter().filter(|face| face.loaded > 0 && face.family.eq_ignore_ascii_case(family)).count())
+                .collect::<Vec<_>>()
+        };
+        let faces = loaded_faces();
         assert_eq!(load_font_bytes(f.bytes.to_vec()), families);
-        assert_eq!(db().read().unwrap().face_count(), faces);
+        assert_eq!(loaded_faces(), faces);
     }
+}
+
+/// #2092: a font loaded with `text.loadFont` wins over the built-in and installed faces of its family
+/// and style, the latest load over earlier ones; other styles resolve as before.
+#[test]
+fn a_loaded_face_wins_over_the_built_in_one_of_its_family_and_style() {
+    // Any embedded or installed font stands in for the faces (none without craft-fonts on CI).
+    let stand_in = CRAFT_FONTS.first().map(|f| f.bytes.to_vec()).or_else(|| {
+        let mut installed = BTreeMap::new();
+        for dir in system_font_dirs() {
+            scan_dir(&dir, 0, &mut installed);
+        }
+        installed.values().flat_map(|(_, v)| v).find_map(|p| std::fs::read(&p.path).ok())
+    });
+    let Some(bytes) = stand_in.map(Arc::new) else {
+        eprintln!("skipping: no font to stand in");
+        return;
+    };
+    let face = |style: &str, name: &str| {
+        let mut f = Face::from_bytes(FontBytes::Shared(bytes.clone()), 0, Some("Brand Sans"), Some(style)).unwrap();
+        f.instances.clear();
+        f.postscript = Some(name.into());
+        f
+    };
+    let name = |db: &FontDb, style: &str| db.best("Brand Sans", style).and_then(|f| f.postscript.clone());
+    let mut db = FontDb::default();
+    db.add(face("Regular", "Built-in-Regular"));
+    db.add(face("Bold", "Built-in-Bold"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Built-in-Regular"));
+    db.add_loaded(face("Regular", "Loaded-Regular"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Loaded-Regular"));
+    // Bold wasn't loaded: the built-in one stays. Nor does the loaded Regular stand in for it.
+    assert_eq!(name(&db, "Bold").as_deref(), Some("Built-in-Bold"));
+    // The latest load wins.
+    db.add_loaded(face("Regular", "Loaded-Regular-2"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Loaded-Regular-2"));
+    // A face added after a load, not loaded, doesn't displace it.
+    db.add(face("Regular", "Installed-Regular"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Loaded-Regular-2"));
 }
 
 /// Apple's system font answers to the names designs and CSS use for it (SF Pro, SF UI Text,
@@ -435,8 +461,29 @@ fn hidden_apple_families_take_public_names() {
     assert_eq!(public_family(".SF Compact").as_deref(), Some("SF Compact"));
     assert_eq!(public_family(".SF Compact Rounded").as_deref(), Some("SF Compact Rounded"));
     assert_eq!(public_family(".SF NS Rounded").as_deref(), Some("SF Pro Rounded"));
+    assert_eq!(public_family(".New York").as_deref(), Some("New York"));
     assert_eq!(public_family(".Keyboard"), None);
     assert_eq!(public_family("Inter").as_deref(), Some("Inter"));
+}
+
+#[test]
+fn new_york_is_found_under_its_public_name() {
+    // macOS installs New York as `.New York` (a dot keeps it out of font menus): it used to be
+    // skipped, so "New York" was a missing font. Only on a Mac that has the files.
+    let dir = std::path::Path::new("/System/Library/Fonts");
+    if !dir.join("NewYork.ttf").is_file() || !dir.join("NewYorkItalic.ttf").is_file() {
+        return;
+    }
+    let mut pending = BTreeMap::new();
+    scan_dir(dir, 0, &mut pending);
+    let mut db = FontDb { pending, ..FontDb::default() };
+    let families = db.families();
+    assert!(families.iter().any(|f| f == "New York"), "{families:?}");
+    assert!(families.iter().all(|f| !f.starts_with('.')), "dot names stay out of the list: {families:?}");
+    for (style, italic) in [("Regular", false), ("Italic", true)] {
+        let face = db.find("New York", style).expect("New York loads");
+        assert_eq!((face.family.as_str(), face.italic), ("New York", italic), "{style}");
+    }
 }
 
 /// A named style keeps its own optical size whatever the text size (existing documents render as
@@ -564,6 +611,32 @@ fn every_platform_has_a_thai_font_in_the_fallbacks() {
     }
 }
 
+/// #1902: a web build has no system fonts, so a document's missing characters can only come from
+/// the embedded faces. Every script face craft-fonts can embed (`FIGCRAFT_EMBED_SCRIPTS`) is a
+/// document fallback after the Latin faces; else Hebrew or Devanagari typed into an Inter layer
+/// would stay missing glyphs with its face embedded.
+#[test]
+fn every_embeddable_script_face_is_a_document_fallback() {
+    let at = |family: &str| FALLBACK_FAMILIES.iter().position(|f| *f == family);
+    let latin = at("Segoe UI").unwrap();
+    for face in [
+        "Noto Sans Arabic",
+        "Noto Sans Thai",
+        "Noto Sans Hebrew",
+        "Noto Sans Devanagari",
+        "Noto Sans Georgian",
+        "Noto Sans JP",
+        "Noto Sans Symbols",
+        "Noto Sans Symbols 2",
+    ] {
+        assert!(at(face).is_some_and(|i| i > latin), "{face} is a fallback after the Latin faces");
+    }
+    // And whatever script face this build embeds (CI builds have craft-fonts; CJK by request).
+    for f in CRAFT_FONTS.iter().filter(|f| f.family.starts_with("Noto Sans") && !f.family.contains("CJK")) {
+        assert!(FALLBACK_FAMILIES.contains(&f.family), "embedded {} is a document fallback", f.family);
+    }
+}
+
 // The paths are Unix absolute paths (font managers are a macOS thing): on Windows they aren't absolute.
 #[cfg(unix)]
 #[test]
@@ -613,4 +686,23 @@ fn core_text_lists_the_installed_font_files() {
     let files = font_manager_files();
     assert!(files.iter().any(|f| f.starts_with("/System/Library/Fonts")), "{} files", files.len());
     assert!(files.iter().all(|f| f.is_absolute()));
+}
+
+#[test]
+fn system_font_dirs_are_walked_once_each() {
+    let dirs = super::system_font_dirs();
+    let unique: std::collections::HashSet<_> = dirs.iter().collect();
+    assert_eq!(unique.len(), dirs.len(), "{dirs:?}");
+}
+
+#[test]
+fn a_collection_header_naming_billions_of_faces_loads_a_bounded_few() {
+    // Four bytes per face offset: a header can name far more faces than the data holds, and each
+    // one would be parsed (and keep a character map) in turn.
+    let mut bytes = synthetic_font_collection(32);
+    bytes[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
+    let start = std::time::Instant::now();
+    let faces = FontDb::default().add_bytes(bytes);
+    assert!(faces.len() <= 64, "{}", faces.len());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
 }

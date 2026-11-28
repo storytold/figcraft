@@ -1,8 +1,8 @@
 use super::host::hosting_json;
 use super::types::{NO_SESSION, SessionId, Share, SharedLink, Status};
 use super::{
-    Access, Arc, Client, EditingText, EngineError, EngineRecompute, FollowedView, Live, Result, Session, Value, ViewState, bad, busy, close, code,
-    editing_of, json,
+    Access, Arc, Client, EditingText, EngineError, EngineRecompute, FollowedView, Live, Result, ServerMsg, Session, Value, ViewState, bad, busy,
+    close, code, editing_of, json,
 };
 
 impl Session {
@@ -39,10 +39,16 @@ impl Session {
     /// called `label`, or not undoable (`None`: also what changed it outside a command). Nothing
     /// while a gesture or preview shows, or inside a group (it syncs when the group ends).
     pub(crate) fn live_edit(&mut self, uid: u64, label: Option<&str>) {
-        let Some(ds) = self.docs.iter().find(|d| d.uid == uid) else { return };
-        let Some(live) = self.live.doc(uid) else { return };
+        let _ = self.live_edit_batch(uid, label);
+    }
+
+    /// Like [`live_edit`](Self::live_edit), returning the sent `ClientMsg::Changes` batch id when
+    /// one was produced.
+    pub(crate) fn live_edit_batch(&mut self, uid: u64, label: Option<&str>) -> Option<u64> {
+        let ds = self.docs.iter().find(|d| d.uid == uid)?;
+        let live = self.live.doc(uid)?;
         if live.hold > 0 || busy(ds) || live.synced.as_ref().is_some_and(|s| Arc::ptr_eq(s, &ds.doc)) {
-            return;
+            return None;
         }
         let (id, doc, synced) = (live.id, ds.doc.clone(), live.synced.clone());
         if self.live_read_only(uid).is_some() && !self.live_comment_edit(uid, &doc) {
@@ -50,16 +56,27 @@ impl Session {
             if let Some(s) = synced {
                 self.apply_remote(uid, s);
             }
-            return;
+            return None;
         }
-        let Some(live) = self.live.sessions.get_mut(&id) else { return };
-        let Some(client) = live.client.as_mut() else { return };
+        let live = self.live.sessions.get_mut(&id)?;
+        let client = live.client.as_mut()?;
         match client.edit_with(&doc, label) {
             Ok(msg) => {
+                let batch_id = match &msg {
+                    Some(figcraft_collab::ClientMsg::Changes { batch_id, .. }) => {
+                        live.last_batch = Some(*batch_id);
+                        Some(*batch_id)
+                    }
+                    _ => None,
+                };
                 live.synced = Some(doc);
                 self.live.send(id, msg);
+                batch_id
             }
-            Err(e) => self.live_fail(id, format!("Couldn't sync an edit: {e}")),
+            Err(e) => {
+                self.live_fail(id, format!("Couldn't sync an edit: {e}"));
+                None
+            }
         }
     }
 
@@ -112,24 +129,97 @@ impl Session {
         }
         // Your own edits first: the client replays them over what others did.
         self.live_edit(uid, None);
-        let Some(live) = self.live.sessions.get_mut(&id) else { return };
-        let Some(client) = live.client.as_mut() else { return };
+        self.live_branches_sync(uid);
+        let waiting = {
+            let Some(live) = self.live.sessions.get_mut(&id) else { return };
+            std::mem::take(&mut live.deferred)
+        };
+        let mut waiting = waiting.into_iter();
+        let mut still_waiting = Vec::new();
         let mut out = Vec::new();
-        for m in std::mem::take(&mut live.deferred) {
+        let mut changed_main = false;
+        while let Some(m) = waiting.next() {
+            match m {
+                ServerMsg::Branches(list) => {
+                    self.live_branches_welcome(id, list);
+                    continue;
+                }
+                ServerMsg::Branch(ev) => {
+                    let tab_busy = crate::branches::tab_of(self, uid, ev.id()).and_then(|ti| self.docs.get(ti)).is_some_and(busy);
+                    if tab_busy {
+                        still_waiting.push(ServerMsg::Branch(ev));
+                    } else {
+                        self.live_branch_event(id, *ev);
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            let merge_outcome = match &m {
+                ServerMsg::Changes(acc) => self.live.sessions.get_mut(&id).and_then(|live| {
+                    let me = live.client.as_ref()?.id();
+                    (acc.author == me).then(|| live.pending_merges.remove(&acc.batch_id)).flatten().map(|bid| (bid, true))
+                }),
+                ServerMsg::Reject { batch_id, .. } => {
+                    self.live.sessions.get_mut(&id).and_then(|live| live.pending_merges.remove(batch_id)).map(|bid| (bid, false))
+                }
+                _ => None,
+            };
+            let Some(live) = self.live.sessions.get_mut(&id) else { return };
+            let Some(client) = live.client.as_mut() else { return };
+            // The server no longer knows this client (it restarted without its saved state, say):
+            // it welcomed you as someone new. What you did goes on top like after any rejoin.
+            if let ServerMsg::Welcome { session, client_id, .. } = &m {
+                let me = client.resume();
+                if (*session, *client_id) != (me.session, me.client_id) {
+                    live.hold();
+                    live.client = None;
+                    let mut rest: Vec<_> = still_waiting;
+                    rest.extend(waiting);
+                    self.live_welcome(id, m);
+                    if let Some(live) = self.live.sessions.get_mut(&id) {
+                        live.deferred = rest;
+                    }
+                    return;
+                }
+            }
             match client.receive(m, &EngineRecompute) {
-                Ok(more) => out.extend(more),
-                Err(e) => return self.live_fail(id, format!("The live session got out of step ({e}); join again")),
+                Ok(more) => {
+                    out.extend(more);
+                    changed_main = true;
+                }
+                Err(e) => {
+                    self.live_fail(id, format!("The live session got out of step ({e})"));
+                    // A fresh join has nothing to get out of step with.
+                    if let Err(e) = self.live_rejoin("collab.reconnect", id) {
+                        log::warn!("live session: couldn't join again: {e}");
+                    }
+                    return;
+                }
+            }
+            if let Some((branch_id, accepted)) = merge_outcome {
+                self.live_branch_merge_finished(uid, &branch_id, accepted);
             }
         }
-        let doc = Arc::new(client.document().clone());
-        // Edits the server refused were rolled back: say why (the UI's toast).
-        let notices: Vec<String> = client.take_notices().iter().map(figcraft_collab::Notice::message).collect();
-        live.synced = Some(doc.clone());
-        if !notices.is_empty() {
-            self.message = Some(notices.join("; "));
+        if !still_waiting.is_empty()
+            && let Some(live) = self.live.sessions.get_mut(&id)
+        {
+            still_waiting.extend(std::mem::take(&mut live.deferred));
+            live.deferred = still_waiting;
         }
-        self.live.send(id, out);
-        self.apply_remote(uid, doc);
+        if changed_main {
+            let Some(live) = self.live.sessions.get_mut(&id) else { return };
+            let Some(client) = live.client.as_mut() else { return };
+            let doc = Arc::new(client.document().clone());
+            // Edits the server refused were rolled back: say why (the UI's toast).
+            let notices: Vec<String> = client.take_notices().iter().map(figcraft_collab::Notice::message).collect();
+            live.synced = Some(doc.clone());
+            if !notices.is_empty() {
+                self.message = Some(notices.join("; "));
+            }
+            self.live.send(id, out);
+            self.apply_remote(uid, doc);
+        }
     }
 
     /// Show the peer followed in session `id`: their viewport (and their page, in the session's
@@ -204,6 +294,7 @@ impl Session {
             self.live_deferred(id);
             if let Some(uid) = self.live.get(id).and_then(|l| l.doc_uid) {
                 self.live_edit(uid, None);
+                self.live_branches_sync(uid);
             }
             self.live_present(id);
         }
@@ -283,6 +374,7 @@ impl Session {
             })
             .collect();
         let mine = synced.and_then(|d| d.text_edit.as_ref()).map(|t| editing(&editing_of(t)));
+        let (link, url) = l.invite();
         let sessions: Vec<Value> = self
             .live
             .iter()
@@ -295,7 +387,7 @@ impl Session {
                     "reason": reason(o),
                     "role": o.role(),
                     "fileName": info.map(|i| i.file_name.as_str()),
-                    "link": info.map(|i| i.link.as_str()),
+                    "link": o.invite().0,
                     "peers": o.peers.len(),
                 })
             })
@@ -313,8 +405,8 @@ impl Session {
             "color": info.map(|i| i.color.as_str()),
             "fileName": info.map(|i| i.file_name.as_str()),
             "pages": info.map(|i| &i.pages),
-            "link": info.map(|i| i.link.as_str()),
-            "url": info.map(|i| i.url.as_str()),
+            "link": link,
+            "url": url,
             "address": info.map(|i| i.address.as_str()),
             "network": info.map(|i| i.network),
             "access": l.client.as_ref().map(Client::access).or(info.map(|i| i.access)),

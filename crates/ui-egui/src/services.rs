@@ -24,6 +24,11 @@ pub trait Services {
     fn download(&mut self, _name: &str, _bytes: &[u8]) -> bool {
         false
     }
+    /// The document file a host page opened, where the app runs inside one (the browser's host
+    /// mode): a Save of that document keeps this name instead of the document's own.
+    fn host_file(&self) -> Option<String> {
+        None
+    }
     /// A folder to write several files into.
     fn pick_folder(&mut self, _title: &str) -> DialogFuture {
         Box::pin(std::future::ready(None))
@@ -40,6 +45,10 @@ pub trait Services {
     fn clipboard_set_png(&mut self, _w: u32, _h: u32, _rgba: &[u8]) {}
     /// An image on the system clipboard as (width, height, straight RGBA).
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
+        None
+    }
+    /// One supported raster image copied as a file, separate from its clipboard icon or filename.
+    fn clipboard_image_file(&mut self) -> Option<PathBuf> {
         None
     }
     fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {

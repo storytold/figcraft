@@ -30,43 +30,111 @@ pub fn paint_name(painter: &Painter, left_center: Pos2, name: &str, font: FontId
     rect
 }
 
+/// [`paint_name`] with its start at `start`'s x: its left end, or its right end in a mirrored
+/// (right-to-left) panel.
+pub fn paint_name_from(painter: &Painter, start: Pos2, rtl: bool, name: &str, font: FontId, color: Color32, max_w: f32) -> Rect {
+    if !rtl {
+        return paint_name(painter, start, name, font, color, max_w);
+    }
+    let galley = name_galley(painter, name, font, color, max_w);
+    let rect = Rect::from_min_size(pos2(start.x - galley.size().x, start.y - galley.size().y / 2.0), galley.size());
+    painter.galley(rect.min, galley, color);
+    rect
+}
+
 /// A frameless one-line text editor for a name (a [`egui::TextEdit`] with id `id`). The editor's
 /// text is logical; egui's galley paints it in visual order, and its caret, selection, clicks,
 /// drags and left and right arrows follow what is on screen while reporting logical char offsets.
 pub fn single_line(ui: &mut Ui, id: Id, text: &mut String, font: FontId, width: f32) -> Response {
     // Centred in the height it's given (a rename row), like the name it replaces.
     let height = ui.available_height().max(0.0);
+    // At the start of its row: the right end in a mirrored (right-to-left) panel.
+    let align = if ui.style().right_to_left { egui::Align2::RIGHT_CENTER } else { egui::Align2::LEFT_CENTER };
     egui::TextEdit::singleline(text)
         .id(id)
         .frame(egui::Frame::NONE)
         .font(font)
         .desired_width(width)
-        .align(egui::Align2::LEFT_CENTER)
+        .align(align)
         .min_size(vec2(0.0, height))
         .show(ui)
         .response
         .response
 }
 
+/// One letter per script the UI's own fonts may lack: Hebrew, Arabic, Ethiopic, Devanagari,
+/// Gurmukhi, Gujarati, Tamil, Telugu, Kannada, Malayalam, Sinhala, Lao, Myanmar, Khmer, Armenian
+/// and Georgian. egui's shaper selects the joined contextual forms itself. Bengali and Thai are
+/// not here: [`crate::cjk`] picks their faces, in its own order of preference, after this list.
+pub(crate) const SCRIPT_SAMPLES: [char; 16] = [
+    '\u{05D0}', '\u{0628}', '\u{1200}', '\u{0915}', '\u{0A15}', '\u{0A95}', '\u{0B95}', '\u{0C15}', '\u{0C95}', '\u{0D15}', '\u{0D9A}', '\u{0E81}',
+    '\u{1000}', '\u{1780}', '\u{0531}', '\u{10D0}',
+];
+
+/// System families that draw those scripts, in order of preference: the first installed one that
+/// has a script's letter is taken, so a family covering several scripts (Segoe UI, Nirmala UI,
+/// Kohinoor, Noto Sans) joins once. Windows, macOS and the common Linux fonts for each script.
+pub(crate) const SCRIPT_FAMILIES: [&str; 46] = [
+    // Hebrew and Arabic.
+    "Segoe UI",
+    "Arial",
+    "Tahoma",
+    "Noto Sans Hebrew",
+    "Noto Sans Arabic",
+    "Arial Hebrew",
+    "Geeza Pro",
+    "Lucida Grande",
+    "DejaVu Sans",
+    "FreeSans",
+    "Noto Sans",
+    // Ethiopic (#2014).
+    "Ebrima",
+    "Nyala",
+    "Kefa",
+    "Noto Sans Ethiopic",
+    "Abyssinica SIL",
+    // Devanagari, Gurmukhi, Gujarati, Tamil, Telugu, Kannada, Malayalam and Sinhala.
+    "Nirmala UI",
+    "Kohinoor Devanagari",
+    "Kohinoor Gujarati",
+    "Kohinoor Telugu",
+    "Gurmukhi MN",
+    "Tamil Sangam MN",
+    "Kannada Sangam MN",
+    "Malayalam Sangam MN",
+    "Sinhala Sangam MN",
+    "Noto Sans Devanagari",
+    "Noto Sans Gurmukhi",
+    "Noto Sans Gujarati",
+    "Noto Sans Tamil",
+    "Noto Sans Telugu",
+    "Noto Sans Kannada",
+    "Noto Sans Malayalam",
+    "Noto Sans Sinhala",
+    "Lohit Devanagari",
+    // Lao, Myanmar and Khmer.
+    "Leelawadee UI",
+    "Lao Sangam MN",
+    "Myanmar Text",
+    "Myanmar Sangam MN",
+    "Khmer Sangam MN",
+    "Noto Sans Lao",
+    "Noto Sans Myanmar",
+    "Noto Sans Khmer",
+    // Armenian and Georgian.
+    "Sylfaen",
+    "Mshtakan",
+    "Noto Sans Armenian",
+    "Noto Sans Georgian",
+];
+
 /// Faces the UI adds for scripts its own fonts lack (desktop: from the system), as egui font data;
-/// `taken` as for [`crate::theme::system_fallbacks`].
+/// `taken` as for [`crate::theme::system_fallbacks`]. Hebrew and Arabic names were covered first;
+/// Ethiopic and the other scripts in [`SCRIPT_SAMPLES`] drew as boxes in the panels (a String
+/// variable's Amharic value, #2014) until the system face for each was taken too. Bengali and
+/// Thai keep [`crate::cjk`]'s choice, made after this list.
 pub fn script_fallbacks(have: &dyn Fn(char) -> bool, taken: &mut Vec<Arc<figcraft_text::Face>>) -> Vec<(String, egui::FontData)> {
-    // Hebrew and Arabic letters; egui's shaper selects the joined contextual forms itself.
-    const SAMPLES: [char; 2] = ['\u{05D0}', '\u{0628}'];
-    const FAMILIES: [&str; 11] = [
-        "Segoe UI",
-        "Arial",
-        "Tahoma",
-        "Noto Sans Hebrew",
-        "Noto Sans Arabic",
-        "Arial Hebrew",
-        "Geeza Pro",
-        "Lucida Grande",
-        "DejaVu Sans",
-        "FreeSans",
-        "Noto Sans",
-    ];
-    crate::theme::system_fallbacks(SAMPLES, &FAMILIES, have, taken)
+    crate::theme::system_fallbacks(SCRIPT_SAMPLES, &SCRIPT_FAMILIES, have, taken)
 }
 
 #[cfg(test)]

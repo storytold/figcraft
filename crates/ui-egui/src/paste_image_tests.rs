@@ -28,6 +28,7 @@ const HELD: [Held; 3] = [Held::Ours, Held::Text, Held::Image];
 
 #[derive(Default)]
 struct Clip {
+    file: Option<std::path::PathBuf>,
     text: Option<String>,
     image: Option<(u32, u32, Vec<u8>)>,
     png: Option<Vec<u8>>,
@@ -45,6 +46,9 @@ impl Services for Desktop {
     }
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
         self.0.borrow().image.clone()
+    }
+    fn clipboard_image_file(&mut self) -> Option<std::path::PathBuf> {
+        self.0.borrow().file.clone()
     }
     fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
         self.0.borrow().png.clone()
@@ -64,7 +68,7 @@ impl Win {
         let mut s = Session::new();
         s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
         s.execute("select.none", &json!({})).unwrap();
-        let ctx = egui::Context::default();
+        let ctx = crate::framework::headless_context();
         let clip = Rc::new(RefCell::new(Clip::default()));
         let app = FigApp::new(s, Box::new(Desktop(clip.clone())));
         let mut w = Self { ctx, app, time: 0.0, clip, shapes: Vec::new() };
@@ -84,6 +88,7 @@ impl Win {
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| {
             if take_v {
                 ui.ctx().input_mut(|i| i.consume_key(Modifiers::NONE, Key::V));
@@ -190,6 +195,18 @@ fn cmd_v_pastes_an_image_copied_elsewhere() {
     w.app.session.execute("select.none", &json!({})).unwrap();
     w.cmd_v();
     assert_eq!(w.named("Pasted image"), 2, "and again");
+}
+
+#[test]
+fn a_copied_image_file_pastes_its_contents_even_when_the_clipboard_offers_a_filename_and_icon() {
+    let mut w = Win::new();
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/app-icon/figcraft-48.png");
+    *w.clip.borrow_mut() = Clip { file: Some(file.clone()), text: Some("figcraft-48.png".into()), image: Some((2, 2, vec![255; 16])), png: None };
+    w.cmd_v();
+    let doc = w.app.session.doc().unwrap();
+    assert_eq!(w.named("Pasted image"), 1);
+    let stored = doc.images.values().next().expect("an image on the canvas");
+    assert_eq!(stored.bytes.as_slice(), std::fs::read(file).unwrap());
 }
 
 #[test]
@@ -544,6 +561,21 @@ fn a_clipboard_png_past_the_byte_limit_falls_back_to_the_decoded_image() {
     let mut png = png.into_inner();
     png.resize(crate::MAX_CLIPBOARD_PNG_BYTES + 1, 0);
     *w.clip.borrow_mut() = Clip { png: Some(png), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    let doc = w.app.session.doc().unwrap();
+    let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted from the decoded image");
+    assert_eq!((pasted.width, pasted.height), (2.0, 2.0));
+}
+
+#[test]
+fn a_clipboard_png_with_a_cut_off_body_falls_back_to_the_decoded_image() {
+    let mut w = Win::new();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::new(4, 4).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let png = png.into_inner();
+    let cut_off = png[..png.len() - 20].to_vec();
+    assert_eq!(image::ImageReader::new(std::io::Cursor::new(&cut_off)).with_guessed_format().unwrap().into_dimensions().unwrap(), (4, 4));
+    *w.clip.borrow_mut() = Clip { png: Some(cut_off), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
     w.cmd_v();
     let doc = w.app.session.doc().unwrap();
     let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted from the decoded image");

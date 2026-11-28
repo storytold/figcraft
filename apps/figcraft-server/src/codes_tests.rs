@@ -118,7 +118,7 @@ fn a_file_shared_online_is_joined_by_its_codes() {
     });
     for guest in [&b, &c] {
         assert!(guest.message.as_deref().unwrap_or_default().contains("Sharing was stopped"), "{:?}", guest.message);
-        assert_eq!(guest.live().status, Status::Off, "over, not failed: nothing retries");
+        assert!(guest.live().rejoinable() && !guest.live().status.active(), "over: nothing retries, and the tab says so");
     }
     assert_eq!(layers(&b), before + 2, "Bo keeps the copy");
     let folder = dir.path().join("files").join(&p.file);

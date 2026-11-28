@@ -181,3 +181,35 @@ fn advanced_options_offer_the_bounding_box_for_text_layers() {
     assert!(shown.iter().any(|s| s == "Include bounding box"), "a rectangle that has it on shows it: {shown:?}");
     assert!(u.app.session.doc().unwrap().node(r).unwrap().exports[0].include_bounding_box, "the setting is kept");
 }
+
+/// The advanced options of a PNG, JPG or WebP setting list its color profile: same as the file
+/// (naming the document's profile), sRGB or Display P3. SVG, PDF and XML settings list none.
+#[test]
+fn advanced_options_offer_a_color_profile_for_images() {
+    let mut s = Session::new();
+    let r = crate::present_tests::id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 80})).unwrap());
+    s.execute("export.add", &json!({"ids": [r]})).unwrap();
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    let options = |u: &mut crate::layers_drag_tests::Ui| {
+        u.frame(vec![]);
+        egui::Popup::open_id(&u.ctx, egui::Id::unique(("export_more", 0)));
+        u.frame(vec![]);
+        crate::import_report_tests::shown_texts(u.frame_output(vec![]).shapes)
+    };
+    for f in ["png", "jpg", "webp"] {
+        u.app.run("export.update", json!({"ids": [r], "index": 0, "format": f}));
+        let shown = options(&mut u);
+        for label in ["Color profile", "Same as file (sRGB)", "sRGB", "Display P3"] {
+            assert!(shown.iter().any(|s| s == label), "{f}: no {label:?} in {shown:?}");
+        }
+    }
+    u.app.run("file.colorProfile", json!({"profile": "displayP3"}));
+    let shown = options(&mut u);
+    assert!(shown.iter().any(|s| s == "Same as file (Display P3)"), "{shown:?}");
+    for f in ["svg", "pdf", "xml"] {
+        u.app.run("export.update", json!({"ids": [r], "index": 0, "format": f}));
+        let shown = options(&mut u);
+        assert!(!shown.iter().any(|s| s == "Color profile" || s.starts_with("Same as file")), "{f}: {shown:?}");
+    }
+}

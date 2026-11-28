@@ -1,7 +1,7 @@
 //! Shared styles and variables.
 
 use crate::props::{Effect, LayoutGrid};
-use crate::text::TextStyle;
+use crate::text::{ParagraphStyle, TextStyle};
 use figcraft_color::{Color, Paint};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,10 +14,22 @@ pub type ModeId = String;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StyleKind {
-    Paint { paints: Vec<Paint> },
-    Text { style: TextStyle },
-    Effect { effects: Vec<Effect> },
-    Grid { grids: Vec<LayoutGrid> },
+    Paint {
+        paints: Vec<Paint>,
+    },
+    Text {
+        style: TextStyle,
+        /// What the style sets at the paragraph and layer level (#1829); boxed to keep the enum
+        /// small.
+        #[serde(default, skip_serializing_if = "crate::node::is_default")]
+        paragraph: Box<ParagraphStyle>,
+    },
+    Effect {
+        effects: Vec<Effect>,
+    },
+    Grid {
+        grids: Vec<LayoutGrid>,
+    },
 }
 
 impl StyleKind {

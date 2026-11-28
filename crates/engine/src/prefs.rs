@@ -7,6 +7,10 @@ pub const UI_SCALE_MIN: f64 = 0.75;
 pub const UI_SCALE_MAX: f64 = 3.0;
 
 /// `scale` kept between [`UI_SCALE_MIN`] and [`UI_SCALE_MAX`]; not a finite number: `None`.
+/// The interface sizes Preferences offers, relative to the system's scale (the keys step through
+/// them; `pref.uiScale` takes any size up to [`UI_SCALE_MAX`]).
+pub const UI_SCALE_SIZES: [f64; 8] = [0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+
 pub fn clamp_ui_scale(scale: f64) -> Option<f64> {
     scale.is_finite().then(|| scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX))
 }
@@ -32,6 +36,9 @@ pub struct Prefs {
     /// A mouse wheel zooms the canvas about the pointer, and Cmd/Ctrl+wheel scrolls it (off: the
     /// other way round). Trackpads are unchanged.
     pub scroll_wheel_zoom: bool,
+    /// Wheel zoom goes the other way: Cmd/Ctrl+wheel (and a plain mouse wheel with Scroll wheel
+    /// zoom on) zooms out where it would zoom in. A trackpad pinch is unchanged.
+    pub invert_zoom: bool,
     /// "system" by default; an explicit "light" or "dark" choice stays saved.
     pub theme: String,
     /// The widths of the main window's left and right panels (the interface keeps them within its
@@ -56,7 +63,8 @@ pub struct Prefs {
     /// Files that have a path are saved by themselves a few seconds after they change (the app's
     /// timer; off: only File ▸ Save writes them).
     pub auto_save: bool,
-    /// The desktop app starts on the Home screen instead of in a new file.
+    /// The desktop app starts on the Home screen instead of reopening the files open when it last
+    /// quit.
     pub start_on_home: bool,
     /// `figcraft://` invite links open this app (`collab.registerLinks`); `None`: on for installed
     /// builds, off for development builds.
@@ -78,6 +86,18 @@ pub struct Prefs {
     /// Recently opened or saved files, newest first (File ▸ Open recent; at most
     /// [`cmd::file::MAX_RECENT`]).
     pub recent_files: Vec<String>,
+    /// The files open when the desktop app last quit, in tab order: the next start opens them again
+    /// ([`Session::reopen_files`](crate::Session::reopen_files)).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub open_files: Vec<String>,
+    /// Which of [`open_files`](Self::open_files) was in front.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub front_file: Option<String>,
+    /// Where each file was left when its tab closed or the app quit, the most recently left first,
+    /// at most [`MAX_FILE_VIEWS`](crate::MAX_FILE_VIEWS): opening it again shows that page at that
+    /// view ([`Session::remember_views`](crate::Session::remember_views)).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub file_views: Vec<crate::FileView>,
     /// The files you put on a server without its key, with their owner tokens (passwords: see
     /// [`online`]), most recently opened first, at most [`online::MAX_ONLINE_FILES`].
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "online::read")]
@@ -102,6 +122,9 @@ pub struct Prefs {
     /// files opened or made later start with them. Missing: the toggle's default.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub view: BTreeMap<String, bool>,
+    /// Design review ignores, by document path: whole rule ids and `rule@layer` entries.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub design_review_ignored: BTreeMap<String, Vec<String>>,
     /// The board canvas's background grid (`board.grid`).
     #[serde(deserialize_with = "crate::board_grid::read")]
     pub board_grid: crate::board_grid::BoardGrid,
@@ -132,6 +155,7 @@ impl Default for Prefs {
             number_keys_opacity: true,
             show_dimensions: true,
             scroll_wheel_zoom: false,
+            invert_zoom: false,
             theme: "system".into(),
             panel_widths: (240.0, 240.0),
             pages_height: None,
@@ -147,6 +171,9 @@ impl Default for Prefs {
             plugin_directory: None,
             publish_server: live::DEFAULT_SERVER.into(),
             recent_files: Vec::new(),
+            open_files: Vec::new(),
+            front_file: None,
+            file_views: Vec::new(),
             online_files: Vec::new(),
             getting_started_dismissed: false,
             link_notice_skipped: false,
@@ -154,6 +181,7 @@ impl Default for Prefs {
             home_sort: "modified".into(),
             home_order: "desc".into(),
             view: BTreeMap::new(),
+            design_review_ignored: BTreeMap::new(),
             board_grid: Default::default(),
             recent_actions: Vec::new(),
             team_libraries: Vec::new(),
@@ -169,6 +197,18 @@ pub struct UiRequest {
     pub data: Value,
 }
 
+/// What Edit ▸ Set default properties keeps: the properties new layers drawn with the tools take,
+/// as Copy properties copies them (fills, strokes and their settings, effects, opacity, blend,
+/// corners; for text also the font, size, line height and letter spacing). One set for shapes
+/// (rectangles, ellipses, polygons and stars), set from any layer but text, and one for text.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DefaultProps {
+    /// For new rectangles, ellipses, polygons and stars.
+    pub shape: Option<Value>,
+    /// For new text.
+    pub text: Option<Value>,
+}
+
 /// Clipboard contents (internal; the UI mirrors to the system clipboard).
 #[derive(Clone, Debug, Default)]
 pub struct Clipboard {
@@ -177,6 +217,9 @@ pub struct Clipboard {
     pub images: std::collections::BTreeMap<String, figcraft_doc::ImageData>,
     /// Copied properties (Copy properties / Paste properties).
     pub props: Option<Value>,
+    /// The file the copied properties came from: their style and variable ids name its styles and
+    /// variables, and in another file the same ids can name unrelated ones.
+    pub props_source_doc: u64,
     /// A copied fill or stroke row (`fill.copy`, `stroke.copy`): whether it's a fill, and the paint.
     pub paint: Option<(bool, figcraft_color::Paint)>,
     /// The stroke settings (`weight`, alignment, sides…) copied with a stroke's paint.

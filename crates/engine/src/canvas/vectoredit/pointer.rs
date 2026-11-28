@@ -1072,11 +1072,17 @@ impl Session {
                 }
             }
             VGesture::BendVertex { v, moved, smooth, .. } => {
+                let id = ve.id;
                 if moved {
                     self.commit_interaction()?;
                 } else if smooth {
-                    let id = ve.id;
                     self.preview(|doc, _| edit(doc, id, |net| ops::make_sharp(net, v)))?;
+                    self.commit_interaction()?;
+                } else if network(self.doc()?, id).is_some_and(|n| n.incident(v).len() == 2) {
+                    // "Click on a point or path where you want to add a curve" (Edit vector
+                    // layers): a sharp point between two segments gets handles along the line
+                    // between its neighbours (#1875); an endpoint has nothing to curve.
+                    self.preview(|doc, _| edit(doc, id, |net| ops::auto_smooth(net, v)))?;
                     self.commit_interaction()?;
                 } else {
                     self.cancel_interaction()?;

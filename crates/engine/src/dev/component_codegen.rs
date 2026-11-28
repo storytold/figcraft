@@ -11,7 +11,9 @@ use figcraft_doc::{Document, NodeId, NodeKind, PropDef};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
-use crate::codegen::{CodeLang, Ctx, FLUTTER_IMPORT, Markup, Place, arkui, class_name, compose, flutter, flutter_indent, indent, literal, swift};
+use crate::codegen::{
+    CodeLang, Ctx, FLUTTER_IMPORT, Markup, Names, Place, arkui, class_name, compose, flutter, flutter_indent, indent, literal, swift,
+};
 use crate::components::{prop_default_value, slot_edited, slots_of, variant_options, variant_props, variant_set};
 use crate::params::{id_of, string, targets};
 use crate::{bad, spec};
@@ -616,14 +618,14 @@ pub(crate) fn value_expr(doc: &Document, c: &Component, p: &Param, value: &Value
 /// The `<slot name="…">` of a slot parameter: unique among the component's slot parameters, unlike
 /// `class_name` called with a fresh list per parameter (two idents can lowercase alike).
 pub(crate) fn slot_name(c: &Component, p: &Param) -> String {
-    let mut used = Vec::new();
+    let mut used = Names::default();
     for q in c.params.iter().filter(|q| matches!(q.kind, ParamKind::Slot)) {
         let name = class_name(&q.ident, "slot", &mut used);
         if q.ident == p.ident {
             return name;
         }
     }
-    class_name(&p.ident, "slot", &mut Vec::new())
+    class_name(&p.ident, "slot", &mut Names::default())
 }
 
 /// The values an instance sets for `c`'s parameters, in order (`None` for other layers): variant
@@ -720,7 +722,7 @@ pub(crate) fn usage_with_styles(doc: &Document, id: NodeId, lang: CodeLang, dept
                 .filter(|(name, _, _)| is_slot(name))
                 .map(|(name, expr, _)| {
                     let slot = c.params.iter().find(|q| q.ident == *name);
-                    let name = slot.map(|p| slot_name(&c, p)).unwrap_or_else(|| class_name(name, "slot", &mut Vec::new()));
+                    let name = slot.map(|p| slot_name(&c, p)).unwrap_or_else(|| class_name(name, "slot", &mut Names::default()));
                     format!("{pad}  <template #{name}>\n{expr}{pad}  </template>\n")
                 })
                 .collect();
@@ -823,7 +825,7 @@ pub fn definition(doc: &Document, c: &Component, lang: CodeLang) -> String {
 
 /// `data-*` attribute names for variant parameters, unique among them (in order).
 fn data_attrs(variants: &[&Param]) -> Vec<String> {
-    let mut used = Vec::new();
+    let mut used = Names::default();
     variants.iter().map(|p| format!("data-{}", class_name(&p.prop, "prop", &mut used))).collect()
 }
 
@@ -832,7 +834,7 @@ fn data_attrs(variants: &[&Param]) -> Vec<String> {
 fn web(doc: &Document, c: &Component, lang: CodeLang) -> (String, String, String) {
     let ctx = Ctx { doc, root: c.comp, comp: Some(c), base: 2 };
     let root_name = c.set.and_then(|s| doc.node(s)).or_else(|| doc.node(c.comp)).map(|n| n.name.clone()).unwrap_or_default();
-    let root_class = class_name(&root_name, "component", &mut Vec::new());
+    let root_class = class_name(&root_name, "component", &mut Names::default());
     let variants: Vec<&Param> = c.params.iter().filter(|p| matches!(p.kind, ParamKind::Variant(_))).collect();
     let attr_names = data_attrs(&variants);
     let pass = |root: NodeId| {

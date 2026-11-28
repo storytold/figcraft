@@ -22,6 +22,8 @@ struct GroupCheckpoint {
     journal_len: usize,
     /// Live events buffered before the group: a failed one drops only its own.
     pending_events: usize,
+    ui_requests: usize,
+    document_selection_revision: u64,
     last_command: Option<(String, Value)>,
 }
 
@@ -65,7 +67,7 @@ impl Session {
     /// Replace the document with `f(snapshot)` for a live preview during a gesture.
     pub fn preview(&mut self, f: impl FnOnce(&mut Document, &mut Vec<NodeId>) -> Result<()>) -> Result<()> {
         let ds = self.ds_mut()?;
-        let Some(it) = ds.interaction.clone() else { return Err(EngineError::Other("no gesture in progress".into())) };
+        let Some(it) = ds.interaction.clone() else { return Err(EngineError::NoGesture) };
         let mut doc = (*it.doc).clone();
         let mut sel = it.selection.clone();
         // What the gesture changes on the selected layers is an explicit edit.
@@ -114,6 +116,10 @@ impl Session {
 
     pub fn undo(&mut self) -> Result<bool> {
         textpreview::end(self);
+        // While the pen draws, undo works on the anchors of its path (#1745).
+        if self.ds().is_ok_and(|d| d.preview.is_none()) && self.pen_undo()? {
+            return Ok(true);
+        }
         let live = self.ds().is_ok_and(|d| self.live_doc(d.uid));
         let ds = self.ds_mut()?;
         if ds.preview.is_some() {
@@ -152,6 +158,10 @@ impl Session {
 
     pub fn redo(&mut self) -> Result<bool> {
         textpreview::end(self);
+        // While the pen draws, redo works on the anchors of its path (#1745).
+        if self.ds().is_ok_and(|d| d.preview.is_none()) && self.pen_redo()? {
+            return Ok(true);
+        }
         let live = self.ds().is_ok_and(|d| self.live_doc(d.uid));
         let ds = self.ds_mut()?;
         if ds.preview.is_some() {
@@ -333,6 +343,8 @@ impl Session {
             active: self.active,
             journal_len: self.journal.len(),
             pending_events: self.pending_events.len(),
+            ui_requests: self.ui_requests.len(),
+            document_selection_revision: self.document_selection_revision,
             last_command: self.last_command.clone(),
         };
         // The steps inside are dropped again below, so they mustn't push the oldest ones out.
@@ -373,6 +385,9 @@ impl Session {
         self.active = before.active;
         self.journal.truncate(before.journal_len);
         self.pending_events.truncate(before.pending_events);
+        // UI requests are deferred group effects, just like collaboration events.
+        self.ui_requests.truncate(before.ui_requests);
+        self.document_selection_revision = before.document_selection_revision;
         if restore_last_command {
             self.last_command = before.last_command;
         }

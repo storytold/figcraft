@@ -167,7 +167,12 @@ pub fn eval(text: &str, cur: Option<f64>) -> Option<f64> {
 /// (0.1 + 0.2).
 pub fn stepped(from: f64, steps: f64, step: f64) -> f64 {
     let v = from + steps * step;
-    if v.is_finite() { (v * 1e6).round() / 1e6 } else { from }
+    if !v.is_finite() {
+        return from;
+    }
+    let rounded = (v * 1e6).round() / 1e6;
+    // Past ~1.8e302 the scaling overflows; such a value has no dust to remove.
+    if rounded.is_finite() { rounded } else { v }
 }
 
 #[cfg(test)]
@@ -181,5 +186,11 @@ mod tests {
         assert_eq!(parse("10 °", true), Some(Typed::Value(10.0)));
         assert_eq!(parse("50 %", true), Some(Typed::Value(50.0)));
         assert_eq!(parse("3 px + 2 px", true), Some(Typed::Value(5.0)));
+    }
+
+    #[test]
+    fn stepped_keeps_a_huge_finite_value_finite() {
+        assert_eq!(stepped(1e305, 1.0, 1.0), 1e305);
+        assert!(stepped(f64::MAX / 2.0, 0.0, 1.0).is_finite());
     }
 }

@@ -109,7 +109,9 @@ pub fn eligible(doc: &Document, ids: &[NodeId]) -> Vec<NodeId> {
             out.push(id);
         }
     }
-    let ids: Vec<NodeId> = ids.iter().copied().filter(|i| doc.contains(*i)).collect();
+    // Each id counts once: a repeated group must not be walked once per repeat.
+    let mut seen = std::collections::BTreeSet::new();
+    let ids: Vec<NodeId> = ids.iter().copied().filter(|i| doc.contains(*i) && seen.insert(*i)).collect();
     let mut out = Vec::new();
     for id in roots(doc, &ids) {
         walk(doc, id, 0, &mut out);
@@ -132,8 +134,8 @@ fn world_area(doc: &Document, part: Part) -> Option<(BezPath, bool)> {
         }
         match (&n.kind, part.region) {
             (NodeKind::Vector { network }, Some(i)) => {
-                let rounded = network.rounded();
-                let net = rounded.as_ref().unwrap_or(network);
+                let drawn = figcraft_doc::geometry::drawn_network(network, n.corners.smoothing);
+                let net = drawn.as_ref();
                 let region = net.regions.get(i)?;
                 let path = net.region_path(i)?;
                 (path, if region.winding == WindingRule::EvenOdd { figcraft_render::FillRule::EvenOdd } else { figcraft_render::FillRule::Winding })
@@ -654,7 +656,7 @@ impl Session {
     fn builder_select(&mut self, ev: &PointerEvent) {
         let Ok(ds) = self.ds() else { return };
         let (doc, page, mut sel) = (ds.doc.clone(), ds.page, ds.selection.clone());
-        let Some(leaf) = self.hit(&doc, page, ev.p(), 2.0 / ev.zoom.max(1e-6)) else { return };
+        let Some(leaf) = self.hit_pick(&doc, page, ev.p(), 2.0 / ev.zoom.max(1e-6), ev.cmd) else { return };
         let t = figcraft_doc::geometry::select_target(&doc, leaf, &sel, ev.cmd);
         if ev.shift {
             if let Some(i) = sel.iter().position(|x| *x == t) {

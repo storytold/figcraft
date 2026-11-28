@@ -24,6 +24,8 @@ pub(crate) struct Walker<'a> {
     opts: &'a VdOptions,
     warn: Warnings,
     names: std::collections::BTreeSet<String>,
+    /// The next suffix to try for each base name (names only get taken, so none before it is free).
+    next_suffix: std::collections::BTreeMap<String, usize>,
 }
 
 /// Every coordinate of `p` finite and within [`MAX_COORD`].
@@ -54,7 +56,7 @@ fn normal(b: BlendMode) -> bool {
 
 impl<'a> Walker<'a> {
     pub fn new(doc: &'a Document, opts: &'a VdOptions) -> Self {
-        Self { doc, opts, warn: Warnings::default(), names: Default::default() }
+        Self { doc, opts, warn: Warnings::default(), names: Default::default(), next_suffix: Default::default() }
     }
 
     /// Reports that the export drew nothing at all (named after `layer`).
@@ -78,12 +80,25 @@ impl<'a> Walker<'a> {
     fn unique(&mut self, name: &str) -> String {
         let base: String = name.chars().take(200).collect();
         let base = if base.trim().is_empty() { "layer".to_string() } else { base };
-        // Bounded: a set of n names leaves one of the first n + 1 candidates free.
-        let tries = self.names.len().saturating_add(1);
-        let name = (1..=tries)
-            .map(|k| if k == 1 { base.clone() } else { format!("{base}_{k}") })
-            .find(|n| !self.names.contains(n))
-            .unwrap_or_else(|| format!("{base}_{}", tries.saturating_add(1)));
+        let mut k = self.next_suffix.get(&base).copied().unwrap_or(1);
+        let mut stem = base.clone();
+        // Bounded: a set of n names leaves one of the first n + 1 candidates free. A counter
+        // that has run out (`usize::MAX`) continues from a longer stem instead of repeating.
+        let name = loop {
+            let candidate = if k == 1 { stem.clone() } else { format!("{stem}_{k}") };
+            if !self.names.contains(&candidate) {
+                k = k.saturating_add(1);
+                break candidate;
+            }
+            if k == usize::MAX {
+                stem = candidate;
+                k = 2;
+            } else {
+                k += 1;
+            }
+        };
+        let longer = stem.len() > base.len();
+        self.next_suffix.insert(base, if longer { usize::MAX } else { k });
         self.names.insert(name.clone());
         name
     }
@@ -402,5 +417,22 @@ impl<'a> Walker<'a> {
             }
             (None, Some(GradOut::Nothing) | None) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod unique_tests {
+    use super::*;
+
+    #[test]
+    fn an_exhausted_suffix_counter_still_finds_a_free_name() {
+        let (doc, opts) = (Document::new("File"), VdOptions::default());
+        let mut w = Walker::new(&doc, &opts);
+        w.next_suffix.insert("a".into(), usize::MAX);
+        w.names.insert(format!("a_{}", usize::MAX));
+        let first = w.unique("a");
+        let second = w.unique("a");
+        assert_ne!(first, second);
+        assert!(w.names.len() == 3 && w.names.contains(&first) && w.names.contains(&second));
     }
 }

@@ -59,12 +59,15 @@ queue. A screenshot settles on three completed, presented UI frames (a discarded
 not count), then is issued, and expires once at its 60 s deadline if no paint arrives. `window.new`
 remains an error at once (`window 0 is minimised or hidden: …`) instead of waiting for the window
 to show; `ui.render` draws the document without it. Under Wayland the app can't tell that its
-window is minimised: where the compositor then stops drawing it, a request waits for the window
-and gets the 60 s timeout error. The browser's shared eframe runner does not implement
+window is minimised, and the compositor stops asking it to draw: a window that draws no frame for
+0.2 s while a request waits for it is treated as hidden, so the requests that act on the app's
+state are answered without a frame (about half a second each), while `ui.screenshot` and
+`ui.input` keep waiting for one. The browser's shared eframe runner does not implement
 `RequestPaintWhileHidden` yet, so hidden-tab screenshots and injected input are unqualified there.
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent
 frame (groups have no coordinate space of their own).
+`rotation` in `node.set` is the layer's angle to its parent; `absoluteRotation` sets its rotation on the page (what the Design panel's field shows); a call takes one of the two.
 
 **Windows.** The desktop app can show files in several windows (`window.new`). Every method takes
 an optional `window` (an id from `window.list`; `0` is the main window) and then runs in that
@@ -76,7 +79,10 @@ unknown id is an error.
 **Documents.** `engine.execute`, `document.inspect`, `node.get` and `ui.render` take an optional
 `document`: an open file's `id` (from `doc.list`, or `document.inspect`'s `id`) or its path. The
 request acts on that file without bringing its tab to the front; the tab in front comes back
-afterwards unless the command opened or switched to another file itself. A file that isn't open is
+afterwards unless the command explicitly opens or switches a file (`file.new`, `file.open`,
+`doc.switch`, `doc.nextTab`, `doc.previousTab`) or shows its prototype (`proto.present`,
+`proto.preview`). These commands keep the requested file in front even if it was already selected
+temporarily for this call; a failed command restores the previous tab. A file that isn't open is
 an error, and so is a `document` naming a file behind the tab in front on any other method
 (`ui.screenshot`, `ui.input`, `ui.key`… act on what the window shows). `doc.list` includes each file's
 `path` only when the call names no `agent`: an AI agent's calls (MCP sets `agent`) get ids and names.
@@ -192,9 +198,12 @@ layout (including grid `columnTracks` / `rowTracks`), sizing, `minWidth` / `maxW
 children), `gridCell` (a grid auto layout child's column, row and spans), clip, text properties,
 component/instance links, overrides, `slot` (a slot layer's property name), boundVariables, interactions, exports,
 `devStatus` (handoff status), `devChanged` (changed since it was marked ready for dev),
-`annotations` (Dev Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
+`textAlignVertical`, `textCase`, `paragraphSpacing`, `paragraphIndent`, `features` (OpenType
+toggles), `startCap` and `endCap` (when not none), `variableModes` (a frame's collection → mode),
+`propertyReferences` (which component property controls a field), `exposedInstance`,
+`annotations` (Developer Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
 links to code: `[{language, importPath, name, template}]`), `devResources` (links for developers,
-its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Dev Mode measurements
+its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Developer Mode measurements
 starting from the layer: `[{to} | {side}]`), `pluginData` (layer data written with
 `node.set {props: {pluginData: {key: value}}}`, pages included: `{key: value}`, values as strings;
 only when there is some). The auto layout props
@@ -233,7 +242,9 @@ zoom preview or the refined image (`canvas.quality`: `preview` or `refined`) and
 asking for a render to its preview and its refined image being handed to egui as the canvas
 texture (`canvas.previewLatencyMs`, `canvas.refineLatencyMs`, on a monotonic clock, rendering
 included in the browser too; the GPU upload and presenting the frame come after; `null` until
-there was one). `importReport` holds the Import report window's content (`{name, pages, layers, images, appended, placed, warnings, warningCount}`,
+there was one), and the share of the canvas only the page colour covered last frame, no render
+reaching it (`canvas.uncovered`, 0 to 1: past the canvas image the desktop shows a coarse image of the
+area around the view). `importReport` holds the Import report window's content (`{name, pages, layers, images, appended, placed, warnings, warningCount}`,
 `null` while none is open). The window opens only for a file the user opened or imported in the app
 (File ▸ Open or Import, Open recent, a recent file on the home screen, a drop, a paste, the system's open event).
 Emulated user input counts as the user's action: `ui.input` and `ui.key` (for example a Cmd+V paste or a click
@@ -250,9 +261,9 @@ far the view is panned (`pan`, `panRange`), whether a scroll is still coasting (
 active screen's `hotspots` (`[{id, rect: [x0, y0, x1, y1]}]` in window points, bottom-most first),
 whether a click where nothing reacts flashes them (`hotspotHints`) and they are flashing now
 (`hotspotFlash`), and whether the Inspect panel shows (`inspect`) with the layer it shows
-(`inspected`), and the link an Open link notice waits to open (`linkNotice`, else `null`) (`null`
+(`inspected`), whether its bars are hidden (`hideUi`), and the link an Open link notice waits to open (`linkNotice`, else `null`) (`null`
 when nothing plays). `presentOptions` holds the options the next presentation
-starts with (`scale`, `deviceFrame`, `comments`, `hotspotHints`, `inspect`).
+starts with (`scale`, `deviceFrame`, `comments`, `hotspotHints`, `inspect`, `hideUi`).
 `textPreview` is true while a live text preview shows on the canvas (a hovered text style or named
 instance, a dragged axis slider; see `text.preview` in [mcp.md](mcp.md)).
 `focus` is keyboard navigation's state: the `region` with the keyboard (`toolbar`, `layers`,
@@ -377,7 +388,7 @@ closes it), `commentDraft` (`{x, y}`: start a new comment there), `commentFilter
 (`date|page`), `commentSearch` (the panel's search text), `commentReply` (the open thread's reply
 text, focused with the cursor at its end: an `@` there shows the mention picker), `commentEdit` (a
 message index of the open thread to edit, 0 for the first; `null` stops), `presentComments` (bool:
-the presenter shows the presented frame's comments, also Shift+C there). Dev Mode: `devCompare` (a
+the presenter shows the presented frame's comments, also Shift+C there). Developer Mode: `devCompare` (a
 frame or section id opens the Compare changes view, like `dev.compare {id, show:
 true}`; `null` closes it) with `devCompareVersion` (a version id to compare with; `null`: when it
 was marked ready for dev), `devCompareMode` (`sideBySide|overlay`) and `devCompareSplit` (the
@@ -463,11 +474,15 @@ app. It is opt-in: the page installs `window.figcraft` only when its URL has a `
 |---|---|
 | `figcraft.request(method, params)` | any control method of this document → its `result` |
 | `figcraft.execute(command, params)` | `engine.execute` |
-| `figcraft.commands()` / `figcraft.inspect()` | `engine.commands` / the inspect method |
-| `figcraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline) |
+| `figcraft.commands()` | `engine.commands` |
+| `figcraft.docInspect(params)` / `figcraft.uiInspect(params)` | `document.inspect` / `ui.inspect` |
+| `figcraft.inspect()` | `document.inspect` (the name before `docInspect`) |
+| `figcraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline, also as `data`) |
 | `figcraft.openFile(name, bytes)` | runs `file.open` with the bytes as `data` and resolves with its result |
 | `figcraft.captureDownloads(on)` | while on, a save or export is kept in the page instead of downloaded |
 | `figcraft.files()` / `figcraft.readFile(name)` | the kept files (`{path, size}`) / one of them as a `Uint8Array` |
 
 Errors reject with an `Error` carrying the method's message. Requests run on the UI's next frame, so a
 hidden tab (whose frames the browser pauses) answers when it is shown again.
+
+`request`, `execute`, `commands`, `docInspect`, `uiInspect` and `screenshot` come from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app. A call the app does not answer within 30 seconds rejects, and the app drops it unrun if it had not started it. `openFile`, `captureDownloads`, `files`, `readFile` and `inspect` are FigCraft's own.

@@ -1,6 +1,6 @@
 use super::{
-    Done, FigApp, LeftTab, MobilePanel, NodeId, PANEL_DEFAULT, RightTab, Value, comments, dev_compare, dialogs, home, i18n, import_report, json,
-    layers, live, menus, missing_fonts, plugins_ui, present, tabs, updates_ui, versions,
+    Done, FigApp, LeftTab, MobilePanel, NodeId, PANEL_DEFAULT, RightTab, Value, comments, dev_compare, dialogs, home, import_report, json, layers,
+    live, menus, missing_fonts, plugins_ui, present, tabs, updates_ui, versions,
 };
 
 impl FigApp {
@@ -22,7 +22,21 @@ impl FigApp {
         // `file.open`/`file.close`). Record that presentation before returning, so an in-flight
         // screenshot admitted on the old file cannot accept pixels from the new one.
         self.observe_presentation();
+        if let Ok(v) = &r {
+            self.note_snapping(id, v);
+        }
         r.map_err(|e| self.failed(id, &e)).ok()
+    }
+
+    /// Snap to pixel grid turned on or off says which at the bottom, as in Figma: its shortcut
+    /// (Shift+Cmd/Ctrl+') changes nothing on the canvas until the next drag.
+    fn note_snapping(&mut self, id: &str, result: &Value) {
+        let msg = match (id, result.get("on").and_then(Value::as_bool)) {
+            ("view.snapPixel", Some(true)) => crate::i18n::tr("Snap to pixel grid on"),
+            ("view.snapPixel", Some(false)) => crate::i18n::tr("Snap to pixel grid off"),
+            _ => return,
+        };
+        self.toast(msg);
     }
 
     /// A programmatic command that changed the engine clipboard never wrote the system clipboard:
@@ -55,7 +69,8 @@ impl FigApp {
     /// Show command `id`'s error.
     pub(crate) fn failed(&mut self, id: &str, e: &figcraft_engine::EngineError) {
         let msg = e.to_string();
-        log::warn!("{id}: {msg}");
+        // A plugin's failure text may carry CR or terminal controls: log it escaped.
+        log::warn!("{id}: {}", msg.escape_debug());
         self.show_error(msg);
     }
 
@@ -210,20 +225,34 @@ impl FigApp {
                     if let Some(i) = r.data.get("inspect").and_then(|i| i.as_bool()) {
                         v.inspect = i;
                     }
+                    if let Some(h) = r.data.get("hideUi").and_then(|h| h.as_bool()) {
+                        v.hide_ui = h;
+                    }
                     if let Some(p) = self.ui.present.as_mut() {
                         p.view.device_frame = v.device_frame;
                         p.view.hotspot_hints = v.hotspot_hints;
                         p.view.inspect = v.inspect;
+                        p.view.hide_ui = v.hide_ui;
                         p.set_scale(v.scale);
                     }
                 }
                 "preview" => {
                     if let Some(start) = r.data.get("start").and_then(figcraft_engine::params::id_of) {
+                        // The preview draws over the editor and must not stay behind the presenter.
+                        tabs::pause_present(self);
+                        self.ui.home = false;
                         self.ui.preview = Some(present::Pane::new(start, &self.session));
                     }
                 }
                 "preview.close" => self.ui.preview = None,
                 "open.help" => self.services.open_url("https://getartcraft.com/apps/figcraft"),
+                // A link in text activated while editing (`text.openLink`): the engine checked it
+                // is a web or mail link.
+                "open.url" => {
+                    if let Some(url) = r.data["url"].as_str() {
+                        self.services.open_url(url);
+                    }
+                }
                 "layers.collapseAll" => layers::collapse_all(self),
                 "contextMenu" => self.ui.key_menu = true,
                 "selectArea" => self.start_key_box(),
@@ -254,12 +283,30 @@ impl FigApp {
                         self.ui.comments.show(id);
                     }
                 }
+                "annotation.new" => {
+                    // The Annotation tool: show the Inspect tab (never toggle it away) and put the
+                    // caret in the layer's new-note field.
+                    // Only a selected layer's field can show; a request for anything else would wait
+                    // and take the keyboard later.
+                    let shown =
+                        |id| self.session.selection().contains(&id) && self.session.doc().is_ok_and(|d| d.node(id).is_some_and(|n| !n.is_page()));
+                    if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of).filter(|id| shown(*id)) {
+                        self.ui.right_tab = RightTab::Inspect;
+                        self.ui.dev.focus_new_note = Some(id);
+                    }
+                }
                 "comment.new" => {
                     let x = r.data.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     let y = r.data.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     comments::start_draft(self, x, y);
                 }
-                "dialog.unsaved" => self.toast(i18n::tr("This file has unsaved changes")),
+                "dialog.unsaved" => {
+                    // `file.close` refused a file with unsaved changes: ask about it.
+                    let i = r.data.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).unwrap_or(self.session.active);
+                    if let Some(d) = self.session.docs.get(i) {
+                        self.ui.close_tab = Some(crate::windows::TabClose::Ask(d.uid));
+                    }
+                }
                 "dialog.plugins" => self.ui.plugins_window = true,
                 "dialog.pluginSave" => plugins_ui::save_file(self, &r.data),
                 "dialog.cursorChat" => live::open_chat(self),
@@ -291,6 +338,7 @@ impl FigApp {
         self.autosave_tick(ctx, now);
         self.auto_save_tick(ctx, now);
         updates_ui::tick(self, ctx);
+        crate::assets_panel::refresh_libraries(self, ctx);
         self.logic_ticked = true;
     }
 }

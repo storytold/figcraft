@@ -9,6 +9,8 @@
 mod breaks;
 pub mod color;
 pub mod display;
+#[cfg(target_arch = "wasm32")]
+mod embedded;
 pub mod fontdb;
 mod layout;
 mod onpath;
@@ -17,8 +19,8 @@ pub use breaks::{backspace_step, grapheme_step};
 pub use color::{ColorBitmap, ColorInk, ColorLayer};
 pub use fontdb::{
     Axis, CRAFT_FONTS, Coords, Face, FontDb, LocalFont, NamedInstance, Rescan, add_local_fonts, axis_label, db, face_with_char, family_names,
-    family_styles, find_face, has_family, installed_fonts_known, load_font_bytes, load_local_font, local_only, no_coords, opt_out_of_system_fonts,
-    rescan_system_fonts, scan_system_fonts, scan_system_fonts_on_demand, system_fonts_scanned, take_wanted_local_fonts,
+    family_style_weights, family_styles, find_face, has_family, installed_fonts_known, load_font_bytes, load_local_font, local_only, no_coords,
+    opt_out_of_system_fonts, rescan_system_fonts, scan_system_fonts, scan_system_fonts_on_demand, system_fonts_scanned, take_wanted_local_fonts,
 };
 pub use layout::{Decoration, Glyph, Line, TextLayout, layout};
 pub use onpath::OnPath;

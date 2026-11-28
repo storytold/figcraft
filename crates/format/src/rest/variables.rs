@@ -20,6 +20,9 @@ const MAX_VARIABLES: usize = 100_000;
 const MAX_MODES: usize = 1_000;
 /// Longest string variable value kept (characters).
 const MAX_STRING: usize = 10_000;
+/// The copies of fallback values that fill missing modes, in bytes, for one import: variables, modes
+/// and string length are each capped, but not their product. Past it, modes stay empty.
+const MAX_FILLED_BYTES: usize = 64 << 20;
 
 /// The object holding `variableCollections` and `variables`: a local variables response's `meta`,
 /// or `v` itself.
@@ -287,14 +290,10 @@ impl Ctx<'_> {
         if dropped {
             self.warn("variable aliases to variables that aren't in the variables JSON (or of another type) were skipped");
         }
+        let mut budget = MAX_FILLED_BYTES;
         for v in found.iter_mut() {
             let Some(modes) = self.var_modes.get(&v.collection) else { continue };
-            let fallback = modes.first().and_then(|m| v.values.get(m)).or_else(|| v.values.values().next()).cloned();
-            if let Some(f) = fallback {
-                for m in modes {
-                    v.values.entry(m.clone()).or_insert_with(|| f.clone());
-                }
-            }
+            fill_modes(&mut v.values, modes, &mut budget);
         }
     }
 
@@ -378,6 +377,7 @@ impl Ctx<'_> {
                 }
             }
         }
+        skipped.retain(|k| !bound_by_items(k, j, &found));
         for k in skipped {
             self.warn(format!("variables bound to `{}` are not supported and were skipped", clip_str(k)));
         }
@@ -428,6 +428,19 @@ fn node_binding<'v>(k: &str, v: &'v Value, n: &Node, out: &mut Vec<(String, &'v 
                 push(f, v.get(key).and_then(alias));
             }
         }
+        // Each stroke side's weight (#2441). The live `/nodes` response names the sides
+        // `BORDER_TOP_WEIGHT` and so on, as `rectangleCornerRadii` names its corners; Figma's
+        // published OpenAPI spec names them `top` … `left`. Either is read.
+        "individualStrokeWeights" => {
+            for (keys, f) in [
+                (["BORDER_TOP_WEIGHT", "top"], "strokeTopWeight"),
+                (["BORDER_RIGHT_WEIGHT", "right"], "strokeRightWeight"),
+                (["BORDER_BOTTOM_WEIGHT", "bottom"], "strokeBottomWeight"),
+                (["BORDER_LEFT_WEIGHT", "left"], "strokeLeftWeight"),
+            ] {
+                push(f, keys.iter().find_map(|key| v.get(*key)).and_then(alias));
+            }
+        }
         "fills" | "strokes" => {
             let field = if k == "fills" { "fill" } else { "stroke" };
             match v.as_array().and_then(|a| a.first()).and_then(alias) {
@@ -446,6 +459,28 @@ fn node_binding<'v>(k: &str, v: &'v Value, n: &Node, out: &mut Vec<(String, &'v 
         },
     }
     true
+}
+
+/// A node-level `fills`, `strokes`, `effects` or `textRangeFills` list only repeats what each
+/// paint, gradient stop and effect binds itself (#2441): nothing is lost when every variable it
+/// names was read for one of them.
+fn bound_by_items(k: &str, j: &Value, found: &[(String, &str)]) -> bool {
+    let (one, each) = match k {
+        "fills" | "textRangeFills" => ("fill", "fills/"),
+        "strokes" => ("stroke", "strokes/"),
+        "effects" => ("", "effects/"),
+        _ => return false,
+    };
+    let Some(list) = j.get("boundVariables").and_then(|b| b.get(k)) else { return false };
+    aliases(list).iter().all(|a| found.iter().any(|(f, x)| x == a && (f == one || f.starts_with(each))))
+}
+
+/// Every variable an alias, or a list of them (nested), names.
+fn aliases(v: &Value) -> Vec<&str> {
+    match v.as_array() {
+        Some(a) => a.iter().flat_map(aliases).collect(),
+        None => alias(v).into_iter().collect(),
+    }
 }
 
 /// The one variable every entry of a per-range list (or a single alias) names.
@@ -519,5 +554,38 @@ fn field_type(field: &str) -> VariableType {
         "characters" | "fontFamily" | "fontStyle" => VariableType::String,
         "visible" => VariableType::Boolean,
         _ => VariableType::Number,
+    }
+}
+
+/// Give each of `modes` without a value a copy of the first mode's (else any) value, while the
+/// copies' bytes fit in `budget`.
+fn fill_modes(values: &mut BTreeMap<String, VariableValue>, modes: &[String], budget: &mut usize) {
+    let Some(f) = modes.first().and_then(|m| values.get(m)).or_else(|| values.values().next()).cloned() else { return };
+    let cost =
+        64 + modes.iter().map(String::len).max().unwrap_or(0) + if let VariableValue::String(t) | VariableValue::Alias(t) = &f { t.len() } else { 0 };
+    for m in modes {
+        if values.contains_key(m) {
+            continue;
+        }
+        let Some(left) = budget.checked_sub(cost) else { return };
+        *budget = left;
+        values.insert(m.clone(), f.clone());
+    }
+}
+
+#[cfg(test)]
+mod fill_tests {
+    use super::*;
+
+    #[test]
+    fn missing_modes_are_filled_only_within_the_budget() {
+        let modes: Vec<String> = (0..10).map(|i| format!("m{i}")).collect();
+        let mut v = BTreeMap::from([("m0".to_string(), VariableValue::String("x".repeat(100)))]);
+        let mut budget = 1_000;
+        fill_modes(&mut v, &modes, &mut budget);
+        assert!(v.len() > 1 && v.len() < 10, "{}", v.len());
+        let mut v = BTreeMap::from([("m0".to_string(), VariableValue::Number(1.0))]);
+        fill_modes(&mut v, &modes, &mut { MAX_FILLED_BYTES });
+        assert_eq!(v.len(), 10);
     }
 }

@@ -18,6 +18,10 @@ macro_rules! m {
 
 pub const SEP: &str = "-";
 
+/// Extra search terms the Actions palette reads, by command id: a name a feature had before it was
+/// renamed, so people who know the old name still find the command. Never shown.
+pub static SEARCH_ALIASES: &[(&str, &str)] = &[("view.devMode", "Dev Mode")];
+
 pub static MENU: &[MenuItem] = &[
     // File
     m!("File", "New design file", "file.new"),
@@ -216,6 +220,11 @@ pub static MENU: &[MenuItem] = &[
     m!("Text/Case", "Uppercase", "text.caseUpper"),
     m!("Text/Case", "Lowercase", "text.caseLower"),
     m!("Text/Case", "Title case", "text.caseTitle"),
+    // "Go to Text > Text direction. Select Left to right or Right to left." (Add right-to-left
+    // text); Auto, the way back to detection, is FigCraft's own (in `OWN`).
+    m!("Text/Text direction", "Auto", "text.directionAuto"),
+    m!("Text/Text direction", "Left to right", "text.directionLtr"),
+    m!("Text/Text direction", "Right to left", "text.directionRtl"),
     m!("Text", SEP, ""),
     m!("Text", "Missing fonts…", "text.missingFonts"),
     // Arrange
@@ -282,6 +291,7 @@ pub static MENU: &[MenuItem] = &[
     m!("Tools", "Pencil", "tool.pencil"),
     m!("Tools", "Text", "tool.text"),
     m!("Tools", "Comment", "tool.comment"),
+    m!("Tools", "Annotation", "tool.annotation"),
     m!("Tools", "Shape builder", "tool.shapeBuilder"),
     m!("Tools", "Actions", "app.actions"),
 ];
@@ -292,7 +302,7 @@ pub fn items() -> impl Iterator<Item = &'static MenuItem> {
 }
 
 /// Items of FigCraft's own that the parity count leaves out (as it does the `collab.` ones).
-const OWN: [&str; 5] = ["file.newFromTemplate", "file.newBoard", "help.gettingStarted", "text.missingFonts", "image.crop"];
+const OWN: [&str; 6] = ["file.newFromTemplate", "file.newBoard", "help.gettingStarted", "text.missingFonts", "image.crop", "text.directionAuto"];
 
 /// Coverage: (implemented, total, missing ids). `extra` lists ids implemented by the UI layer.
 pub fn parity(extra: &[&str]) -> (usize, usize, Vec<&'static str>) {
@@ -313,4 +323,120 @@ pub fn parity(extra: &[&str]) -> (usize, usize, Vec<&'static str>) {
 /// The default shortcut for a command id on this platform (notation of [`crate::keymap`]).
 pub fn shortcut(id: &str) -> Option<&'static str> {
     crate::keymap::primary(id, crate::keymap::Platform::current())
+}
+
+/// RFC-0052 hand marks for counted catalog ids that aren't in the engine registry:
+/// `(id, headless, reach, why)`.
+///
+/// `headless` is `no` or `partial`; `reach` is `window` (needs a desktop window, dialog or pointer),
+/// `os` (needs an OS service the engine doesn't wrap) or `engine-gap` (could be an engine command,
+/// isn't one yet). `yes` is never written here: an id is `yes` only when [`crate::find_command`] has
+/// it, the registry `figcraft-cli` and the MCP server load. The UI-layer ids that `cargo xtask parity`
+/// passes as `extra` light up a menu item but are not `yes`. An unmarked id is `unknown`.
+pub const HEADLESS: &[(&str, &str, &str, &str)] = &[
+    ("edit.copyAsSvg", "partial", "os", "`file.exportSvg` writes the same SVG to a file; the clipboard is the OS's"),
+    ("edit.copyAsPng", "partial", "os", "`file.export` writes the PNG to a file; the clipboard is the OS's"),
+    ("edit.copyAsCss", "partial", "os", "`inspect.code` with `language: css` returns the same CSS; the clipboard is the OS's"),
+    ("edit.copyAsText", "no", "os", "puts the selected layers' text on the OS clipboard"),
+    ("edit.copyLink", "no", "os", "puts a `figcraft://` link on the OS clipboard"),
+];
+
+/// One counted catalog item's RFC-0052 value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeadlessRow {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub value: &'static str,
+    pub reach: Option<&'static str>,
+    pub why: &'static str,
+}
+
+/// The `headless:` value of `id`: `yes` when `in_engine`, else its mark, else `unknown`.
+pub fn headless_of(
+    id: &str,
+    in_engine: bool,
+    marks: &[(&'static str, &'static str, &'static str, &'static str)],
+) -> (&'static str, Option<&'static str>, &'static str) {
+    if in_engine {
+        return ("yes", None, "");
+    }
+    marks.iter().find(|m| m.0 == id).map_or(("unknown", None, ""), |m| (m.1, Some(m.2), m.3))
+}
+
+/// Every item [`parity`] counts, with its `headless:` value from the engine registry and [`HEADLESS`].
+pub fn headless_rows() -> Vec<HeadlessRow> {
+    items()
+        .filter(|m| !m.id.starts_with("collab.") && !OWN.contains(&m.id))
+        .map(|m| {
+            let (value, reach, why) = headless_of(m.id, crate::find_command(m.id).is_some(), HEADLESS);
+            HeadlessRow { id: m.id, label: m.label, value, reach, why }
+        })
+        .collect()
+}
+
+/// Problems with `marks` against `ids` (`(id, in engine registry)`): bad values, repeats, ids not
+/// counted by [`parity`], and marks on registry ids (they would hide a `yes`).
+pub fn headless_errors(marks: &[(&str, &str, &str, &str)], ids: &[(&str, bool)]) -> Vec<String> {
+    let mut errs = Vec::new();
+    for (i, (id, value, reach, _)) in marks.iter().enumerate() {
+        if !matches!(*value, "no" | "partial") {
+            errs.push(format!("headless mark `{id}`: `{value}` is not `no` or `partial` (`yes` comes from the registry)"));
+        }
+        if !matches!(*reach, "window" | "os" | "engine-gap") {
+            errs.push(format!("headless mark `{id}`: reach `{reach}` is not window, os or engine-gap"));
+        }
+        if marks[..i].iter().any(|m| m.0 == *id) {
+            errs.push(format!("headless mark `{id}` is written twice"));
+        }
+        match ids.iter().find(|x| x.0 == *id) {
+            None => errs.push(format!("headless mark `{id}` is not a counted catalog id")),
+            Some((_, true)) => errs.push(format!("headless mark `{id}` is stale: the engine registry has it, so it is `yes`")),
+            Some(_) => {}
+        }
+    }
+    errs
+}
+
+/// The RFC-0052 summary of `rows`: (yes, no by window/os/engine-gap, partial, unknown).
+pub fn headless_counts(rows: &[HeadlessRow]) -> (usize, [usize; 3], usize, usize) {
+    let count = |v: &str| rows.iter().filter(|r| r.value == v).count();
+    let no = |r: &str| rows.iter().filter(|x| x.value == "no" && x.reach == Some(r)).count();
+    (count("yes"), [no("window"), no("os"), no("engine-gap")], count("partial"), count("unknown"))
+}
+
+#[cfg(test)]
+mod headless_tests {
+    use super::*;
+
+    #[test]
+    fn checked_in_marks_are_current() {
+        let ids: Vec<(&str, bool)> = headless_rows().iter().map(|r| (r.id, r.value == "yes")).collect();
+        let errs = headless_errors(HEADLESS, &ids);
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn yes_is_the_engine_registry_not_the_ui_layer() {
+        let rows = headless_rows();
+        let (done, total, _) = parity(&[]);
+        assert_eq!(rows.len(), total, "one row per counted item");
+        let (yes, no, partial, unknown) = headless_counts(&rows);
+        assert_eq!(yes, done, "yes is what the engine registry implements, without the UI-layer extras");
+        assert_eq!(yes + no.iter().sum::<usize>() + partial + unknown, total);
+        assert!(rows.iter().filter(|r| r.value == "yes").all(|r| crate::find_command(r.id).is_some()));
+    }
+
+    #[test]
+    fn bad_marks_are_refused_and_live_ids_stay_yes() {
+        let ids = [("a.b", true), ("c.d", false)];
+        let marks = [("c.d", "yes", "os", ""), ("c.d", "no", "desk", ""), ("a.b", "no", "os", ""), ("z.z", "no", "os", "")];
+        let errs = headless_errors(&marks, &ids);
+        for want in ["is not `no` or `partial`", "reach `desk`", "written twice", "`a.b` is stale", "`z.z` is not a counted"] {
+            assert!(errs.iter().any(|e| e.contains(want)), "{want}: {errs:?}");
+        }
+        let ok = [("c.d", "no", "window", "a dialog")];
+        assert_eq!(headless_of("a.b", true, &ok).0, "yes");
+        assert_eq!(headless_of("c.d", false, &ok), ("no", Some("window"), "a dialog"));
+        assert_eq!(headless_of("q.q", false, &ok).0, "unknown");
+    }
 }

@@ -2,10 +2,12 @@ use super::connectors::{CAPS, at_json, end_json, make, other_end, side_json};
 use super::derived::{ends_now, route};
 use super::edit::label_of;
 use super::items::edit_text;
+use super::mindmap::MIND_ROOT_H;
 use super::{
     BoardItem, Connector, Document, ERASER_PX, End, EngineError, Gesture, NodeId, Point, PointerEvent, Result, SHAPE, STICKY, Session, Side, ToolId,
     id_of, is_board, json,
 };
+use figcraft_doc::{CODE_MIN_H, CODE_WIDTH};
 
 /// How near (screen pixels) the pointer must be to the middle of an object's side for a connector
 /// end to attach there, however small the object is on screen.
@@ -63,6 +65,24 @@ impl Session {
                 let half = SHAPE / 2.0;
                 self.execute("board.shape", &json!({"x": ev.x - half, "y": ev.y - half}))?;
                 self.board_placed();
+                Ok(())
+            }
+            ToolId::MindMap => {
+                // The first node's text starts at the click: its left edge there, its middle level with it.
+                let r = self.execute("board.mindMap", &json!({"x": ev.x, "y": ev.y - MIND_ROOT_H / 2.0}))?;
+                self.board_placed();
+                if let Some(id) = r.get("id").and_then(id_of) {
+                    edit_text(self, id)?;
+                }
+                Ok(())
+            }
+            ToolId::CodeBlock => {
+                let (x, y) = (ev.x - CODE_WIDTH / 2.0, ev.y - CODE_MIN_H / 2.0);
+                let r = self.execute("board.codeBlock", &json!({"x": x, "y": y}))?;
+                self.board_placed();
+                if let Some(id) = r.get("id").and_then(id_of) {
+                    edit_text(self, id)?;
+                }
                 Ok(())
             }
             ToolId::Stamp => {
@@ -133,13 +153,19 @@ impl Session {
         (to.node().is_none() || to.node() != from.node()).then_some(to)
     }
 
-    /// The object `end` is on (if any) outlined, with its attach points; the one the end is at
-    /// (`at`, else its named side's) lit.
+    /// The object `end` is on (if any) outlined, with its attach points (the side middles, on the
+    /// border); the one the end is at lit: the nearest to `at` (a route's end sits `END_GAP` outside
+    /// its side's middle, #1916), else its named side's.
     fn show_attach(&mut self, end: Option<End>, at: Option<Point>) {
         let attach = match end {
             Some(End::Node { node, side, .. }) => self.doc().ok().and_then(|d| d.world_bounds(node)).map(|b| {
                 let on = at.or_else(|| (side != Side::Auto).then(|| side.point(b)));
-                SIDES.map(|s| s.point(b)).map(|p| ([p.x, p.y], on.is_some_and(|o| (o - p).hypot() < 1e-6))).to_vec()
+                let pts = SIDES.map(|s| s.point(b));
+                let lit = on.and_then(|o| {
+                    let near = pts.iter().enumerate().map(|(i, p)| (i, (o - *p).hypot())).filter(|(_, d)| *d <= figcraft_doc::END_GAP + 1e-6);
+                    near.min_by(|x, y| x.1.total_cmp(&y.1)).map(|(i, _)| i)
+                });
+                pts.iter().enumerate().map(|(i, p)| ([p.x, p.y], lit == Some(i))).collect()
             }),
             _ => None,
         };
@@ -165,7 +191,7 @@ impl Session {
     /// or free point under the pointer.
     pub(crate) fn connect_drag(&mut self, ev: &PointerEvent, from: End, start: Point) {
         self.tool.gesture = Gesture::Connect { from, start };
-        let c = self.drag_end(ev, from, start).map(|to| Connector { from, to, routing: self.tool.board.routing, path: None });
+        let c = self.drag_end(ev, from, start).map(|to| Connector { from, to, routing: self.tool.board.routing, path: None, branch: false });
         if let Ok(page) = self.page() {
             // One that can't be placed shows nothing, as none would be made.
             let _ = self.preview(|d, _| {

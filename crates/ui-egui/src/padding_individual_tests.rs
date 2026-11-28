@@ -112,3 +112,61 @@ fn shut_pair_fields_edit_their_own_axis() {
     u.frame(vec![]);
     assert_eq!(padding(&u, f), [7.0, 20.0, 7.0, 20.0]);
 }
+
+/// A press and release at `p` with Cmd/Ctrl held (Alt is the field's own scrub modifier).
+fn command_click(u: &mut Ui, p: Pos2) {
+    let m = Modifiers::COMMAND;
+    let press = |pressed: bool| Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: m };
+    u.frame_with(vec![Event::PointerMoved(p)], m);
+    u.frame_with(vec![press(true)], m);
+    u.frame_with(vec![press(false)], m);
+    u.frame(vec![]);
+}
+
+/// A value typed
+/// after a Cmd/Ctrl-click on any padding field goes to all four sides in one undo step; a plain
+/// click keeps editing that side or axis alone.
+#[test]
+fn a_command_click_on_a_padding_field_edits_all_sides() {
+    let (mut u, f) = scene();
+    u.app.run("node.set", json!({"ids": [f], "props": {"paddingLeft": 16.0, "paddingRight": 54.0}}));
+    assert_eq!(padding(&u, f), [10.0, 54.0, 10.0, 16.0]);
+    // Cmd/Ctrl-click and Tab away without typing: nothing is committed, to any side.
+    let before = u.app.session.undo_depth().0;
+    let v = named_field(&mut u, "Vertical padding");
+    command_click(&mut u, v);
+    u.frame(vec![
+        Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::Tab, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![]);
+    assert_eq!(padding(&u, f), [10.0, 54.0, 10.0, 16.0], "an untouched field commits nothing");
+    assert_eq!(u.app.session.undo_depth().0, before);
+    // The shut pair: Cmd/Ctrl-click Vertical padding and type 7: every side is 7.
+    let history = u.app.session.undo_depth().0;
+    let v = named_field(&mut u, "Vertical padding");
+    command_click(&mut u, v);
+    u.frame(vec![Event::Text("7".into())]);
+    enter(&mut u);
+    u.frame(vec![]);
+    assert_eq!(padding(&u, f), [7.0; 4]);
+    assert_eq!(u.app.session.undo_depth().0, history + 1, "one undo step");
+    // A plain click afterwards edits its own axis again.
+    let v = named_field(&mut u, "Vertical padding");
+    click(&mut u, v);
+    u.frame(vec![Event::Text("9".into())]);
+    enter(&mut u);
+    u.frame(vec![]);
+    assert_eq!(padding(&u, f), [9.0, 7.0, 9.0, 7.0]);
+    // Individual padding open: Cmd/Ctrl-click the left field and type 3: every side is 3.
+    let t = named_button(&mut u, "Individual padding");
+    click(&mut u, t);
+    let left = u.ctx.read_response(Id::unique(("padding", 3)).with("field")).expect("left field shows").rect.center();
+    command_click(&mut u, left);
+    u.frame(vec![Event::Text("3".into())]);
+    enter(&mut u);
+    u.frame(vec![]);
+    assert_eq!(padding(&u, f), [3.0; 4]);
+    u.app.run("edit.undo", json!({}));
+    assert_eq!(padding(&u, f), [9.0, 7.0, 9.0, 7.0], "undone as one step");
+}

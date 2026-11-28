@@ -17,6 +17,15 @@ set -u
 APPDIR="$(dirname "$(readlink -f "$0")")"
 DESK_ID=ai.storyteller.figcraft
 
+refresh_icon_cache() {
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    # A per-user hicolor directory need not have index.theme; -t permits that.
+    gtk-update-icon-cache -f -t "$1" >/dev/null 2>&1 || true
+  elif command -v gtk4-update-icon-cache >/dev/null 2>&1; then
+    gtk4-update-icon-cache -f -t "$1" >/dev/null 2>&1 || true
+  fi
+}
+
 integrate() {
   case "${FIGCRAFT_NO_DESKTOP_INTEGRATION:-}" in
     1 | true | yes) return 0 ;;
@@ -63,12 +72,26 @@ integrate() {
   src_icons="$APPDIR/usr/share/icons/hicolor"
   [ -d "$src_icons" ] || return 0
   icons="$data/icons/hicolor"
-  (cd "$src_icons" && find . -type f) | while IFS= read -r rel; do
-    mkdir -p "$icons/$(dirname "$rel")" 2>/dev/null || continue
-    if ! cmp -s "$src_icons/$rel" "$icons/$rel"; then
-      cp "$src_icons/$rel" "$icons/$rel" 2>/dev/null || true
+  (cd "$src_icons" && find . -type f) | {
+    changed=false
+    while IFS= read -r rel; do
+      mkdir -p "$icons/$(dirname "$rel")" 2>/dev/null || continue
+      if ! cmp -s "$src_icons/$rel" "$icons/$rel"; then
+        if cp "$src_icons/$rel" "$icons/$rel" 2>/dev/null; then
+          changed=true
+        fi
+      fi
+    done
+    cache="$icons/icon-theme.cache"
+    if [ "$changed" = false ] && [ -f "$cache" ]; then
+      if [ -n "$(find "$icons" -type f -name "$DESK_ID.*" -newer "$cache" 2>/dev/null)" ]; then
+        changed=true
+      fi
     fi
-  done
+    if [ "$changed" = true ]; then
+      refresh_icon_cache "$icons"
+    fi
+  }
 }
 
 # The CLI is headless and its stdout may be a protocol stream (`cli mcp`): no

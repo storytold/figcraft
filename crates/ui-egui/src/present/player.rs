@@ -16,12 +16,14 @@ use super::{
 pub(super) fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrome: Chrome) -> Option<BarAction> {
     let ctx = ui.ctx().clone();
     p.clock = now;
-    let bar = Rect::from_min_size(rect.min, vec2(rect.width(), chrome.bar_h));
+    // Hide UI (the full-window presenter only): no bar, the prototype takes the whole window.
+    let hidden = p.view.hide_ui && !chrome.pane;
+    let bar = Rect::from_min_size(rect.min, vec2(rect.width(), if hidden { 0.0 } else { chrome.bar_h }));
     let area = Rect::from_min_max(pos2(rect.min.x, bar.max.y), rect.max);
     let bg = crate::theme::doc_c32(ui.ctx(), p.doc.as_ref().map(|d| page_settings(d, p.current)).unwrap_or_default().background);
     let r = chrome.round;
     ui.painter().rect_filled(area, CornerRadius { nw: 0, ne: 0, sw: r, se: r }, bg);
-    let action = top_bar(p, ui, bar, now, chrome);
+    let action = if hidden { None } else { top_bar(p, ui, bar, now, chrome) };
     if action == Some(BarAction::Restart) {
         p.restart(p.start, now);
     }
@@ -58,7 +60,18 @@ pub(super) fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrom
         // The pane only takes the keyboard while the pointer is over it. While a link notice shows
         // the prototype takes neither keys nor the pointer (Escape there cancels the notice).
         let keys = chrome.keys && p.link_notice.is_none() && (!chrome.pane || over);
-        input(p, &ctx, &l, InputMode { over_area: over && p.link_notice.is_none(), keys_on: keys, pane: chrome.pane, now });
+        input(
+            p,
+            &ctx,
+            &l,
+            InputMode {
+                over_area: over && p.link_notice.is_none(),
+                clicks: !(p.view.comments && !chrome.pane),
+                keys_on: keys,
+                pane: chrome.pane,
+                now,
+            },
+        );
     } else {
         p.pads.clear();
     }
@@ -171,7 +184,7 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
             resp = resp.tip(tr("Inspect the layer under the pointer: size, colours, typography"));
         }
         if chrome.pane {
-            icons::paint(ui.painter(), br.shrink(5.0), *icon, if on { t.accent_on } else { t.icon });
+            icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(br), *icon, if on { t.accent_on } else { t.icon });
         } else {
             ui.painter().text(br.center(), Align2::CENTER_CENTER, shown, regular(11.5), if on { t.accent_on } else { text });
         }
@@ -278,6 +291,12 @@ fn options_menu(p: &mut Presenter, ui: &mut Ui, device: Option<Device>, responsi
     }
     if menu_check(ui, p.view.hotspot_hints, tr("Show hotspot hints"), "") {
         p.view.hotspot_hints = !p.view.hotspot_hints;
+        ui.close();
+    }
+    // Hide UI, as the reference tool's Options menu has it (#1820): the bars go away, the key
+    // (the editor's Show/Hide UI key) brings them back.
+    if menu_check(ui, p.view.hide_ui, tr("Hide UI"), &crate::toolbar::pretty_shortcut("Cmd+\\")) {
+        action = Some(BarAction::HideUi);
         ui.close();
     }
     if menu_check(ui, false, tr("Restart"), "R") {

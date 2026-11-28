@@ -84,7 +84,7 @@ static ROWS: &[Row] = &[
     // Essential
     doc(Essential, "Open the actions menu", &["Cmd+K", "Cmd+/"], &[], Bound("app.actions"), "Cmd+/ is in the keyboard layout tables"),
     doc(Essential, "Open the keyboard shortcuts panel", &["Ctrl+Shift+?"], &[], Bound("help.shortcuts"), "Control on macOS too (Shift+Cmd+? is the system's Help search)"),
-    doc(Essential, "Show or hide the interface", &["Cmd+\\"], &[], Bound("view.toggleUi"), ""),
+    doc(Essential, "Show or hide the interface", &["Cmd+\\", "Cmd+."], &[], Bound("view.toggleUi"), "Cmd+. works too"),
     doc(Essential, "Find layers and text", &["Cmd+F"], &[], Bound("edit.findReplace"), ""),
     doc(Essential, "Chat at your cursor in a live session", &["/"], &[], Bound("collab.cursorChat"), ""),
     doc(Essential, "Sample a colour", &["I", "Ctrl+C"], &["I"], Bound("edit.pickColor"), "Control+C on macOS only (Ctrl+C copies elsewhere)"),
@@ -110,6 +110,7 @@ static ROWS: &[Row] = &[
     doc(Tools, "Pencil tool", &["Shift+P"], &[], Bound("tool.pencil"), ""),
     doc(Tools, "Text tool", &["T"], &[], Bound("tool.text"), ""),
     doc(Tools, "Comment mode", &["C"], &[], Bound("tool.comment"), ""),
+    doc(Tools, "Annotation tool", &["Shift+T"], &[], Bound("tool.annotation"), "Accessibility at Figma, Add an annotation; Developer Mode"),
     doc(Tools, "Hand tool while held", &["Space"], &[], Gesture("Pan the canvas"), "held, not pressed"),
     doc(Tools, "Pan with the arrows when nothing is selected (Shift: farther)", &["ArrowRight"], &[], Gesture("Pan with nothing selected (Shift: farther)"),
         "view.pan; nudges move the selection when there is one"),
@@ -128,7 +129,9 @@ static ROWS: &[Row] = &[
     pin(Tools, "tool.highlighter", &["U"], &[]),
     pin(Tools, "tool.eraser", &["E"], &[]),
     pin(Tools, "tool.stamp", &["W"], &[]),
+    pin(Tools, "tool.codeBlock", &["`"], &[]),
     pin(Tools, "board.nextSticky", &["Shift+Cmd+Enter"], &[]),
+    pin(Tools, "board.mindMapAdd", &["Cmd+Enter"], &[]),
     // Vector edit mode
     doc(Selection, "Edit the selected shape's points", &["Enter"], &[], Bound("select.children"), "Enter on a shape edits it; on a frame or group it selects the children"),
     doc(Shape, "Vector edit: move", &["V"], &[], VectorTool(VTool::Move), ""),
@@ -145,8 +148,11 @@ static ROWS: &[Row] = &[
     doc(View, "Outline mode", &["Shift+Cmd+O"], &[], Bound("view.outlines"), ""),
     doc(View, "Pixel preview", &["Ctrl+P"], &["Ctrl+Alt+P"], Bound("view.pixelPreview"), ""),
     doc(View, "Others' cursors in a live session", &["Alt+Cmd+\\"], &["Ctrl+Alt+\\"], Bound("view.multiplayerCursors"), "new command"),
-    doc(View, "Hide the side panels (minimize the interface)", &["Shift+Cmd+\\"], &[], Bound("view.leftSidebar"), ""),
-    doc(View, "Layers panel", &["Alt+1"], &[], Bound("view.layers"), "one article writes Ctrl+1 for Windows, another Alt+1; Alt+1 bound"),
+    doc(View, "Minimize the interface: the navigation bar and both sidebars", &["Shift+Cmd+\\"], &[], Bound("view.minimize"), "the toolbar stays; the right sidebar shows while something is selected"),
+    doc(View, "Layers panel", &["Alt+1"], &["Alt+1", "Ctrl+1"], Bound("view.layers"), "one article writes Ctrl+1 for Windows, another Alt+1; both bound there"),
+    doc(View, "Interface scale: make larger", &["Alt+Shift+Cmd+="], &[], Bound("pref.uiScaleUp"), "Accessibility at Figma, Adjust the scale of the Figma UI"),
+    doc(View, "Interface scale: make smaller", &["Alt+Shift+Cmd+-"], &[], Bound("pref.uiScaleDown"), "Accessibility at Figma"),
+    doc(View, "Interface scale: reset to default", &["Alt+Shift+Cmd+0"], &[], Bound("pref.uiScaleReset"), "Accessibility at Figma"),
     doc(View, "Assets panel", &["Alt+2"], &[], Bound("view.assets"), ""),
     doc(View, "Libraries", &["Alt+3"], &[], Bound("libraries.open"), ""),
     doc(View, "Dev Mode on or off", &["Shift+D"], &[], Bound("view.devMode"), ""),
@@ -178,6 +184,7 @@ static ROWS: &[Row] = &[
     pin(Zoom, "view.nextFrame", &["N", "End"], &[]),
     // Text
     doc(Text, "Bold", &["Cmd+B"], &[], Bound("text.bold"), ""),
+    doc(Text, "Activate a focused link", &["Alt+Enter"], &[], Bound("text.openLink"), "while editing: the link at the caret; web and mail links only"),
     doc(Text, "Italic", &["Cmd+I"], &[], Bound("text.italic"), ""),
     doc(Text, "Underline", &["Cmd+U"], &[], Bound("text.underline"), ""),
     doc(Text, "Strikethrough", &["Shift+Cmd+X"], &[], Bound("text.strikethrough"), ""),
@@ -231,6 +238,8 @@ static ROWS: &[Row] = &[
         "then the arrows move it, Cmd/Ctrl+arrows draw it out (Shift: farther), Enter selects, Escape closes; F8 kept")
         .reserved("Ctrl+Space switches the input method with some Chinese, Japanese and Korean input methods on Windows and Linux"),
     doc(Selection, "Select nested layers", &["Cmd"], &[], Gesture("Deep select"), "held while clicking or dragging"),
+    doc(Selection, "Pick select (while the keyboard box selection shows)", &["Tab"], &[], Gesture("Selection box: switch to pick select"),
+        "or the chord again; then Tab and Shift+Tab move the pick cursor between layers, Enter and Shift+Enter into and out of a layer, Space selects, Escape ends"),
     pin(Selection, "object.rename", &["F2"], &[]),
     pin(Selection, "select.area", &["F8"], &[]),
     // Edit
@@ -249,12 +258,15 @@ static ROWS: &[Row] = &[
     pin(Edit, "edit.redo", &["Shift+Cmd+Z"], &[]),
     pin(Edit, "edit.cut", &["Cmd+X"], &[]),
     pin(Edit, "file.import", &["Shift+Cmd+I"], &[]),
+    pin(Edit, "edit.copyLink", &["Cmd+L"], &[]),
     // Transform
     doc(Transform, "Flip horizontally", &["Shift+H"], &[], Bound("object.flipH"), ""),
     doc(Transform, "Flip vertically", &["Shift+V"], &[], Bound("object.flipV"), ""),
     doc(Transform, "Use as mask (again: release)", &["Ctrl+Cmd+M"], &["Ctrl+Alt+M"], Bound("object.mask"), ""),
     doc(Transform, "Resize a frame to fit its contents", &["Alt+Shift+Cmd+R"], &["Ctrl+Alt+Shift+R"], Bound("object.resizeToFit"), ""),
     doc(Transform, "Nudge (Shift: big nudge)", &["ArrowRight"], &[], Gesture("Nudge (Shift: big nudge)"), ""),
+    doc(Transform, "Rotate a degree (Shift: 15 degrees)", &["Alt+Cmd+ArrowDown"], &[], Gesture("Rotate a degree (Shift: 15)"),
+        "Accessibility at Figma; down and right turn clockwise, up and left back (silent on the direction)"),
     doc(Transform, "Suspend snapping while dragging", &["Ctrl"], &[], Gesture("Suspend snapping while dragging"),
         "Control on macOS (Cmd keeps working); Ctrl elsewhere"),
     doc(Transform, "Show the rotation origin to move it", &["Alt+R"], &[], Bound("transform.rotationOrigin"),
@@ -273,6 +285,7 @@ static ROWS: &[Row] = &[
     doc(Arrange, "Add auto layout", &["Shift+A"], &[], Bound("layout.add"), ""),
     doc(Arrange, "Remove auto layout", &["Alt+Shift+A"], &[], Bound("layout.remove"), ""),
     doc(Arrange, "Suggest auto layout", &["Ctrl+Shift+A"], &["Ctrl+Alt+Shift+A"], Bound("layout.suggest"), "was unbound"),
+    doc(Arrange, "Edit padding on all sides (from right panel)", &["Cmd"], &["Ctrl"], Gesture("Edit padding on all sides"), "held while clicking a padding field: the value typed goes to every side"),
     pin(Arrange, "distribute.horizontal", &["Ctrl+Alt+H"], &["Alt+Shift+H"]),
     pin(Arrange, "distribute.vertical", &["Ctrl+Alt+V"], &["Alt+Shift+V"]),
     pin(Arrange, "arrange.tidy", &["Ctrl+Alt+T"], &["Ctrl+Alt+Shift+T"]),
@@ -407,7 +420,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (129, 128, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (137, 136, 1, 0, 2, 60));
 }
 
 #[test]

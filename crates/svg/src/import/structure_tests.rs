@@ -129,10 +129,96 @@ fn strokes_scale_with_their_layer() {
     assert_eq!((l.width, l.stroke.weight, l.stroke.dashes.clone()), (30.0, 6.0, vec![12.0, 6.0]));
 }
 
+/// `stroke-dashoffset` is how far into the pattern the stroke starts. A closed outline runs the
+/// pattern from its start, so the offset rotates the pattern; an open line starts half a dash in by
+/// itself (see `figcraft_pathops::width::line_dashes`), so an offset of half the first dash is
+/// already there and only that one is left out.
+#[test]
+fn a_closed_outline_keeps_a_dash_offset_of_half_a_dash() {
+    let (d, f) = import(
+        r##"<rect id="r" width="40" height="40" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><path id="p" d="M0 60 L40 60 L20 100 Z" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><circle id="c" cx="100" cy="100" r="20" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><line id="l" y1="120" y2="120" x2="40" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/>"##,
+    );
+    // Two in: a dash of 2 is left, then the gap, then the pattern as it is (`dash_offset`).
+    let rotated = vec![2.0, 2.0, 2.0, 0.0];
+    assert_eq!(node(&d, f, "r").stroke.dashes, rotated, "rectangle");
+    assert_eq!(node(&d, f, "p").stroke.dashes, rotated, "closed path");
+    assert_eq!(node(&d, f, "c").stroke.dashes, rotated, "circle");
+    assert_eq!(node(&d, f, "l").stroke.dashes, vec![4.0, 2.0], "an open line starts half a dash in anyway");
+}
+
+/// An open path is a line in this respect: half a dash in is where it starts anyway, so that
+/// offset is left out, and any other is applied; an outline with an open subpath among closed
+/// ones is open.
+#[test]
+fn an_open_path_starts_half_a_dash_in_and_takes_other_offsets() {
+    let (d, f) = import(
+        r##"<path id="half" d="M0 0 L40 0 L40 40" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><path id="one" d="M0 60 L40 60" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="1"/><path id="mixed" d="M0 100 L40 100 L20 140 Z M60 100 L100 100" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/>"##,
+    );
+    assert_eq!(node(&d, f, "half").stroke.dashes, vec![4.0, 2.0], "half a dash in is where an open path starts");
+    assert_eq!(node(&d, f, "one").stroke.dashes, vec![3.0, 2.0, 1.0, 0.0], "one in: three of the first dash are left");
+    assert_eq!(node(&d, f, "mixed").stroke.dashes, vec![4.0, 2.0], "an open subpath makes the outline open");
+}
+
+/// A filled and stroked path with an open subpath becomes a fill layer and a stroke layer: the
+/// stroke layer is open, so it starts half a dash in like any open path and that offset is left
+/// out; a filled and stroked path that closes stays one layer whose offset is applied.
+#[test]
+fn a_filled_and_stroked_open_path_splits_and_its_stroke_layer_is_open() {
+    let (d, f) = import(
+        r##"<path id="both" d="M0 0 L40 0 L40 40" fill="#F00" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><path id="bothmixed" d="M0 60 L40 60 L20 100 Z M60 60 L100 60 L100 100" fill="#F00" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/><path id="bothclosed" d="M0 120 L40 120 L20 160 Z" fill="#F00" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2"/>"##,
+    );
+    for id in ["both", "bothmixed"] {
+        let stroke_layer = node(&d, f, id);
+        assert!(stroke_layer.fills.is_empty() && !stroke_layer.strokes.is_empty(), "{id}: the stroke layer carries the stroke alone");
+        assert_eq!(stroke_layer.stroke.dashes, vec![4.0, 2.0], "{id}: an open stroke layer starts half a dash in by itself");
+        let fill_layer = node(&d, f, &format!("{id} fill"));
+        assert!(!fill_layer.fills.is_empty() && fill_layer.strokes.is_empty(), "{id}: the fill layer carries the fill alone");
+    }
+    let one = node(&d, f, "bothclosed");
+    assert!(!one.fills.is_empty() && !one.strokes.is_empty(), "a closed path keeps fill and stroke on one layer");
+    assert_eq!(one.stroke.dashes, vec![2.0, 2.0, 2.0, 0.0], "and its offset rotates the pattern");
+    assert!(d.subtree(f).into_iter().filter_map(|i| d.node(i)).all(|n| n.name != "bothclosed fill"), "no split for a closed path");
+}
+
+/// A text stroke runs along glyph contours, which close, so its offset is applied as on a shape.
+#[test]
+fn a_text_stroke_keeps_a_dash_offset_of_half_a_dash() {
+    if figcraft_text::fontdb::find_face("Inter", "Regular").is_none() {
+        return;
+    }
+    let (d, f) = import(
+        r##"<text id="t" x="10" y="30" font-family="Inter" font-size="20" fill="none" stroke="#000" stroke-dasharray="4 2" stroke-dashoffset="2">T</text>"##,
+    );
+    assert_eq!(node(&d, f, "t").stroke.dashes, vec![2.0, 2.0, 2.0, 0.0]);
+}
+
+/// `preserveAspectRatio="none"` stretches a picture into its box edge to edge. usvg sizes the
+/// box to the picture for `meet` and `slice` (the fit is in the transform), so a box of another
+/// shape is a stretch: a Fill, which keeps the picture's shape and crops it, would show the
+/// middle of the picture instead.
+#[test]
+fn an_image_stretched_into_its_box_stays_stretched() {
+    use figcraft_color::{ImageScaleMode, PaintKind};
+    let (d, f) =
+        import(&format!(r##"<image id="pic" x="10" y="20" width="40" height="40" preserveAspectRatio="none" href="data:image/png;base64,{PNG}"/>"##));
+    let n = node(&d, f, "pic");
+    assert_eq!((n.width, n.height), (40.0, 40.0));
+    let Some(PaintKind::Image(ip)) = n.fills.first().map(|p| &p.kind) else { panic!("{:?}", n.fills) };
+    // The 4 × 2 picture's pixels map onto the whole 40 × 40 box: 10 across, 20 down.
+    let m = figcraft_render::paint::image_transform(ip, 4.0, 2.0, n.width, n.height);
+    assert_eq!((m.sx, m.ky, m.kx, m.sy, m.tx, m.ty), (10.0, 0.0, 0.0, 20.0, 0.0, 0.0), "{ip:?}");
+    // With the aspect kept (the default) the box is the picture's own shape and a Fill is exact.
+    let (d, f) = import(&format!(r##"<image id="pic" x="10" y="20" width="40" height="40" href="data:image/png;base64,{PNG}"/>"##));
+    let n = node(&d, f, "pic");
+    assert_eq!((n.width, n.height), (40.0, 20.0));
+    assert!(matches!(n.fills.first().map(|p| &p.kind), Some(PaintKind::Image(i)) if i.scale_mode == ImageScaleMode::Fill), "{:?}", n.fills);
+}
+
 #[test]
 fn linked_files_are_never_read() {
-    let dir = std::env::temp_dir().join("figcraft-svg-linked");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::env::temp_dir().join(format!("figcraft-svg-linked-{}", std::process::id()));
+    // `create_dir` refuses a directory or link someone else planted at this name.
+    std::fs::create_dir(&dir).unwrap();
     let png = dir.join("secret.png");
     std::fs::write(&png, base64::Engine::decode(&base64::engine::general_purpose::STANDARD, PNG).unwrap()).unwrap();
     let href = png.to_string_lossy().replace('\\', "/");

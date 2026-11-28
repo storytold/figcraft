@@ -17,9 +17,12 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod a11y;
 pub mod bidi;
 pub mod canvas;
+pub mod channel;
 pub mod cjk;
+mod combo_menu;
 pub mod control;
 pub mod dialogs;
+pub mod framework;
 pub mod home;
 pub mod i18n;
 pub mod icons;
@@ -54,7 +57,11 @@ mod async_dialog_tests;
 #[cfg(test)]
 mod blend_preview_tests;
 #[cfg(test)]
+mod bool_menu_icon_tests;
+#[cfg(test)]
 mod branch_ui_tests;
+#[cfg(test)]
+mod canvas_autopan_tests;
 #[cfg(test)]
 mod canvas_double_click_tests;
 #[cfg(test)]
@@ -74,6 +81,8 @@ mod colorpicker_selection_tests;
 #[cfg(test)]
 mod comments_tests;
 #[cfg(test)]
+mod component_header_tests;
+#[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
 mod component_set_narrow_tests;
@@ -85,6 +94,8 @@ mod component_swap_search_tests;
 mod context_menu_tests;
 #[cfg(test)]
 mod corner_individual_tests;
+#[cfg(test)]
+mod create_multiple_menu_tests;
 #[cfg(test)]
 mod crop_image_tests;
 #[cfg(test)]
@@ -100,17 +111,23 @@ mod devmode_tail_tests;
 #[cfg(test)]
 mod display_name_tests;
 #[cfg(test)]
+mod drop_position_tests;
+#[cfg(test)]
 mod duplicate_paint_tests;
 #[cfg(test)]
 mod export_name_tests;
 #[cfg(test)]
 mod export_preview_tests;
 #[cfg(test)]
+mod field_ellipsis_tests;
+#[cfg(test)]
 mod field_tests;
 #[cfg(test)]
 mod font_menu_regrow_tests;
 #[cfg(test)]
 mod frame_label_tests;
+#[cfg(test)]
+mod frame_new_from_selection_tests;
 #[cfg(test)]
 mod gap_handle_tests;
 #[cfg(test)]
@@ -120,9 +137,17 @@ mod guide_release_tests;
 #[cfg(test)]
 mod guide_snap_tests;
 #[cfg(test)]
+mod header_icon_size_tests;
+#[cfg(test)]
+mod hex_field_target_tests;
+#[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
+#[cfg(test)]
+mod host_save_tests;
+#[cfg(test)]
+mod icon_button_size_tests;
 #[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
@@ -132,7 +157,11 @@ mod import_report_tests;
 #[cfg(test)]
 mod inspect_fields_tests;
 #[cfg(test)]
+mod instances_shared_props_tests;
+#[cfg(test)]
 mod layers_behaviour_tests;
+#[cfg(test)]
+mod layers_component_rows_tests;
 #[cfg(test)]
 mod layers_drag_tests;
 #[cfg(test)]
@@ -141,6 +170,8 @@ mod layers_keyboard_tests;
 mod layers_keys_tests;
 #[cfg(test)]
 mod layers_rename_tests;
+#[cfg(test)]
+mod layers_wide_names_tests;
 #[cfg(test)]
 mod library_beacon_tests;
 #[cfg(test)]
@@ -172,13 +203,23 @@ mod menu_contrast_tests;
 #[cfg(test)]
 mod menu_input_tests;
 #[cfg(test)]
+mod menu_overflow_tests;
+#[cfg(test)]
+mod menu_scroll_tests;
+#[cfg(test)]
+mod mirror_tests;
+#[cfg(test)]
 mod missing_fonts_tests;
+#[cfg(test)]
+mod naming_tests;
 #[cfg(test)]
 mod online_tests;
 #[cfg(test)]
 mod open_issues_tests;
 #[cfg(test)]
 mod padding_individual_tests;
+#[cfg(test)]
+mod page_variable_modes_tests;
 #[cfg(test)]
 mod palette_tests;
 #[cfg(test)]
@@ -194,6 +235,8 @@ mod paste_image_tests;
 mod pen_mode_tests;
 #[cfg(test)]
 mod perf_tests;
+#[cfg(test)]
+mod pixel_grid_tests;
 #[cfg(test)]
 mod plugin_panel_tests;
 #[cfg(test)]
@@ -214,12 +257,19 @@ mod present_tests;
 mod present_view_tests;
 #[cfg(test)]
 mod property_menu_tests;
+mod property_rows;
+#[cfg(test)]
+mod property_rows_tests;
 #[cfg(test)]
 mod proto_editor_tests;
 #[cfg(test)]
 mod proto_reorder_tests;
 #[cfg(test)]
 mod proto_responsive_tests;
+#[cfg(test)]
+mod proto_variant_connect_tests;
+#[cfg(test)]
+mod region_fill_rows_tests;
 #[cfg(test)]
 mod resources_tests;
 #[cfg(test)]
@@ -228,6 +278,8 @@ mod sampled_color_tests;
 mod save_as_tests;
 #[cfg(test)]
 mod select_all_tests;
+#[cfg(test)]
+mod selection_colors_tests;
 #[cfg(test)]
 mod shortcut_keys_tests;
 #[cfg(test)]
@@ -243,21 +295,47 @@ mod table_paste_tests;
 #[cfg(test)]
 mod text_enter_tests;
 #[cfg(test)]
+mod text_link_tests;
+#[cfg(test)]
+mod text_mixed_fill_tests;
+#[cfg(test)]
+mod text_paste_style_tests;
+#[cfg(test)]
+mod tidy_tests;
+#[cfg(test)]
 mod titlebar_tests;
 #[cfg(test)]
 mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
 #[cfg(test)]
+mod usage_summary_tests;
+#[cfg(test)]
+mod variable_picker_tests;
+#[cfg(test)]
 mod variables_export_ui_tests;
+#[cfg(test)]
+mod variables_group_create_tests;
 #[cfg(test)]
 mod variables_rename_tests;
 #[cfg(test)]
+mod variables_select_tests;
+#[cfg(test)]
+mod variables_window_resize_tests;
+#[cfg(test)]
+mod variant_own_value_tests;
+#[cfg(test)]
 mod variants_discovery_tests;
+#[cfg(test)]
+mod vector_align_tests;
 #[cfg(test)]
 mod vector_keys_tests;
 #[cfg(test)]
 mod vector_panel_tests;
+#[cfg(test)]
+mod vector_point_radius_tests;
+#[cfg(test)]
+mod vector_point_xy_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
 #[cfg(test)]
@@ -393,6 +471,9 @@ pub struct UiState {
     pub right_width: f32,
     /// The right sidebar as drawn this frame, after fitting the window.
     pub right_panel_rect: Option<egui::Rect>,
+    /// The layers the Design panel showed, and the pass it did, while one of its fields had the
+    /// keyboard (see `design_selection`).
+    pub field_selection: Option<(u64, Vec<figcraft_doc::NodeId>)>,
     pub right_tab: RightTab,
     /// The tab of the previous frame, to see the right panel change mode.
     pub last_right_tab: RightTab,
@@ -479,13 +560,19 @@ pub struct UiState {
     /// A selection box drawn from the keyboard (`select.area`), page `[x0, y0, x1, y1]` with the
     /// marquee's start at `x0, y0`.
     pub key_box: Option<[f64; 4]>,
+    /// Pick select (#1836): the layer the pink outline is on while the keys walk the layer tree
+    /// (Tab or the selection-box chord again while the box shows; Space selects it), with the uid
+    /// of its document: layer ids are only unique within a document, and the pick holds only on
+    /// the page shown ([`FigApp::picked`]).
+    pub pick: Option<(u64, NodeId)>,
     /// Layers panel search: open, the filter text, the shift-click range anchor and the selection
     /// the tree last revealed (ancestors expand and the row scrolls into view when it changes).
     pub layer_search: bool,
     pub layer_filter: String,
     pub layer_anchor: Option<NodeId>,
-    /// The layers panel has the keyboard: arrow keys move through its rows instead of nudging
-    /// (set by a click on a row, cleared by a press on the canvas).
+    /// A layer row was clicked last: Shift+F10 opens the context menu at its row (set by a click on
+    /// a row, cleared by a press on the canvas). Arrow keys still nudge; they move through the rows
+    /// only once F6 has put the keyboard on the layers panel.
     pub layers_focus: bool,
     /// The file (its `uid`) whose pages list has the keyboard: Delete with no layers selected deletes
     /// its current page (set by a click on a page row or the add-page button, cleared by a click on a
@@ -543,6 +630,9 @@ pub struct UiState {
     pub mobile_panel: Option<MobilePanel>,
     /// The window was narrow (one side panel at a time) at the last frame.
     pub narrow: bool,
+    /// The window is mirrored for a right-to-left UI language: the icon rail and the layers panel
+    /// on the right, the Design panel on the left, popovers beside it on its right.
+    pub mirrored: bool,
     pub comments: comments::CommentUi,
     pub versions: versions::VersionUi,
     /// The branch review dialog, while open.
@@ -559,6 +649,13 @@ pub struct UiState {
     /// copy changes the engine clipboard without writing the OS clipboard; the generation then
     /// no longer matches, so the stale mirror is not mistaken for the user's own copy.
     pub last_copy_generation: u64,
+    /// The formatting of the characters last copied as text: a paste into a text edit of those
+    /// same characters keeps it.
+    pub text_copy: Option<figcraft_engine::textedit::RichText>,
+    /// The fill, stroke or effect row highlighted in the Design panel: Cmd/Ctrl+C copies it.
+    pub property_row: Option<property_rows::Highlight>,
+    /// A paint or effect copied from its row: Cmd/Ctrl+V pastes it while it's the last copy.
+    pub property_copy: Option<property_rows::Copied>,
     /// A save shortcut pressed while a panel field had the keyboard: the field lets go (which
     /// commits what was typed) and the command runs next frame for that document/window.
     pub after_field: Option<shortcuts::AfterFieldSave>,
@@ -588,6 +685,8 @@ pub struct UiState {
     pub online: online::OnlineUi,
     /// The window was asked to close with unsaved changes: the question shows.
     pub confirm_close: bool,
+    /// A tab was asked to close with unsaved changes: the question for it, then its save.
+    pub close_tab: Option<windows::TabClose>,
     /// The file a Save as started from the unsaved-changes question is saving: the window closes
     /// once it is saved, and stays open if the dialog is cancelled or the save fails.
     pub close_after_save_as: Option<u64>,
@@ -605,6 +704,7 @@ impl Default for UiState {
             left_width: PANEL_DEFAULT,
             right_width: PANEL_DEFAULT,
             right_panel_rect: None,
+            field_selection: None,
             right_tab: RightTab::Design,
             last_right_tab: RightTab::Design,
             left_tab: LeftTab::File,
@@ -654,6 +754,7 @@ impl Default for UiState {
             context_menu: None,
             key_menu: false,
             key_box: None,
+            pick: None,
             layer_search: false,
             layer_filter: String::new(),
             layer_anchor: None,
@@ -691,6 +792,7 @@ impl Default for UiState {
             left_collapsed: false,
             mobile_panel: None,
             narrow: false,
+            mirrored: false,
             comments: comments::CommentUi::default(),
             versions: versions::VersionUi::default(),
             branch_review: None,
@@ -698,6 +800,9 @@ impl Default for UiState {
 
             last_copy: None,
             last_copy_generation: 0,
+            text_copy: None,
+            property_row: None,
+            property_copy: None,
             after_field: None,
             held: egui::Modifiers::NONE,
             next_autosave: 0.0,
@@ -711,6 +816,7 @@ impl Default for UiState {
             live: live::LiveUi::default(),
             online: online::OnlineUi::default(),
             confirm_close: false,
+            close_tab: None,
             close_after_save_as: None,
             save_on_close: false,
         }
@@ -746,6 +852,9 @@ pub struct FigApp {
     panels_unsaved: bool,
     /// Control-channel requests waiting for the next frame.
     pub control_queue: Vec<ControlRequest>,
+    /// Windows a control request waits for: the window's pass count when the wait began and the
+    /// app-clock time it began, to tell a window that stopped drawing ([`control::background`]).
+    control_waits: std::collections::BTreeMap<u64, (u64, f64)>,
     /// Input events from the control channel (`ui.input`) for the next frame's raw input.
     pub control_input: Vec<egui::Event>,
     /// Frames drawn and what asked for them (`ui.inspect`).
@@ -793,6 +902,10 @@ pub struct FigApp {
     pub(crate) ime: egui::ime_context::ImeContextTracker,
     /// The check for a newer release and its prompt (desktop; [`updates_ui`]).
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// The framework dialogs (the update dialogs), run once per frame after the main window's UI.
+    pub framework_dialogs: craft_ui::dialog::DialogHost,
+    /// Who FigCraft is to the framework's dialogs ([`framework::host`]).
+    pub(crate) framework_host: std::sync::Arc<craft_host::Host>,
     /// Test-only count of the one IME observation each viewport pass makes.
     #[cfg(test)]
     pub(crate) ime_observations: u32,

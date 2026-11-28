@@ -11,14 +11,62 @@ use crate::{Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        spec!("align.left", "Align left", "{ids?}", true, |s, p| align(s, p, Al::Left)),
-        spec!("align.hcenter", "Align horizontal centers", "{ids?}", true, |s, p| align(s, p, Al::HCenter)),
-        spec!("align.right", "Align right", "{ids?}", true, |s, p| align(s, p, Al::Right)),
-        spec!("align.top", "Align top", "{ids?}", true, |s, p| align(s, p, Al::Top)),
-        spec!("align.vcenter", "Align vertical centers", "{ids?}", true, |s, p| align(s, p, Al::VCenter)),
-        spec!("align.bottom", "Align bottom", "{ids?}", true, |s, p| align(s, p, Al::Bottom)),
-        spec!("distribute.horizontal", "Distribute horizontal spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, true)),
-        spec!("distribute.vertical", "Distribute vertical spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, false)),
+        spec!(
+            "align.left",
+            "Align left",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Left)
+        ),
+        spec!(
+            "align.hcenter",
+            "Align horizontal centers",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::HCenter)
+        ),
+        spec!(
+            "align.right",
+            "Align right",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Right)
+        ),
+        spec!(
+            "align.top",
+            "Align top",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Top)
+        ),
+        spec!(
+            "align.vcenter",
+            "Align vertical centers",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::VCenter)
+        ),
+        spec!(
+            "align.bottom",
+            "Align bottom",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Bottom)
+        ),
+        spec!(
+            "distribute.horizontal",
+            "Distribute horizontal spacing",
+            "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| distribute(s, p, true)
+        ),
+        spec!(
+            "distribute.vertical",
+            "Distribute vertical spacing",
+            "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| distribute(s, p, false)
+        ),
         spec!(
             "arrange.spacing",
             "Spacing",
@@ -164,12 +212,27 @@ pub fn can_align(doc: &Document, ids: &[NodeId]) -> bool {
     align_target(doc, &roots(doc, ids)).is_some()
 }
 
+/// Whether `ids` is one layer that its auto layout frame places: Figma greys out Align for it,
+/// since the frame decides where it goes (measured in Figma's web app, 2026-11-12).
+pub fn align_blocked_by_auto_layout(doc: &Document, ids: &[NodeId]) -> bool {
+    matches!(roots(doc, ids).as_slice(), [id] if in_auto_layout_flow(doc, *id))
+}
+
+/// Whether the layer sits in an auto layout frame and takes part in its flow (not absolutely positioned).
+fn in_auto_layout_flow(doc: &Document, id: NodeId) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+}
+
 /// What `roots` align to: one layer to its parent frame, several to their combined bounds.
 fn align_target(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
     match roots {
         [] => None,
         [id] => {
             let parent = doc.node(*id)?.parent.filter(|pp| !doc.node(*pp).is_some_and(Node::is_page))?;
+            if in_auto_layout_flow(doc, *id) {
+                return None;
+            }
             Some(doc.world_bounds(parent).unwrap_or_default())
         }
         _ => Some(doc.bounds_of(roots).unwrap_or_default()),
@@ -177,6 +240,18 @@ fn align_target(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
 }
 
 fn align(s: &mut Session, p: &Value, a: Al) -> Result<Value> {
+    use crate::vectoredit::transform::PointAlign;
+    let how = match a {
+        Al::Left => PointAlign::Left,
+        Al::HCenter => PointAlign::HCenter,
+        Al::Right => PointAlign::Right,
+        Al::Top => PointAlign::Top,
+        Al::VCenter => PointAlign::VCenter,
+        Al::Bottom => PointAlign::Bottom,
+    };
+    if let Some(r) = crate::vectoredit::transform::align_points_in_edit_mode(s, p, how) {
+        return r;
+    }
     let ids = req_targets("align", s, p)?;
     let doc = s.doc_mut()?;
     let ids = roots(doc, &ids);
@@ -197,6 +272,9 @@ fn align(s: &mut Session, p: &Value, a: Al) -> Result<Value> {
 }
 
 fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
+    if let Some(r) = crate::vectoredit::transform::distribute_points_in_edit_mode(s, p, horizontal) {
+        return r;
+    }
     let ids = req_targets("distribute", s, p)?;
     let doc = s.doc_mut()?;
     let ids = roots(doc, &ids);
@@ -223,53 +301,25 @@ fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
     ok()
 }
 
-/// Tidy up: snap the selection into a grid of rows/columns with even spacing.
+/// Tidy up: even the gaps of a row, a column or a grid, keeping the order and sizes (see
+/// `selection::tidy`). Nothing moves, and no undo step is added, when it is unavailable.
 fn tidy(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("arrange.tidy", s, p)?;
+    let spacing = num(p, "spacing");
+    if spacing.is_some_and(|v| !v.is_finite() || v.abs() > 1_000_000.0) {
+        return Err(bad("arrange.tidy", "spacing out of range"));
+    }
+    let snap = s.ds()?.view.snap_pixel;
+    let moves = crate::tidy::tidy_moves(s.doc()?, &ids, spacing, snap);
+    if moves.is_empty() {
+        return ok();
+    }
+    if moves.iter().any(|(_, dx, dy)| !dx.is_finite() || !dy.is_finite()) {
+        return Err(bad("arrange.tidy", "non-finite result"));
+    }
     let doc = s.doc_mut()?;
-    let ids = roots(doc, &ids);
-    let mut items: Vec<(NodeId, Rect)> = ids.iter().filter_map(|i| doc.world_bounds(*i).map(|b| (*i, b))).collect();
-    if items.len() < 2 {
-        return ok();
-    }
-    // Group into rows by vertical centre overlap.
-    items.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0));
-    let mut rows: Vec<Vec<(NodeId, Rect)>> = Vec::new();
-    for it in items {
-        match rows.last_mut() {
-            Some(row) if row.iter().any(|(_, b)| it.1.center().y < b.y1 && it.1.center().y > b.y0) => row.push(it),
-            _ => rows.push(vec![it]),
-        }
-    }
-    let all: Vec<Rect> = rows.iter().flatten().map(|(_, b)| *b).collect();
-    let (Some(origin), maxw, maxh) = (
-        all.iter().copied().reduce(|a, b| a.union(b)),
-        all.iter().map(Rect::width).fold(0.0, f64::max),
-        all.iter().map(Rect::height).fold(0.0, f64::max),
-    ) else {
-        return ok();
-    };
-    let gap = num(p, "spacing").unwrap_or_else(|| {
-        // Keep the average existing horizontal gap (min 10).
-        10f64.max(
-            rows.iter()
-                .filter(|r| r.len() > 1)
-                .map(|r| {
-                    (r.iter().map(|(_, b)| b.x1).fold(f64::MIN, f64::max)
-                        - r.iter().map(|(_, b)| b.x0).fold(f64::MAX, f64::min)
-                        - r.iter().map(|(_, b)| b.width()).sum::<f64>())
-                        / (r.len() - 1) as f64
-                })
-                .fold(0.0, f64::max),
-        )
-    });
-    for (ri, row) in rows.iter_mut().enumerate() {
-        row.sort_by(|a, b| a.1.x0.total_cmp(&b.1.x0));
-        for (ci, (id, b)) in row.iter().enumerate() {
-            let x = origin.x0 + ci as f64 * (maxw + gap);
-            let y = origin.y0 + ri as f64 * (maxh + gap);
-            move_world(doc, *id, x - b.x0, y - b.y0)?;
-        }
+    for (id, dx, dy) in moves {
+        move_world(doc, id, dx, dy)?;
     }
     ok()
 }
@@ -399,17 +449,78 @@ fn turn_pivot(s: &Session, ids: &[NodeId]) -> Result<Option<Point>> {
     Ok(ds.moved_origin().filter(|_| ds.selection == ids).or_else(|| ds.doc.bounds_of(&roots(&ds.doc, ids)).map(|b| b.center())))
 }
 
+/// The range an instance's scale factor stays in (the same range `.fig` files allow).
+pub(crate) const MIN_SCALE_FACTOR: f64 = 1e-3;
+pub(crate) const MAX_SCALE_FACTOR: f64 = 1e3;
+
+/// For each layer of `sub` (the subtree of `id`), whether an instance sits above it, up to `id`
+/// (never `id` itself): `scale_of`'s product already carries the outer factor to it (#2090).
+fn covered_by_instance(doc: &Document, sub: &[NodeId], id: NodeId) -> Vec<bool> {
+    sub.iter()
+        .map(|i| {
+            if *i == id {
+                return false;
+            }
+            for a in doc.ancestors(*i) {
+                if doc.node(a).is_some_and(|n| matches!(n.kind, NodeKind::Instance { .. })) {
+                    return true;
+                }
+                if a == id {
+                    break;
+                }
+            }
+            false
+        })
+        .collect()
+}
+
+/// Whether [`scale_node`] by `k` keeps every instance it multiplies inside the scale factor's
+/// range. Every other length takes the full `k`, so a factor that had to be clamped would leave
+/// bound lengths (drawn at the variable's value times the factor) off from unbound ones.
+pub(crate) fn scale_fits(doc: &Document, id: NodeId, k: f64) -> bool {
+    if !(k.is_finite() && k > 0.0) {
+        return true;
+    }
+    let sub = doc.subtree(id);
+    let covered = covered_by_instance(doc, &sub, id);
+    sub.iter().enumerate().all(|(depth, i)| {
+        let Some(n) = doc.node(*i) else { return true };
+        if !matches!(n.kind, NodeKind::Instance { .. }) || covered.get(depth).copied().unwrap_or(false) {
+            return true;
+        }
+        // A hair of slack, so 10 x 100 and 0.1 x 0.01 land on the bounds despite rounding.
+        let f = n.scale_factor * k;
+        (MIN_SCALE_FACTOR * (1.0 - 1e-9)..=MAX_SCALE_FACTOR * (1.0 + 1e-9)).contains(&f)
+    })
+}
+
 /// Scale a node and everything in it uniformly (the Scale tool): sizes and positions (whatever
 /// the children's constraints), strokes, effects, radii, auto layout spacing, min/max sizes,
 /// layout grids, ruler guides, tiled images and text sizes.
+///
+/// Variable-bound lengths follow the incumbent (#2090): an instance multiplies its scale factor and
+/// keeps its bindings, which draw at the variable's value times the factor; any other layer not
+/// inside an instance keeps the scaled value and drops the binding of each length it scaled.
 pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     let k = if k.is_finite() && k > 0.0 { k } else { return Ok(()) };
+    if !scale_fits(doc, id, k) {
+        return Err(scale_range_error());
+    }
+    // A scale by one changes no length, so it keeps every binding: a Scale tool drag back to where it
+    // started scales by exactly one, and must not unbind the lengths it never changed.
+    if (k - 1.0).abs() <= f64::EPSILON {
+        return Ok(());
+    }
     let sub = doc.subtree(id);
     // The layers below `id` scale whatever their constraints, so where they are layers of an
     // instance their new size and place are overrides. The edit's own diff takes geometry that
     // changed with an ancestor's size for what constraints give, so the next rebuild of the
     // instance would put them back at their main's size (#922).
     let in_instance: Vec<bool> = sub.iter().enumerate().map(|(depth, i)| depth > 0 && crate::components::inside_instance(doc, *i)).collect();
+    let nested: Vec<bool> = sub.iter().map(|i| crate::components::inside_instance(doc, *i)).collect();
+    // An instance inside another instance of the subtree is covered by the outer factor through
+    // `scale_of`'s product (#2090); only an instance with no instance above it, up to `id`, takes k.
+    let covered = covered_by_instance(doc, &sub, id);
     let tiles = |paints: &mut Vec<figcraft_color::Paint>| {
         for p in paints {
             if let figcraft_color::PaintKind::Image(img) = &mut p.kind
@@ -422,6 +533,13 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     for (depth, i) in sub.iter().enumerate() {
         let n = doc.get_mut(*i)?;
         let (w0, h0, t0) = (n.width, n.height, n.transform);
+        if matches!(n.kind, NodeKind::Instance { .. }) {
+            if !covered.get(depth).copied().unwrap_or(false) {
+                n.scale_factor = (n.scale_factor * k).clamp(MIN_SCALE_FACTOR, MAX_SCALE_FACTOR);
+            }
+        } else if !nested.get(depth).copied().unwrap_or(false) && !n.bound.is_empty() {
+            n.bound.retain(|field, _| !super::styles::LENGTH_FIELDS.contains(&field.as_str()));
+        }
         tiles(&mut n.fills);
         tiles(&mut n.strokes);
         let cl = &mut n.child_layout;
@@ -465,7 +583,8 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
                 }
                 EffectKind::Glass(g) => {
                     g.depth *= k;
-                    g.frost *= k;
+                    // From the frost it draws with (an older file's past 100 draws at 100).
+                    g.frost = (g.sanitized().frost * k).min(figcraft_doc::Glass::MAX_FROST);
                 }
             }
         }
@@ -529,6 +648,10 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     Ok(())
 }
 
+fn scale_range_error() -> crate::EngineError {
+    bad("transform.scale", "the scale would take an instance past the supported scale range of 0.001 to 1000")
+}
+
 fn scale_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let k = req_num("transform.scale", p, "factor")?;
     if k <= 0.0 {
@@ -539,6 +662,10 @@ fn scale_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = roots(doc, &ids);
     let b = doc.bounds_of(&ids).unwrap_or_default();
     let pivot = Point::new(num_or(p, "cx", b.x0), num_or(p, "cy", b.y0));
+    // Refuse before anything changes, so a selection where only a later root fails stays whole.
+    if !ids.iter().all(|i| scale_fits(doc, *i, k)) {
+        return Err(scale_range_error());
+    }
     for i in ids {
         let Some(nb) = doc.world_bounds(i) else { continue };
         scale_node(doc, i, k)?;
@@ -569,18 +696,19 @@ pub(crate) fn resize_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         let n = doc.get_mut(i)?;
         let after = n.transform * Point::new(w * ax, h * ay);
         n.transform = Affine::translate(before - after) * n.transform;
-        if num(p, "width").is_some() {
-            n.child_layout.sizing_h = Sizing::Fixed;
-        }
-        if num(p, "height").is_some() {
-            n.child_layout.sizing_v = Sizing::Fixed;
-        }
         if let NodeKind::Text(t) = &mut n.kind {
             if num(p, "height").is_some() {
                 t.fix_size(num(p, "width").is_some(), true);
             } else if t.auto_resize != TextAutoResize::Truncate {
                 t.auto_resize = TextAutoResize::Height;
             }
+        }
+        // A side given is fixed, or fills its auto layout parent when it is the full space there.
+        if num(p, "width").is_some() {
+            super::props::fix_axis(doc, i, true)?;
+        }
+        if num(p, "height").is_some() {
+            super::props::fix_axis(doc, i, false)?;
         }
         super::props::restore_worlds(doc, &kept)?;
     }

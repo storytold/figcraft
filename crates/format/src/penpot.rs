@@ -413,7 +413,6 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
     let mut warnings = Vec::new();
     embedded_fonts::report(&mut z, &mut warnings, &mut inflate_budget);
     inflate_budget.check()?;
-    let mut image_keys: BTreeMap<String, String> = BTreeMap::new();
     let mut layer_count = 0;
     let mut image_bytes = 0usize;
     let mut svg_bytes = 0usize;
@@ -425,6 +424,8 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
             return Err(corrupt("invalid file UUID"));
         };
         let base = format!("files/{file_id}");
+        // Media records are scoped to this file, even when UUIDs repeat across files.
+        let mut image_keys = BTreeMap::new();
         let (masters, variant_names, component_sources) = component_masters(&mut z, &base, &mut inflate_budget);
         let file_header = json(&mut z, &format!("{base}.json"), &mut inflate_budget)
             .ok()
@@ -1531,7 +1532,7 @@ fn import_typography_styles(
             id: format!("penpot:text:{base}:{id}"),
             name: name.chars().take(256).collect(),
             description: "Imported from Penpot typography library".into(),
-            kind: StyleKind::Text { style },
+            kind: StyleKind::Text { style, paragraph: Default::default() },
             bound: BTreeMap::new(),
         });
     }
@@ -1596,7 +1597,7 @@ fn composite_token_style(token: &Value) -> Option<StyleKind> {
                 }
             }
             let parsed = text_style(&Value::Object(fields), &style);
-            Some(StyleKind::Text { style: parsed })
+            Some(StyleKind::Text { style: parsed, paragraph: Default::default() })
         }
         "boxShadow" | "shadow" => {
             let parts: Vec<&Value> = if let Some(items) = value.as_array() { items.iter().take(32).collect() } else { vec![value] };
@@ -2030,27 +2031,51 @@ fn token_theme_groups<'a>(value: &'a Value, tokens: &BTreeMap<&str, BTreeMap<Str
 }
 
 /// Drops the resolved tokens that alias a variable which isn't being made, until none does; how
-/// many were dropped.
+/// many were dropped. Each token is looked at once to start with, and again only when a variable
+/// it aliases goes: a chain of aliases dropped one link per round would otherwise rescan every
+/// token per link.
 fn drop_dangling_aliases(
     resolved: &mut BTreeMap<&str, (usize, VariableType, BTreeMap<String, VariableValue>)>,
     var_id: &dyn Fn(&str) -> String,
 ) -> usize {
-    let mut dropped = 0;
-    loop {
-        let ids: BTreeSet<String> = resolved.keys().map(|p| var_id(p)).collect();
-        let dangling: Vec<&str> = resolved
-            .iter()
-            .filter(|(_, (_, _, values))| values.values().any(|v| matches!(v, VariableValue::Alias(target) if !ids.contains(target))))
-            .map(|(path, _)| *path)
-            .collect();
-        if dangling.is_empty() {
-            return dropped;
+    // How many tokens make each variable id, and the tokens aliasing each id.
+    let mut makers: BTreeMap<String, usize> = BTreeMap::new();
+    for path in resolved.keys() {
+        *makers.entry(var_id(path)).or_default() += 1;
+    }
+    let mut aliased_by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut gone: Vec<&str> = Vec::new();
+    for (path, (_, _, values)) in resolved.iter() {
+        let mut dangling = false;
+        for v in values.values() {
+            if let VariableValue::Alias(target) = v {
+                dangling |= !makers.contains_key(target);
+                aliased_by.entry(target.as_str()).or_default().push(*path);
+            }
         }
-        dropped += dangling.len();
-        for path in dangling {
-            resolved.remove(path);
+        if dangling {
+            gone.push(*path);
         }
     }
+    let mut dropped: BTreeSet<&str> = gone.iter().copied().collect();
+    while let Some(path) = gone.pop() {
+        let id = var_id(path);
+        let Some(left) = makers.get_mut(&id) else { continue };
+        *left -= 1;
+        if *left > 0 {
+            continue;
+        }
+        makers.remove(&id);
+        for &by in aliased_by.get(id.as_str()).into_iter().flatten() {
+            if dropped.insert(by) {
+                gone.push(by);
+            }
+        }
+    }
+    for path in &dropped {
+        resolved.remove(path);
+    }
+    dropped.len()
 }
 
 /// Moves a base token whose expression refers to a themed token into that token's collection, so
@@ -2131,7 +2156,10 @@ fn import_themed_tokens(
     if set_names.is_empty() {
         return false;
     }
-    set_names.sort_by_key(|name| order.iter().position(|o| o == name).unwrap_or(usize::MAX));
+    // Each set's place in the order once: a position search per comparison was quadratic in
+    // the order's length for every one of the sort's comparisons.
+    let place: BTreeMap<&str, usize> = order.iter().enumerate().rev().map(|(i, o)| (*o, i)).collect();
+    set_names.sort_by_key(|name| place.get(name).copied().unwrap_or(usize::MAX));
     let set_names: Vec<&str> = set_names.into_iter().take(512).collect();
     let mut tokens: BTreeMap<&str, BTreeMap<String, &Value>> = BTreeMap::new();
     for name in &set_names {
@@ -3951,7 +3979,7 @@ fn vector_path(v: &Value, warnings: &mut Vec<String>) -> Option<VectorNetwork> {
 /// Parse supported vector commands and report unrepresentable geometry.
 fn vector_bezpath(v: &Value, warnings: &mut Vec<String>) -> Option<BezPath> {
     if let Some(d) = v.get("content").and_then(Value::as_str) {
-        let path = BezPath::from_svg(d).ok().filter(|p| !p.elements().is_empty())?;
+        let path = figcraft_doc::geom::svg_path(d).ok().filter(|p| !p.elements().is_empty())?;
         let origin = Affine::translate((-geometry(v, "x", 0.0), -geometry(v, "y", 0.0)));
         return Some(origin * path);
     }
@@ -4764,6 +4792,52 @@ mod tests {
         assert!(matches!(node.fills.first().map(|p| &p.kind), Some(PaintKind::Image(img))
             if img.scale_mode == ImageScaleMode::Crop && img.crop == Some([1.0,0.0,0.0,1.0,0.0,0.0])));
         assert!(doc.validate().is_empty());
+    }
+
+    #[test]
+    fn image_fills_resolve_media_ids_within_each_penpot_file() {
+        use image::ImageEncoder;
+        use serde_json::json;
+
+        let page = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let shape = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let media = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        let first = "11111111-1111-1111-1111-111111111111";
+        let second = "22222222-2222-2222-2222-222222222222";
+        let mut writer = craft_penpot::Writer::new();
+        let manifest = craft_penpot::manifest("test", &[(first, "First", Value::Null), (second, "Second", Value::Null)]);
+        writer.add("manifest.json", &serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let mut expected = Vec::new();
+        for (file, name, object, rgb) in [
+            (first, "Red image", "33333333-3333-3333-3333-333333333333", [255, 0, 0]),
+            (second, "Blue image", "44444444-4444-4444-4444-444444444444", [0, 0, 255]),
+        ] {
+            let base = format!("files/{file}");
+            for (path, data) in [
+                (format!("{base}/pages/{page}.json"), json!({"id":page,"name":name,"index":0})),
+                (format!("{base}/pages/{page}/{ROOT_ID}.json"), json!({"id":ROOT_ID,"type":"frame","shapes":[shape]})),
+                (
+                    format!("{base}/pages/{page}/{shape}.json"),
+                    json!({"id":shape,"type":"image","name":name,"width":1,"height":1,"metadata":{"id":media}}),
+                ),
+                (format!("{base}/media/{media}.json"), json!({"id":media,"mtype":"image/png","mediaId":object})),
+            ] {
+                writer.add(&path, &serde_json::to_vec(&data).unwrap()).unwrap();
+            }
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png).write_image(&rgb, 1, 1, image::ExtendedColorType::Rgb8).unwrap();
+            writer.add(&format!("objects/{object}.png"), &png).unwrap();
+            expected.push((name, png));
+        }
+        let (doc, warnings) = import(&writer.finish().unwrap()).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        for (name, bytes) in expected {
+            let layer = doc.nodes().find(|n| n.name == name && !n.fills.is_empty()).unwrap();
+            let PaintKind::Image(image) = &layer.fills[0].kind else {
+                panic!("expected an image fill for {name}");
+            };
+            assert_eq!(doc.images[&image.image].bytes.as_slice(), bytes.as_slice(), "{name} should use its own file's image");
+        }
     }
 
     #[test]
@@ -5927,7 +6001,7 @@ mod tests {
         let (doc, warnings) = import(&archive_with_design_system(tokens, None, None, None)).unwrap();
         assert_eq!(doc.styles.len(), 2);
         assert!(doc.styles.iter().any(|s| s.name == "Penpot tokens/Core/title"
-            && matches!(&s.kind, StyleKind::Text { style }
+            && matches!(&s.kind, StyleKind::Text { style, .. }
             if style.font_family == "Spicy Rice" && style.font_size == 24.0 && style.line_height == LineHeight::Pixels(32.0))));
         assert!(doc.styles.iter().any(|s| s.name == "Penpot tokens/Core/elevation"
             && matches!(&s.kind, StyleKind::Effect { effects }
@@ -5983,10 +6057,8 @@ mod tests {
         let (doc, warnings) = import(&archive_with_design_system(serde_json::json!({"sets":{}}), Some(typ), Some(color), None)).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(doc.styles.len(), 2);
-        assert!(
-            doc.styles.iter().any(|s| s.name == "Brand/Heading"
-                && matches!(&s.kind, StyleKind::Text { style } if style.font_family == "Inter" && style.font_size == 24.0))
-        );
+        assert!(doc.styles.iter().any(|s| s.name == "Brand/Heading"
+            && matches!(&s.kind, StyleKind::Text { style, .. } if style.font_family == "Inter" && style.font_size == 24.0)));
         assert!(doc.styles.iter().any(|s| s.name == "Brand/Primary" && matches!(s.kind, StyleKind::Paint { .. })));
         assert_eq!(doc.document_colors.len(), 1);
     }
@@ -6513,5 +6585,45 @@ mod tests {
         assert!(issues.is_empty(), "{issues:?}");
         let button = opened.nodes().find(|n| n.name == "Go").unwrap();
         assert_eq!(button.interactions.len(), 1, "the prototype link survives the round trip");
+    }
+}
+
+#[cfg(test)]
+mod dangling_alias_tests {
+    use super::*;
+
+    type Resolved<'a> = BTreeMap<&'a str, (usize, VariableType, BTreeMap<String, VariableValue>)>;
+
+    fn token(alias: Option<&str>) -> (usize, VariableType, BTreeMap<String, VariableValue>) {
+        let value = alias.map_or(VariableValue::Number(1.0), |a| VariableValue::Alias(format!("v:{a}")));
+        (0, VariableType::Number, [("m".to_string(), value)].into())
+    }
+
+    #[test]
+    fn a_chain_ending_in_a_missing_variable_is_dropped_whole() {
+        // t0 → t1 → … → t1999 → missing: every link goes, in one pass along the chain.
+        let names: Vec<String> = (0..2000).map(|i| format!("t{i}")).collect();
+        let mut resolved: Resolved = BTreeMap::new();
+        for (i, n) in names.iter().enumerate() {
+            let next = names.get(i + 1).map_or("missing", String::as_str);
+            resolved.insert(n, token(Some(next)));
+        }
+        resolved.insert("plain", token(None));
+        resolved.insert("to-plain", token(Some("plain")));
+        let var_id = |p: &str| format!("v:{p}");
+        assert_eq!(drop_dangling_aliases(&mut resolved, &var_id), 2000);
+        assert_eq!(resolved.keys().copied().collect::<Vec<_>>(), ["plain", "to-plain"]);
+    }
+
+    #[test]
+    fn a_variable_made_by_two_tokens_stays_while_one_does() {
+        // `a` and `b` both make `v:x`; `a` dangles, `b` doesn't, so `c` (aliasing `v:x`) stays.
+        let mut resolved: Resolved = BTreeMap::new();
+        resolved.insert("a", token(Some("missing")));
+        resolved.insert("b", token(None));
+        resolved.insert("c", token(Some("x")));
+        let var_id = |p: &str| if p == "a" || p == "b" { "v:x".to_string() } else { format!("v:{p}") };
+        assert_eq!(drop_dangling_aliases(&mut resolved, &var_id), 1);
+        assert_eq!(resolved.keys().copied().collect::<Vec<_>>(), ["b", "c"]);
     }
 }

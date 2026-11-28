@@ -154,14 +154,8 @@ fn the_corpus_mangled_byte_by_byte() {
 }
 
 #[test]
-fn nesting_is_measured_before_parsing() {
-    use super::nesting;
-    assert_eq!(nesting(b"<svg><g><g/><g a='>' b=\"/>\"></g></g></svg>", 99), 3);
-    assert_eq!(nesting(b"<?xml version='1.0'?><!-- <g><g> --><svg><![CDATA[<g><g>]]></svg>", 99), 1);
-    assert_eq!(nesting(b"<svg><g", 99), 2);
+fn far_too_deep_a_document_is_refused() {
     let deep = format!("{}{}", "<g>".repeat(5000), "</g>".repeat(5000));
-    assert_eq!(nesting(deep.as_bytes(), 512), 513, "stops once past the limit");
-    // Far too deep for the parser's stack: refused.
     let mut d = Document::new("t");
     let p = d.first_page().unwrap();
     assert!(import_svg(&mut d, &svg(&deep), p, 0.0, 0.0, "x").is_err());
@@ -179,5 +173,31 @@ fn entity_expansion_cannot_bypass_the_nesting_limit() {
     let mut d = Document::new("t");
     let p = d.first_page().unwrap();
     let err = import_svg(&mut d, data.as_bytes(), p, 0.0, 0.0, "x").err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(err.contains("nested more than 512 deep"), "{err:?}");
+    assert!(err.contains("nested more than 256 levels deep"), "{err:?}");
+}
+
+#[test]
+fn an_element_with_thousands_of_attributes_is_refused_before_parsing() {
+    let l = craft_svg::tree::Limits::default();
+    let too_wide = |s: &[u8]| craft_svg::guard::too_wide(std::str::from_utf8(s).unwrap(), l.attributes, l.attribute_work);
+    let many = |n: usize| (0..n).map(|i| format!(" a{i}=\"1\"")).collect::<String>();
+    assert!(!too_wide(format!("<svg{}/>", many(4096)).as_bytes()));
+    assert!(too_wide(format!("<svg><g{}/></svg>", many(4097)).as_bytes()));
+    assert!(!too_wide(format!("<svg>{}</svg>", "<g a='1' b='2'/>".repeat(10_000)).as_bytes()), "per element, not per file");
+    let mut d = Document::new("t");
+    let p = d.first_page().unwrap();
+    assert!(import_svg(&mut d, &svg(&format!("<g{}/>", many(100_000))), p, 0.0, 0.0, "x").is_err());
+}
+
+#[test]
+fn attribute_work_is_bounded_over_the_whole_document_and_its_dtd() {
+    let l = craft_svg::tree::Limits::default();
+    let too_wide = |s: &[u8]| craft_svg::guard::too_wide(std::str::from_utf8(s).unwrap(), l.attributes, l.attribute_work);
+    let many = |n: usize| (0..n).map(|i| format!(" a{i}=\"1\"")).collect::<String>();
+    let tag = format!("<g{}/>", many(4000));
+    assert!(!too_wide(format!("<svg>{}</svg>", tag.repeat(10)).as_bytes()));
+    assert!(too_wide(format!("<svg>{}</svg>", tag.repeat(40)).as_bytes()), "each element is within the limit, all together are not");
+    let dtd = format!("<!DOCTYPE svg [<!ENTITY e '<g{}/>'>]><svg>&e;</svg>", many(5000));
+    assert!(too_wide(dtd.as_bytes()), "entities can hold elements");
+    assert!(!too_wide(b"<?xml version='1.0'?><!DOCTYPE svg [<!ENTITY ns 'http://www.w3.org/2000/svg'>]><svg/>"));
 }

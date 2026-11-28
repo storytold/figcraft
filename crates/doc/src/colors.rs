@@ -79,7 +79,7 @@ impl Style {
     pub fn for_each_color_mut(&mut self, f: &mut ColorVisitor) {
         match &mut self.kind {
             StyleKind::Paint { paints } => paints.iter_mut().for_each(|p| p.for_each_color_mut(f)),
-            StyleKind::Text { style } => style.for_each_color_mut(f),
+            StyleKind::Text { style, .. } => style.for_each_color_mut(f),
             StyleKind::Effect { effects } => effects.iter_mut().for_each(|e| e.for_each_color_mut(f)),
             StyleKind::Grid { grids } => grids.iter_mut().for_each(|g| f(&mut g.color)),
         }

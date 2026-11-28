@@ -2,6 +2,7 @@
 //! duplicate and delete; extended collections (overrides, keeping them in step with what they
 //! extend); alias checks; and which scope a bindable property belongs to.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use figcraft_doc::{
@@ -12,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::lists::BoundList;
 use super::{CommandSpec, ok};
-use crate::params::{boolean, get, num, req_string, string};
+use crate::params::{boolean, get, req_index, req_string, string};
 use crate::{Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -25,6 +26,20 @@ pub fn specs() -> Vec<CommandSpec> {
             update
         ),
         spec!("variable.duplicate", "Duplicate variable", "{variable} → {id}", true, duplicate),
+        spec!(
+            "variable.move",
+            "Move variables",
+            "{variables [ids or names, one collection], before? (variable of that collection; default: the end)}  the order the Variables window and pickers list them in",
+            true,
+            move_variables
+        ),
+        spec!(
+            "variable.sort",
+            "Sort variables",
+            "{collection, group? (\"color/indigo\"; default: the whole collection), descending? (Z to A)}  by name, numbers by value (50 before 100)",
+            true,
+            sort_variables
+        ),
         spec!("variable.renameMode", "Rename mode", "{collection, mode, name}", true, rename_mode),
         spec!("variable.removeMode", "Delete mode", "{collection, mode} (a collection keeps at least one mode)", true, remove_mode),
         spec!("variable.moveMode", "Move mode", "{collection, mode, to (index; 0 = the default mode, layers on Auto follow it)}", true, move_mode),
@@ -53,9 +68,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// Props resolve an exact id first, then an unambiguous exact name or `Collection/name`. Compare
-/// whole names: both collection and variable names can contain `/`. Other commands keep their
-/// existing first-match lookup.
+/// Props, `variable.bind` and `variable.create` aliases resolve an exact id first, then an
+/// unambiguous exact name or `Collection/name`. Compare whole names: both collection and variable
+/// names can contain `/`. Other commands keep their existing first-match lookup.
 pub(crate) fn resolve_strict(cmd: &str, doc: &Document, name: &str) -> Result<VariableId> {
     let vars = &doc.variables;
     if let Some(v) = vars.variables.iter().find(|v| v.id == name) {
@@ -184,7 +199,10 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.duplicate";
     let v = req_string(cmd, p, "variable")?;
     let doc = s.doc_mut()?;
-    let pos = doc.variables.variables.iter().position(|x| x.id == v || x.name == v).ok_or_else(|| bad(cmd, "no such variable"))?;
+    // An exact id first, then a name: an earlier variable named like another's id must not be the
+    // one copied.
+    let vars = &doc.variables.variables;
+    let pos = vars.iter().position(|x| x.id == v).or_else(|| vars.iter().position(|x| x.name == v)).ok_or_else(|| bad(cmd, "no such variable"))?;
     let mut copy = doc.variables.variables.get(pos).cloned().ok_or_else(|| bad(cmd, "no such variable"))?;
     let taken = |n: &str| doc.variables.variables.iter().any(|x| x.collection == copy.collection && x.name == n);
     let name = (1..1000)
@@ -199,6 +217,113 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let id = copy.id.clone();
     doc.variables.variables.insert(pos + 1, copy);
     Ok(json!({"id": id}))
+}
+
+/// Rearrange the variables at list positions `slots` (in list order) with `order`; each slot takes
+/// the variable `order` leaves at its place.
+fn rearrange(doc: &mut Document, slots: &[usize], order: impl FnOnce(&mut Vec<Variable>)) {
+    let vars = &mut doc.variables.variables;
+    let mut list: Vec<Variable> = slots.iter().filter_map(|&i| vars.get(i).cloned()).collect();
+    order(&mut list);
+    for (&i, v) in slots.iter().zip(list) {
+        if let Some(slot) = vars.get_mut(i) {
+            *slot = v;
+        }
+    }
+}
+
+fn move_variables(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "variable.move";
+    let doc = s.doc_mut()?;
+    let keys: Vec<&str> = match get(p, "variables") {
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).collect(),
+        _ => return Err(bad(cmd, "`variables` must be a list of variable ids")),
+    };
+    let find = |k: &str| doc.variables.get(k).ok_or_else(|| bad(cmd, format!("no variable `{k}`")));
+    let picked: Vec<&Variable> = keys.iter().map(|k| find(k)).collect::<Result<_>>()?;
+    let cid = picked.first().map(|v| v.collection.clone()).ok_or_else(|| bad(cmd, "no variables to move"))?;
+    if picked.iter().any(|v| v.collection != cid) {
+        return Err(bad(cmd, "the variables to move must be in one collection"));
+    }
+    let picked: BTreeSet<VariableId> = picked.into_iter().map(|v| v.id.clone()).collect();
+    let before = match string(p, "before") {
+        Some(b) => {
+            let v = find(&b)?;
+            if v.collection != cid {
+                return Err(bad(cmd, "`before` must be in the same collection"));
+            }
+            if picked.contains(&v.id) {
+                return Err(bad(cmd, "`before` can't be one of the variables moved"));
+            }
+            Some(v.id.clone())
+        }
+        None => None,
+    };
+    let slots: Vec<usize> = doc.variables.variables.iter().enumerate().filter(|(_, v)| v.collection == cid).map(|(i, _)| i).collect();
+    rearrange(doc, &slots, |list| {
+        let (moved, mut rest): (Vec<Variable>, Vec<Variable>) = std::mem::take(list).into_iter().partition(|v| picked.contains(&v.id));
+        let at = before.and_then(|b| rest.iter().position(|v| v.id == b)).unwrap_or(rest.len());
+        rest.splice(at..at, moved);
+        *list = rest;
+    });
+    ok()
+}
+
+fn sort_variables(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "variable.sort";
+    let doc = s.doc_mut()?;
+    let ci = collection_index(doc, cmd, &req_string(cmd, p, "collection")?)?;
+    let cid = doc.variables.collections.get(ci).map(|c| c.id.clone()).ok_or_else(|| bad(cmd, "no such collection"))?;
+    let group = string(p, "group").and_then(|g| clean_name(&g));
+    let prefix = group.as_ref().map(|g| format!("{g}/"));
+    let slots: Vec<usize> = doc
+        .variables
+        .variables
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.collection == cid && prefix.as_ref().is_none_or(|g| v.name.starts_with(g.as_str())))
+        .map(|(i, _)| i)
+        .collect();
+    if let Some(g) = group.filter(|_| slots.is_empty()) {
+        return Err(bad(cmd, format!("no variables in group `{g}`")));
+    }
+    let descending = boolean(p, "descending").unwrap_or(false);
+    rearrange(doc, &slots, |list| {
+        list.sort_by(|a, b| {
+            let o = natural_cmp(&a.name, &b.name);
+            if descending { o.reverse() } else { o }
+        });
+    });
+    ok()
+}
+
+/// Compare names with each run of digits as a number ("50" < "100" < "950") and letters ignoring
+/// case; names equal that way compare as plain text.
+fn natural_cmp(a: &str, b: &str) -> Ordering {
+    fn digits(it: &mut std::iter::Peekable<std::str::Chars>) -> String {
+        std::iter::from_fn(|| it.next_if(char::is_ascii_digit)).collect()
+    }
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        let o = match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(c), Some(d)) if c.is_ascii_digit() && d.is_ascii_digit() => {
+                let (n, m) = (digits(&mut x), digits(&mut y));
+                let (n, m) = (n.trim_start_matches('0'), m.trim_start_matches('0'));
+                n.len().cmp(&m.len()).then_with(|| n.cmp(m))
+            }
+            (Some(c), Some(d)) => {
+                x.next();
+                y.next();
+                c.to_lowercase().cmp(d.to_lowercase())
+            }
+        };
+        if o.is_ne() {
+            return o;
+        }
+    }
 }
 
 /// The index of collection `c` (id or name).
@@ -258,13 +383,13 @@ fn remove_mode(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn move_mode(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.moveMode";
-    let to = num(p, "to").filter(|x| x.is_finite()).ok_or_else(|| bad(cmd, "`to` must be a number"))?;
+    let to = req_index(cmd, p, "to")?;
     let doc = s.doc_mut()?;
     let (ci, mode) = mode_of(doc, cmd, p)?;
     let coll = doc.variables.collections.get_mut(ci).ok_or_else(|| bad(cmd, "no such collection"))?;
     let from = coll.modes.iter().position(|m| m.id == mode).ok_or_else(|| bad(cmd, "no such mode"))?;
     let m = coll.modes.remove(from);
-    let at = (to.max(0.0) as usize).min(coll.modes.len());
+    let at = to.min(coll.modes.len());
     coll.modes.insert(at, m);
     ok()
 }
@@ -639,6 +764,8 @@ pub fn field_scope(doc: &Document, node: NodeId, field: &str) -> Option<&'static
         "characters" => "TEXT_CONTENT",
         "fontFamily" => "FONT_FAMILY",
         "fontStyle" => "FONT_STYLE",
+        // What shows behind a page's frames is filled like a frame.
+        "background" => "FRAME_FILL",
         f => match super::lists::list_binding(f)? {
             (BoundList::Strokes, _, _) => "STROKE_COLOR",
             (BoundList::Effects, _, "color") => "EFFECT_COLOR",
@@ -654,10 +781,34 @@ pub fn field_scope(doc: &Document, node: NodeId, field: &str) -> Option<&'static
     })
 }
 
+/// The type of variable effect `i` of `node` takes on `field`, as an effect style's does: None when
+/// the layer has no effect `i` or that effect has no such field.
+fn effect_field(doc: &Document, node: NodeId, i: usize, field: &str) -> Option<VariableType> {
+    crate::style_vars::effect_field_type(&doc.node(node)?.effects.get(i)?.kind, field)
+}
+
+/// Whether `node` has the field a binding key names. Only effect fields are checked: a layer has
+/// `effects/<i>/<field>` when its effect `i` has that field (a drop shadow has no `refraction`),
+/// and an `effects…` key naming no effect's field (`effects/x/radius`, `effects/0`) has none.
+pub fn has_field(doc: &Document, node: NodeId, field: &str) -> bool {
+    // A page's background colour (#2343) is the only field a page binds, and only a page has it.
+    let page = doc.node(node).is_some_and(|n| matches!(n.kind, NodeKind::Page { .. }));
+    if field == "background" || page {
+        return field == "background" && page;
+    }
+    match super::lists::list_binding(field) {
+        Some((BoundList::Effects, i, f)) => effect_field(doc, node, i, f).is_some(),
+        _ => field.split('/').next() != Some(BoundList::Effects.prefix()),
+    }
+}
+
 /// Whether property `field` of `node` takes a variable of type `kind`: the type its scope belongs
 /// to (number variables also fill text content), booleans for visibility, numbers for layout grid
-/// fields; fields without a known type take any.
+/// fields, an effect's field the type its effect takes there; fields without a known type take any.
 pub fn field_takes(doc: &Document, node: NodeId, field: &str, kind: VariableType) -> bool {
+    if let Some((BoundList::Effects, i, f)) = super::lists::list_binding(field) {
+        return effect_field(doc, node, i, f) == Some(kind);
+    }
     match (field, field_scope(doc, node, field)) {
         ("visible", _) => kind == VariableType::Boolean,
         (_, Some(scope)) => scope_known(kind, scope),

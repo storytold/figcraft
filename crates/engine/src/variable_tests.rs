@@ -172,7 +172,8 @@ fn effects_follow_their_variables() {
     bind(&mut s, "effects/0/offsetY", "y");
     bind(&mut s, "effects/0/color", "shadow");
     bind(&mut s, "effects/1/radius", "blur");
-    bind(&mut s, "effects/9/radius", "blur");
+    // There is no effect 9 to bind (see `binding_lists_tests::a_layer_binds_only_fields_its_effects_have`).
+    assert!(s.execute("variable.bind", &json!({"ids": [r], "field": "effects/9/radius", "variable": "blur"})).is_err());
     let fx = |s: &Session| s.doc().unwrap().node(r).unwrap().effects.clone();
     match &fx(&s)[0].kind {
         figcraft_doc::EffectKind::DropShadow(sh) => {

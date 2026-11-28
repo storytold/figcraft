@@ -133,7 +133,7 @@ fn pattern(cx: &mut Ctx, pat: &usvg::Pattern, t: Target) -> Option<Paint> {
         let s = img.size();
         let (iw, ih) = (f64::from(s.width()), f64::from(s.height()));
         let b = figcraft_geom::transform_rect_bbox(m, Rect::new(0.0, 0.0, iw, ih));
-        (tile_rect.contains(b.origin()) && tile_rect.contains(Point::new(b.x1, b.y1))).then(|| (add_image(cx.doc, bytes, iw, ih), iw, ih, m))
+        (tile_rect.contains(b.origin()) && tile_rect.contains(Point::new(b.x1, b.y1))).then(|| (cx.image(bytes, iw, ih), iw, ih, m))
     });
     let (hash, iw, ih, content) = match lone {
         Some(l) => l,

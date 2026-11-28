@@ -234,12 +234,13 @@ fn sizing_rules() {
             rects: &[(10.0, 10.0, 20.0, 80.0)],
         },
         Case {
-            rule: "fill on an axis the frame hugs has nothing to fill: the child keeps its size",
-            // A hugging frame has no free space; it hugs 50 + 30.
+            rule: "fill along an axis the frame hugs has nothing to fill (the child keeps its size); across it the child takes the line",
+            // A hugging frame has no free space along the flow: it hugs 50 + 30. Across the flow the
+            // frame keeps hugging and the child takes the line's 20, the other child's height.
             frame: Frame { sizing: (Hug, Hug), ..FRAME },
             kids: &[kid(50.0, 20.0), Kid { size: (30.0, 40.0), sizing: (Fill, Fill), ..KID }],
-            want: (80.0, 40.0),
-            rects: &[(0.0, 0.0, 50.0, 20.0), (50.0, 0.0, 30.0, 40.0)],
+            want: (80.0, 20.0),
+            rects: &[(0.0, 0.0, 50.0, 20.0), (50.0, 0.0, 30.0, 20.0)],
         },
         Case {
             rule: "min width: a fixed child is never narrower than its minimum",
@@ -286,6 +287,119 @@ fn sizing_rules() {
             kids: &[Kid { text: Some((150.0, 20.0, 15.0)), sizing: (Fill, Hug), ..KID }],
             want: (100.0, 60.0),
             rects: &[(10.0, 10.0, 80.0, 40.0)],
+        },
+    ]);
+}
+
+/// Measured in Figma web (2026-11-08): along the flow a Fill child turns
+/// a hugging parent Fixed, but across the flow the parent keeps hugging and the Fill child takes
+/// the line's cross size (the largest non-Fill sibling, its min counted, padding outside).
+#[test]
+fn fill_across_a_hugging_axis_rules() {
+    let bar = |w: f64, h: f64| Kid { size: (w, h), sizing: (Fixed, Fill), ..KID };
+    let hug = Frame { sizing: (Hug, Hug), ..FRAME };
+    check(&[
+        Case {
+            rule: "round 1: a bar filling the height beside a taller sibling stretches to it, the row keeps hugging",
+            frame: hug,
+            kids: &[bar(4.0, 20.0), kid(50.0, 40.0)],
+            want: (54.0, 40.0),
+            rects: &[(0.0, 0.0, 4.0, 40.0), (4.0, 0.0, 50.0, 40.0)],
+        },
+        Case {
+            rule: "round 1: the sibling grows to 60, the bar and the row follow",
+            frame: hug,
+            kids: &[bar(4.0, 20.0), kid(50.0, 60.0)],
+            want: (54.0, 60.0),
+            rects: &[(0.0, 0.0, 4.0, 60.0), (4.0, 0.0, 50.0, 60.0)],
+        },
+        Case {
+            rule: "round 2 case 2: in a vertical stack hugging its width a Fill width takes the widest sibling",
+            frame: Frame { mode: V, ..hug },
+            kids: &[Kid { size: (20.0, 10.0), sizing: (Fill, Fixed), ..KID }, kid(100.0, 30.0)],
+            want: (100.0, 40.0),
+            rects: &[(0.0, 0.0, 100.0, 10.0), (0.0, 10.0, 100.0, 30.0)],
+        },
+        Case {
+            rule: "round 2 case 2: the sibling widens to 150, the Fill child follows",
+            frame: Frame { mode: V, ..hug },
+            kids: &[Kid { size: (20.0, 10.0), sizing: (Fill, Fixed), ..KID }, kid(150.0, 30.0)],
+            want: (150.0, 40.0),
+            rects: &[(0.0, 0.0, 150.0, 10.0), (0.0, 10.0, 150.0, 30.0)],
+        },
+        Case {
+            rule: "round 2 case 3: padding is outside the line: the bar gets the content box",
+            // 10 + 40 + 10.
+            frame: Frame { pad: [10.0, 0.0, 10.0, 0.0], ..hug },
+            kids: &[bar(4.0, 20.0), kid(50.0, 40.0)],
+            want: (54.0, 60.0),
+            rects: &[(0.0, 10.0, 4.0, 40.0), (4.0, 10.0, 50.0, 40.0)],
+        },
+        Case {
+            rule: "round 2 case 5: a Fill child's min counts toward the hug size",
+            frame: hug,
+            kids: &[Kid { min: (None, Some(50.0)), ..bar(4.0, 20.0) }, kid(50.0, 40.0)],
+            want: (54.0, 50.0),
+            rects: &[(0.0, 0.0, 4.0, 50.0), (4.0, 0.0, 50.0, 40.0)],
+        },
+        Case {
+            rule: "round 2 case 6: beside a text the bar is as tall as the text (two lines)",
+            frame: hug,
+            kids: &[bar(3.0, 20.0), Kid { text: Some((80.0, 64.0, 24.0)), ..KID }],
+            want: (83.0, 64.0),
+            rects: &[(0.0, 0.0, 3.0, 64.0), (3.0, 0.0, 80.0, 64.0)],
+        },
+        Case {
+            rule: "round 2 case 6: a third line and the bar and the row follow the text",
+            frame: hug,
+            kids: &[bar(3.0, 20.0), Kid { text: Some((80.0, 96.0, 24.0)), ..KID }],
+            want: (83.0, 96.0),
+            rects: &[(0.0, 0.0, 3.0, 96.0), (3.0, 0.0, 80.0, 96.0)],
+        },
+        Case {
+            rule: "shrinking is real: a Fill child taller than the tallest non-Fill sibling comes down to it",
+            frame: hug,
+            kids: &[bar(4.0, 90.0), kid(50.0, 40.0)],
+            want: (54.0, 40.0),
+            rects: &[(0.0, 0.0, 4.0, 40.0), (4.0, 0.0, 50.0, 40.0)],
+        },
+        Case {
+            rule: "round 2 case 1 (import-only state): nothing but Fill children across a hugging axis keep their own sizes",
+            frame: hug,
+            kids: &[bar(4.0, 20.0), bar(50.0, 40.0)],
+            want: (54.0, 40.0),
+            rects: &[(0.0, 0.0, 4.0, 20.0), (4.0, 0.0, 50.0, 40.0)],
+        },
+        Case {
+            rule: "a text stretched to the line's width reflows taller: the Fill-height sibling takes what is left, not what it got before",
+            // The stack is 100 tall and hugs its width: the wider sibling makes the line 100, the text
+            // (200 wide) is 2 lines (40) at that width, so the Fill-height bar gets 100 - 40 - 10 = 50.
+            frame: Frame { mode: V, size: (100.0, 100.0), sizing: (Hug, Fixed), ..FRAME },
+            kids: &[
+                Kid { text: Some((200.0, 20.0, 15.0)), sizing: (Fill, Hug), ..KID },
+                Kid { size: (30.0, 20.0), sizing: (Fixed, Fill), ..KID },
+                kid(100.0, 10.0),
+            ],
+            want: (100.0, 100.0),
+            rects: &[(0.0, 0.0, 100.0, 40.0), (0.0, 40.0, 30.0, 50.0), (0.0, 90.0, 100.0, 10.0)],
+        },
+        Case {
+            rule: "the same with a child that fills both axes: it takes the line's width and the left-over height",
+            frame: Frame { mode: V, size: (100.0, 100.0), sizing: (Hug, Fixed), ..FRAME },
+            kids: &[
+                Kid { text: Some((200.0, 20.0, 15.0)), sizing: (Fill, Hug), ..KID },
+                Kid { size: (30.0, 20.0), sizing: (Fill, Fill), ..KID },
+                kid(100.0, 10.0),
+            ],
+            want: (100.0, 100.0),
+            rects: &[(0.0, 0.0, 100.0, 40.0), (0.0, 40.0, 100.0, 50.0), (0.0, 90.0, 100.0, 10.0)],
+        },
+        Case {
+            rule: "round 2 case 4: in a wrapping row hugging its height a Fill height still reads as fixed",
+            frame: Frame { size: (120.0, 100.0), sizing: (Fixed, Hug), wrap: true, ..FRAME },
+            kids: &[bar(40.0, 30.0), kid(40.0, 10.0)],
+            want: (120.0, 30.0),
+            rects: &[(0.0, 0.0, 40.0, 30.0), (40.0, 0.0, 40.0, 10.0)],
         },
     ]);
 }
@@ -535,12 +649,32 @@ fn alignment_rules() {
             rects: &[(0.0, 10.0, 30.0, 14.0), (35.0, 0.0, 60.0, 28.0)],
         },
         Case {
-            // Docs silent on layers without text: they keep to the top of the line.
-            rule: "baseline alignment: a layer without text sits at the top",
+            // "for baseline alignment, the bottoms of the icon and the word home are aligned on
+            // the red line" (the figure's caption): a layer without text sits on the baseline with
+            // its bottom edge. Baseline 20, icon 10 high: the icon moves down 10 (#1825).
+            rule: "baseline alignment: a layer without text puts its bottom on the baseline",
             frame: Frame { sizing: (Hug, Hug), cross: CrossAlign::Baseline, ..FRAME },
             kids: &[kid(10.0, 10.0), Kid { text: Some((60.0, 28.0, 20.0)), sizing: (Hug, Hug), ..KID }],
             want: (70.0, 28.0),
-            rects: &[(0.0, 0.0, 10.0, 10.0), (10.0, 0.0, 60.0, 28.0)],
+            rects: &[(0.0, 10.0, 10.0, 10.0), (10.0, 0.0, 60.0, 28.0)],
+        },
+        Case {
+            // The icon (30 high) reaches below the text's baseline (20): the line's baseline is the
+            // icon's bottom, so the text moves down 10 and the frame hugs 10 + 28.
+            rule: "baseline alignment: a layer taller than the baseline moves the text down",
+            frame: Frame { sizing: (Hug, Hug), cross: CrossAlign::Baseline, ..FRAME },
+            kids: &[kid(10.0, 30.0), Kid { text: Some((60.0, 28.0, 20.0)), sizing: (Hug, Hug), ..KID }],
+            want: (70.0, 38.0),
+            rects: &[(0.0, 0.0, 10.0, 30.0), (10.0, 10.0, 60.0, 28.0)],
+        },
+        Case {
+            // Docs silent on a line with no text at all: every layer's baseline is its bottom
+            // edge (as the icon's), so the bottoms line up, as they do under CSS baseline alignment.
+            rule: "baseline alignment without text: the layers' bottoms line up",
+            frame: Frame { sizing: (Hug, Hug), cross: CrossAlign::Baseline, ..FRAME },
+            kids: &[kid(10.0, 10.0), kid(10.0, 30.0)],
+            want: (20.0, 30.0),
+            rects: &[(0.0, 20.0, 10.0, 10.0), (10.0, 0.0, 10.0, 30.0)],
         },
     ]);
 }
@@ -654,27 +788,48 @@ fn grid_rules() {
             rects: &[(0.0, 0.0, 60.0, 20.0), (60.0, 0.0, 240.0, 20.0)],
         },
         Case {
-            rule: "fr tracks behave like the CSS fr unit: a fixed child taller than its share keeps its row",
-            // Share 50 < 80: row 1 keeps 80, row 2 gets the remaining 20.
+            rule: "fr tracks as measured in Figma: a fixed child taller than its share keeps its row's share and overflows",
+            // Share 50 < 80: rows stay 50 / 50, child 1 overflows into row 2.
             frame: Frame { mode: Grid, size: (100.0, 100.0), columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
             kids: &[kid(20.0, 80.0), Kid { sizing: (Fixed, Fill), ..KID }],
             want: (100.0, 100.0),
-            rects: &[(0.0, 0.0, 20.0, 80.0), (0.0, 80.0, 20.0, 20.0)],
+            rects: &[(0.0, 0.0, 20.0, 80.0), (0.0, 50.0, 20.0, 50.0)],
         },
         Case {
-            rule: "fr tracks: children bigger than every share keep their sizes (the grid overflows)",
+            rule: "fr tracks as measured in Figma: children bigger than every share keep their sizes (the grid overflows)",
             frame: Frame { mode: Grid, size: (100.0, 100.0), columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
             kids: &[kid(20.0, 80.0), kid(20.0, 70.0)],
             want: (100.0, 100.0),
-            rects: &[(0.0, 0.0, 20.0, 80.0), (0.0, 80.0, 20.0, 70.0)],
+            rects: &[(0.0, 0.0, 20.0, 80.0), (0.0, 50.0, 20.0, 70.0)],
         },
         Case {
-            rule: "fr columns: a fixed child wider than its share keeps its column",
-            // Share 100 < 150: column 1 keeps 150; column 2 (2fr alone) gets the other 150.
+            rule: "fr columns as measured in Figma: a fixed child wider than its share overflows its column",
+            // Share 100 < 150: columns stay 100 / 200.
             frame: Frame { mode: Grid, size: (300.0, 20.0), columns: &[fr(1.0), fr(2.0)], ..FRAME },
             kids: &[kid(150.0, 20.0), Kid { sizing: (Fill, Fixed), ..KID }],
             want: (300.0, 20.0),
-            rects: &[(0.0, 0.0, 150.0, 20.0), (150.0, 0.0, 150.0, 20.0)],
+            rects: &[(0.0, 0.0, 150.0, 20.0), (100.0, 0.0, 200.0, 20.0)],
+        },
+        Case {
+            rule: "fr rows as measured in Figma: 300 x 200, 1fr / 1fr, a 150-tall child does not widen its row",
+            frame: Frame { mode: Grid, size: (300.0, 200.0), columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
+            kids: &[kid(100.0, 150.0), kid(100.0, 20.0)],
+            want: (300.0, 200.0),
+            rects: &[(0.0, 0.0, 100.0, 150.0), (0.0, 100.0, 100.0, 20.0)],
+        },
+        Case {
+            rule: "fr rows as measured in Figma: the row gap comes off first (95 / 95, second child at 105)",
+            frame: Frame { mode: Grid, size: (300.0, 200.0), cross_gap: 10.0, columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
+            kids: &[kid(100.0, 150.0), kid(100.0, 20.0)],
+            want: (300.0, 200.0),
+            rects: &[(0.0, 0.0, 100.0, 150.0), (0.0, 105.0, 100.0, 20.0)],
+        },
+        Case {
+            rule: "fr rows as measured in Figma: with the frame on Hug the rows size to content (150 / 20, frame 170)",
+            frame: Frame { mode: Grid, size: (300.0, 200.0), sizing: (Fixed, Hug), columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
+            kids: &[kid(100.0, 150.0), kid(100.0, 20.0)],
+            want: (300.0, 170.0),
+            rects: &[(0.0, 0.0, 100.0, 150.0), (0.0, 150.0, 100.0, 20.0)],
         },
         Case {
             rule: "placement: left to right, top to bottom; rows grow to fit the children",

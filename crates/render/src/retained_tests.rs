@@ -569,3 +569,33 @@ fn pans_patch_backdrops_at_the_edges_that_moved_in() {
         }
     }
 }
+
+#[test]
+fn grainy_layers_patch_as_they_render() {
+    fonts();
+    let texture = |clip_to_shape| EffectKind::Texture(figcraft_doc::Texture { size: 0.5, radius: 12.0, clip_to_shape, ..Default::default() });
+    let noise = EffectKind::Noise(figcraft_doc::Noise { size: 0.5, density: 0.4, color: Color::BLACK, ..Default::default() });
+    // At a zoom of 1.7, a grain of 0.5 is 1.7 pixels across: every tenth grain edge falls on a row
+    // of pixel centres, and a patch renders those rows from another origin than a full render.
+    for (why, kind) in [("texture", texture(false)), ("texture clipped to its shape", texture(true)), ("noise", noise)] {
+        let mut d = Document::new("grain");
+        let p = d.first_page().unwrap();
+        let e = d.create(p, NodeKind::Rectangle, "E", 60.0, 50.0, 120.0, 90.0).unwrap();
+        solid(d.get_mut(e).unwrap(), "E03030");
+        d.get_mut(e).unwrap().effects = vec![Effect { kind, visible: true }];
+        let m = d.create(p, NodeKind::Rectangle, "M", 220.0, 60.0, 30.0, 30.0).unwrap();
+        solid(d.get_mut(m).unwrap(), "20A060");
+        let doc = Arc::new(d);
+        let v = View { origin: (0.0, 0.0), scale: 1.7, width: 400, height: 300 };
+        let mut r = Retained::default();
+        check(&mut r, &doc, p, &v);
+        // Over the grainy layer, which is redrawn whole.
+        let over = edit(&doc, |d| d.get_mut(m).unwrap().transform = Affine::translate((100.0, 80.0)));
+        let (shown, pix, work) = r.render(&over, p, &v, &Options::default()).unwrap();
+        let pix = pix.clone();
+        let full = render_view(&over, p, &shown, &Options::default()).unwrap();
+        let worst = pix.data().iter().zip(full.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        assert!(partial(work), "{why}: {work:?}");
+        assert!(worst <= 2, "{why}: {work:?} is {worst} levels off a full render");
+    }
+}

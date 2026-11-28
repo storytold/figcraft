@@ -43,7 +43,7 @@ Releases also ship it ready-built for Linux (`figcraft-server-<version>-linux-x8
   tells everyone it is restarting. Every change it accepted is on disk before anyone is told about
   it, so even a hard kill loses nothing confirmed (a file's log is then folded into a new snapshot
   the next time everyone leaves it). Apps that were in a file keep editing and reconnect once the
-  server is back (for about a minute and a half), as the same participants.
+  server is back, as the same participants.
 
 ## Publishing a file
 
@@ -254,8 +254,9 @@ which other files use without anyone copying the library file around.
   layers use each of the library's styles and variables. **Show usage** in the library file
   (`library.usage`) lists the files and the instances and detaches of each component, the
   insertions and detachments of the past 30 days, 90 days or year, and, by its Type choice, the
-  layers and files using each style and variable. Layers inside instances count for their
-  component. Files are
+  layers and files using each style and variable with their insertions and detachments. Applying
+  a style or variable, or copying or duplicating content that uses it, inserts it, and the Detach
+  button detaches it. Layers inside instances count for their component. Files are
   told apart by their names; a file's report changes only when its usage does. The server counts
   what a file's totals grow past their highest in the week it hears of it, keeps a year of weeks,
   and counts an undo and a redo once. A server from before these counts refuses the reports
@@ -268,7 +269,10 @@ send their requests on a thread of their own, show that they're on their way (wi
 finish when the answer arrives, acting on the file they started in. Scripts, the CLI and the MCP
 server run the same commands and wait for the answer.
 
-The browser build can't use team libraries yet (it has no library support of its own).
+The browser build uses team libraries through the same panel: adding one by its link, its styles
+and components, publishing a file that is on the server, Show usage and the reports a file sends.
+A browser can't keep a library file, and scripts through `window.figcraft` can't reach a server
+(commands there don't wait for it), so those stay with the desktop app, the CLI and MCP.
 
 ## Plugin directory
 
@@ -752,6 +756,18 @@ sudo -u figcraft figcraft-server --config /etc/figcraft-server/server.toml key
 
 The other commands ([Managing files and links](#managing-files-and-links)) run the same way, as
 the `figcraft` user with `--config /etc/figcraft-server/server.toml`.
+
+**Browser editor on the same hostname (optional).** The steps above install the collaboration
+server. To also serve the editor, copy the complete contents of the matching
+`figcraft-web-<version>/` release directory into `/srv/figcraft-web`, with `index.html` directly
+inside it; keep subdirectories such as `snippets/`. Use the commented browser-and-server block
+in [`packaging/server/Caddyfile`](../packaging/server/Caddyfile) in place of its active server-only
+block. Keep the loopback `listen`, `public_url` and `trusted_proxy` settings from steps 2 and 4.
+The editor opens at `https://figcraft.example.com/app/`; the hostname root remains the
+`wss://figcraft.example.com/` collaboration endpoint, not an editor homepage. Configure the
+browser's `figcraft-server` meta tag as described in the
+[web-hosting guide](../packaging/web/README.md#live-sessions), using the server address without a
+publishing key. That guide also covers browser requirements, fonts and static-file delivery.
 
 **In Docker instead of systemd.** [`packaging/server/Dockerfile`](../packaging/server/Dockerfile)
 builds a small image (the binary on a distroless base, no shell) that runs as an unprivileged

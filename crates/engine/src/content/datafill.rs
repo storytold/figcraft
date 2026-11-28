@@ -189,14 +189,21 @@ fn fill_layers(s: &mut Session, copy: NodeId, (key, value): (&str, &Value), miss
 /// Export each copy into `dir` as `<name>.<format>` at `scale`, adding `files` (and `errors`) to
 /// `out`.
 fn export_copies(s: &mut Session, ids: &[(NodeId, String)], dir: &str, (format, scale): (&str, f64), out: &mut Value) {
-    let (mut files, mut errors, mut used) = (Vec::new(), Vec::new(), Vec::<String>::new());
+    let (mut files, mut errors) = (Vec::new(), Vec::new());
+    let mut used = std::collections::BTreeSet::<String>::new();
+    // The next number to try per base, so many copies of one name don't retry from 2 each time.
+    let mut next = std::collections::BTreeMap::<String, u64>::new();
     for (copy, name) in ids {
         // One file per copy: same or same-looking names get " 2", " 3"… (case-insensitively,
         // as macOS and Windows file systems compare names).
         let base = file_name(name);
-        let stem =
-            (1..).map(|k| if k == 1 { base.clone() } else { format!("{base} {k}") }).find(|n| !used.contains(&n.to_lowercase())).unwrap_or(base);
-        used.push(stem.to_lowercase());
+        let from = next.get(&base.to_lowercase()).copied().unwrap_or(1);
+        let (k, stem) = (from..)
+            .map(|k| (k, if k == 1 { base.clone() } else { format!("{base} {k}") }))
+            .find(|(_, n)| !used.contains(&n.to_lowercase()))
+            .unwrap_or((from, base.clone()));
+        next.insert(base.to_lowercase(), k + 1);
+        used.insert(stem.to_lowercase());
         let path = std::path::Path::new(dir).join(format!("{stem}.{format}")).to_string_lossy().to_string();
         match s.execute("file.export", &json!({"ids": [copy.0], "format": format, "scale": scale, "path": path})) {
             Ok(_) => files.push(path),

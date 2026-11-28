@@ -1,11 +1,11 @@
 //! Pages.
 
 use figcraft_doc::proto::Flow;
-use figcraft_doc::{Guide, NodeId, NodeKind};
+use figcraft_doc::{Document, Guide, NodeId, NodeKind};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::{boolean, color, id, req_index, req_num, req_string, string};
+use crate::params::{boolean, color, id, req_id, req_index, req_num, req_string, string};
 use crate::{Session, bad, spec};
 
 /// After a page edit: the file keeps a page that isn't a divider, and the canvas shows one (the
@@ -24,9 +24,43 @@ fn settle(s: &mut Session, cmd: &str) -> crate::Result<()> {
     Ok(())
 }
 
+/// `page.setBackground`: a colour, or a colour variable the page's background follows in the
+/// page's variable mode (#2343). Setting a colour detaches the variable.
+fn set_background(s: &mut Session, p: &Value) -> crate::Result<Value> {
+    let cmd = "page.setBackground";
+    let var = match p.get("color") {
+        Some(Value::Object(o)) => match (o.len(), o.get("$var").and_then(Value::as_str)) {
+            (1, Some(name)) if !name.is_empty() => Some(name),
+            _ => return Err(bad(cmd, "`color`: a `$var` wrapper takes only `$var`, a variable id or name")),
+        },
+        _ => None,
+    };
+    let c = if var.is_some() { None } else { Some(color(p, "color").ok_or_else(|| bad(cmd, "`color`: a colour or {$var: variable}"))?) };
+    let id = page_target(s, cmd, p)?;
+    let doc = s.doc_mut()?;
+    match (var, c) {
+        (Some(name), _) => {
+            let vid = super::variables::resolve_strict(cmd, doc, name)?;
+            super::styles::bind_variable(cmd, doc, &[id], "background", Some(&vid))?;
+            super::styles::apply_bindings_to(doc, Some(&std::iter::once(id).collect()));
+        }
+        (None, Some(c)) => {
+            super::styles::bind_variable(cmd, doc, &[id], "background", None)?;
+            if let NodeKind::Page { background, .. } = &mut doc.get_mut(id)?.kind {
+                *background = c;
+            }
+        }
+        (None, None) => {}
+    }
+    ok()
+}
+
 /// The page a command targets: the explicit `id` (which must be a page) or the open page.
 fn page_target(s: &Session, cmd: &str, p: &Value) -> crate::Result<NodeId> {
-    let Some(target) = id(p, "id") else { return s.page() };
+    let target = match p.get("id") {
+        None | Some(Value::Null) => s.page()?,
+        Some(_) => req_id(cmd, p, "id")?,
+    };
     if !s.doc()?.pages.contains(&target) {
         return Err(bad(cmd, format!("{target} is not a page")));
     }
@@ -53,9 +87,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Ok(json!({"id": id, "divider": true}));
             }
             let ds = s.ds_mut()?;
-            ds.page = id;
+            ds.open_page(id);
             ds.selection.clear();
-            ds.zoom_to_fit();
             Ok(json!({"id": id}))
         }),
         spec!("page.select", "Go to page", "{id | index}", false, |s, p| {
@@ -74,10 +107,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Err(bad("page.select", "a divider isn't a page to open"));
             }
             let ds = s.ds_mut()?;
-            ds.page = id;
+            ds.open_page(id);
             ds.selection.clear();
             ds.text_edit = None;
-            ds.zoom_to_fit();
             ok()
         }),
         spec!("page.rename", "Rename page", "{id?, name} (an empty page named with a leading hyphen becomes a divider)", true, |s, p| {
@@ -109,8 +141,8 @@ pub fn specs() -> Vec<CommandSpec> {
             // The copy keeps the page's colour, flows (pointing at the copied frames), prototype settings and guides.
             let guides = doc.get(src)?.guides.clone();
             doc.get_mut(np)?.guides = guides;
-            if let NodeKind::Page { background, flows, prototype } = doc.get(src)?.kind.clone()
-                && let NodeKind::Page { background: b, flows: f, prototype: pr } = &mut doc.get_mut(np)?.kind
+            if let NodeKind::Page { background, flows, prototype, .. } = doc.get(src)?.kind.clone()
+                && let NodeKind::Page { background: b, flows: f, prototype: pr, .. } = &mut doc.get_mut(np)?.kind
             {
                 *b = background;
                 *f = flows
@@ -128,25 +160,53 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"id": np}))
         }),
         spec!("page.move", "Move page", "{id?, index}", true, |s, p| {
-            let id = id(p, "id").unwrap_or(s.page()?);
-            let k = req_num("page.move", p, "index")?.max(0.0) as usize;
+            let k = req_index("page.move", p, "index")?;
+            let id = page_target(s, "page.move", p)?;
             let doc = s.doc_mut()?;
-            if !doc.pages.contains(&id) {
-                return Err(bad("page.move", format!("{id} is not a page")));
-            }
             doc.pages.retain(|x| *x != id);
             let k = k.min(doc.pages.len());
             doc.pages.insert(k, id);
             ok()
         }),
-        spec!("page.setBackground", "Page background", "{id?, color}", true, |s, p| {
-            let c = color(p, "color").ok_or_else(|| bad("page.setBackground", "`color` required"))?;
-            let id = page_target(s, "page.setBackground", p)?;
-            if let NodeKind::Page { background, .. } = &mut s.doc_mut()?.get_mut(id)?.kind {
-                *background = c;
+        spec!(
+            "page.setBackground",
+            "Page background",
+            "{id?, color (a colour, or {$var: colour variable id or name} to bind it; a colour detaches a bound one)}",
+            true,
+            set_background
+        ),
+        spec!(
+            "page.setOpening",
+            "Set as opening page",
+            "{id?} (the page the file opens on, for everyone who opens or joins it; the current page when none is named)",
+            true,
+            |s, p| {
+                // A document property (#1817), so it syncs in a live session and undoes; nobody's
+                // own page moves (`page.select` is each viewer's).
+                let id = page_target(s, "page.setOpening", p)?;
+                if s.doc()?.is_divider(id) {
+                    return Err(bad("page.setOpening", "a divider isn't a page to open on"));
+                }
+                let is_opening = |doc: &Document, p: NodeId| matches!(doc.get(p).map(|n| &n.kind), Ok(NodeKind::Page { opening: true, .. }));
+                if s.doc()?.current_page == Some(id) && is_opening(s.doc()?, id) {
+                    // Already the opening page: nothing changes, so no undo step.
+                    return ok();
+                }
+                let doc = s.doc_mut()?;
+                doc.current_page = Some(id);
+                // The flag lives on the page node (so it syncs with the node's kind): one page has it.
+                for page in doc.pages.clone() {
+                    let want = page == id;
+                    if is_opening(doc, page) != want
+                        && let NodeKind::Page { opening, .. } = &mut doc.get_mut(page)?.kind
+                    {
+                        *opening = want;
+                    }
+                }
+                settle(s, "page.setOpening")?;
+                ok()
             }
-            ok()
-        }),
+        ),
         spec!("page.list", "List pages", "{}", false, |s, _| {
             let doc = s.doc()?;
             let cur = s.page()?;

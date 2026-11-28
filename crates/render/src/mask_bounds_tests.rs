@@ -139,3 +139,24 @@ fn a_deep_nest_of_isolated_layers_stays_within_the_budget() {
     // The outer levels still draw (the innermost, past the budget, are left out).
     assert_ne!(&pix.data()[..4], &[255, 255, 255, 255]);
 }
+
+#[test]
+fn masks_nested_inside_masks_stop_at_the_nesting_limit() {
+    // A mask's content is drawn straight from `mask_pixels`, not through `draw_layer`, so a mask
+    // group inside a mask group inside… used to recurse past the limit and down the stack.
+    let mut d = Document::new("deep masks");
+    let p = d.first_page().unwrap();
+    let mut parent = p;
+    for _ in 0..2000 {
+        let g = d.create(parent, NodeKind::Group, "Masking group", 0.0, 0.0, 1.0, 1.0).unwrap();
+        let n = d.get_mut(g).unwrap();
+        n.is_mask = true;
+        n.mask_type = MaskType::Alpha;
+        parent = g;
+    }
+    shape(&mut d, parent, NodeKind::Rectangle, (0.0, 0.0, 100.0, 100.0), "2040E0");
+    shape(&mut d, p, NodeKind::Rectangle, (0.0, 0.0, 100.0, 100.0), "E04020");
+    let v = View { origin: (0.0, 0.0), scale: 1.0, width: 50, height: 50 };
+    let pix = render(&d, p, &v, false);
+    assert_eq!(pix.width(), 50);
+}

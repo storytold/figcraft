@@ -6,12 +6,7 @@ use super::{
 impl FigApp {
     pub fn save_as_dialog(&mut self) {
         if self.services.downloads() {
-            if let Some(r) = self.run("file.saveAs", json!({"data": true}))
-                && self.download(r["name"].as_str().unwrap_or_default(), &r)
-            {
-                self.run("file.markSaved", json!({}));
-                dialogs::file_saved(self, &r);
-            }
+            self.save_download(None);
             return;
         }
         let Ok(name) = self.session.doc().map(|d| d.name.clone()) else { return };
@@ -43,6 +38,17 @@ impl FigApp {
         });
     }
 
+    /// Save by handing the file over as a download. `keep`: the name a Save of a host-opened
+    /// document keeps; `None` is a Save As, under the document's own name.
+    fn save_download(&mut self, keep: Option<&str>) {
+        if let Some(r) = self.run("file.saveAs", json!({"data": true}))
+            && self.download(keep.unwrap_or_else(|| r["name"].as_str().unwrap_or_default()), &r)
+        {
+            self.run("file.markSaved", json!({}));
+            dialogs::file_saved(self, &r);
+        }
+    }
+
     pub fn save(&mut self) {
         // A branch tab saves its main file.
         let tab = figcraft_engine::branches::file_tab(&self.session);
@@ -57,6 +63,9 @@ impl FigApp {
             if self.run("file.save", json!({})).is_some() {
                 self.toast(i18n::tr("Saved"));
             }
+        } else if let Some(name) = self.services.host_file().filter(|n| is_document_file(n)) {
+            // A host-opened document is saved as the file the host gave: the host updates that file.
+            self.save_download(Some(&name));
         } else {
             self.save_as_dialog();
         }
@@ -298,4 +307,9 @@ impl FigApp {
         }
         failed
     }
+}
+
+/// A `.figcraft` file name: the document format a Save writes (a `.fig` is an export copy).
+fn is_document_file(name: &str) -> bool {
+    Path::new(name).extension().and_then(OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("figcraft"))
 }

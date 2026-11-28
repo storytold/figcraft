@@ -74,6 +74,8 @@ fn a_kicked_connection_with_a_full_queue_is_shut() {
     let out = Line {
         tx,
         queued: Arc::default(),
+        waiting: Arc::default(),
+        max_presence: 32,
         block: Arc::new(AtomicUsize::new(0)),
         all: Arc::new(AtomicUsize::new(0)),
         max: 1 << 20,

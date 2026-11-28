@@ -68,7 +68,7 @@ pub(crate) fn color_at(stops: &[(f64, Color)], t: f64) -> Color {
 /// the seam where the gradient starts over kept as a hard step.
 pub(crate) fn turn_stops(stops: &[(f64, Color)], shift: f64) -> Vec<(f64, Color)> {
     let d = shift.rem_euclid(1.0);
-    if !d.is_finite() || d < 1e-9 || d > 1.0 - 1e-9 || stops.is_empty() {
+    if !d.is_finite() || !(1e-9..=1.0 - 1e-9).contains(&d) || stops.is_empty() {
         return stops.to_vec();
     }
     let seam = 1.0 - d;

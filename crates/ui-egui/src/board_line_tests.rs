@@ -41,7 +41,7 @@ fn connector() -> (Ui, NodeId, NodeId) {
 }
 
 /// Open the menu at `x` from the bar's left edge and pick `item` in it.
-fn pick(u: &mut Ui, x: f32, item: &str) {
+pub(crate) fn pick(u: &mut Ui, x: f32, item: &str) {
     let r = bar(u).expect("the bar shows");
     click(u, pos2(r.min.x + x, r.center().y));
     let shapes = flat(&u.frame_output(vec![]).shapes);
@@ -51,8 +51,8 @@ fn pick(u: &mut Ui, x: f32, item: &str) {
 // The bar's parts from its left edge: 8 board colours from 8 (24 apart) and the colour wheel
 // (to 224), Straight, Elbow and Curved from 232 (30 apart), the start point (62 wide) from 328, the
 // end point from 392 and the line style from 462.
-const END: f32 = 328.0 + 31.0;
-const START: f32 = 392.0 + 31.0;
+const START: f32 = 328.0 + 31.0;
+const END: f32 = 392.0 + 31.0;
 const STYLE: f32 = 462.0 + 20.0;
 const WHEEL: f32 = 200.0 + 10.0;
 

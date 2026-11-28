@@ -73,8 +73,15 @@ fn bundle() -> Vec<u8> {
 
 fn directory(req: PluginReq) -> PluginReply {
     let bytes = bundle();
-    let entry =
-        PluginEntry { id: ID.into(), name: "Tiny tool".into(), version: "1.0.0".into(), sha256: sha256_hex(&bytes), ..PluginEntry::default() };
+    let entry = PluginEntry {
+        id: ID.into(),
+        name: "Tiny tool".into(),
+        version: "1.0.0".into(),
+        access: "write".into(),
+        commands: vec!["shape.rectangle".into()],
+        sha256: sha256_hex(&bytes),
+        ..PluginEntry::default()
+    };
     match req {
         PluginReq::List { .. } => PluginReply::List(vec![entry]),
         PluginReq::Fetch { .. } => PluginReply::Bundle { entry, bundle: bytes },
@@ -91,10 +98,13 @@ fn library(w: &mut Wire, req: LibraryReq) -> LibraryReply {
             LibraryReply::Published { version: 1 }
         }
         (LibraryReq::Usage, _) => LibraryReply::Usage(Vec::new()),
-        (LibraryReq::ReportDetached(_) | LibraryReq::ReportInserted(_) | LibraryReq::ReportAssets(_), _) => LibraryReply::Noted,
+        (LibraryReq::ReportDetached(_) | LibraryReq::ReportInserted(_) | LibraryReq::ReportAssets(_) | LibraryReq::ReportAssetActions(_), _) => {
+            LibraryReply::Noted
+        }
         (LibraryReq::Detached, _) => LibraryReply::Detached(Vec::new()),
         (LibraryReq::Actions, _) => LibraryReply::Actions(Vec::new()),
         (LibraryReq::Assets, _) => LibraryReply::Assets(Vec::new()),
+        (LibraryReq::AssetActions, _) => LibraryReply::AssetActions(Vec::new()),
     }
 }
 

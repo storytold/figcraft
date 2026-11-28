@@ -95,8 +95,9 @@ impl Store {
             return Err(format!("the file has more than {} layers", self.cfg.core.max_nodes));
         }
         let mut doc = replica.document().clone();
+        // The name the file keeps, whichever one it comes from, is cleaned.
         let name = match clean_name(name) {
-            n if n.is_empty() => doc.name.clone(),
+            n if n.is_empty() => clean_name(&doc.name),
             n => n,
         };
         doc.name = name.clone();

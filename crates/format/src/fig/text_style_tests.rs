@@ -85,7 +85,7 @@ fn seen(doc: &Document) -> Seen {
     assert_eq!((text.style.font_family.as_str(), text.style.font_size), ("Inter", 20.0));
     let linked = doc.style(label.styles.text.as_deref().unwrap()).unwrap();
     assert_eq!(linked.name, "Shared");
-    let StyleKind::Text { style } = &linked.kind else { panic!("the linked definition must stay a text style") };
+    let StyleKind::Text { style, .. } = &linked.kind else { panic!("the linked definition must stay a text style") };
     Seen {
         case: text.style.case,
         decoration: text.style.decoration,

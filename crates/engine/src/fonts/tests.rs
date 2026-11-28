@@ -37,7 +37,10 @@ fn lists_families_of_layers_ranges_styles_and_variables_once_each() {
         id: "S:1".into(),
         name: "Heading".into(),
         description: String::new(),
-        kind: StyleKind::Text { style: TextStyle { font_family: "FigCraft Missing C".into(), ..TextStyle::default() } },
+        kind: StyleKind::Text {
+            style: TextStyle { font_family: "FigCraft Missing C".into(), ..TextStyle::default() },
+            paragraph: Default::default(),
+        },
         bound: Default::default(),
     });
     s.execute("variable.createCollection", &json!({"name": "Type", "modes": ["Light", "Dark"]})).unwrap();

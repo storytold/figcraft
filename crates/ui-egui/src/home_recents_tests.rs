@@ -115,6 +115,8 @@ fn view_and_sort_are_kept_in_the_preferences_and_come_back() {
     assert_eq!((View::of(&old), Sort::of(&old)), (View::Grid, Sort::default()));
     let junk: Prefs = serde_json::from_value(json!({"home_views": {"recents": "tiles"}, "home_sort": "size"})).unwrap();
     assert_eq!((View::of(&junk), Sort::of(&junk)), (View::Grid, Sort::default()));
+    let bad_order: Prefs = serde_json::from_value(json!({"home_sort": "name", "home_order": "junk"})).unwrap();
+    assert_eq!(Sort::of(&bad_order), Sort { key: SortKey::Name, descending: false });
 }
 
 /// What the services were asked to do.

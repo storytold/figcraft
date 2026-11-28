@@ -11,8 +11,8 @@ use crate::board::{route, selected_connector_handles};
 use crate::board_tests::{board, connector, drawn, id, near};
 use crate::tools::{PointerEvent, PointerKind};
 
-const A: Point = Point::new(100.0, 50.0);
-const B: Point = Point::new(300.0, 250.0);
+const A: Point = Point::new(104.0, 50.0);
+const B: Point = Point::new(296.0, 250.0);
 
 /// Shapes a (at the origin) and b (down and to the right), 100 × 100, joined side to side.
 fn joined(style: &str) -> (Session, NodeId, NodeId, NodeId) {
@@ -80,11 +80,11 @@ fn a_reshaped_connector_keeps_the_sides_it_left_by() {
 fn the_first_and_last_runs_gain_a_run_and_stay_on_their_ends() {
     let (mut s, _, _, k) = joined("elbow");
     reshape(&mut s, k, 0.0, 150.0, 120.0).unwrap();
-    assert_eq!(drawn(&s, k), [A, pt(124.0, 50.0), pt(124.0, 120.0), pt(200.0, 120.0), pt(200.0, 250.0), B]);
+    assert_eq!(drawn(&s, k), [A, pt(128.0, 50.0), pt(128.0, 120.0), pt(200.0, 120.0), pt(200.0, 250.0), B]);
     let last = drawn(&s, k).len() - 2;
     reshape(&mut s, k, last as f64, 250.0, 200.0).unwrap();
     let pts = drawn(&s, k);
-    assert_eq!(pts, [A, pt(124.0, 50.0), pt(124.0, 120.0), pt(200.0, 120.0), pt(200.0, 200.0), pt(276.0, 200.0), pt(276.0, 250.0), B]);
+    assert_eq!(pts, [A, pt(128.0, 50.0), pt(128.0, 120.0), pt(200.0, 120.0), pt(200.0, 200.0), pt(272.0, 200.0), pt(272.0, 250.0), B]);
     assert!(right_angled(&pts));
 }
 
@@ -97,8 +97,8 @@ fn a_lone_run_gains_a_run_at_each_end() {
     let k = id(&s.execute("board.connector", &json!({"from": a, "to": b, "style": "elbow"})).unwrap(), "id");
     assert_eq!(drawn(&s, k).len(), 2);
     reshape(&mut s, k, 0.0, 200.0, -40.0).unwrap();
-    let (l, r) = (pt(100.0, 50.0), pt(300.0, 50.0));
-    assert_eq!(drawn(&s, k), [l, pt(124.0, 50.0), pt(124.0, -40.0), pt(276.0, -40.0), pt(276.0, 50.0), r]);
+    let (l, r) = (pt(104.0, 50.0), pt(296.0, 50.0));
+    assert_eq!(drawn(&s, k), [l, pt(128.0, 50.0), pt(128.0, -40.0), pt(272.0, -40.0), pt(272.0, 50.0), r]);
 }
 
 #[test]

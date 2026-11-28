@@ -81,11 +81,12 @@ fn only_a_comment_link_leaves_the_comment_tool() {
     assert!(!tool_left(crate::live::PUBLISHING, ToolId::Comment));
 }
 
+/// A local network share has edit and view-only codes, not a comment code, and says where one is.
 #[test]
 fn a_local_share_has_no_comment_code() {
     let (mut s, _) = session();
     let e = s.execute("collab.share", &json!({"via": "local", "access": "comment"})).unwrap_err().to_string();
-    assert!(e.contains("can edit it"), "{e}");
+    assert!(e.contains("share it online for a comment code"), "{e}");
     let e = s.execute("collab.share", &json!({"access": "owner"})).unwrap_err().to_string();
     assert!(e.contains("\"comment\""), "{e}");
 }

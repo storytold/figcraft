@@ -14,6 +14,10 @@ pub enum EngineError {
     NoNode(NodeId),
     #[error("{0}")]
     Other(String),
+    /// A preview was asked for with no gesture open (something committed it under a held button).
+    /// Not for the user: the canvas drops it, as the drag it belonged to is over.
+    #[error("no gesture in progress")]
+    NoGesture,
     /// A command run in the background sent a request to a server and runs again with the answer
     /// ([`background`]); never returned to other callers.
     #[error("waiting for the server")]
@@ -39,6 +43,8 @@ impl EngineError {
         match self {
             EngineError::BadParams { cmd, msg } => EngineError::BadParams { cmd, msg: format!("step {step}: {msg}") },
             EngineError::Other(msg) => EngineError::Other(format!("step {step}: {msg}")),
+            EngineError::Disabled(cmd, msg) => EngineError::Disabled(cmd, format!("step {step}: {msg}")),
+            EngineError::Internal { cmd, msg } => EngineError::Internal { cmd, msg: format!("step {step}: {msg}") },
             e => e,
         }
     }

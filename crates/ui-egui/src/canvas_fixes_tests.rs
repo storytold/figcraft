@@ -186,6 +186,23 @@ fn the_pencil_previews_its_stroke_in_its_colour_and_weight() {
     assert!((w - 1.0).abs() < 0.01, "at least a point: {w}");
 }
 
+/// Over a dark page the Pencil's preview is white, as the stroke it makes will be (#1741).
+#[test]
+fn the_pencil_previews_white_over_a_dark_page() {
+    let mut u = Ui::new(Session::new());
+    u.app.run("page.setBackground", json!({"color": "#1E1E1E"}));
+    u.app.run("tool.set", json!({"tool": "pencil"}));
+    let white = egui::epaint::ColorMode::Solid(crate::theme::c32(figcraft_color::Color::WHITE));
+    let at = |u: &Ui, x: f64, y: f64| u.app.to_screen(x, y);
+    u.button(at(&u, 10.0, 10.0), true);
+    for i in 1..=6 {
+        let p = at(&u, 10.0 + 12.0 * f64::from(i), 10.0 + 6.0 * f64::from(i % 2));
+        u.frame(vec![egui::Event::PointerMoved(p)]);
+    }
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(shapes.iter().any(|s| matches!(s, Shape::Path(p) if !p.closed && p.points.len() >= 3 && p.stroke.color == white)), "a white preview");
+}
+
 #[test]
 fn a_selected_layer_shows_its_constraint_guides_in_its_frame() {
     // A child pinned left (the default) in a frame without auto layout: a dashed guide runs from its

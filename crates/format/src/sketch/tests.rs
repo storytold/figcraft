@@ -36,6 +36,13 @@ fn pages_become_pages_in_document_order() {
 }
 
 #[test]
+fn a_page_listed_twice_is_imported_once() {
+    let z = sketch_zip("50.2", 103, document(&["A", "A", "A"]), &[page("A", "Alpha", vec![])], &[]);
+    let (doc, _) = import(&z, "f").unwrap();
+    assert_eq!(page_names(&doc), ["Alpha"]);
+}
+
+#[test]
 fn older_than_48_is_refused() {
     let z = sketch_zip("47.1", 95, document(&["P"]), &[page("P", "P", vec![])], &[]);
     let e = import(&z, "f").unwrap_err().to_string();
@@ -198,4 +205,22 @@ fn members_over_budget_are_skipped() {
     // Each page JSON is larger than 200 bytes: both are skipped, with a warning; nothing panics.
     assert!(warnings.iter().any(|w| w.contains("too large")), "{warnings:?}");
     assert!(!page_names(&doc).contains(&"Big".to_string()));
+}
+
+/// The shared container refuses ambiguous member names instead of selecting one silently.
+#[test]
+fn duplicate_archive_members_are_refused() {
+    let mut z = sketch_zip("50.2", 103, document(&["A", "B"]), &[page("A", "Alpha", vec![]), page("B", "Beta", vec![])], &[]);
+    let from = b"pages/B.json";
+    let to = b"pages/A.json";
+    let mut replaced = 0;
+    for i in 0..z.len().saturating_sub(from.len()).saturating_add(1) {
+        if z.get(i..i + from.len()) == Some(from.as_slice()) {
+            z[i..i + from.len()].copy_from_slice(to);
+            replaced += 1;
+        }
+    }
+    assert_eq!(replaced, 2, "local and central directory names changed");
+    let error = import(&z, "ambiguous").unwrap_err().to_string();
+    assert!(error.contains("two entries of the archive share a name"), "{error}");
 }

@@ -8,7 +8,7 @@ use figcraft_doc::{Collection, CollectionId, Document, Mode, ModeId, Variable, V
 use serde_json::{Value, json};
 
 use super::CommandSpec;
-use crate::codegen::{css_var_name, css_var_of};
+use crate::codegen::{CssNames, css_var_name};
 use crate::library::{is_remote_collection, local_collections};
 use crate::params::{get, string};
 use crate::{EngineError, Result, Session, bad, spec};
@@ -73,7 +73,9 @@ fn css(doc: &Document, colls: &[&Collection], tailwind: bool) -> String {
     let flattener = vars.flattener();
     // Tailwind theme names, unique per file and the same ones page code reads.
     let theme = crate::tailwind::Theme::new(doc);
-    let name = |v: &Variable| if tailwind { theme.name(v) } else { css_var_of(v) };
+    // CSS names, unique per file and the same ones generated code reads.
+    let names = CssNames::new(doc);
+    let name = |v: &Variable| if tailwind { theme.name(v) } else { names.name(v) };
     // Lengths need a unit where CSS reads them (`border-radius: var(--radius)`); opacity and
     // font weight don't.
     let roles = crate::token_roles::Roles::new(doc);

@@ -386,6 +386,34 @@ fn library_components_keep_their_variable_bindings() {
 }
 
 #[test]
+fn a_file_bringing_older_copies_of_the_same_library_variables_shares_them() {
+    let d = dir("older-copies");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    theme(&mut lib);
+    let lid = publish_to(&mut lib, &lib_path);
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let r = idv(&ex(&mut s, "shape.rectangle", json!({"width": 10, "height": 10, "name": "Swatch"})));
+    ex(&mut s, "library.bindVariable", json!({"library": lid, "variable": "primary", "field": "fill", "ids": [r]}));
+    let old_path = path_str(&d.join("old.figcraft"));
+    ex(&mut s, "file.saveAs", json!({"path": old_path}));
+    // The copies take an update; the saved file keeps the older ones under the same ids.
+    ex(&mut lib, "variable.set", json!({"variable": "primary", "mode": "Light", "value": "#444444"}));
+    republish(&mut lib);
+    ex(&mut s, "library.acceptUpdates", json!({}));
+    let before = s.doc().unwrap().clone();
+    ex(&mut s, "file.import", json!({"path": old_path}));
+    let doc = s.doc().unwrap();
+    assert_eq!((&doc.variables, &doc.libraries.variables), (&before.variables, &before.libraries.variables), "shared by id, as before");
+    let swatches: Vec<&Node> = doc.nodes().filter(|n| n.name == "Swatch").collect();
+    assert_eq!(swatches.len(), 2);
+    assert!(swatches.iter().all(|n| n.bound.get("fill") == Some(&copy_of(&s, "primary").id)));
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn library_variable_commands_fail_cleanly() {
     let mut s = Session::new();
     for cmd in ["library.importVariable", "library.bindVariable", "library.aliasVariable", "library.setVariableMode"] {
@@ -521,4 +549,56 @@ fn stored_variable_ids_keep_library_alias_dependencies() {
     assert!(!copy.values.is_empty());
     assert!(copy.values.values().all(|v| *v == VariableValue::Alias(map.variables[target].clone())));
     assert!(dest.variables.collections.iter().any(|c| c.name == "Base"));
+}
+
+/// A library with collection `coll` (Main/Alt), a colour variable `var` and a paint style `var`
+/// bound to it, published to `path`; returns (the library session, its id).
+fn styled_library(path: &str, coll: &str, var: &str, main: &str, alt: &str) -> (Session, String) {
+    let mut lib = Session::new();
+    ex(&mut lib, "variable.createCollection", json!({"name": coll, "modes": ["Main", "Alt"]}));
+    let v = ex(&mut lib, "variable.create", json!({"collection": coll, "name": var, "type": "color", "values": {"Main": main, "Alt": alt}}))["id"]
+        .clone();
+    let style = ex(&mut lib, "style.create", json!({"type": "paint", "name": var, "value": main}))["id"].clone();
+    ex(&mut lib, "style.bind", json!({"style": style, "field": "fill", "variable": v}));
+    let lid = publish_to(&mut lib, path);
+    (lib, lid)
+}
+
+#[test]
+fn accepting_updates_keeps_variables_only_library_styles_use() {
+    let d = dir("accept-style-vars");
+    let (pa, pb) = (path_str(&d.join("a.figcraft")), path_str(&d.join("b.figcraft")));
+    let (mut a, la) = styled_library(&pa, "TokensA", "accent", "#1565c0", "#2e7d32");
+    let (_b, lb) = styled_library(&pb, "TokensB", "primary", "#7b1fa2", "#00838f");
+
+    let mut s = Session::new();
+    let frame = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 200})));
+    let ra = idv(&ex(&mut s, "shape.rectangle", json!({"x": 10, "y": 10, "width": 20, "height": 20, "parent": frame})));
+    let rb = idv(&ex(&mut s, "shape.rectangle", json!({"x": 50, "y": 10, "width": 20, "height": 20, "parent": frame})));
+    ex(&mut s, "library.add", json!({"path": pa}));
+    ex(&mut s, "library.add", json!({"path": pb}));
+    ex(&mut s, "library.applyStyle", json!({"library": la, "style": "accent", "id": ra}));
+    ex(&mut s, "library.applyStyle", json!({"library": lb, "style": "primary", "id": rb}));
+    ex(&mut s, "library.setVariableMode", json!({"library": la, "collection": "TokensA", "mode": "Alt", "ids": [frame]}));
+    ex(&mut s, "library.setVariableMode", json!({"library": lb, "collection": "TokensB", "mode": "Alt", "ids": [frame]}));
+    assert_eq!(fill(&s, ra), "2E7D32");
+    assert_eq!(fill(&s, rb), "00838F");
+    healthy(&s);
+
+    ex(&mut a, "variable.set", json!({"variable": "accent", "mode": "Alt", "value": "#ef6c00"}));
+    republish(&mut a);
+    let r = ex(&mut s, "library.acceptUpdates", json!({}));
+    assert_eq!(r["variables"], 1, "{r}");
+
+    let doc = s.doc().unwrap();
+    for name in ["accent", "primary"] {
+        let v = doc.variables.variables.iter().find(|v| v.name == name && is_remote_variable(doc, &v.id));
+        assert!(v.is_some(), "library variable copy `{name}` was deleted");
+        let id = &v.unwrap().id;
+        assert!(doc.libraries.variables.iter().any(|r| &r.local == id), "record of `{name}` was deleted");
+    }
+    assert_eq!(fill(&s, ra), "EF6C00");
+    assert_eq!(fill(&s, rb), "00838F");
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
 }

@@ -11,6 +11,14 @@ pub fn rotation_degrees(xf: Affine) -> f64 {
     if deg <= -180.0 { deg + 360.0 } else { deg }
 }
 
+/// Whether `xf` maps axis-aligned rectangles to axis-aligned rectangles: scale, flip, translate or a
+/// quarter turn, but no other rotation and no skew.
+pub fn is_axis_aligned(xf: Affine) -> bool {
+    let [a, b, c, d, ..] = xf.as_coeffs();
+    let tol = 1e-9 * (a.abs() + b.abs() + c.abs() + d.abs()).max(1.0);
+    (b.abs() <= tol && c.abs() <= tol) || (a.abs() <= tol && d.abs() <= tol)
+}
+
 /// The translation part of `xf`.
 pub fn translation(xf: Affine) -> Point {
     let c = xf.as_coeffs();
@@ -57,6 +65,14 @@ pub fn rotate_about(xf: Affine, pivot: Point, degrees: f64) -> Affine {
 /// Round a value to `digits` decimals for display (avoids `-0` and float noise).
 pub fn round_to(v: f64, digits: i32) -> f64 {
     let f = 10f64.powi(digits);
-    let r = (v * f).round() / f;
+    if v.is_finite() && !f.is_finite() {
+        return v;
+    }
+    let scaled = v * f;
+    if v.is_finite() && !scaled.is_finite() {
+        // Too large to have a fractional part at this scale; already whole.
+        return v;
+    }
+    let r = scaled.round() / f;
     if r == 0.0 { 0.0 } else { r }
 }

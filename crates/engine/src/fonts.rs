@@ -54,7 +54,7 @@ pub fn missing(doc: &Document) -> Vec<Missing> {
         }
     }
     for st in &doc.styles {
-        if let StyleKind::Text { style } = &st.kind {
+        if let StyleKind::Text { style, .. } = &st.kind {
             add(&style.font_family, false);
         }
         if let Some(var) = st.bound.get("fontFamily") {

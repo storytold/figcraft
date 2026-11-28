@@ -374,7 +374,7 @@ fn icon_button(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) -> bool {
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), rect.shrink(5.0), icon, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(rect), icon, t.icon);
     resp.clicked()
 }
 
@@ -639,30 +639,33 @@ fn interactions(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId, nod
         && n == id
         && let Some(it) = list.get(k)
     {
-        let panel_left = ui.clip_rect().min.x;
+        let panel = ui.clip_rect().x_range();
         let y = anchor.map(|a| a.min.y).unwrap_or(ui.clip_rect().min.y + 80.0);
-        editor_popover(app, ui.ctx(), InteractionPopover { doc, page, node: id, index: k, interaction: it, anchor: pos2(panel_left - 8.0, y) });
+        editor_popover(app, ui.ctx(), InteractionPopover { doc, page, node: id, index: k, interaction: it, panel, y });
     } else if open.is_some_and(|(n, _)| n == id) {
         open_editor(ui.ctx(), None);
     }
 }
 
-/// The interaction editor, floating left of the panel (`at` is its top-right corner).
+/// The interaction editor, floating beside the panel (`panel`, its x range) on the canvas side,
+/// its top at `y`.
 struct InteractionPopover<'a> {
     doc: &'a Document,
     page: NodeId,
     node: NodeId,
     index: usize,
     interaction: &'a Interaction,
-    anchor: Pos2,
+    panel: egui::Rangef,
+    y: f32,
 }
 
 fn editor_popover(app: &mut FigApp, ctx: &egui::Context, popover: InteractionPopover<'_>) {
-    let InteractionPopover { doc, page, node, index: k, interaction: it, anchor: at } = popover;
+    let InteractionPopover { doc, page, node, index: k, interaction: it, panel, y } = popover;
     let t = Tokens::get(ctx);
     let width = 280.0;
     let screen = ctx.content_rect();
-    let pos = pos2(at.x - width, at.y.min(screen.max.y - 420.0).max(screen.min.y + 48.0));
+    let x = crate::popover::beside_panel(panel, width, 8.0, app.ui.mirrored);
+    let pos = pos2(x, y.min(screen.max.y - 420.0).max(screen.min.y + 48.0));
     let mut close = false;
     egui::Area::new(Id::unique("proto_editor_area")).fixed_pos(pos).order(egui::Order::Foreground).show(ctx, |ui| {
         egui::Frame::new()
@@ -681,7 +684,7 @@ fn editor_popover(app: &mut FigApp, ctx: &egui::Context, popover: InteractionPop
                 if xr.hovered() {
                     ui.painter().rect_filled(x, CornerRadius::same(5), t.hover);
                 }
-                icons::paint(ui.painter(), x.shrink(6.0), Icon::Close, t.icon);
+                icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(x), Icon::Close, t.icon);
                 if xr.clicked() {
                     close = true;
                 }
@@ -1349,5 +1352,23 @@ fn scroll_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId],
                 }
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod icon_size_tests {
+    use super::*;
+    use crate::header_icon_size_tests::{painted_rects, paints_icon_at_button_size};
+
+    /// The panel's 24 pt icon buttons (flow play, preview, remove) paint their glyphs at 16 pt (#2238).
+    #[test]
+    fn prototype_icon_buttons_paint_16pt() {
+        for icon in [Icon::Play, Icon::Preview, Icon::Minus] {
+            let painted = painted_rects(None, |ui| {
+                let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(24.0, 24.0));
+                icon_button(ui, Id::unique("proto_icon_size"), rect, icon, "x");
+            });
+            assert!(paints_icon_at_button_size(&painted, icon), "{icon:?} is not 16 pt");
+        }
     }
 }

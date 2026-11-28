@@ -56,12 +56,10 @@ fn region_filled(n: &figcraft_doc::Node, net: &VectorNetwork, i: usize) -> bool 
     net.regions.get(i).is_some_and(|r| r.fills.as_deref().unwrap_or(&n.fills).iter().any(|f| f.visible))
 }
 
-/// The network as its fill draws it: rounded points drawn in (region indexes are kept).
-fn drawn(net: &VectorNetwork) -> std::borrow::Cow<'_, VectorNetwork> {
-    match net.rounded() {
-        Some(r) => std::borrow::Cow::Owned(r),
-        None => std::borrow::Cow::Borrowed(net),
-    }
+/// The network as its fill draws it: rounded points drawn in with the layer's corner `smoothing`
+/// (region indexes are kept).
+fn drawn(net: &VectorNetwork, smoothing: f64) -> std::borrow::Cow<'_, VectorNetwork> {
+    figcraft_doc::geometry::drawn_network(net, smoothing)
 }
 
 /// The region of the active layer under page point `p` at `zoom`: none when a point is within
@@ -90,7 +88,7 @@ pub fn region_hit(doc: &Document, ve: &VectorEdit, p: Point, zoom: f64) -> Optio
     if (0..net.segments.len()).filter_map(|i| net.cubic(i)).any(|c| c.nearest(lp, 0.01).distance_sq.sqrt() <= sc) {
         return None;
     }
-    let drawn = drawn(net);
+    let drawn = drawn(net, node.corners.smoothing);
     (0..drawn.regions.len()).rev().find(|i| region_filled(node, &drawn, *i) && drawn.region_contains(*i, lp))
 }
 
@@ -221,7 +219,7 @@ pub fn region_hatch(doc: &Document, ve: &VectorEdit, regions: &[usize], view: Af
     let zoom = view.determinant().abs().sqrt();
     let Some(spacing) = hatch_spacing(zoom).filter(|_| !regions.is_empty()) else { return Vec::new() };
     let Some(net) = network(doc, ve.id) else { return Vec::new() };
-    let net = drawn(net);
+    let net = drawn(net, doc.node(ve.id).map_or(0.0, |n| n.corners.smoothing));
     let m = view * doc.world_transform(ve.id);
     let anchor = m * Point::ZERO;
     let mut out = Vec::new();

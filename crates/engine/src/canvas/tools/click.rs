@@ -22,6 +22,29 @@ impl Session {
         }
     }
 
+    /// A double-click on an edge handle of the one selected layer auto layout sizes: Hug contents
+    /// on that axis for an auto layout frame, Fill container with Alt for a child of one (a
+    /// vertical edge sizes the width, a horizontal one the height). Whether it applied: on any
+    /// other layer, or off the edges, the double-click goes on as before.
+    fn edge_double_click(&mut self, doc: &Document, sel: &[NodeId], ev: &PointerEvent) -> Result<bool> {
+        let [id] = sel[..] else { return Ok(false) };
+        let Some(super::Handle::Edge(edge)) = super::handles::handle_at(doc, sel, ev.p(), ev.zoom) else { return Ok(false) };
+        let Some(n) = doc.node(id) else { return Ok(false) };
+        let applies = if ev.alt {
+            !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+        } else {
+            n.layout.is_some()
+        };
+        if !applies {
+            return Ok(false);
+        }
+        // Edges run top, right, bottom, left: the odd ones are vertical and size the width.
+        let mut props = serde_json::Map::new();
+        props.insert(if edge % 2 == 1 { "sizingH" } else { "sizingV" }.to_string(), json!(if ev.alt { "fill" } else { "hug" }));
+        self.execute("node.set", &json!({"id": id, "props": props}))?;
+        Ok(true)
+    }
+
     pub(super) fn double_click(&mut self, ev: &PointerEvent) -> Result<()> {
         let ds = self.ds()?;
         let (doc, sel, page) = (ds.doc.clone(), ds.selection.clone(), ds.page);
@@ -61,7 +84,17 @@ impl Session {
             self.tool.overlay.marquee = None;
             self.cancel_interaction()?;
         }
-        let hit_here = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+        // An edge of an auto layout object's bounding box: Hug contents on that axis, with Alt
+        // Fill container ("Tip: Double-click the vertical or horizontal edge of an auto layout
+        // object's bounding box to set it to Hug contents." and "Hold ⌥ Option or Alt and
+        // double-click the vertical or horizontal edge of an auto layout object's bounding box to
+        // set it to Fill container.", Guide to auto layout).
+        if edits && matches!(self.tool.tool, ToolId::Move | ToolId::Scale) && !(ev.shift || ev.cmd) && self.edge_double_click(&doc, &sel, ev)? {
+            return Ok(());
+        }
+        // With Cmd/Ctrl, the pick reaches through an unfilled overlay as a Cmd/Ctrl-click does, so
+        // the layer under it is edited at once.
+        let hit_here = self.hit_pick(&doc, page, ev.p(), ev.tol() * 2.0, ev.cmd);
         // A double-click anywhere on the one selected shape edits its points, like Enter: also
         // inside a hollow (unfilled) closed shape, where the hit test finds nothing under the
         // pointer (an open path or a line has no inside: only its stroke counts).
@@ -108,6 +141,38 @@ impl Session {
             return crate::vectoredit::begin_many(self, &ids);
         }
         // Groups, frames and boolean groups: select one level deeper (the layer under the pointer).
+        if ev.shift && !ev.cmd {
+            // Both presses recorded here are this double-click's; without them (the presses came in
+            // one frame with the double-click, or with another tool) the current selection stands in.
+            let before_the_clicks = match std::mem::take(&mut self.tool.selections_before_last_two_presses) {
+                [Some((first, before)), Some((second, _))] if within_slop(ev, first) && within_slop(ev, second) => before,
+                _ => sel.clone(),
+            };
+            let entered_here = before_the_clicks.iter().any(|s| *s == leaf || doc.is_ancestor(*s, leaf));
+            let deeper = if entered_here {
+                figcraft_doc::geometry::enter_target(&doc, leaf, &before_the_clicks)
+            } else {
+                let mut branch = doc.ancestors(leaf);
+                branch.reverse();
+                branch.push(leaf);
+                let clicked = select_target(&doc, leaf, &before_the_clicks, false);
+                let beside_the_selection = before_the_clicks
+                    .iter()
+                    .filter_map(|s| branch.iter().rposition(|b| doc.is_ancestor(*b, *s)))
+                    .max()
+                    .and_then(|shared| branch.get(shared + 1))
+                    .copied();
+                let start = beside_the_selection.filter(|b| doc.is_ancestor(clicked, *b)).unwrap_or(clicked);
+                figcraft_doc::geometry::enter_target(&doc, leaf, &[start])
+            };
+            let mut alongside: Vec<NodeId> = before_the_clicks
+                .into_iter()
+                .filter(|s| doc.contains(*s) && *s != deeper && !doc.is_ancestor(*s, deeper) && !doc.is_ancestor(deeper, *s))
+                .collect();
+            alongside.push(deeper);
+            self.set_selection(alongside);
+            return Ok(());
+        }
         let deeper = figcraft_doc::geometry::enter_target(&doc, leaf, &sel);
         if deeper != target || !sel.contains(&deeper) {
             self.set_selection(vec![deeper]);
@@ -162,6 +227,7 @@ impl Session {
         }
         // New text at the click (Figma puts the baseline-ish top-left there).
         let parent = frame_at(&doc, page, ev.p(), &[]).unwrap_or(page);
+        let defaults = self.default_props.text.clone();
         let ds = self.ds_mut()?;
         let d = ds.doc_mut();
         let id = d.alloc_id();
@@ -173,12 +239,18 @@ impl Session {
         if let Some(fills) = readable_text_fills(d, parent) {
             n.fills = fills;
         }
-        if let Some((w, h)) = figcraft_text::auto_size(&n) {
-            n.width = w.max(1.0);
-            n.height = h;
-        }
-        let line = n.height;
         d.insert(n, parent, None)?;
+        // Edit ▸ Set default properties from a text layer: its fills and font (best effort).
+        if let Some(defaults) = &defaults {
+            let _ = crate::cmd::edit::apply_copied_props("edit.setDefaultProperties", d, id, defaults);
+        }
+        let line = d.node_mut(id).map_or(14.0, |n| {
+            if let Some((w, h)) = figcraft_text::auto_size(n) {
+                n.width = w.max(1.0);
+                n.height = h;
+            }
+            n.height
+        });
         ds.selection = vec![id];
         textedit::begin(self, id, Some(0), true)?;
         self.tool.gesture = Gesture::TextBox { id, start: ev.p(), line };
@@ -322,8 +394,13 @@ impl Session {
     pub(super) fn eyedrop(&mut self, ev: &PointerEvent) -> Result<()> {
         let ds = self.ds()?;
         let doc = ds.doc.clone();
-        let view = figcraft_render::View { origin: (ev.x, ev.y), scale: ev.zoom.max(0.01), width: 1, height: 1 };
-        let Some(pix) = figcraft_render::render_view(&doc, ds.page, &view, &Default::default()) else { return Ok(()) };
+        // One screen pixel centred on the pointer (its top left half a pixel up and to the left).
+        let scale = ev.zoom.max(0.01);
+        let view = figcraft_render::View { origin: (ev.x - 0.5 / scale, ev.y - 0.5 / scale), scale, width: 1, height: 1 };
+        // As the canvas draws it: an image magnified past 2x shows its pixels, so the colour picked
+        // is the pixel under the pointer, not a blend with its neighbours (#2189).
+        let opts = figcraft_render::Options { magnified_image_pixels: true, ..Default::default() };
+        let Some(pix) = figcraft_render::render_view(&doc, ds.page, &view, &opts) else { return Ok(()) };
         let rgba = figcraft_render::to_rgba8(&pix);
         let c = figcraft_color::Color::from_rgba8(
             rgba.first().copied().unwrap_or(0),
@@ -339,7 +416,15 @@ impl Session {
             // and what to call it; nothing is applied).
             self.request_ui("dialog.createFromColor", json!({"color": c.to_css_hex()}));
         } else if !sel.is_empty() {
-            self.execute("node.set", &json!({"ids": sel, "props": {"fill": c.to_css_hex()}}))?;
+            let (stroked, filled): (Vec<NodeId>, Vec<NodeId>) = sel.iter().partition(|id| doc.node(**id).is_some_and(takes_pick_on_stroke));
+            self.grouped("Pick color", |s| {
+                for (ids, key) in [(filled, "fill"), (stroked, "stroke")] {
+                    if !ids.is_empty() {
+                        s.execute("node.set", &json!({"ids": ids, "props": {key: c.to_css_hex()}}))?;
+                    }
+                }
+                Ok(())
+            })?;
         }
         self.recent_colors.retain(|x| *x != c);
         self.recent_colors.insert(0, c);
@@ -348,4 +433,8 @@ impl Session {
         self.set_tool(ToolId::Move);
         Ok(())
     }
+}
+
+fn takes_pick_on_stroke(n: &Node) -> bool {
+    !n.fills.iter().any(|p| p.visible) && n.strokes.iter().any(|p| p.visible)
 }

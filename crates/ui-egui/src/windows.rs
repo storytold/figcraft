@@ -10,7 +10,8 @@
 
 use std::cell::RefCell;
 
-use egui::{Context, Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportId};
+use craft_ui::shell::embed::CloseDecision;
+use egui::{Context, Key, KeyboardShortcut, Modifiers, Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportId};
 use figcraft_engine::{DocState, Session};
 use serde_json::{Value, json};
 
@@ -190,9 +191,12 @@ pub(crate) fn fail_input_acks(app: &mut FigApp, viewport: ViewportId) {
 }
 
 fn title_of(ds: Option<&DocState>) -> String {
+    // The Nightly names itself in the caption and the taskbar, so two windows of the same file are
+    // never mistaken for each other (see `channel`).
+    let app = crate::channel::name();
     match ds {
-        Some(ds) => format!("{}{} – FigCraft", ds.doc.name, if ds.is_dirty() { " •" } else { "" }),
-        None => "FigCraft".into(),
+        Some(ds) => format!("{}{} – {app}", ds.doc.name, if ds.is_dirty() { " •" } else { "" }),
+        None => app.into(),
     }
 }
 
@@ -236,6 +240,8 @@ fn exchange(app: &mut FigApp, p: &mut Pane) {
     std::mem::swap(&mut app.ui, &mut p.ui);
     std::mem::swap(&mut app.ui.last_copy, &mut p.ui.last_copy);
     std::mem::swap(&mut app.ui.last_copy_generation, &mut p.ui.last_copy_generation);
+    // A paint or effect copied from its row is on the one clipboard every window pastes from.
+    std::mem::swap(&mut app.ui.property_copy, &mut p.ui.property_copy);
     std::mem::swap(&mut app.ui.quit, &mut p.ui.quit);
     std::mem::swap(&mut app.ui.dark, &mut p.ui.dark);
     std::mem::swap(&mut app.canvas, &mut p.canvas);
@@ -371,19 +377,38 @@ pub fn list(app: &FigApp) -> Value {
     )
 }
 
-/// The window drawing now was asked to close (its close button, the system's): its files close
-/// with it, after asking when one has unsaved changes. The main window closes last: while other
-/// windows are open it takes over one of them. The desktop app calls it from the main window's
-/// `logic` (which runs even while the window is minimised); other windows call it themselves.
+/// Ctrl+Q asks the window it is pressed in to close, as its close button does: only that window's
+/// files are asked about and close. Last in the window's frame, so its widgets and shortcuts read
+/// the key first. (On macOS Cmd+Q is the app menu's Quit, which asks the main window to close.)
+pub(crate) fn quit_key(ctx: &Context) {
+    const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
+    if ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
+        ctx.send_viewport_cmd(ViewportCommand::Close);
+    }
+}
+
+/// Another window drawing now was asked to close (its close button, Ctrl+Q, the system's): its
+/// files close with it, after asking when one has unsaved changes. The main window's close goes
+/// through the runtime's close path ([`close_decision`]).
 pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
     if app.ui.quit || !ctx.input(|i| i.viewport().close_requested()) {
         return;
     }
-    let unsaved = !app.unsaved().is_empty();
-    if app.windows.current == 0 && (unsaved || !app.windows.list.is_empty()) {
-        ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-    }
     request_close(app, ctx);
+}
+
+/// The main window was asked to close (its close button, the system's, a quit): its files close
+/// with it, after asking when one has unsaved changes. The main window closes last: while other
+/// windows are open it takes over one of them, and the window stays open. Runs in the runtime's
+/// close path ([`FigApp::close_path`]), from the main window's `logic`, which runs even while the
+/// window is minimised.
+pub(crate) fn close_decision(app: &mut FigApp, ctx: &Context) -> CloseDecision {
+    if app.ui.quit {
+        return CloseDecision::Close;
+    }
+    let hold = !app.unsaved().is_empty() || !app.windows.list.is_empty();
+    request_close(app, ctx);
+    if hold { CloseDecision::Hold } else { CloseDecision::Close }
 }
 
 /// The custom title bar's Close button uses the same unsaved-file check as a system close event.
@@ -445,6 +470,15 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
         app.ui.confirm_close = false;
         return;
     }
+    if let Some(a) = unsaved_question(ctx, &names) {
+        answer_close(app, ctx, a);
+    }
+}
+
+/// The unsaved-changes question about files `names` (Don't Save / Cancel / Save, as the other
+/// Craft apps ask it; Enter answers Save, the dialog's close button Cancel): `None` while it is
+/// unanswered.
+fn unsaved_question(ctx: &Context, names: &[String]) -> Option<CloseAnswer> {
     let t = crate::theme::Tokens::get(ctx);
     let mut open = true;
     let mut answer = None;
@@ -464,15 +498,121 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
             }
         });
         // Save is the default: Enter answers it when no button has the keyboard.
-        if answer.is_none() && ui.memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if answer.is_none() && !crate::a11y::field_focused(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             answer = Some(CloseAnswer::Save);
         }
     });
     if !open {
         answer = Some(CloseAnswer::Cancel);
     }
-    if let Some(a) = answer {
-        answer_close(app, ctx, a);
+    answer
+}
+
+/// Where closing a tab whose file has unsaved changes is (each step names the file's uid).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabClose {
+    /// The unsaved-changes question shows for it.
+    Ask(u64),
+    /// Save was answered: it saves next frame, once a panel field the click took the keyboard
+    /// from has committed what was typed, then the tab closes.
+    Save(u64),
+    /// Its Save as dialog (a file without a path, or a .fig) is open: the tab closes once the file
+    /// is saved, and stays open if the dialog is cancelled or the save fails.
+    AfterSaveAs(u64),
+}
+
+/// Close tab `i` (its X, a middle click, File ▸ Close tab): at once when its file has no unsaved
+/// changes (a branch tab's edits are in its main file already), else after the unsaved-changes
+/// question ([`confirm_close_tab`]).
+pub(crate) fn ask_close_tab(app: &mut FigApp, i: usize) {
+    let Some(d) = app.session.docs.get(i) else { return };
+    if d.is_dirty() && d.branch_of.is_none() {
+        app.ui.find = None;
+        app.ui.close_tab = Some(TabClose::Ask(d.uid));
+    } else {
+        app.run("file.close", json!({"index": i}));
+    }
+}
+
+/// Act on the unsaved-changes question's answer for the tab it asks about: Cancel keeps the tab,
+/// Don't Save closes it and drops the changes, Save saves the file next frame, then closes it.
+pub(crate) fn answer_close_tab(app: &mut FigApp, ctx: &Context, answer: CloseAnswer) {
+    let Some(TabClose::Ask(uid)) = app.ui.close_tab else { return };
+    app.ui.close_tab = None;
+    match answer {
+        CloseAnswer::Cancel => {}
+        CloseAnswer::DontSave => {
+            if let Some(i) = tab_of(app, uid) {
+                app.run("file.close", json!({"index": i, "force": true}));
+            }
+        }
+        CloseAnswer::Save => {
+            app.ui.close_tab = Some(TabClose::Save(uid));
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// Tab `i` of the session whose file has uid `uid`, if it is still open.
+fn tab_of(app: &FigApp, uid: u64) -> Option<usize> {
+    app.session.docs.iter().position(|d| d.uid == uid)
+}
+
+/// The unsaved-changes question for a closing tab and what its answer starts: Don't Save closes
+/// the tab and drops the changes, Cancel keeps it, Save saves the file (Save as for one without a
+/// path or saved as .fig) and closes the tab once it is saved.
+pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
+    let Some(step) = app.ui.close_tab else { return };
+    let (TabClose::Ask(uid) | TabClose::Save(uid) | TabClose::AfterSaveAs(uid)) = step;
+    let Some(i) = tab_of(app, uid) else {
+        app.ui.close_tab = None;
+        return;
+    };
+    let dirty = app.session.docs.get(i).is_some_and(DocState::is_dirty);
+    match step {
+        TabClose::Ask(_) if !dirty => {
+            // Saved meanwhile: nothing is lost by closing.
+            app.ui.close_tab = None;
+            app.run("file.close", json!({"index": i}));
+        }
+        TabClose::Ask(_) => {
+            let names: Vec<String> = app.session.docs.get(i).map(|d| d.doc.name.clone()).into_iter().collect();
+            if let Some(a) = unsaved_question(ctx, &names) {
+                answer_close_tab(app, ctx, a);
+            }
+        }
+        TabClose::Save(_) => {
+            app.ui.close_tab = None;
+            // Saving acts on the file shown.
+            app.session.active = i;
+            let native = app.session.docs.get(i).and_then(|d| d.path.as_deref()).is_some_and(|p| {
+                !std::path::Path::new(p).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("fig"))
+            });
+            if !native {
+                app.ui.close_tab = Some(TabClose::AfterSaveAs(uid));
+                app.save_as_dialog();
+                if app.pending_dialog.is_none() {
+                    // No dialog could start: the tab stays open.
+                    app.ui.close_tab = None;
+                }
+                ctx.request_repaint();
+                return;
+            }
+            if app.run("file.save", json!({})).is_some()
+                && let Some(i) = tab_of(app, uid)
+            {
+                app.run("file.close", json!({"index": i}));
+            }
+        }
+        TabClose::AfterSaveAs(_) => {
+            if app.pending_dialog.is_some() {
+                return;
+            }
+            app.ui.close_tab = None;
+            if !dirty {
+                app.run("file.close", json!({"index": i}));
+            }
+        }
     }
 }
 
@@ -714,10 +854,13 @@ fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
         app.viewport_setup(&ctx);
         app.frame(ui)
     });
+    quit_key(&ctx);
     app.end_input_frame(&ctx);
     adopt(app, &e);
     settle(app, &ctx, files_before);
     if app.session.prefs != prefs {
+        // This window too (see the root's frame): the next frame applies the preference.
+        ctx.request_repaint();
         repaint_others(app, &ctx);
     }
     let (outer, inner) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect));

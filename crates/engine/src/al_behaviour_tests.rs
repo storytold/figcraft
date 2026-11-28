@@ -72,6 +72,173 @@ fn fill_on_a_child_turns_the_hugging_parent_fixed() {
     assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug));
 }
 
+fn name_of(s: &Session, node: NodeId) -> String {
+    s.doc().unwrap().node(node).unwrap().name.clone()
+}
+
+/// Measured in Figma web (2026-11-08): across the flow a Fill child
+/// leaves its hugging parent hugging and takes the line's cross size; the parent turns Fixed (with
+/// a notice) only when no non-Fill child is left on that axis.
+#[test]
+fn fill_across_a_hugging_parent_keeps_it_hugging_and_takes_the_line() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));
+    let a = rect(&mut s, f, 4.0, 20.0, "#FF0000");
+    let b = rect(&mut s, f, 50.0, 40.0, "#0000FF");
+    assert_eq!(size(&s, f), (54.0, 40.0));
+    s.message = None;
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug), "a non-Fill sibling is left: the parent keeps hugging");
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fill));
+    assert_eq!((size(&s, a), size(&s, f)), ((4.0, 40.0), (54.0, 40.0)));
+    assert_eq!(s.message, None, "no notice");
+    // The sibling grows: the bar and the parent follow.
+    set(&mut s, b, json!({"height": 60}));
+    assert_eq!((size(&s, a), size(&s, f)), ((4.0, 60.0), (54.0, 60.0)));
+    // The last non-Fill child fills too: the parent turns Fixed at its current height, with a notice.
+    set(&mut s, b, json!({"sizingV": "fill"}));
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Fixed));
+    assert_eq!(s.message, Some(format!("Height set to Fixed for {}", name_of(&s, f))));
+    assert_eq!((size(&s, a), size(&s, b), size(&s, f)), ((4.0, 60.0), (50.0, 60.0), (54.0, 60.0)));
+    set(&mut s, f, json!({"height": 80}));
+    assert_eq!((size(&s, a), size(&s, b)), ((4.0, 80.0), (50.0, 80.0)));
+    // One undo step puts the sizing back.
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug));
+    assert_eq!(sizing(&s, b), (Sizing::Fixed, Sizing::Fixed));
+}
+
+#[test]
+fn fill_along_a_hugging_parent_notes_that_the_width_is_fixed() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));
+    let a = rect(&mut s, f, 50.0, 20.0, "#FF0000");
+    rect(&mut s, f, 30.0, 40.0, "#0000FF");
+    s.message = None;
+    set(&mut s, a, json!({"sizingH": "fill"}));
+    assert_eq!(sizing(&s, f), (Sizing::Fixed, Sizing::Hug));
+    assert_eq!(s.message, Some(format!("Width set to Fixed for {}", name_of(&s, f))));
+    // A Fill that changes nothing about the parent has no notice.
+    s.message = None;
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    assert_eq!(s.message, None);
+}
+
+#[test]
+fn hugging_a_row_notes_the_child_that_filled_its_width_turned_fixed() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "fixed", "sizingV": "fixed"}));
+    let a = rect(&mut s, f, 50.0, 20.0, "#FF0000");
+    rect(&mut s, f, 30.0, 40.0, "#0000FF");
+    set(&mut s, a, json!({"sizingH": "fill"}));
+    assert_eq!(sizing(&s, a).0, Sizing::Fill);
+    s.message = None;
+    set(&mut s, f, json!({"sizingH": "hug"}));
+    assert_eq!(sizing(&s, a).0, Sizing::Fixed);
+    assert_eq!(s.message, Some(format!("Width set to Fixed for {}", name_of(&s, a))));
+}
+
+#[test]
+fn hugging_a_row_keeps_and_does_not_note_the_child_that_fills_across_it() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "fixed", "sizingV": "fixed"}));
+    let a = rect(&mut s, f, 50.0, 20.0, "#FF0000");
+    rect(&mut s, f, 30.0, 40.0, "#0000FF");
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    s.message = None;
+    set(&mut s, f, json!({"sizingV": "hug"}));
+    assert_eq!(sizing(&s, a).1, Sizing::Fill);
+    assert_eq!(s.message, None);
+}
+
+#[test]
+fn a_fill_childs_min_counts_toward_the_hugging_size() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));
+    let a = rect(&mut s, f, 4.0, 20.0, "#FF0000");
+    let b = rect(&mut s, f, 50.0, 40.0, "#0000FF");
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    set(&mut s, a, json!({"minHeight": 50}));
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug));
+    assert_eq!((size(&s, a), size(&s, b), size(&s, f)), ((4.0, 50.0), (50.0, 40.0), (54.0, 50.0)));
+}
+
+#[test]
+fn a_parent_set_back_to_hug_keeps_the_child_that_fills_across_it() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "fixed", "height": 100}));
+    let a = rect(&mut s, f, 4.0, 20.0, "#FF0000");
+    rect(&mut s, f, 50.0, 40.0, "#0000FF");
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    assert_eq!(size(&s, a), (4.0, 100.0));
+    set(&mut s, f, json!({"sizingV": "hug"}));
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fill), "a non-Fill sibling is left on that axis");
+    assert_eq!((size(&s, a), size(&s, f)), ((4.0, 40.0), (54.0, 40.0)));
+}
+
+#[test]
+fn fill_across_a_wrapping_row_that_hugs_that_axis_is_not_offered() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"wrap": true, "sizingH": "fixed", "sizingV": "hug", "width": 120}));
+    let a = rect(&mut s, f, 40.0, 20.0, "#FF0000");
+    let r = s.execute("node.set", &json!({"id": a, "props": {"sizingV": "fill"}}));
+    assert!(r.is_err(), "Fill height in a wrapping row that hugs its height");
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fixed));
+    assert_eq!(sizing(&s, f), (Sizing::Fixed, Sizing::Hug));
+    // Along the flow a wrapping row still takes Fill width, and with a fixed height Fill height.
+    set(&mut s, a, json!({"sizingH": "fill"}));
+    set(&mut s, f, json!({"sizingV": "fixed"}));
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    assert_eq!(sizing(&s, a), (Sizing::Fill, Sizing::Fill));
+}
+
+#[test]
+fn a_child_resized_to_the_full_available_space_becomes_fill() {
+    // Documented: "Child objects of an auto layout frame will also be set to Fill container if
+    // they are manually resized to the full available space of the parent frame."
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"padding": 10, "gap": 10})); // 200 × 100, fixed
+    let a = rect(&mut s, f, 50.0, 20.0, "#FF0000");
+    // Along the flow, alone in the frame: its width less the padding (200 - 20).
+    s.execute("transform.resize", &json!({"ids": [a], "width": 180})).unwrap();
+    assert_eq!(sizing(&s, a), (Sizing::Fill, Sizing::Fixed));
+    assert_eq!(size(&s, a), (180.0, 20.0));
+    s.undo().unwrap();
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fixed), "undone as part of the edit");
+    // Across the flow, beside a sibling too: the frame's height less its padding.
+    let b = rect(&mut s, f, 50.0, 20.0, "#0000FF");
+    set(&mut s, b, json!({"height": 80}));
+    assert_eq!(sizing(&s, b), (Sizing::Fixed, Sizing::Fill));
+    assert_eq!(size(&s, b), (50.0, 80.0));
+    // Short of it: fixed, as before.
+    set(&mut s, b, json!({"height": 70}));
+    assert_eq!(sizing(&s, b), (Sizing::Fixed, Sizing::Fixed));
+    // Along the flow beside a sibling, what is left is not "the full available space": a width
+    // that happens to match it (180 - 10 - 50) stays fixed.
+    s.execute("transform.resize", &json!({"ids": [b], "width": 120})).unwrap();
+    assert_eq!(sizing(&s, b), (Sizing::Fixed, Sizing::Fixed));
+    // A hugging frame has no full space to offer: the child stays fixed.
+    let g = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug", "padding": 10}));
+    let c = rect(&mut s, g, 50.0, 20.0, "#00FF00");
+    set(&mut s, c, json!({"width": 180}));
+    assert_eq!(sizing(&s, c), (Sizing::Fixed, Sizing::Fixed));
+    // An inside stroke the layout includes takes room like the padding: the full space is what
+    // layout leaves the child (200 - 2 × 10 - 2 × 4), not the frame less its padding alone.
+    let h = al_frame(&mut s, json!({"padding": 10, "strokesIncluded": true, "stroke": "#000000", "strokeWeight": 4, "strokeAlign": "inside"}));
+    let d = rect(&mut s, h, 50.0, 20.0, "#FF0000");
+    set(&mut s, d, json!({"width": 180}));
+    assert_eq!(sizing(&s, d), (Sizing::Fixed, Sizing::Fixed), "wider than the room the stroke leaves");
+    assert_eq!(size(&s, d), (180.0, 20.0), "and kept as typed");
+    set(&mut s, d, json!({"width": 172}));
+    assert_eq!(sizing(&s, d), (Sizing::Fill, Sizing::Fixed));
+    assert_eq!(size(&s, d), (172.0, 20.0));
+    // Excluded from the layout, the stroke takes no room: the frame less its padding again.
+    set(&mut s, h, json!({"strokesIncluded": false}));
+    set(&mut s, d, json!({"width": 172}));
+    assert_eq!(sizing(&s, d), (Sizing::Fixed, Sizing::Fixed));
+}
+
 #[test]
 fn hug_and_fill_only_where_they_apply() {
     // Documented: Hug applies to auto layout frames (and text); Fill to children of auto layout,
@@ -232,6 +399,20 @@ fn a_size_given_with_a_new_path_fixes_that_axis() {
     set(&mut s, v, json!({"path": "M0 0 L20 5", "width": 30}));
     assert_eq!(sizing(&s, v).0, Sizing::Fixed);
     assert!((size(&s, v).0 - 30.0).abs() < 1e-6, "{:?}", size(&s, v));
+    // The axis is judged by the size the path is given, not the one before it: the frame's full
+    // height (100) given with a path fills; a smaller height given with the next path is fixed,
+    // though the layer filled the frame until then.
+    set(&mut s, v, json!({"path": "M0 0 L20 5", "height": 100}));
+    assert_eq!(sizing(&s, v).1, Sizing::Fill);
+    assert!((size(&s, v).1 - 100.0).abs() < 1e-6, "{:?}", size(&s, v));
+    set(&mut s, v, json!({"height": 40, "path": "M0 0 L20 5"}));
+    assert_eq!(sizing(&s, v).1, Sizing::Fixed);
+    assert!((size(&s, v).1 - 40.0).abs() < 1e-6, "{:?}", size(&s, v));
+    // Rotated, the layer's local size isn't the room layout gives it: a height matching the
+    // frame's stays fixed rather than have Fill squash the path.
+    set(&mut s, v, json!({"rotation": 90}));
+    set(&mut s, v, json!({"path": "M0 0 L20 5", "height": 100}));
+    assert_eq!(sizing(&s, v).1, Sizing::Fixed);
 }
 
 /// What one call's auto layout keys give, whichever way they are spelled: the mode (a string, or
@@ -275,4 +456,37 @@ fn auto_layout_keys_beside_no_auto_layout_are_refused() {
     set(&mut s, f, json!({"layout": "vertical", "gap": 8}));
     set(&mut s, f, json!({"layout": null, "name": "Plain"}));
     assert!(s.doc().unwrap().node(f).unwrap().layout.is_none());
+}
+
+#[test]
+fn align_is_unavailable_for_a_child_in_an_auto_layout_flow() {
+    use crate::cmd::arrange::{align_blocked_by_auto_layout, can_align};
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"gap": 10}));
+    let a = rect(&mut s, f, 20.0, 20.0, "#ff0000");
+    let b = rect(&mut s, f, 20.0, 20.0, "#00ff00");
+    let at = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap();
+    let (before_a, before_b) = (at(&s, a), at(&s, b));
+    assert_eq!(before_b.x0, 30.0, "the layout placed the second one after the first");
+    let doc = s.doc().unwrap();
+    assert!(!can_align(doc, &[b]), "Align is greyed out for one child of the frame");
+    assert!(align_blocked_by_auto_layout(doc, &[b]), "because its frame places it");
+    for cmd in ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"] {
+        s.execute(cmd, &json!({"ids": [b]})).unwrap();
+        assert_eq!((at(&s, a), at(&s, b)), (before_a, before_b), "{cmd} leaves the layout alone");
+    }
+}
+
+#[test]
+fn an_absolute_child_of_an_auto_layout_frame_still_aligns_to_it() {
+    use crate::cmd::arrange::{align_blocked_by_auto_layout, can_align};
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({}));
+    let kid = rect(&mut s, f, 20.0, 20.0, "#ff0000");
+    set(&mut s, kid, json!({"absolute": true}));
+    let doc = s.doc().unwrap();
+    assert!(can_align(doc, &[kid]));
+    assert!(!align_blocked_by_auto_layout(doc, &[kid]));
+    s.execute("align.right", &json!({"ids": [kid]})).unwrap();
+    assert_eq!(s.doc().unwrap().world_bounds(kid).unwrap().x1, 200.0);
 }

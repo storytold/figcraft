@@ -28,7 +28,7 @@ pub const RESOURCE_NOT_FOUND: i64 = -32002;
 const MAX_LINE: usize = 32 * 1024 * 1024;
 
 /// The `instructions` string sent on initialize.
-pub const INSTRUCTIONS: &str = "FigCraft is an interface design tool (Figma-class): pages hold frames, \
+pub const INSTRUCTIONS: &str = "FigCraft is an interface design tool: pages hold frames, \
 groups, shapes, text, components and instances, with auto layout, styles, variables and prototyping. \
 Coordinates are page units (1 unit = 1 px at 100% zoom), x right and y DOWN. create_node and set_properties \
 take x/y RELATIVE TO THE PARENT (the page when there is no parent, so page coordinates); inspect_document \
@@ -36,14 +36,27 @@ reports both x/y relative to the parent frame (groups don't count) and absoluteB
 positioned by the layout (set layout, gap, padding, mainAlign, crossAlign, sizingH/sizingV instead). \
 Every menu item, panel action and shortcut is a command: find ids and params with list_commands (use a filter) \
 and run them with run_command, or several as one undo step with batch. Commands act on `ids` when given, else \
-on the selection; new layers become the selection. Colours are \"#RRGGBB\" or \"#RRGGBBAA\". Verify your work: \
+on the selection; new layers become the selection. Colours are \"#RRGGBB\" or \"#RRGGBBAA\". \
+Repeated UI (buttons, inputs, cards, list rows, tab bars, icons) is a component: build it once, make it one with \
+component.create (or create_node type component), then place every other copy with \
+instance.create {component, parent?, x?, y?} instead of duplicating layers, so every copy follows its main component. \
+States and sizes are variants of one set: name the mains Property=value (State=Default, State=Hover) and run \
+component.combineVariants on them; component.addVariant {id} adds one more. What changes from copy to copy is a \
+component property: component.addProperty {id, name, type: text|boolean|instanceSwap, layer} on the component (on the \
+set once its variants are combined, then component.bindProperty {layer, property} for each other variant's layer), and \
+instance.setProperties {ids, properties} sets it on each copy. get_node shows whether a layer is an instance and of \
+which main. Verify your work: \
 inspect_document / get_node return the layer tree as JSON (check sizes, fills, layout, overrides), and \
 screenshot returns a PNG of the page or of given layers to look at. undo/redo step through history. \
 Comments: comment.list returns threads (text, anchor node id, frame, page, x/y, replies); fix open ones, \
 reply with what changed, then resolve (a reply reopens a thread). To react to new feedback, call \
 wait_for_changes {after, timeoutMs} and pass the returned cursor back. \
+Design review: design.audit {scope} reports spacing, radii, type, colour, contrast, copy and naming findings \
+with severities; design.fix repairs the fixable ones as one undo step; design.rules lists the rules and \
+presets; design.configure {preset, grid, radii, brand, disabled} sets the file's design system, and \
+design.assert {failOn, minScore} is a read-only CI gate. \
 Resources: figcraft://document, figcraft://node/{id}, figcraft://command/{id}, figcraft://comments. \
-prompts/list has workflows, including fix_comments.";
+prompts/list has workflows, including fix_comments and design_review.";
 
 /// An MCP server bound to one backend.
 pub struct Server {
@@ -282,7 +295,7 @@ impl Server {
                     resources::ReadError::NotFound(uri) => (RESOURCE_NOT_FOUND, format!("resource not found: {uri}")),
                     resources::ReadError::Backend(why) => (INTERNAL_ERROR, why),
                 })?;
-                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}]}))
+                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": serde_json::to_string(&v).unwrap_or_default()}]}))
             }
             "prompts/list" => Ok(prompts::list()),
             "prompts/get" => {

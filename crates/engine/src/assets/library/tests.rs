@@ -189,8 +189,6 @@ fn assert_remote_read_only(s: &mut Session, b: NodeId, remote_button: NodeId) {
     let style = s.doc().unwrap().styles[0].id.clone();
     assert!(s.execute("style.update", &json!({"style": style, "name": "Mine"})).is_err());
     assert!(s.execute("style.delete", &json!({"style": style})).is_err());
-    let e = s.execute("component.goToMain", &json!({"id": b})).unwrap_err();
-    assert!(e.to_string().contains("library"), "{e}");
     assert!(s.execute("select.set", &json!({"ids": [remote_button]})).is_err(), "library copies can't be selected");
     assert!(s.doc().unwrap().pages.contains(&s.page().unwrap()));
     assert!(s.execute("component.pushChanges", &json!({"id": b})).is_err());
@@ -399,6 +397,75 @@ fn add_place_and_update_keep_overrides() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+fn go_to_main(s: &mut Session, id: NodeId) -> Value {
+    s.active = 0;
+    ex(s, "component.goToMain", json!({"id": id}))
+}
+
+#[test]
+fn going_to_a_library_main_opens_the_library_file() {
+    let d = dir("go-to-main");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    let k = kit(&mut lib);
+    let mut chips = Vec::new();
+    for (i, color) in ["#ff0000", "#00ff00"].iter().enumerate() {
+        let f = idv(&ex(&mut lib, "frame.create", json!({"x": 400.0 + i as f64 * 100.0, "y": 0, "width": 60, "height": 20, "name": "Chip"})));
+        ex(&mut lib, "node.set", json!({"id": f, "props": {"fill": color}}));
+        chips.push(idv(&ex(&mut lib, "component.create", json!({"ids": [f]}))));
+    }
+    ex(&mut lib, "component.combineVariants", json!({"ids": chips}));
+    let kit_page = lib.doc().unwrap().page_of(k.card).unwrap();
+    ex(&mut lib, "page.add", json!({"name": "Notes"}));
+    let lid = publish_to(&mut lib, &lib_path);
+
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let card = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Card", "x": 0, "y": 0})));
+    let nested_button = node(&s, card).children[0];
+    let chip = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Chip", "x": 0, "y": 200})));
+    ex(&mut s, "instance.setProperties", json!({"ids": [chip], "properties": {"Property 1": "Variant2"}}));
+    s.ds_mut().unwrap().view.vw = 900.0;
+    s.ds_mut().unwrap().view.vh = 500.0;
+    let using = s.doc().unwrap().clone();
+
+    let r = go_to_main(&mut s, card);
+    assert_eq!((id_of(&r["id"]), r["index"].as_u64()), (Some(k.card), Some(1)), "{r}");
+    let ds = s.ds().unwrap();
+    assert_eq!(ds.path.as_deref(), Some(lib_path.as_str()));
+    assert_eq!((ds.selection.clone(), ds.page), (vec![k.card], kit_page));
+    assert_eq!((ds.view.vw, ds.view.vh), (900.0, 500.0), "the canvas it opens on is the one shown, so the fit stands");
+    let shown = ds.doc.world_bounds(k.card).unwrap().center();
+    assert_eq!((ds.view.cx, ds.view.cy), (shown.x, shown.y));
+
+    for (layer, main) in [(nested_button, k.button), (chip, chips[1])] {
+        let r = go_to_main(&mut s, layer);
+        assert_eq!((id_of(&r["id"]), r["index"].as_u64()), (Some(main), Some(1)), "{r}");
+        assert_eq!(s.ds().unwrap().selection, vec![main]);
+    }
+    assert_eq!(s.docs.len(), 2, "the open library file comes to the front");
+    assert_eq!(s.docs[0].doc.as_ref(), &using, "the file going there is unchanged");
+
+    s.active = 1;
+    ex(&mut s, "edit.delete", json!({"ids": [k.card]}));
+    let r = go_to_main(&mut s, card);
+    assert!(r["id"].is_null() && r["index"] == 1, "{r}");
+    assert!(s.message.take().is_some_and(|m| m.contains("isn't in this file any more")));
+
+    ex(&mut s, "file.close", json!({"index": 1, "force": true}));
+    std::fs::rename(&lib_path, d.join("moved.figcraft")).unwrap();
+    s.active = 0;
+    let e = s.execute("component.goToMain", &json!({"id": card})).unwrap_err();
+    assert!(e.to_string().contains("isn't at"), "{e}");
+    assert_eq!(s.docs.len(), 1);
+
+    let NodeKind::Instance { component: copy, .. } = node(&s, card).kind else { panic!("not an instance") };
+    s.doc_mut().unwrap().libraries_mut().components.retain(|r| r.root != copy);
+    let e = s.execute("component.goToMain", &json!({"id": card})).unwrap_err();
+    assert!(e.to_string().contains("no link to its library"), "an imported copy without its record: {e}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn library_styles_apply_and_import_with_pages() {
     let d = dir("styles");
@@ -573,4 +640,127 @@ fn a_file_stamp_from_the_moment_it_was_read_does_not_prove_it_unchanged() {
     let old = read_at - Duration::from_secs(10);
     assert!(entry(old).still_valid(&Stamp { len: 10, modified: Some(old) }));
     assert!(!entry(old).still_valid(&Stamp { len: 11, modified: Some(old) }));
+}
+
+/// Library `lid` is listed without an error, and `library.updates` reports no errors.
+fn link_found(s: &mut Session, lid: &str) {
+    let list = ex(s, "library.list", json!({}));
+    let l = list["libraries"].as_array().unwrap().iter().find(|l| l["id"] == lid).unwrap_or_else(|| panic!("{list}"));
+    assert!(l.get("error").is_none_or(Value::is_null), "{l}");
+    let u = ex(s, "library.updates", json!({}));
+    assert_eq!(u["errors"], json!([]), "{u}");
+}
+
+/// A library next to the documents that use it stays linked when their folder is moved or cloned;
+/// files from before relative links, and relative paths written by hand, keep working too.
+#[test]
+fn library_links_follow_a_moved_folder() {
+    let d = dir("moved-folder");
+    let (a, b) = (d.join("a"), d.join("b"));
+    std::fs::create_dir_all(a.join("lib")).unwrap();
+    std::fs::create_dir_all(a.join("pages")).unwrap();
+    let mut lib = Session::new();
+    kit(&mut lib);
+    let lid = publish_to(&mut lib, &path_str(&a.join("lib").join("kit.figcraft")));
+
+    let mut s = Session::new();
+    ex(&mut s, "file.saveAs", json!({"path": path_str(&a.join("pages").join("Page.figcraft"))}));
+    ex(&mut s, "library.add", json!({"path": path_str(&a.join("lib").join("kit.figcraft"))}));
+    ex(&mut s, "library.place", json!({"library": lid, "component": "Card", "x": 0, "y": 0}));
+    ex(&mut s, "file.save", json!({}));
+    // The folder moves (or is cloned elsewhere): the library keeps its place next to the page.
+    std::fs::rename(&a, &b).unwrap();
+    let mut moved = Session::empty();
+    ex(&mut moved, "file.open", json!({"path": path_str(&b.join("pages").join("Page.figcraft"))}));
+    link_found(&mut moved, &lid);
+
+    // A file from before relative links: the absolute path is followed.
+    let old = d.join("old");
+    std::fs::create_dir_all(&old).unwrap();
+    let mut doc = Document::new("Old");
+    let abs = path_str(&b.join("lib").join("kit.figcraft"));
+    doc.libraries_mut().enabled.push(LibraryLink { id: lid.clone(), name: "Kit".into(), path: abs, version: 1, ..Default::default() });
+    std::fs::write(old.join("Old.figcraft"), figcraft_format::save_bytes(&doc, None).unwrap()).unwrap();
+    let mut s = Session::empty();
+    ex(&mut s, "file.open", json!({"path": path_str(&old.join("Old.figcraft"))}));
+    link_found(&mut s, &lid);
+
+    // A relative path written by hand goes by the document's folder, not the working directory.
+    let mut doc = Document::new("Hand");
+    let rel = "../lib/kit.figcraft".to_string();
+    doc.libraries_mut().enabled.push(LibraryLink { id: lid.clone(), name: "Kit".into(), path: rel, version: 1, ..Default::default() });
+    std::fs::write(b.join("pages").join("Hand.figcraft"), figcraft_format::save_bytes(&doc, None).unwrap()).unwrap();
+    let mut s = Session::empty();
+    ex(&mut s, "file.open", json!({"path": path_str(&b.join("pages").join("Hand.figcraft"))}));
+    link_found(&mut s, &lid);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A main component copied from a library file and pasted into another file is an instance of it
+/// from that library, which gets enabled, as pasting an instance of it is; a variant is an instance
+/// of that variant. A component the library doesn't offer pastes as a copy of itself, also one the
+/// library holds because an offered component uses it.
+#[test]
+fn a_main_pasted_from_its_library_file_is_an_instance_of_it() {
+    let d = dir("paste-main");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut s = Session::new();
+    let k = kit(&mut s);
+    let sizes: Vec<NodeId> = ["Size=S", "Size=L"]
+        .iter()
+        .enumerate()
+        .map(|(n, name)| {
+            idv(&ex(
+                &mut s,
+                "node.create",
+                json!({"type": "component", "name": name, "x": 600.0 + n as f64 * 100.0, "y": 0, "width": 40, "height": 20}),
+            ))
+        })
+        .collect();
+    ex(&mut s, "component.combineVariants", json!({"ids": sizes.clone()}));
+    let spare = idv(&ex(&mut s, "frame.create", json!({"x": 300, "y": 300, "width": 10, "height": 10, "name": "_Spare"})));
+    let spare = idv(&ex(&mut s, "component.create", json!({"ids": [spare]})));
+    let icon = idv(&ex(&mut s, "frame.create", json!({"x": 400, "y": 300, "width": 10, "height": 10, "name": "_Icon"})));
+    let icon = idv(&ex(&mut s, "component.create", json!({"ids": [icon]})));
+    let badge = idv(&ex(&mut s, "frame.create", json!({"x": 500, "y": 300, "width": 30, "height": 30, "name": "Badge"})));
+    ex(&mut s, "instance.create", json!({"component": icon, "x": 5, "y": 5, "parent": badge}));
+    ex(&mut s, "component.create", json!({"ids": [badge]}));
+    let lid = publish_to(&mut s, &lib_path);
+    assert!(s.doc().unwrap().published.as_ref().unwrap().manifest.component(icon).is_some_and(|a| !a.published));
+    let at = s.doc().unwrap().world_bounds(k.button).unwrap();
+    ex(&mut s, "file.new", json!({"name": "Design"}));
+    let paste = |s: &mut Session, main: NodeId| -> NodeId {
+        ex(s, "doc.switch", json!({"index": 0}));
+        ex(s, "edit.copy", json!({"ids": [main]}));
+        ex(s, "doc.switch", json!({"index": 1}));
+        id_of(&ex(s, "edit.paste", json!({}))["ids"][0]).unwrap()
+    };
+    let main_of = |s: &Session, id: NodeId| match node(s, id).kind {
+        NodeKind::Instance { component, .. } => component,
+        k => panic!("not an instance: {k:?}"),
+    };
+    let button = paste(&mut s, k.button);
+    let doc = s.doc().unwrap();
+    assert_eq!(library_source(doc, main_of(&s, button)), Some((lid.as_str(), k.button)));
+    assert_eq!(doc.libraries.enabled.iter().map(|l| l.path.as_str()).collect::<Vec<_>>(), [lib_path.as_str()]);
+    assert_eq!(doc.world_bounds(button), Some(at), "where the main was");
+    let label = node(&s, button).children[0];
+    assert_eq!(chars(&s, label), "OK");
+    healthy(&s);
+    let copies = s.doc().unwrap().libraries.components.len();
+    let again = paste(&mut s, k.button);
+    assert_eq!(main_of(&s, again), main_of(&s, button), "the same library copy");
+    assert_eq!(s.doc().unwrap().libraries.components.len(), copies);
+    let large = paste(&mut s, sizes[1]);
+    assert_eq!(library_source(s.doc().unwrap(), main_of(&s, large)), Some((lid.as_str(), sizes[1])));
+    let card = paste(&mut s, k.card);
+    assert_eq!(library_source(s.doc().unwrap(), main_of(&s, card)), Some((lid.as_str(), k.card)));
+    let copy = paste(&mut s, spare);
+    assert!(matches!(node(&s, copy).kind, NodeKind::Component { .. }), "not offered by the library: a copy");
+    assert!(!s.doc().unwrap().is_remote(copy));
+    let icon_copy = paste(&mut s, icon);
+    assert!(matches!(node(&s, icon_copy).kind, NodeKind::Component { .. }), "only used by an offered component: a copy");
+    assert!(!s.doc().unwrap().is_remote(icon_copy));
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(d);
 }

@@ -159,7 +159,7 @@ impl<'d> Exporter<'d> {
                 Bound::default()
             } else {
                 let mut sample = Node::new(NodeId(0), NodeKind::Rectangle, "", 0.0, 0.0);
-                if let StyleKind::Text { style } = &st.kind {
+                if let StyleKind::Text { style, .. } = &st.kind {
                     sample.kind = NodeKind::Text(TextData { style: style.as_text_style(), ..TextData::new("Ag") });
                 }
                 sample.bound.clone_from(&st.bound);
@@ -179,8 +179,9 @@ impl<'d> Exporter<'d> {
                     let list = grids.iter().enumerate().map(|(i, g)| layout_grid(g, i, &none)).collect();
                     f.extend([("fillPaints", arr(Vec::new())), ("layoutGrids", arr(list))]);
                 }
-                StyleKind::Text { style } => {
-                    let td = TextData { style: style.as_text_style(), ..TextData::new("Ag") };
+                StyleKind::Text { style, paragraph } => {
+                    let mut td = TextData { style: style.as_text_style(), ..TextData::new("Ag") };
+                    td.take_paragraph_style(paragraph);
                     let fills = [Paint::solid(Color::BLACK)];
                     f.push(("fillPaints", self.paints(style.fills.as_deref().unwrap_or(&fills), true, &none)));
                     self.text(&td, &fills, &mut f);

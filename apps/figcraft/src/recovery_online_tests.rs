@@ -77,6 +77,7 @@ fn root(name: &str) -> PathBuf {
     r
 }
 
+/// What the scripted link says about the session it is in.
 fn info() -> SessionInfo {
     SessionInfo {
         role: Role::Guest,
@@ -90,6 +91,7 @@ fn info() -> SessionInfo {
         address: SERVER.into(),
         network: true,
         access: Access::Edit,
+        view: None,
     }
 }
 

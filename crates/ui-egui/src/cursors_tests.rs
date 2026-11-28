@@ -22,7 +22,7 @@ fn every_engine_cursor_has_a_system_cursor_or_a_glyph() {
     // (engine cursor, what shows, its name in `ui.inspect`)
     let rows: Vec<(Cursor, Shown, &str)> = vec![
         (Cursor::Default, System(CursorIcon::Default), "default"),
-        (Cursor::Crosshair, System(CursorIcon::Crosshair), "crosshair"),
+        (Cursor::Crosshair, Drawn(Glyph::Crosshair), "crosshair"),
         (Cursor::Move, System(CursorIcon::Move), "move"),
         (Cursor::Resize(0.0), System(CursorIcon::ResizeHorizontal), "ew-resize"),
         (Cursor::Resize(90.0), System(CursorIcon::ResizeVertical), "ns-resize"),
@@ -41,6 +41,7 @@ fn every_engine_cursor_has_a_system_cursor_or_a_glyph() {
         (Cursor::Pointer, System(CursorIcon::PointingHand), "pointer"),
         (Cursor::Eyedropper, Drawn(Glyph::Eyedropper), "eyedropper"),
         (Cursor::Comment, Drawn(Glyph::Comment), "comment"),
+        (Cursor::Ink, crate::cursors::ink((Some(figcraft_color::Color::BLACK), 0.0)), "ink"),
         (Cursor::NotAllowed, System(CursorIcon::NotAllowed), "not-allowed"),
     ];
     for (cursor, shown, name) in rows {
@@ -57,6 +58,44 @@ fn every_engine_cursor_has_a_system_cursor_or_a_glyph() {
     // Junk angles don't break it.
     assert_eq!(of(Cursor::Resize(f64::NAN)), System(CursorIcon::Default));
     assert_eq!(of(Cursor::Rotate(f64::INFINITY)), Drawn(Glyph::Rotate(0.0)));
+}
+
+#[test]
+fn the_crosshair_is_drawn_dark_with_a_white_edge_so_it_shows_on_white() {
+    use egui::epaint::Shape;
+    let shown = of(Cursor::Crosshair);
+    assert_eq!(shown, Shown::Drawn(Glyph::Crosshair));
+    // The system's pointer is hidden under it, whatever its colour.
+    assert_eq!(shown.icon(), CursorIcon::None);
+    let at = pos2(50.0, 40.0);
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let ctx = ui.ctx().clone();
+        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("crosshair_test"));
+        crate::cursors::paint(&ctx.layer_painter(layer), at, Glyph::Crosshair);
+    });
+    out.textures_delta.clear();
+    let mut strokes = Vec::new();
+    for clipped in &out.shapes {
+        if let Shape::LineSegment { points, stroke } = &clipped.shape {
+            strokes.push((points.to_vec(), stroke.color, stroke.width));
+        }
+    }
+    let dark: Vec<_> = strokes.iter().filter(|s| s.1 == crate::cursors::INK).collect();
+    let white: Vec<_> = strokes.iter().filter(|s| s.1 == egui::Color32::WHITE).collect();
+    assert!(!dark.is_empty() && !white.is_empty(), "{strokes:?}");
+    // The white edge is wider than the dark line and is painted first.
+    assert!(white.iter().all(|w| w.2 > dark[0].2), "{strokes:?}");
+    assert_eq!(strokes[0].1, egui::Color32::WHITE);
+    // The arms are centred on the pointer and leave its pixel clear.
+    for (pts, ..) in &dark {
+        for p in pts {
+            let d = (p.x - at.x).abs().max((p.y - at.y).abs());
+            assert!((2.0..=8.0).contains(&d), "{p:?}");
+            assert!((p.x - at.x).abs() < 0.01 || (p.y - at.y).abs() < 0.01, "{p:?}");
+        }
+    }
+    assert_eq!(dark.len(), 4);
 }
 
 #[test]
@@ -134,10 +173,10 @@ fn the_window_asks_for_the_cursor_of_the_tool_under_the_pointer() {
         ("move", edge, &[], no, CursorIcon::ResizeHorizontal, "ew-resize"),
         ("move", on, &[], alt, CursorIcon::Copy, "copy"),
         ("hand", empty, &[], no, CursorIcon::Grab, "grab"),
-        ("rectangle", empty, &[], no, CursorIcon::Crosshair, "crosshair"),
-        ("frame", on, &[], no, CursorIcon::Crosshair, "crosshair"),
-        ("slice", empty, &[], no, CursorIcon::Crosshair, "crosshair"),
-        ("text", empty, &[], no, CursorIcon::Crosshair, "crosshair"),
+        ("rectangle", empty, &[], no, CursorIcon::None, "crosshair"),
+        ("frame", on, &[], no, CursorIcon::None, "crosshair"),
+        ("slice", empty, &[], no, CursorIcon::None, "crosshair"),
+        ("text", empty, &[], no, CursorIcon::None, "crosshair"),
         ("pen", empty, &[], no, CursorIcon::None, "pen"),
         ("comment", empty, &[], no, CursorIcon::None, "comment"),
         ("move", empty, &[Key::Space], no, CursorIcon::Grab, "grab"),
@@ -198,4 +237,53 @@ fn a_layers_row_that_takes_no_drop_shows_not_allowed() {
     assert_eq!(out.platform_output.cursor_icon, CursorIcon::Grabbing);
     u.frame(vec![Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
     u.button(o, false);
+}
+
+/// The Marker's cursor on a board, as the canvas draws it: a dot in the ink's colour, wider for
+/// a heavier stroke, ringed light and dark; the Eraser's is a ring (#2641).
+#[test]
+fn the_ink_tools_show_a_dot_in_the_inks_colour_and_width() {
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let p = u.app.canvas.rect.center();
+    let dot = |u: &mut Ui, weight: f64| {
+        u.app.run("tool.ink", json!({"tool": "marker", "color": "#336699", "weight": weight}));
+        u.app.run("tool.set", json!({"tool": "marker"}));
+        at(u, p, &[], Modifiers::NONE);
+        match u.app.canvas.cursor {
+            Some(Shown::Drawn(Glyph::Dot { color, radius })) => (color, radius),
+            other => panic!("not a dot: {other:?}"),
+        }
+    };
+    let (color, thin) = dot(&mut u, 2.0);
+    assert_eq!(color, Some(egui::Color32::from_rgb(0x33, 0x66, 0x99)));
+    let (_, wide) = dot(&mut u, 20.0);
+    assert!(wide > thin, "{wide} > {thin}");
+    assert_eq!(u.app.canvas.cursor.map(Shown::icon), Some(CursorIcon::None), "the system's pointer is hidden under it");
+    u.app.run("tool.set", json!({"tool": "eraser"}));
+    at(&mut u, p, &[], Modifiers::NONE);
+    assert!(matches!(u.app.canvas.cursor, Some(Shown::Drawn(Glyph::Dot { color: None, .. }))), "{:?}", u.app.canvas.cursor);
+
+    // Drawn: the ink's dot, a white ring outside it and a dark ring outside that.
+    let at = pos2(50.0, 40.0);
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("dot_test"));
+        crate::cursors::paint(&ui.ctx().layer_painter(layer), at, Glyph::Dot { color, radius: 5.0 });
+    });
+    out.textures_delta.clear();
+    let circles: Vec<_> = out
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::epaint::Shape::Circle(c) => Some((c.radius, c.fill, c.stroke.color)),
+            _ => None,
+        })
+        .collect();
+    let fill = circles.iter().find(|c| Some(c.1) == color).expect("the ink's dot");
+    let white = circles.iter().find(|c| c.2 == egui::Color32::WHITE).expect("a white ring");
+    let dark = circles.iter().find(|c| c.2 == crate::cursors::INK).expect("a dark ring");
+    assert!(fill.0 < white.0 && white.0 < dark.0, "{circles:?}");
 }

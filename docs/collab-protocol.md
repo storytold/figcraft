@@ -99,15 +99,24 @@ fit FigCraft's architecture:
   collide with what a connected client makes, because a client's numbers continue above every id of
   its space already in the document. Removed entries are part of the saved session state
   (`SessionState::removed`).
-- **Branches** of a file in a session stay with the person who made them; nothing about them goes
-  over the wire until a merge, which is an ordinary batch from that person (no message or format
-  change). So that the server takes the layers a branch made, a branch made in the session makes
-  its ids in its author's own client space, 2^24 above every id made there on the main file and the
-  author's other branches. Layers of the branch's base that main deleted during the session come
-  back with their ids (the server accepts re-creating deleted ids). Merging a branch whose new
-  layers, styles, variables or comments lie in another id space (one made offline or in an earlier
-  session) is refused by the app before anything is sent, since the server would refuse it (see
-  `crates/engine/src/sharing/branches.rs`).
+- **Branches** of a file in a live session sync across everyone when both sides announce the
+  `branches` capability in `Hello::client_version` (older clients never receive branch messages, and
+  clients connected to an older server keep branches local to their author). Right after `Welcome`,
+  the server sends `ServerMsg::Branches(Vec<SharedBranch>)` with each branch encoded as diffs from
+  the current main state (`base_diff` to base, `head_diff` to head; at most `MAX_SHARED_BRANCHES`,
+  64). Editors send `ClientMsg::Branch(BranchReq)` (`Create`, `Edit`, `UpdateFromMain`, `SetState`
+  for `Merged`/`Archived`) and peers receive `ServerMsg::Branch(BranchEvent)`. The server refuses
+  branch mutations from view or comment links, stamps `client` from the authenticated sender, checks
+  node/entry id spaces, geometry, and image entries on every branch change, and persists branches in
+  `SessionState::branches` and the server journal (`Journal::BranchCreate` / `BranchEdit` /
+  `BranchUpdateFromMain` / `BranchState`; `figcraft-server` falls back to decoding pre-branch
+  snapshots without `branches`). Each editor allocates new branch ids in their own client space,
+  2^24 above every id made there on the main file and its branches. When any editor merges a shared
+  branch, the merge goes out as one ordinary batch on main (the server accepts node and entry ids
+  that already belong to a kept shared branch), and peers with that branch tab open have it closed.
+  Merging an offline or earlier-session branch whose new layers, styles, variables or comments lie
+  in another id space is still refused by the app before anything is sent (see
+  `crates/engine/src/sharing/branches.rs` and `crates/engine/src/sharing/live/branches.rs`).
 - Objects inside an entry are not separate objects: modes are part of their collection, a
   variable's values per mode part of the variable and replies part of their comment thread. Two
   people adding a mode to the same collection, editing different modes of one variable, or replying
@@ -148,7 +157,14 @@ As built:
   A diff gives new keys only to the children that need them (the longest run of old keys that is
   still increasing keeps its keys) and re-spaces a parent whose keys would grow past 48 characters.
 - **Document-level objects covered now**: the file name, the current page, document colours, the
-  colour profile, image presets, annotation categories and library data (whole values); styles,
+  colour profile, image presets, annotation categories, the design review settings
+  (`DocProp::DesignReview`, sent only to clients whose `client_version` announces
+  `design-review`; a client that doesn't gets every batch, catch-up delta and snapshot without
+  them, and an accepted batch still reaches it when nothing of it is left, so sequence numbers
+  never skip; a snapshot saved with longer lists opens clamped to the limits `design.configure`
+  keeps, and a session restored from such a snapshot catches every resuming client up with that
+  snapshot, since its saved batches still hold the value past the limits; a host refuses to share
+  a file whose settings are already past the limits) and library data (whole values); styles,
   comment threads, variable collections and variables (one entry per id plus the order of ids;
   the whole list when ids aren't unique); dev-mode snapshots (per layer); images (per content
   hash, the encoded bytes as base64; as an entry applies the claim is checked: every key is
@@ -257,7 +273,7 @@ Client → server:
 | `Manage {protocol, key, client_version}` | Instead of `Hello`: manage a server's files with its key. |
 | `Admin {publish {name, snapshot} \| files \| links {file} \| createLink {file, access, label} \| revoke {file, link} \| remove {file}}` | A request on a managing connection; each gets one `Admin` reply, in order. |
 | `OpenLibrary {protocol, file, token, client_version}` | Instead of `Hello`: use a file's team library with one of the file's share links. |
-| `Library {fetch {have?, usage?} \| publish {archive} \| usage \| reportDetached {file, components} \| detached \| reportInserted {file, components} \| actions \| reportAssets {file, styles, variables} \| assets}` | A request on a library connection; each gets one `Library` reply, in order. `usage` is `{file, components: [(id, instances)]}`; `reportDetached` gives the asking file's detached instances per component the same way (answered `noted`), `detached` asks for every file's. The last two are newer: a server from before them can't read them and refuses the request. |
+| `Library {fetch {have?, usage?} \| publish {archive} \| usage \| reportDetached {file, components} \| detached \| reportInserted {file, components} \| actions \| reportAssets {file, styles, variables} \| assets \| reportAssetActions {file, inserted, detached} \| assetActions}` | A request on a library connection; each gets one `Library` reply, in order. `usage` is `{file, components: [(id, instances)]}`; `reportDetached` gives the asking file's detached instances per component the same way (answered `noted`), `detached` asks for every file's. The last two are newer: a server from before them can't read them and refuses the request. |
 | `Signal {kind, text}` | Ephemeral presence, only after the server's `ready`: `chat` (the cursor chat message; empty: closed), `spotlight` (`"on"`, or empty: stopped) or `name` (your new name: the server keeps it, cleaned like a hello's, and sends everyone, you too, your `PeerJoined`; never passed on as a signal). |
 | `OpenPlugins {protocol, key, client_version}` | Instead of `Hello`: use the server's plugin directory; `key` empty to browse, the server key to publish too. |
 | `OpenHosting {protocol, client_version, file, owner}` | Instead of `Hello`: ask about the server's hosting; publish without the key (`Admin publish`) when it is open to the public; with a file's id and owner token, manage that file (`Admin links \| createLink \| revoke \| rename \| remove` of it). Answered with `Hosting` or `Refused`. |
@@ -279,7 +295,7 @@ Server → client:
 | `Refused {reason}` | The connection is refused (protocol version, token, session full, a message out of place). |
 | `Pong` | Keep-alive. |
 | `Admin {ready \| published {file, edit, view} \| files \| links \| link \| done \| failed {reason}}` | A managing connection's answer: the key is right, a published file with its first two links (tokens shown once), listings, a new link, done, or why not. |
-| `Library {ready {access} \| library {version, archive} \| unchanged {version} \| empty \| published {version} \| usage [{usage, updated}] \| failed {reason} \| noted \| detached [{detached, updated}] \| actions [{week, component, insertions, detachments}] \| assets [{file, styles, variables}]}` | A library connection's answer: the link is right (with its access), the library (a `.figcraft` archive holding it), no newer version, no library yet, kept, the usage reports, or why not; then (newer) a detach report kept, and the detach reports. |
+| `Library {ready {access} \| library {version, archive} \| unchanged {version} \| empty \| published {version} \| usage [{usage, updated}] \| failed {reason} \| noted \| detached [{detached, updated}] \| actions [{week, component, insertions, detachments}] \| assets [{file, styles, variables}] \| assetActions [{week, component, insertions, detachments}]}` | A library connection's answer: the link is right (with its access), the library (a `.figcraft` archive holding it), no newer version, no library yet, kept, the usage reports, or why not; then (newer) a detach report kept, and the detach reports. |
 | `Signal {client_id, signal: {kind, text}}` | Someone's cursor chat or spotlight, cleaned by the server; `ready` (about the client itself, after its welcome): signals may be sent. Only to clients whose hello announced `signals`. |
 | `Hosting {open, operator, terms, idle_secs, max_file_mb, expires?}` | The answer to `OpenHosting`, and after a welcome to clients whose hello announced `hosting`: anyone may publish, how to reach the operator, the terms (a URL), how long files published without the key are kept unopened, the largest file, and this file's expiry (seconds since 1970). |
 | `Admin {hosted {file, edit, view, owner, expires?} \| listing [row] \| reports [report] \| blocked [ip]}` | A file published without the key with its links and owner token (shown once), and the answers to the later managing requests. |
@@ -535,9 +551,24 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   `ws://<ip:port>/` and sends the token only inside its `Hello`. Links are pasted into the Join
   dialog (its field has the keyboard when it opens; Escape closes it), or opened from anywhere:
   see *Opening invite links* below.
-- Reconnect: a connection that drops after it was live reconnects with growing pauses (0.5 s,
-  doubling up to 10 s, 12 attempts); a refusal (wrong token, full) or the host ending the session
-  is final; a first join that can't reach the host fails at once. A reconnect resumes as the same
+- Reconnect: a connection that drops after it was live reconnects until you leave, with growing
+  pauses (0.5 s, doubling up to 10 s, 12 attempts), then a minute's pause and as many again. A
+  server turning a live session away is taken as passing (busy, a limit, a file it couldn't read
+  just now) unless it says why in words that are for good: the link, the file or your place in it
+  is gone, or the versions can't talk (`FINAL_REFUSALS` in `crates/collab-net/src/join.rs`). Those
+  and the host ending the session are final; a first join that can't reach the host fails at once.
+  Messages queued while offline go out paced, so they stay within what a server takes from a
+  connection.
+- Disconnected: while it reconnects, and after it can't go on, the tab shows a red mark and a strip
+  across the top of the canvas says so, with **Retry now** (`collab.reconnect`). The tab can still
+  be edited. A session you joined that ended stays on its tab with **Try again**, **Save a copy…**
+  and **Dismiss** (`collab.leave`). **Try again** joins it in the same tab, as the same client when
+  the server still knows it, and what changed since it lost the server goes on top as one undoable
+  edit, through the three-way merge of `crates/collab/src/merge.rs`. The same thing changed both
+  ways keeps the other person's, and layers a new client can't make aren't sent; in those cases
+  your whole version also opens beside it as an unsaved "offline copy", so nothing is lost. A
+  session that gets out of step, or a server that no longer knows you, does the same by itself. A
+  reconnect resumes as the same
   client: the guest's connection keeps the session id, client id and last sequence number from
   the messages it read and sends them in its next `Hello` (see Offline and reconnect).
 - The browser build joins and publishes to a server (see *Built (the browser client)*); hosting
@@ -597,8 +628,16 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   `local`), so a local share is protected by 44 bits, not 128: a code is guessed over the network
   at the rate the host accepts connections, which makes 44 bits years of trying, but treat it as
   a secret for the local network, not for the internet. The invite link names the same session.
-  Whoever sees the code learns the host's address. Everyone who joins edits; a host without an
-  IPv4 address gets no code and shares its link.
+  Whoever sees the code learns the host's address. The session has two secrets, so two codes:
+  the **edit code** and a **view-only code** (the same address and port, a 44-bit secret of its
+  own). The host welcomes whoever joins with the view secret as a viewer (`Access::View`): they
+  see every change and everyone's presence, the app makes the file read-only for them, and the
+  session refuses any batch they send anyway, as a server does for its view links. The Share
+  popover picks which code shows (Can edit / Can view, also before sharing starts, so the edit
+  code need never be on screen; `collab.share {access}`, whose `link` and `url` are the ones that
+  go with the code shown, so a view-only share never hands out the edit secret); picking one later changes
+  nothing for who already joined. There is no comment code on the local network. A host without an IPv4
+  address gets no codes and shares its links.
 - **In the browser** a code joins like a link (the page asks the server over its own WebSocket,
   then opens the session's); it shares online through the server in Preferences as the desktop
   app does, and not on the local network (a page can't listen).
@@ -825,7 +864,9 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   styles or variables sends `reportAssets` with how many of its layers use each (at most 250 of
   each kind, the most used first; none is a report too, so a file that stops using them stops
   counting); the server keeps the latest in the same `usage.json` entry and answers `assets` with
-  them. The variants are appended to the enums, so the older messages keep their bytes; an older server refuses the new
+  them. It sends `reportAssetActions` with its totals of inserted and detached styles and variables,
+  counted over the weeks as for components (`asset-actions.json`), and `assetActions` answers with
+  those weeks (`component` is the style's or variable's id). The variants are appended to the enums, so the older messages keep their bytes; an older server refuses the new
   requests, and the app ignores that.
 
 *Built* (the plugin directory; operating it: [`server.md`](server.md#plugin-directory), publishing and

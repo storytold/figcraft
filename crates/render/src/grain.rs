@@ -26,6 +26,14 @@ fn unit(h: u64, at: u32) -> f32 {
     f32::from(((h >> at) & 0xFFFF) as u16) / 65536.0
 }
 
+/// Cell positions are rounded to 1 / `STEPS_PER_CELL` of a cell before they're cut into cells. A
+/// pixel centre can fall exactly on a cell edge (at a zoom of 1.7, a 1-unit cell is 1.7 pixels
+/// across: every tenth edge does), and a view whose origin is a whole number of pixels off (a
+/// patch, a band, a pan) reaches it with another rounding error. Unrounded, a row of grains lands
+/// in the next cell; rounded, the edge moves 1 / 2²¹ of a cell aside, off the centres layers at
+/// round positions and zooms put it on.
+const STEPS_PER_CELL: f64 = 1_048_576.0;
+
 /// Maps layer pixels to the grain cells under their centres.
 struct Cells {
     /// Layer pixels → local units, divided by the grain size: `[a, b, c, d, e, f]`.
@@ -44,7 +52,8 @@ impl Cells {
     fn at(&self, x: u32, y: u32) -> (i64, i64) {
         let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
         let [a, b, c, d, e, f] = self.m;
-        ((a * px + c * py + e).floor() as i64, (b * px + d * py + f).floor() as i64)
+        let cell = |v: f64| ((v * STEPS_PER_CELL).round() / STEPS_PER_CELL).floor() as i64;
+        (cell(a * px + c * py + e), cell(b * px + d * py + f))
     }
 }
 
@@ -120,11 +129,14 @@ pub fn texture(layer: &mut Pixmap, t: &Texture, xf: Affine, scale: f64, seed: u3
             let hv = hash(ix, iy, seed ^ 0x7E57_u32);
             // A uniform point in the disc of radius r.
             let (ang, dist) = (unit(hv, 0) * std::f32::consts::TAU, unit(hv, 16).sqrt() * r);
-            let (fx, fy) = (x as f32 + 0.5 + ang.cos() * dist, y as f32 + 0.5 + ang.sin() * dist);
+            // The move in whole pixels, apart from `x` and `y`: the same pixel of the page moves
+            // the same way wherever the layer's pixels start.
+            let (mx, my) = ((0.5 + ang.cos() * dist).floor() as i64, (0.5 + ang.sin() * dist).floor() as i64);
+            let (fx, fy) = (i64::from(x) + mx, i64::from(y) + my);
             let i = ((y * w + x) * 4) as usize;
             let mut px = [0u8; 4];
-            if fx >= 0.0 && fy >= 0.0 && (fx as u32) < w && (fy as u32) < h {
-                let j = (((fy as u32) * w + fx as u32) * 4) as usize;
+            if fx >= 0 && fy >= 0 && fx < i64::from(w) && fy < i64::from(h) {
+                let j = ((fy * i64::from(w) + fx) * 4) as usize;
                 if let Some(s) = src.get(j..j + 4) {
                     px.copy_from_slice(s);
                 }

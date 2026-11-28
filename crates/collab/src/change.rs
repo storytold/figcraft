@@ -183,6 +183,7 @@ node_props! {
     DevResources => dev_resources,
     Measurements => measurements,
     Board => board,
+    ScaleFactor => scale_factor,
 }
 
 /// A document-level property. Lists of entries with ids (styles, comments, variable collections,
@@ -229,6 +230,11 @@ pub enum DocProp {
     Vote,
     /// Ended votes' results kept in the file, oldest first (whole).
     VoteHistory,
+    /// The file's design review settings (`design.configure`).
+    ///
+    /// Kept last: the wire encodes a variant's position, so adding one before it would shift the
+    /// existing properties.
+    DesignReview,
 }
 
 /// A document-level entry, by id.
@@ -330,9 +336,33 @@ impl Change {
             Change::Create { .. } | Change::Set { .. } | Change::Delete { .. } => false,
         }
     }
+
+    /// Whether this writes the file's design review settings: a batch carrying one can't be read
+    /// by a peer that doesn't announce [`crate::message::DESIGN_REVIEW`], so the server keeps it
+    /// out of what it sends them ([`Self::without_design_review`]).
+    pub(crate) fn is_design_review(&self) -> bool {
+        matches!(self, Change::SetDoc { prop: DocProp::DesignReview, .. })
+    }
+
+    /// `changes` without the review-setting edits: what an older peer reads of a batch (its other
+    /// edits, order kept), or of a catch-up delta or snapshot.
+    pub(crate) fn without_design_review(changes: Vec<Self>) -> Vec<Self> {
+        changes.into_iter().filter(|c| !c.is_design_review()).collect()
+    }
 }
 
 impl Entry {
+    /// The synced list this entry belongs to (`None` for entries kept in maps).
+    pub(crate) fn family(&self) -> Option<Family> {
+        match self {
+            Entry::Style(_) => Some(Family::Styles),
+            Entry::Comment(_) => Some(Family::Comments),
+            Entry::Collection(_) => Some(Family::Collections),
+            Entry::Variable(_) => Some(Family::Variables),
+            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
+        }
+    }
+
     /// The client id space the entry's id lies in ([`figcraft_doc::ids`]): ids made during a live
     /// session carry their creator's client id, ids from before and ids of other forms are in
     /// space 0. `None` for entries keyed by something else (dev snapshots by layer, images by

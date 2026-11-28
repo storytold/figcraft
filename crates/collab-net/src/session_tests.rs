@@ -124,8 +124,9 @@ fn following_a_viewport_until_you_move() {
 fn the_host_stopping_ends_the_session_for_guests() {
     let (mut host, mut guest, _, _) = host_and_join();
     host.execute("collab.stop", &json!({})).unwrap();
-    pump(&mut host, &mut guest, "the end", |_, g| g.live().status == Status::Off);
-    assert!(guest.live().peers.is_empty());
+    pump(&mut host, &mut guest, "the end", |_, g| g.live().rejoinable());
+    assert!(guest.live().peers.is_empty() && !guest.live().syncing());
+    assert!(guest.live().disconnected(), "the tab says so");
     assert_eq!(guest.message.as_deref(), Some(crate::host::ENDED));
 }
 

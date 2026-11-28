@@ -69,6 +69,20 @@ fn types_and_their_starting_values() {
 }
 
 #[test]
+fn move_mode_rejects_negative_and_fractional_indexes() {
+    let mut s = Session::new();
+    theme(&mut s);
+    run(&mut s, "variable.addMode", json!({"collection": "Theme", "name": "Dim"}));
+    let order =
+        |s: &Session| -> Vec<String> { s.doc().unwrap().variables.collection("Theme").unwrap().modes.iter().map(|m| m.name.clone()).collect() };
+    let before = order(&s);
+    for to in [json!(-1), json!(1.9)] {
+        assert!(s.execute("variable.moveMode", &json!({"collection": "Theme", "mode": "Dim", "to": to})).is_err(), "{to}");
+        assert_eq!(order(&s), before, "{to}");
+    }
+}
+
+#[test]
 fn modes_new_duplicated_reordered_and_the_default() {
     // Documented: a new mode starts with the default mode's values and a duplicated one with its
     // source's; the default is the left-most mode (set as default = move it there); layers on
@@ -129,6 +143,27 @@ fn aliases_same_type_chains_and_no_cycles() {
     assert_eq!(fill(&s, r), "0000FF", "a chain link → accent → blue resolves");
     run(&mut s, "variable.set", json!({"variable": "blue", "value": "#00FF00"}));
     assert_eq!(fill(&s, r), "00FF00", "the chain follows the end of it");
+    // A `Collection/name` alias resolves like a layer prop's `{"$var": ...}`, even when the bare
+    // name matches more than one variable (then the bare name is refused).
+    run(&mut s, "variable.createCollection", json!({"name": "Primitive"}));
+    let white = vid(run(&mut s, "variable.create", json!({"collection": "Primitive", "name": "white", "type": "color", "value": "#FFFFFF"})));
+    run(&mut s, "variable.create", json!({"collection": "Brand", "name": "white", "type": "color", "value": "#EEEEEE"}));
+    let surface = vid(run(
+        &mut s,
+        "variable.create",
+        json!({"collection": "Theme", "name": "surface", "type": "color", "value": {"alias": "Primitive/white"}}),
+    ));
+    let stored = s.doc().unwrap().variables.get_by_id(&surface).unwrap().clone();
+    assert!(
+        !stored.values.is_empty() && stored.values.values().all(|v| *v == VariableValue::Alias(white.clone())),
+        "stores the qualified target's id"
+    );
+    let e = s
+        .execute("variable.create", &json!({"collection": "Theme", "name": "dup", "type": "color", "value": {"alias": "white"}}))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("ambiguous variable `white`"), "{e}");
+    assert!(s.doc().unwrap().variables.get("dup").is_none(), "a refused alias leaves nothing behind");
     let refused: [(&str, Value, &str); 5] = [
         ("variable.set", json!({"variable": "blue", "value": {"alias": "link"}}), "a loop through the chain"),
         ("variable.set", json!({"variable": "accent", "value": {"alias": "accent"}}), "itself"),

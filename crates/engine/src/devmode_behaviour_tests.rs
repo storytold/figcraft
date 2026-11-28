@@ -99,6 +99,102 @@ fn the_dev_mode_canvas_selects_and_pans_but_never_edits() {
     assert!(s.doc().unwrap().node(r).is_some_and(|n| n.transform.as_coeffs()[4] > 100.0), "moved");
 }
 
+/// The `annotation.new` requests queued so far, as the layer ids they name.
+fn note_requests(s: &Session) -> Vec<NodeId> {
+    s.ui_requests.iter().filter(|r| r.kind == "annotation.new").filter_map(|r| crate::params::id_of(&r.data["id"])).collect()
+}
+
+fn click(s: &mut Session, x: f64, y: f64) {
+    s.pointer(&ev(PointerKind::Down, x, y)).unwrap();
+    s.pointer(&ev(PointerKind::Up, x, y)).unwrap();
+}
+
+#[test]
+fn the_annotation_tool_picks_a_layer_and_asks_for_its_note() {
+    for dev_mode in [true, false] {
+        let mut s = Session::new();
+        let f = frame(&mut s, 0.0, "Screen");
+        let r = rect(&mut s, f, 20.0);
+        s.tool.dev_mode = dev_mode;
+        ex(&mut s, "select.set", json!({"ids": []}));
+        ex(&mut s, "tool.annotation", json!({}));
+        assert_eq!(s.tool.tool, ToolId::Annotation);
+        assert!(note_requests(&s).is_empty(), "nothing selected: no note is asked for yet");
+        let (doc_before, undo_before) = (s.doc().unwrap().clone(), s.undo_labels(1000).len());
+        // A press on empty canvas does nothing.
+        click(&mut s, 1000.0, 1000.0);
+        assert!(note_requests(&s).is_empty(), "empty canvas asks for nothing (dev_mode {dev_mode})");
+        // A press on the rectangle selects it and asks for its note.
+        click(&mut s, 40.0, 40.0);
+        assert_eq!(s.selection(), vec![r], "dev_mode {dev_mode}");
+        assert_eq!(note_requests(&s), vec![r], "dev_mode {dev_mode}");
+        assert_eq!(s.tool.tool, ToolId::Annotation, "the tool stays until V or Escape");
+        // The tool writes nothing.
+        assert_eq!(*s.doc().unwrap(), doc_before);
+        assert_eq!(s.undo_labels(1000).len(), undo_before);
+    }
+    // The keyboard flow: with a layer selected, choosing the tool asks at once.
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, "Screen");
+    let r = rect(&mut s, f, 20.0);
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    ex(&mut s, "tool.annotation", json!({}));
+    assert_eq!(note_requests(&s), vec![r]);
+    // And with an `id`.
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, "Screen");
+    let r = rect(&mut s, f, 20.0);
+    ex(&mut s, "tool.annotation", json!({"id": r}));
+    assert_eq!(note_requests(&s), vec![r]);
+    assert_eq!(s.selection(), vec![r]);
+}
+
+/// A named target that isn't a layer (a page, an unknown id) is an error, and the tool is left as it
+/// was; several targets pick the first layer among them and select it.
+#[test]
+fn the_annotation_tool_checks_the_layer_it_is_named_for_before_changing_anything() {
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, "Screen");
+    let r = rect(&mut s, f, 20.0);
+    let page = s.page().unwrap();
+    assert!(s.execute("tool.annotation", &json!({"id": page})).is_err(), "a page is not a layer");
+    assert!(s.execute("tool.annotation", &json!({"id": "9999:9999"})).is_err(), "no such layer");
+    assert!(s.execute("tool.annotation", &json!({"ids": []})).is_err(), "nothing named");
+    assert_eq!(s.tool.tool, ToolId::Move, "the tool did not change");
+    assert!(note_requests(&s).is_empty());
+    // The page first, then the rectangle: the rectangle is the target, and selected.
+    ex(&mut s, "tool.annotation", json!({"ids": [page, r]}));
+    assert_eq!((s.tool.tool, s.selection(), note_requests(&s)), (ToolId::Annotation, vec![r], vec![r]));
+}
+
+/// Choosing the tool with `tool.set` (the toolbar) asks for the selected layer's note like Shift+T.
+#[test]
+fn choosing_the_annotation_tool_from_the_toolbar_asks_for_the_selected_layers_note() {
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, "Screen");
+    let r = rect(&mut s, f, 20.0);
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    ex(&mut s, "tool.set", json!({"tool": "annotation"}));
+    assert_eq!((s.tool.tool, note_requests(&s)), (ToolId::Annotation, vec![r]));
+}
+
+/// A drag with the tool never moves the layer it starts on, in Developer Mode or out of it.
+#[test]
+fn dragging_with_the_annotation_tool_moves_nothing() {
+    for dev_mode in [true, false] {
+        let mut s = Session::new();
+        let f = frame(&mut s, 0.0, "Screen");
+        rect(&mut s, f, 20.0);
+        s.tool.dev_mode = dev_mode;
+        ex(&mut s, "select.set", json!({"ids": []}));
+        ex(&mut s, "tool.annotation", json!({}));
+        let (doc_before, undo_before) = (s.doc().unwrap().clone(), s.undo_labels(1000).len());
+        drag(&mut s, (40.0, 40.0), (140.0, 90.0));
+        assert_eq!(*s.doc().unwrap(), doc_before, "dev_mode {dev_mode}");
+        assert_eq!(s.undo_labels(1000).len(), undo_before, "dev_mode {dev_mode}");
+    }
+}
+
 #[test]
 fn dev_mode_runs_its_own_edits_and_refuses_design_edits_from_menus_and_shortcuts() {
     for id in [
@@ -121,6 +217,7 @@ fn dev_mode_runs_its_own_edits_and_refuses_design_edits_from_menus_and_shortcuts
         "tool.move",
         "tool.hand",
         "tool.comment",
+        "tool.annotation",
         "inspect.code",
     ] {
         assert!(dev_mode_allows(id), "{id} runs in Dev Mode");

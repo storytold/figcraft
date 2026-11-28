@@ -288,8 +288,10 @@ pub fn layer_changes(before: &Document, now: &Document, id: NodeId) -> Vec<PropC
 fn order(before: &Document, now: &Document, id: NodeId) -> Option<(usize, usize)> {
     let parent = now.node(id)?.parent?;
     let (pb, pa) = (before.node(parent)?, now.node(parent)?);
-    let common_b: Vec<NodeId> = pb.children.iter().rev().copied().filter(|c| pa.children.contains(c)).collect();
-    let common_a: Vec<NodeId> = pa.children.iter().rev().copied().filter(|c| pb.children.contains(c)).collect();
+    let (in_b, in_a): (std::collections::BTreeSet<NodeId>, std::collections::BTreeSet<NodeId>) =
+        (pb.children.iter().copied().collect(), pa.children.iter().copied().collect());
+    let common_b: Vec<NodeId> = pb.children.iter().rev().copied().filter(|c| in_a.contains(c)).collect();
+    let common_a: Vec<NodeId> = pa.children.iter().rev().copied().filter(|c| in_b.contains(c)).collect();
     let (ib, ia) = (common_b.iter().position(|c| *c == id)?, common_a.iter().position(|c| *c == id)?);
     (ib != ia).then_some((ib + 1, ia + 1))
 }

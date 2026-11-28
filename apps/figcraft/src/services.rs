@@ -31,9 +31,18 @@ pub struct Desktop {
 /// folder names), and craft-settings' app id: `FIGCRAFT_CONFIG_DIR` names another folder.
 const APP_ID: &str = "FigCraft";
 
-/// Where the preferences, recovery copies and installed plugins live ([`settings_dir`]).
+/// Where the preferences, recovery copies and installed plugins live ([`settings_dir`]), or the
+/// Nightly's private profile.
 pub fn config_dir() -> Option<PathBuf> {
-    settings_dir(&craft_settings::Probe { platform_config_dir: platform_dir(), ..Default::default() })
+    config_dir_for(crate::launch_profile::current(), &craft_settings::Probe { platform_config_dir: platform_dir(), ..Default::default() })
+}
+
+/// The data root this launch uses: every piece of user state (the preferences and recent files,
+/// the recovery copies, the installed plugins) hangs off it, so a Nightly build keeps all of it in
+/// the profile the Launcher handed it and the stable app's folder is never read or written.
+/// Stable resolves the folder exactly as it always did.
+pub(crate) fn config_dir_for(profile: &crate::launch_profile::Profile, probe: &craft_settings::Probe) -> Option<PathBuf> {
+    profile.root().map(Path::to_path_buf).or_else(|| settings_dir(probe))
 }
 
 /// The platform's config folder, read from the environment as before: `%APPDATA%` on Windows,
@@ -348,9 +357,12 @@ fn open_directory(file: &std::fs::File) -> Result<(), String> {
 const STATE: &str = "state.json";
 
 /// Everything quitting keeps, all done when it returns (macOS then ends the process): the
-/// preferences in `dir`, this run's recovery copies ([`Recovery::quit`](crate::recovery::Recovery::quit))
+/// preferences in `dir` with the files open now, which the next start reopens, and where each was
+/// left, this run's recovery copies ([`Recovery::quit`](crate::recovery::Recovery::quit))
 /// and the live sessions' ends (one this app hosts tells everyone and stops; a joined one leaves).
 pub fn shutdown(app: &mut FigApp, dir: Option<&Path>, recovery: Option<crate::recovery::Recovery>) {
+    app.session.remember_open_files();
+    app.session.remember_views();
     if let Some(dir) = dir {
         write_prefs(dir, &app.session.prefs);
     }
@@ -524,6 +536,12 @@ impl Services for Desktop {
             return None;
         }
         Some((w, h, img.bytes.into_owned()))
+    }
+    #[cfg(target_os = "macos")]
+    fn clipboard_image_file(&mut self) -> Option<PathBuf> {
+        let files = self.clipboard.as_mut()?.get().file_list().ok()?;
+        let [path] = files.as_slice() else { return None };
+        image::ImageFormat::from_path(path).ok()?.reading_enabled().then(|| path.clone())
     }
     #[cfg(target_os = "macos")]
     fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {

@@ -563,6 +563,19 @@ fn css_export_gives_lengths_a_unit_and_keeps_opacity_bare() {
 }
 
 #[test]
+fn css_export_keeps_a_style_weight_bare() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "weight", "type": "number", "value": 700}));
+    let t = idv(&ex(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 0})));
+    let st = ex(&mut s, "style.create", json!({"type": "text", "name": "Body", "from": t}))["id"].as_str().unwrap_or_default().to_string();
+    ex(&mut s, "style.bind", json!({"style": st, "field": "fontWeight", "variable": "weight"}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
+    // A weight bound only to a text style is still a bare number, not a length.
+    assert!(css.contains("--weight: 700;") && !css.contains("700px"), "{css}");
+}
+
+#[test]
 fn review_a_long_alias_chain_keeps_its_role_to_the_end() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
@@ -638,4 +651,27 @@ fn stored_variable_ids_reset_only_the_inherited_parent_and_collection() {
         assert_eq!(result.values[&dark], VariableValue::Number(8.0));
         assert_eq!(result.overrides, std::collections::BTreeSet::from([light]));
     }
+}
+
+#[test]
+fn css_export_gives_clashing_variable_names_their_own_property() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "Brand/Primary", "type": "color", "value": "#ff0000"}));
+    let blue = ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "Brand Primary", "type": "color", "value": "#0000ff"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "link", "type": "color", "value": {"alias": blue["id"]}}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
+    let decls: Vec<(&str, &str)> =
+        css.lines().filter_map(|l| l.trim().strip_prefix("--").and_then(|d| d.strip_suffix(';')).and_then(|d| d.split_once(": "))).collect();
+    let mut names: Vec<&str> = decls.iter().map(|(n, _)| *n).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), decls.len(), "{css}");
+    let red = decls.iter().find(|(_, v)| *v == "#FF0000").map(|(n, _)| *n);
+    let blue = decls.iter().find(|(_, v)| *v == "#0000FF").map(|(n, _)| *n);
+    // The first keeps its plain name; the alias reads the one its target is declared under.
+    assert_eq!(red, Some("brand-primary"), "{css}");
+    let blue = blue.unwrap_or_default();
+    assert_ne!(blue, "brand-primary", "{css}");
+    assert!(css.contains(&format!("--link: var(--{blue});")), "{css}");
 }

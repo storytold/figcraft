@@ -42,7 +42,10 @@ pub use client::{Client, HISTORY_LIMIT};
 pub use diff::{Diff, diff};
 pub use figcraft_doc::{Document, NodeId};
 pub use history::{BatchKind, Notice};
-pub use message::{Accepted, Access, CatchUp, ClientMsg, EditingText, Hello, Peer, Presence, Processed, Resume, ServerMsg, Signal};
+pub use message::{
+    Accepted, Access, BranchEvent, BranchReq, BranchStatus, CatchUp, ClientMsg, EditingText, Hello, Peer, Presence, Processed, Resume, ServerMsg,
+    SharedBranch, Signal,
+};
 pub use replica::{Applied, Mode, Replica};
 pub use server::{COMMENT_ONLY, Journal, Outgoing, Server, SessionState, VIEW_ONLY};
 
@@ -130,6 +133,8 @@ impl Recompute for NoRecompute {
 #[cfg(test)]
 mod board_sync_tests;
 #[cfg(test)]
+mod branch_tests;
+#[cfg(test)]
 mod client_tests;
 #[cfg(test)]
 mod codec_tests;
@@ -147,6 +152,8 @@ mod frac_tests;
 mod image_tests;
 #[cfg(test)]
 mod journal_tests;
+#[cfg(test)]
+mod keyed_list_tests;
 #[cfg(test)]
 mod merge_list_tests;
 #[cfg(test)]

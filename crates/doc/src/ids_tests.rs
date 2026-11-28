@@ -1,6 +1,8 @@
 //! Ids of styles, variables, collections, modes and comments: unchanged outside a live session,
 //! from the client's own space during one.
 
+use std::collections::BTreeSet;
+
 use crate::ids::{COLLECTION_ID_PREFIX, id_number, id_space, mode_number, space_of};
 use crate::{Collection, Comment, Document, Message, Mode, NodeId, NodeKind, Style, StyleKind};
 
@@ -91,6 +93,20 @@ fn ids_of_the_space_already_in_the_document_stay_taken() {
     e.styles.push(style(&format!("S:{}", (5u64 << 32) | 9)));
     e.set_client_id(3);
     assert_eq!(e.new_style_id(), format!("S:{}", C3 | 1));
+}
+
+#[test]
+fn new_ids_can_avoid_ids_about_to_come_in() {
+    let mut d = Document::new("a");
+    d.styles.push(style("S:1"));
+    let avoid: BTreeSet<String> = ["S:2", "S:3", "VariableID:4", "VariableCollectionId:2", "lib:VariableID:9"].map(String::from).into();
+    assert_eq!(d.new_style_id_avoiding(&avoid), "S:4");
+    assert_eq!(d.new_variable_id_avoiding(&avoid), "VariableID:5");
+    assert_eq!(d.new_collection_id_avoiding(&avoid), "VariableCollectionId:3");
+    // In a session the numbers come from the client's space, above those of it to avoid.
+    let avoid: BTreeSet<String> = [format!("VariableID:{}", C3 | 7)].into();
+    d.set_client_id(3);
+    assert_eq!(d.new_variable_id_avoiding(&avoid), format!("VariableID:{}", C3 | 8));
 }
 
 #[test]

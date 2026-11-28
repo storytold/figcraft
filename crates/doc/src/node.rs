@@ -91,6 +91,10 @@ pub enum NodeKind {
         flows: Vec<crate::proto::Flow>,
         #[serde(default)]
         prototype: crate::proto::PrototypeSettings,
+        /// The page chosen to open the file on for everyone (`page.setOpening`; at most one page):
+        /// saving writes it as the document's `current_page` instead of the page the saver was viewing.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        opening: bool,
     },
     Frame,
     Group,
@@ -246,6 +250,15 @@ pub struct CodeLink {
     pub name: String,
     /// The snippet with `{property}` and `{property ? "a" : "b"}` placeholders.
     pub template: String,
+    /// Where the code component lives, relative to the code repository.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// What a property's design values are called in code: property → design value → code value.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, BTreeMap<String, String>>,
+    /// Notes for whoever uses the component.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
 }
 
 /// A dev resource: a link for developers attached to a layer. The URL is data only: it is shown
@@ -395,7 +408,8 @@ impl NodeKind {
         )
     }
 
-    /// Kinds whose corners can be rounded from the panel.
+    /// Kinds whose corners can be rounded from the panel. A boolean group has one radius for every
+    /// sharp corner of its result.
     pub fn has_corner_radius(&self) -> bool {
         matches!(
             self,
@@ -408,17 +422,24 @@ impl NodeKind {
                 | NodeKind::Star { .. }
                 | NodeKind::Vector { .. }
                 | NodeKind::Section { .. }
+                | NodeKind::BooleanOp { .. }
         )
     }
 
-    /// Kinds with a radius per corner (the others round every corner alike).
+    /// Kinds with a radius per corner (the others, boolean groups included, round every corner alike).
     pub fn has_independent_corners(&self) -> bool {
-        self.has_corner_radius() && !matches!(self, NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. })
+        self.has_corner_radius()
+            && !matches!(self, NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. } | NodeKind::BooleanOp { .. })
     }
 
-    /// Kinds whose rounded corners are drawn with corner smoothing (a vector's rounded points are drawn without it).
+    /// Kinds whose rounded corners are drawn with corner smoothing: a vector only when its network
+    /// has a closed region (an open path's rounded points are drawn without it). A boolean group's
+    /// smoothing applies to its result's corners between straight edges.
     pub fn has_corner_smoothing(&self) -> bool {
-        self.has_corner_radius() && !matches!(self, NodeKind::Vector { .. })
+        match self {
+            NodeKind::Vector { network } => !network.regions.is_empty(),
+            _ => self.has_corner_radius(),
+        }
     }
 
     pub fn text(&self) -> Option<&TextData> {
@@ -507,6 +528,10 @@ pub struct Node {
     /// Explicit variable modes (collection → mode) set on this container.
     #[serde(default, skip_serializing_if = "is_default")]
     pub var_modes: BTreeMap<CollectionId, ModeId>,
+    /// An instance's scale factor (the Scale tool): the variables bound on its layers draw at their
+    /// value times this, and times the factors of the instances around it. 1 on everything else.
+    #[serde(default = "one64", skip_serializing_if = "is_one64")]
+    pub scale_factor: f64,
     /// In a boolean group: how this operand combines with the operands below it (`None`: the
     /// group's operation). Ignored for the bottom operand and outside boolean groups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -567,6 +592,9 @@ pub(crate) fn yes() -> bool {
 fn one() -> f32 {
     1.0
 }
+fn one64() -> f64 {
+    1.0
+}
 fn pass() -> BlendMode {
     BlendMode::PassThrough
 }
@@ -583,6 +611,9 @@ pub(crate) fn is_default<T: Default + PartialEq>(v: &T) -> bool {
 }
 fn is_yes(v: &bool) -> bool {
     *v == yes()
+}
+fn is_one64(v: &f64) -> bool {
+    *v == 1.0
 }
 fn is_one(v: &f32) -> bool {
     *v == one()
@@ -726,6 +757,7 @@ impl Node {
             styles: StyleRefs::default(),
             bound: BTreeMap::new(),
             var_modes: BTreeMap::new(),
+            scale_factor: 1.0,
             bool_op: None,
             constrain_proportions: false,
             source: None,
@@ -942,10 +974,14 @@ impl Node {
                 matches!(&self.kind, NodeKind::Vector { network } if network.vertices.iter().any(|v| v.cap.is_some_and(StrokeCap::is_arrow)));
             let caps =
                 if self.stroke.cap_start.is_arrow() || self.stroke.cap_end.is_arrow() || point_arrows { w.max(self.stroke.weight) * 3.0 } else { w };
-            // Right-angled or smooth outlines (boxes, ellipses) end their mitres on the grown box.
-            let boxy = matches!(self.kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Section { .. }) || self.kind.is_frame_like();
-            let miter = if boxy { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
-            base.max(if matches!(self.kind, NodeKind::Line | NodeKind::Vector { .. }) { caps } else { 0.0 }) * miter
+            // Right-angled or smooth outlines (boxes, whole ellipses) end their mitres on the grown
+            // box; an arc's corners don't.
+            let miter = if self.outline_mitres_end_on_its_box() { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
+            // A dash's square end stands out along the path as far as the band does across it:
+            // its corners reach √2 times as far from the path, past the box round a curve.
+            let square_dashes = !self.stroke.dashes.is_empty() && self.stroke.band_caps().contains(&StrokeCap::Square);
+            let corners = if square_dashes { miter.max(std::f64::consts::SQRT_2) } else { miter };
+            base.max(if matches!(self.kind, NodeKind::Line | NodeKind::Vector { .. }) { caps } else { 0.0 }) * corners
         } else {
             0.0
         };
@@ -960,14 +996,31 @@ impl Node {
         !(matches!(self.kind, NodeKind::Group) || (matches!(self.kind, NodeKind::Text(_)) && self.has_visible_stroke()))
     }
 
-    /// Whether a spread grows this node's outline by exactly the spread (no sharp corners).
+    /// Whether this node's outline has no sharp corners (right-angled ones aside), so mitres along
+    /// it end on its box grown by as much: a box or a whole ellipse. An arc (an ellipse that doesn't
+    /// go all the way round) has corners where its ends meet its sides.
+    fn outline_mitres_end_on_its_box(&self) -> bool {
+        match self.kind {
+            NodeKind::Rectangle | NodeKind::Section { .. } => true,
+            NodeKind::Ellipse { sweep, .. } => figcraft_geom::full_sweep(sweep),
+            _ => self.kind.is_frame_like(),
+        }
+    }
+
+    /// Whether a spread grows this node by exactly the spread: its outline mitres end on its box
+    /// (see [`Node::outline_mitres_end_on_its_box`]), and so does its stroke. A dashed stroke is
+    /// cut into dashes with corners wherever they fall round the outline, and a width profile or a
+    /// brush can give the stroke corners of its own, which the spread mitres out.
     fn grows_by_exactly_its_spread(&self) -> bool {
-        matches!(self.kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Section { .. }) || self.kind.is_frame_like()
+        let s = &self.stroke;
+        let cornered = self.has_visible_stroke() && (!s.dashes.is_empty() || s.profile().is_some() || s.brush.is_some());
+        !cornered && self.outline_mitres_end_on_its_box()
     }
 
     /// How much further than its spread a drop shadow can reach at the outline's sharp corners:
     /// spread moves the edges out in parallel and they meet in a mitre (see
-    /// [`SPREAD_MITER_LIMIT`]). Rectangles, frames and ellipses grow by exactly the spread.
+    /// [`SPREAD_MITER_LIMIT`]). Rectangles, frames and whole ellipses grow by exactly the spread,
+    /// unless their stroke has corners (see [`Node::grows_by_exactly_its_spread`]).
     fn spread_miter_reach(&self) -> f64 {
         if self.grows_by_exactly_its_spread() {
             return 0.0;

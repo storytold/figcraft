@@ -354,6 +354,13 @@ impl<B: Backend> Hub<B> {
             let reject = ServerMsg::Reject { batch_id: *batch_id, reason, fixes: Vec::new() };
             return self.queue(file, vec![Outgoing::To(id, reject)]);
         }
+        if let (ClientMsg::Branch(req), Some(n)) = (&msg, bytes)
+            && let Some(room) = self.rooms.get(file)
+            && let Err(reason) = self.backend.room(file, &room.server, n)
+        {
+            let reject = ServerMsg::Branch(Box::new(figcraft_collab::BranchEvent::Rejected { id: req.id().to_string(), reason }));
+            return self.queue(file, vec![Outgoing::To(id, reject)]);
+        }
         let Some(room) = self.rooms.get_mut(file) else { return };
         let outs = room.server.receive(id, msg);
         self.backend.changed(file, &mut room.server);
@@ -737,6 +744,9 @@ impl<B: Backend> Hub<B> {
                         continue;
                     }
                     let Some(&conn) = room.ids.get(&id) else { continue };
+                    if matches!(msg, ServerMsg::Presence { .. }) && self.conns.get(&conn).is_some_and(|c| !c.out.takes_presence()) {
+                        continue;
+                    }
                     let Some(b) = bytes.get_or_insert_with(|| encode(&msg)).clone() else { continue };
                     if !deliver(&self.conns, conn, &b, &mut held, &mut stuck) {
                         stuck.push(conn);
@@ -797,7 +807,7 @@ pub(crate) fn to_local(inbox: &Inbox, local: u32, msg: &ServerMsg) {
         ServerMsg::PeerJoined(p) if p.client_id != local => inbox.push(Event::PeerJoined(p.clone())),
         ServerMsg::PeerLeft { client_id } => inbox.push(Event::PeerLeft(*client_id)),
         ServerMsg::Presence { client_id, presence } => inbox.presence(*client_id, presence.clone()),
-        ServerMsg::Changes { .. } | ServerMsg::Reject { .. } => inbox.push(Event::Sync(msg.clone())),
+        ServerMsg::Changes { .. } | ServerMsg::Reject { .. } | ServerMsg::Branches(_) | ServerMsg::Branch(_) => inbox.push(Event::Sync(msg.clone())),
         ServerMsg::Signal { client_id, signal } => inbox.push(Event::Signal(*client_id, signal.clone())),
         _ => {}
     }

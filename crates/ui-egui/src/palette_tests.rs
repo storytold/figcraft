@@ -50,6 +50,21 @@ fn query_filters_to_matches() {
     assert!(crate::menus::command_sections("zzz-no-such-action").iter().all(|(_, r)| r.is_empty()));
 }
 
+/// The handoff mode is "Developer Mode", and the name it had before is still a search term: a
+/// person who knows "Dev Mode" finds the command, and its row reads the new name.
+#[test]
+fn the_old_name_still_finds_the_mode() {
+    let rows: Vec<(String, String)> =
+        crate::menus::command_sections("dev mode").iter().flat_map(|(_, rows)| rows.iter().map(|r| (r.key.clone(), r.label.clone()))).collect();
+    assert!(rows.iter().any(|(key, _)| key == "command:view.devMode"), "'dev mode' finds the mode: {rows:?}");
+    assert!(
+        rows.iter().filter(|(key, _)| key == "command:view.devMode").all(|(_, label)| label == "Developer Mode"),
+        "and reads the new name: {rows:?}"
+    );
+    // Without the alias the words don't match the label or the id.
+    assert!(!rows.iter().any(|(key, label)| key != "command:view.devMode" && label.contains("Developer Mode")), "only that row: {rows:?}");
+}
+
 #[test]
 fn gone_entries_drop_out_of_recents() {
     let u = Ui::new(Session::new());
@@ -166,13 +181,15 @@ fn arrows_move_the_highlight_and_enter_runs_it() {
 }
 
 /// A trackpad tap sends the press and the release in one frame; the press must not close a
-/// context menu the release just opened, but a later outside press still does.
+/// context menu the release just opened, but a later outside press still does. The runtime ends a
+/// pass at its press, so the release, which opens the menu, arrives in the next frame.
 #[test]
 fn context_menu_survives_a_same_frame_tap() {
     let mut u = Ui::new(Session::new());
     let p = Pos2::new(1000.0, 600.0);
     let b = |pressed| Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
     u.frame(vec![Event::PointerMoved(p), b(true), b(false)]);
+    u.frame(vec![]);
     assert!(u.app.ui.context_menu.is_some(), "the opening tap's press is spared");
     u.frame(vec![]);
     assert!(u.app.ui.context_menu.is_some(), "the menu stays open");

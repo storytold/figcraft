@@ -7,7 +7,7 @@ use figcraft_doc::{
 use figcraft_geom::Point;
 use serde_json::{Value, json};
 
-use crate::board::{route, sticky_font_size};
+use crate::board::{STICKY_TEXT_SIZE, route};
 use crate::collab_live_tests::Room;
 use crate::tools::{PointerEvent, PointerKind, ToolId};
 use crate::{EngineError, Session};
@@ -77,7 +77,7 @@ fn board_commands_refuse_on_design_files_and_prototyping_refuses_on_boards() {
 }
 
 #[test]
-fn a_sticky_is_a_square_frame_whose_note_shrinks_as_it_grows() {
+fn a_sticky_is_a_square_frame_whose_note_grows_taller_as_it_fills() {
     let mut s = board();
     s.prefs.user_name = "Ada".into();
     let r = s.execute("board.sticky", &json!({"x": 10, "y": 20, "text": "Hi", "color": "blue"})).unwrap();
@@ -88,19 +88,125 @@ fn a_sticky_is_a_square_frame_whose_note_shrinks_as_it_grows() {
     assert_eq!(n.fills[0].solid_color(), board_color("blue"));
     assert!(n.layout.is_some() && !n.effects.is_empty());
     assert_eq!(n.children.len(), 2, "the note and its author");
-    assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, 24.0);
+    assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, 16.0);
     // A click on the note picks the sticky whole.
     let doc = s.doc().unwrap();
     assert_eq!(figcraft_doc::geometry::select_target(doc, note, &[], false), st);
-    // A long note takes a smaller size; a very long one grows the sticky past its square.
+    // A long note keeps the size; a very long one grows the sticky past its square.
     let long = "word ".repeat(120);
     s.execute("node.set", &json!({"id": note, "props": {"characters": long}})).unwrap();
-    assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, sticky_font_size(&long));
-    assert!(sticky_font_size(&long) < 16.0);
+    assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, STICKY_TEXT_SIZE);
     assert!(node(&s, st).width == 200.0 && node(&s, st).height >= 200.0);
-    // Undo puts the short note and its size back.
+    // Undo puts the short note back.
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, 24.0);
+    assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, 16.0);
+}
+
+#[test]
+fn a_new_sticky_is_small_16() {
+    let mut s = board();
+    for (cmd, p) in [("board.sticky", json!({"x": 0, "y": 0, "text": "Hi"})), ("board.sticky", json!({"x": 300, "y": 0}))] {
+        let note = id(&s.execute(cmd, &p).unwrap(), "text");
+        assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, 16.0);
+    }
+    let next = id(&s.execute("board.nextSticky", &json!({})).unwrap(), "text");
+    assert_eq!(node(&s, next).kind.text().unwrap().style.font_size, 16.0);
+    assert_eq!(STICKY_TEXT_SIZE, 16.0);
+}
+
+#[test]
+fn the_sticky_sizes_are_figjams() {
+    let table = [("Small", 16.0), ("Medium", 24.0), ("Large", 40.0), ("Extra large", 64.0), ("Huge", 96.0)];
+    assert_eq!(crate::board::STICKY_SIZES, table);
+}
+
+fn note_size(s: &Session, note: NodeId) -> f64 {
+    node(s, note).kind.text().unwrap().style.font_size
+}
+
+#[test]
+fn set_style_font_size_sizes_every_selected_sticky() {
+    let mut s = board();
+    let a = s.execute("board.sticky", &json!({"x": 0, "y": 0, "text": "A"})).unwrap();
+    let b = s.execute("board.sticky", &json!({"x": 400, "y": 0, "text": "B"})).unwrap();
+    let ids = json!([id(&a, "id").0, id(&b, "id").0]);
+    s.execute("board.setStyle", &json!({"ids": ids, "fontSize": 24})).unwrap();
+    assert_eq!(note_size(&s, id(&a, "text")), 24.0);
+    assert_eq!(note_size(&s, id(&b, "text")), 24.0);
+    let bad = s.execute("board.setStyle", &json!({"ids": ids, "fontSize": 0}));
+    assert!(bad.is_err());
+}
+
+#[test]
+fn the_sticky_tool_remembers_the_last_size() {
+    let mut s = board();
+    let a = s.execute("board.sticky", &json!({"x": 0, "y": 0, "text": "A"})).unwrap();
+    s.execute("board.setStyle", &json!({"ids": [id(&a, "id").0], "fontSize": 40})).unwrap();
+    let b = s.execute("board.sticky", &json!({"x": 400, "y": 0, "text": "B"})).unwrap();
+    assert_eq!(note_size(&s, id(&b, "text")), 40.0);
+    let c = s.execute("board.sticky", &json!({"x": 800, "y": 0, "fontSize": 64})).unwrap();
+    assert_eq!(note_size(&s, id(&c, "text")), 64.0);
+    assert!(s.execute("board.sticky", &json!({"x": 0, "y": 400, "fontSize": 5000})).is_err());
+}
+
+#[test]
+fn a_huge_sticky_grows_taller_and_shrinks_back() {
+    figcraft_text::scan_system_fonts();
+    let mut s = board();
+    let r = s.execute("board.sticky", &json!({"x": 0, "y": 0, "text": "Alpha"})).unwrap();
+    let st = id(&r, "id");
+    let ids = json!([st.0]);
+    let (w, h16) = (node(&s, st).width, node(&s, st).height);
+    s.execute("board.setStyle", &json!({"ids": ids, "fontSize": 96})).unwrap();
+    assert_eq!(node(&s, st).width, w, "the width stays");
+    assert!(node(&s, st).height > h16, "Huge is taller than Small");
+    s.execute("board.setStyle", &json!({"ids": ids, "fontSize": 40})).unwrap();
+    assert_eq!(node(&s, st).height, h16, "Large is square again");
+}
+
+#[test]
+fn a_sticky_keeps_its_text_size_as_text_is_added() {
+    // The note's growth needs text measured: without craft-fonts that is with a system font,
+    // scanned here rather than by whichever test happens to run first (#333).
+    figcraft_text::scan_system_fonts();
+    let mut s = board();
+    let r = s.execute("board.sticky", &json!({"x": 0, "y": 0, "text": "one"})).unwrap();
+    let (st, note) = (id(&r, "id"), id(&r, "text"));
+    let (height, text_height) = (node(&s, st).height, node(&s, note).height);
+    // Typing in the note: each step is a real edit that runs the normalize pass.
+    crate::board::edit_text(&mut s, st).unwrap();
+    for _ in 0..9 {
+        crate::textedit::key(&mut s, "Enter", false, false, false).unwrap();
+        crate::textedit::insert(&mut s, "another line").unwrap();
+    }
+    let ten = node(&s, note).kind.text().unwrap().clone();
+    assert_eq!(ten.characters.matches('\n').count(), 9, "ten lines");
+    assert_eq!(ten.style.font_size, 16.0);
+    assert!(node(&s, note).height > text_height, "ten lines make the text taller");
+    assert!(node(&s, st).height > height, "and the note");
+    assert_eq!(node(&s, st).child_layout.sizing_v, figcraft_doc::Sizing::Hug, "the note hugs its text");
+    let (w, h10) = (node(&s, st).width, node(&s, st).height);
+    crate::textedit::insert(&mut s, &"a long paragraph ".repeat(15)).unwrap();
+    crate::textedit::end(&mut s).unwrap();
+    let t = node(&s, note).kind.text().unwrap().clone();
+    assert!(t.characters.chars().count() >= 250);
+    assert_eq!(t.style.font_size, 16.0);
+    assert!(t.runs.iter().all(|r| r.style.font_size == 16.0));
+    assert_eq!(node(&s, st).width, w, "the note keeps its width");
+    assert!(node(&s, st).height > h10, "and grows taller");
+}
+
+#[test]
+fn a_sticky_saved_with_another_text_size_keeps_it() {
+    let mut s = board();
+    let r = s.execute("board.sticky", &json!({"x": 0, "y": 0, "text": "old"})).unwrap();
+    let (st, note) = (id(&r, "id"), id(&r, "text"));
+    s.execute("node.set", &json!({"id": note, "props": {"fontSize": 11}})).unwrap();
+    assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, 11.0);
+    s.execute("node.set", &json!({"id": note, "props": {"characters": "old and now much longer than it was"}})).unwrap();
+    assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, 11.0, "an edit");
+    s.execute("node.set", &json!({"id": st, "props": {"x": 40}})).unwrap();
+    assert_eq!(node(&s, note).kind.text().unwrap().style.font_size, 11.0, "a move");
 }
 
 #[test]
@@ -168,7 +274,7 @@ fn connectors_follow_what_they_join_and_undo_with_it() {
     let b = id(&s.execute("board.sticky", &json!({"x": 400, "y": 0})).unwrap(), "id");
     let c = id(&s.execute("board.connector", &json!({"from": a, "to": b, "style": "straight", "label": "then"})).unwrap(), "id");
     let pts = drawn(&s, c);
-    assert!(near(pts[0], Point::new(200.0, 100.0)) && near(pts[1], Point::new(400.0, 100.0)), "{pts:?}");
+    assert!(near(pts[0], Point::new(204.0, 100.0)) && near(pts[1], Point::new(396.0, 100.0)), "{pts:?}");
     assert_eq!(node(&s, c).stroke.cap_end, StrokeCap::TriangleArrow);
     // Its label sits at the middle.
     let label = crate::board::label_of(s.doc().unwrap(), c).unwrap();
@@ -178,19 +284,19 @@ fn connectors_follow_what_they_join_and_undo_with_it() {
     s.execute("board.setStyle", &json!({"ids": [c], "style": "elbow"})).unwrap();
     s.execute("transform.move", &json!({"ids": [b], "dx": 0, "dy": 300})).unwrap();
     let pts = drawn(&s, c);
-    assert!(near(pts[0], Point::new(200.0, 100.0)) && near(*pts.last().unwrap(), Point::new(400.0, 400.0)), "{pts:?}");
+    assert!(near(pts[0], Point::new(204.0, 100.0)) && near(*pts.last().unwrap(), Point::new(396.0, 400.0)), "{pts:?}");
     assert!(pts.windows(2).all(|w| w[0].x == w[1].x || w[0].y == w[1].y), "right angles: {pts:?}");
     // Undo takes the move back and the route with it.
     s.execute("edit.undo", &json!({})).unwrap();
-    assert!(near(*drawn(&s, c).last().unwrap(), Point::new(400.0, 100.0)));
+    assert!(near(*drawn(&s, c).last().unwrap(), Point::new(396.0, 100.0)));
     // A deleted end stays where it was, as a point.
     s.execute("edit.delete", &json!({"ids": [b]})).unwrap();
     assert!(matches!(connector(&s, c).to, End::Point { .. }));
-    assert!(near(*drawn(&s, c).last().unwrap(), Point::new(400.0, 100.0)));
+    assert!(near(*drawn(&s, c).last().unwrap(), Point::new(396.0, 100.0)));
     // A connector moved on its own takes its free end along; the attached one stays.
     s.execute("transform.move", &json!({"ids": [c], "dx": 0, "dy": 50})).unwrap();
-    assert!(matches!(connector(&s, c).to, End::Point { x, y } if x == 400.0 && y == 150.0), "{:?}", connector(&s, c));
-    assert!(near(drawn(&s, c)[0], Point::new(200.0, 100.0)));
+    assert!(matches!(connector(&s, c).to, End::Point { x, y } if x == 396.0 && y == 150.0), "{:?}", connector(&s, c));
+    assert!(near(drawn(&s, c)[0], Point::new(204.0, 100.0)));
     // Deleting the connector takes its label.
     s.execute("edit.delete", &json!({"ids": [c]})).unwrap();
     assert!(!s.doc().unwrap().contains(label));
@@ -206,12 +312,13 @@ fn routes_are_the_same_for_the_same_document() {
         to: End::Point { x: 300.0, y: 500.0 },
         routing: Routing::Elbow,
         path: None,
+        branch: false,
     };
     let doc = s.doc().unwrap();
     let r = route(doc, &c).unwrap();
     assert_eq!(r, route(&doc.clone(), &c).unwrap());
-    // Down out of the bottom, across halfway, down into the point.
-    assert_eq!(r, vec![Point::new(80.0, 160.0), Point::new(80.0, 330.0), Point::new(300.0, 330.0), Point::new(300.0, 500.0)]);
+    // Down out of the bottom (END_GAP below it), across halfway, down into the point.
+    assert_eq!(r, vec![Point::new(80.0, 164.0), Point::new(80.0, 332.0), Point::new(300.0, 332.0), Point::new(300.0, 500.0)]);
 }
 
 #[test]
@@ -338,7 +445,7 @@ fn boards_sync_in_live_sessions() {
     let doc = room.server.document();
     let NodeKind::Vector { network } = &doc.node(c).unwrap().kind else { panic!("not a vector") };
     let end = doc.world_transform(c) * network.vertices.last().unwrap().point();
-    assert_eq!(end, Point::new(400.0, 350.0), "to the moved sticky's facing side");
+    assert_eq!(end, Point::new(396.0, 350.0), "to END_GAP before the moved sticky's facing side");
     assert_eq!(doc.node(a).unwrap().fills[0].solid_color(), board_color("violet"));
 }
 
@@ -357,14 +464,29 @@ fn board_commands_survive_junk() {
         json!({"path": "M0 0 L 1e308 1e308", "points": [[0, 0], [1e308, 1]]}),
         json!({"end": "from", "target": {"x": 1e308, "y": -1e308}, "side": "inside", "style": "curved"}),
         json!({"id": 99_999, "end": 7, "target": [1], "style": "wavy"}),
+        json!({"id": 99_999, "relation": 7, "children": "x", "text": [1], "x": "NaN", "y": 1e308}),
+        json!({"id": 99_999, "language": 7, "text": [1], "width": "wide", "x": "NaN", "y": 1e308, "side": 3}),
+        json!({"tool": "sticky", "color": "auto", "weight": -1e308}),
     ];
     let ids: Vec<&str> = crate::cmd::all_commands()
         .iter()
         .map(|c| c.id)
         .filter(|i| {
             i.starts_with("board.")
-                || ["tool.sticky", "tool.shape", "tool.connector", "tool.marker", "tool.highlighter", "tool.eraser", "tool.stamp", "file.newBoard"]
-                    .contains(i)
+                || [
+                    "tool.sticky",
+                    "tool.shape",
+                    "tool.connector",
+                    "tool.marker",
+                    "tool.highlighter",
+                    "tool.eraser",
+                    "tool.ink",
+                    "tool.stamp",
+                    "tool.mindMap",
+                    "tool.codeBlock",
+                    "file.newBoard",
+                ]
+                .contains(i)
         })
         .collect();
     assert!(ids.len() >= 17, "{ids:?}");
@@ -374,6 +496,7 @@ fn board_commands_survive_junk() {
             let a = s.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap()["id"].clone();
             let b = s.execute("board.shape", &json!({"x": 300, "y": 0})).unwrap()["id"].clone();
             let _ = s.execute("board.connector", &json!({"from": a, "to": b, "label": "x"}));
+            let _ = s.execute("board.codeBlock", &json!({"x": 0, "y": 300, "text": "a\nb"}));
             if let Err(EngineError::Internal { cmd, msg }) = s.execute(cmd, j) {
                 panic!("{cmd} panicked on {j}: {msg}");
             }
@@ -389,6 +512,7 @@ fn board_commands_survive_junk() {
             let a = s.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap()["id"].clone();
             let b = s.execute("board.stamp", &json!({"x": 300, "y": 0})).unwrap()["id"].clone();
             let _ = s.execute("board.connector", &json!({"from": a, "to": b}));
+            let _ = s.execute("board.codeBlock", &json!({"x": 0, "y": 300, "text": "a\nb"}));
             if let Err(EngineError::Internal { cmd, msg }) = s.execute(spec.id, j) {
                 panic!("{cmd} panicked on {j}: {msg}");
             }
@@ -410,7 +534,9 @@ fn a_press_on_a_stickys_background_picks_and_drags_it() {
     s.pointer(&PointerEvent::at(PointerKind::Up, 100.0, 450.0, 1.0)).unwrap();
     assert_eq!(s.selection(), vec![a]);
     assert_eq!(node(&s, a).transform.translation().y, 300.0);
-    assert!(near(drawn(&s, c)[0], Point::new(200.0, 400.0)), "the connector followed the drag: {:?}", drawn(&s, c));
+    // Its own connector's start, END_GAP outside its edge, is no snap target for it (#1916).
+    assert_eq!(node(&s, a).transform.translation().x, 0.0, "not nudged sideways by its own connector");
+    assert!(near(drawn(&s, c)[0], Point::new(204.0, 400.0)), "the connector followed the drag: {:?}", drawn(&s, c));
 }
 
 #[test]

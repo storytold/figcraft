@@ -16,12 +16,19 @@ use figcraft_doc::{PrintSettings, VdCompat};
 /// (best effort; `info` lists what wasn't imported), .sketch (Sketch 48 or newer, best effort),
 /// .svg, .png/.jpg/.webp/.gif/.bmp (open as an image layer).
 #[derive(Parser)]
-#[command(name = "figcraft-cli", bin_name = "figcraft-cli", version, arg_required_else_help = true, after_help = "See docs/cli.md and docs/mcp.md.")]
+#[command(
+    name = "figcraft-cli",
+    bin_name = "figcraft-cli",
+    version,
+    propagate_version = true,
+    arg_required_else_help = true,
+    after_help = "Exit status:\n  0  success\n  1  a command failed\n  2  usage error\n\nA process ended by a signal exits 128 + the signal number (130 for Ctrl-C), as in the shell.\n\nSee docs/cli.md and docs/mcp.md."
+)]
 pub struct Cli {
     /// Lay text out with the fonts built into FigCraft only, for renders that match on every
-    /// machine (or set FIGCRAFT_NO_SYSTEM_FONTS=1). Otherwise installed fonts are indexed the
-    /// first time text is laid out, as in the app
-    #[arg(long, global = true)]
+    /// machine (FIGCRAFT_NO_SYSTEM_FONTS=1 does the same). Otherwise installed fonts are indexed
+    /// the first time text is laid out, as in the app
+    #[arg(long, global = true, env = "FIGCRAFT_NO_SYSTEM_FONTS", value_parser = env_flag)]
     pub no_system_fonts: bool,
     #[command(subcommand)]
     pub command: Command,
@@ -95,7 +102,7 @@ pub struct ExportArgs {
     pub format: Option<String>,
     #[command(flatten)]
     pub scale: ScaleArg,
-    /// The page to export (default the first)
+    /// The page to export (default the first non-divider page)
     #[arg(long, value_name = "NAME")]
     pub page: Option<String>,
     /// The layer to export, by id (12 or 0:12) or name
@@ -146,6 +153,9 @@ pub struct ConvertArgs {
     /// The file to write; its extension picks the format
     #[arg(value_name = "OUT")]
     pub output: String,
+    /// Allow OUT to be the file IN, replacing it
+    #[arg(long)]
+    pub in_place: bool,
     #[command(flatten)]
     pub roots: RootArgs,
 }
@@ -161,7 +171,7 @@ pub struct RenderArgs {
     pub out: String,
     #[command(flatten)]
     pub scale: ScaleArg,
-    /// The page to render (default the first)
+    /// The page to render (default the first non-divider page)
     #[arg(long, value_name = "NAME")]
     pub page: Option<String>,
     #[command(flatten)]
@@ -183,6 +193,9 @@ pub struct RunArgs {
     /// Save the result here, by extension
     #[arg(long, value_name = "FILE")]
     pub out: Option<String>,
+    /// Allow --out to be the --in file, replacing it
+    #[arg(long, requires_all = ["input", "out"])]
+    pub in_place: bool,
     #[command(flatten)]
     pub roots: RootArgs,
 }
@@ -234,6 +247,9 @@ pub struct PublishArgs {
     /// The server, ws://host:port/ (optionally ?key=KEY)
     #[arg(long, value_name = "URL")]
     pub server: String,
+    /// The server's key, when the address has none (FIGCRAFT_SERVER_KEY)
+    #[arg(long, value_name = "KEY", env = "FIGCRAFT_SERVER_KEY", hide_env_values = true)]
+    pub key: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -243,7 +259,7 @@ pub enum ConnectCommand {
 
 /// Link a design file's components to their code as a figcraft.connect.json says, and save it
 ///
-/// The mappings are what Dev Mode's Export code connections writes, kept in the code repository:
+/// The mappings are what Developer Mode's Export code connections writes, kept in the code repository:
 /// each links a component (or component set) of that name to its code component for a language.
 /// Entries that don't fit (an unknown component, a bad template) are reported and skipped.
 #[derive(Args)]
@@ -290,8 +306,21 @@ enum ValueError {
 }
 
 fn scale(s: &str) -> Result<f64, ValueError> {
-    s.trim_end_matches('x').parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v <= 64.0).ok_or(ValueError::Scale)
+    s.strip_suffix('x').unwrap_or(s).parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v <= 64.0).ok_or(ValueError::Scale)
 }
+
+/// `FIGCRAFT_NO_SYSTEM_FONTS`: the usual boolean spellings; an empty value is unset (RFC-0018 rule 1.7).
+fn env_flag(s: &str) -> Result<bool, NotBoolean> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" | "no" | "off" | "n" | "f" => Ok(false),
+        "1" | "true" | "yes" | "on" | "y" | "t" => Ok(true),
+        _ => Err(NotBoolean),
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("must be 1, 0, true, false, yes, no, on or off")]
+pub struct NotBoolean;
 
 fn bleed(s: &str) -> Result<f64, ValueError> {
     PrintSettings::parse_length(s).filter(|b| *b <= PrintSettings::MAX_BLEED).ok_or(ValueError::Bleed)
@@ -316,7 +345,10 @@ fn whole_number(s: &str) -> Result<usize, ValueError> {
 
 /// `mcp --attach`: `host:port` as given, or a bare port on 127.0.0.1.
 fn attach(s: &str) -> Result<String, ValueError> {
-    if s.contains(':') {
+    if let Some((host, port)) = s.rsplit_once(':') {
+        if host.is_empty() || port.parse::<u16>().is_err() {
+            return Err(ValueError::Attach);
+        }
         return Ok(s.to_owned());
     }
     let port: u16 = s.parse().map_err(|_| ValueError::Attach)?;
@@ -461,6 +493,12 @@ mod tests {
         assert_eq!(a.attach.as_deref(), Some("127.0.0.1:7979"));
         let Command::Mcp(a) = ok(&["mcp", "--attach=localhost:7979"]) else { panic!("mcp") };
         assert_eq!(a.attach.as_deref(), Some("localhost:7979"));
+        for address in ["127.0.0.1:7979", "[::1]:7979", "[fe80::1%3]:7979", "localhost:0"] {
+            let Command::Mcp(a) = ok(&["mcp", "--attach", address]) else { panic!("mcp") };
+            assert_eq!(a.attach.as_deref(), Some(address));
+        }
+        let Command::Mcp(a) = ok(&["mcp", "--attach", "0"]) else { panic!("mcp") };
+        assert_eq!(a.attach.as_deref(), Some("127.0.0.1:0"));
         let Command::Mcp(a) = ok(&["mcp", "--attach", "7979", "--timeout", "300"]) else { panic!("mcp") };
         assert_eq!(a.timeout, Some(300));
         let Command::Mcp(a) = ok(&["mcp", "--automation-read-root", "in", "--automation-write-root", "out"]) else { panic!("mcp") };
@@ -488,6 +526,13 @@ mod tests {
     }
 
     #[test]
+    fn scale_accepts_numbers_and_one_optional_suffix() {
+        for (value, want) in [("0.5", 0.5), ("0.5x", 0.5), ("2", 2.0), ("2x", 2.0), ("64", 64.0), ("64x", 64.0)] {
+            assert_eq!(super::scale(value).ok(), Some(want), "{value}");
+        }
+    }
+
+    #[test]
     fn bad_arguments_are_usage_errors() {
         use ErrorKind::{
             ArgumentConflict, DisplayHelpOnMissingArgumentOrSubcommand, InvalidSubcommand, InvalidValue, MissingRequiredArgument, TooManyValues,
@@ -505,6 +550,8 @@ mod tests {
             (&["export", "a", "-o", "b", "--scale", "0"], ValueValidation),
             (&["export", "a", "-o", "b", "--scale", "-3"], ValueValidation),
             (&["export", "a", "-o", "b", "--scale", "65"], ValueValidation),
+            (&["export", "a", "-o", "b", "--scale", "2xx"], ValueValidation),
+            (&["render", "a", "-o", "b", "--scale", "2xxx"], ValueValidation),
             (&["export", "a", "-o", "b", "--bleed", "lots"], ValueValidation),
             (&["export", "a", "-o", "b", "--bleed", "3in"], ValueValidation),
             (&["export", "a", "-o", "b", "--vd-compat", "sloppy"], ValueValidation),
@@ -514,6 +561,11 @@ mod tests {
             (&["perf", "--layers", "10,x"], ValueValidation),
             (&["perf", "--layers", "10", "--layers", "20"], ArgumentConflict),
             (&["mcp", "--attach", "notaport"], ValueValidation),
+            (&["mcp", "--attach", ":7979"], ValueValidation),
+            (&["mcp", "--attach", "localhost:"], ValueValidation),
+            (&["mcp", "--attach", "localhost:notaport"], ValueValidation),
+            (&["mcp", "--attach", "localhost:65536"], ValueValidation),
+            (&["mcp", "--attach", "[::1]"], ValueValidation),
             (&["mcp", "--attach", "7979", "--timeout", "0"], ValueValidation),
             (&["mcp", "--attach", "7979", "--timeout", "601"], ValueValidation),
             (&["mcp", "--timeout", "300"], MissingRequiredArgument),
@@ -543,6 +595,7 @@ mod tests {
             &["export", "x.figcraft", "-o", "out", "--help"],
             &["export", "-o", "--help"],
             &["mcp", "--attach", "notaport", "--help"],
+            &["mcp", "--attach", "localhost:notaport", "--help"],
             &["mcp", "--bogus", "-h"],
             &["--no-system-fonts", "plugin", "publish", "--bogus", "--help"],
         ] {

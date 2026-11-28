@@ -5,9 +5,10 @@
 //! case; the picker lists what is installed. Synthetic family names only, over pending entries
 //! (no files) and the embedded faces when the build has them.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::{CRAFT_FONTS, Face, FontBytes, FontDb, Pending, style_words};
+use super::{CRAFT_FONTS, Face, FontBytes, FontDb, LocalFont, Pending, scan_dir, style_words, system_font_dirs};
 
 fn entry(style: &str) -> Pending {
     Pending { path: format!("no-such-dir/{style}.ttf").into(), index: 0, style: style.into(), postscript: None, local: None }
@@ -103,4 +104,44 @@ fn faces_are_found_and_listed_under_either_name() {
     let semibold = db.add(face("Synthetic Text", "SemiBold"));
     assert!(Arc::ptr_eq(&db.find("Synthetic Text SemiBold", "Regular").unwrap(), &semibold));
     assert!(Arc::ptr_eq(&db.find("synthetictext", "Semibold").unwrap(), &semibold));
+}
+
+#[test]
+fn a_family_per_weight_offers_its_italics_too() {
+    // Listed by name before anything is read: Synthetic Slab Bold's Italic face is Bold Italic.
+    let local = |id: usize, family: &str, style: &str| LocalFont { id, family: family.into(), style: style.into(), postscript: String::new() };
+    let mut db = FontDb::default();
+    db.add_local(vec![
+        local(0, "Synthetic Slab", "Regular"),
+        local(1, "Synthetic Slab", "Italic"),
+        local(2, "Synthetic Slab Bold", "Regular"),
+        local(3, "Synthetic Slab Bold", "Italic"),
+    ]);
+    let listed = |db: &mut FontDb| db.style_weights("Synthetic Slab");
+    let want = |v: &[(&str, u16)]| v.iter().map(|(s, w)| ((*s).to_string(), *w)).collect::<Vec<_>>();
+    assert_eq!(listed(&mut db), want(&[("Regular", 400), ("Italic", 400), ("Bold", 700), ("Bold Italic", 700)]));
+    assert_eq!(resolved(&db, "Synthetic Slab", "Bold Italic"), pair("synthetic slab bold", "Italic"), "the style drawn by that face");
+    // Faces read give their own weights: Synthetic Slab Semi Light's are 350, not the name's 300.
+    let stand_in = CRAFT_FONTS.first().map(|f| f.bytes.to_vec()).or_else(|| {
+        let mut installed = BTreeMap::new();
+        for dir in system_font_dirs() {
+            scan_dir(&dir, 0, &mut installed);
+        }
+        installed.values().flat_map(|(_, v)| v).find_map(|p| std::fs::read(&p.path).ok())
+    });
+    let Some(bytes) = stand_in.map(Arc::new) else {
+        eprintln!("skipping the read faces: no font to stand in");
+        return;
+    };
+    let face = |family: &str, style: &str, weight: u16, italic: bool| {
+        let mut f = Face::from_bytes(FontBytes::Shared(bytes.clone()), 0, Some(family), Some(style)).unwrap();
+        f.instances.clear();
+        (f.weight, f.italic) = (weight, italic);
+        f
+    };
+    let mut db = FontDb::default();
+    db.add(face("Synthetic Slab", "Regular", 400, false));
+    db.add(face("Synthetic Slab Semi Light", "Regular", 350, false));
+    db.add(face("Synthetic Slab Semi Light", "Italic", 350, true));
+    assert_eq!(listed(&mut db), want(&[("Semi Light", 350), ("Semi Light Italic", 350), ("Regular", 400)]));
 }

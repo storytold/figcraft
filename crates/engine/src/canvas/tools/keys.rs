@@ -1,4 +1,4 @@
-use super::{Document, Gesture, Node, NodeId, Overlay, Point, PointerEvent, PointerKind, Result, Session, ShapeHandle, ToolId, json, textedit};
+use super::{Document, Gesture, NodeId, Overlay, Point, PointerEvent, PointerKind, Result, Session, ShapeHandle, ToolId, json, textedit};
 
 impl Session {
     /// Keys the current mode handles before menu shortcuts (vector edit mode's tools and point
@@ -58,6 +58,14 @@ impl Session {
     /// frame's. Boolean groups are hit by their results ([`crate::booleans::result_outline`]); in
     /// outline mode shapes only on their outlines.
     pub fn hit(&self, doc: &Document, page: NodeId, p: Point, tol: f64) -> Option<NodeId> {
+        self.hit_pick(doc, page, p, tol, false)
+    }
+
+    /// [`Session::hit`] for a pick (a press, a hover, a right-click) with Cmd/Ctrl held when
+    /// `deep`: it reaches through a nested frame, component or instance where that has no
+    /// visible fill (see [`figcraft_doc::geometry::HitOpts::deep`]).
+    pub fn hit_pick(&self, doc: &Document, page: NodeId, p: Point, tol: f64, deep: bool) -> Option<NodeId> {
+        let opts = figcraft_doc::geometry::HitOpts { deep, ..Default::default() };
         let sel = self.selection();
         let result = crate::booleans::result_outline(doc, &sel);
         let focus = self.ds().ok().and_then(crate::DocState::focused);
@@ -68,8 +76,8 @@ impl Session {
             return figcraft_doc::geometry::hit_outlines(doc, focus.unwrap_or(page), p, tol, Some(&result), also);
         }
         match focus {
-            Some(f) => figcraft_doc::geometry::hit_in(doc, f, p, tol, Some(&result)),
-            None => doc.hit_test(page, p, tol, Some(&result)),
+            Some(f) => figcraft_doc::geometry::hit_in_opts(doc, f, p, tol, Some(&result), opts),
+            None => figcraft_doc::geometry::hit_leaf_opts(doc, page, p, tol, Some(&result), opts),
         }
     }
 
@@ -84,9 +92,14 @@ impl Session {
         if self.tool.busy() {
             return refuse("finish the drag first");
         }
+        // The crosshair the arrows moved goes with the placement, which lands on it when no point
+        // is given.
+        let crosshair = self.crosshair();
+        self.tool.place_at = None;
         let v = &self.ds()?.view;
-        let (c, zoom) = (at.unwrap_or(Point::new(v.cx, v.cy)), v.zoom);
-        let (w, h) = tool.click_size();
+        let (c, zoom) = (at.or(crosshair).unwrap_or(Point::new(v.cx, v.cy)), v.zoom);
+        // The board Shapes tool centres its own shape on the press; the others get half a click's size.
+        let (w, h) = if matches!(tool, ToolId::BoardShape) { (0.0, 0.0) } else { tool.click_size() };
         let ev = |kind| PointerEvent::at(kind, c.x - w / 2.0, c.y - h / 2.0, zoom);
         let r = self.pointer(&ev(PointerKind::Down)).and_then(|()| self.pointer(&ev(PointerKind::Up)));
         if r.is_err() {
@@ -111,6 +124,16 @@ impl Session {
             self.tool.overlay = Overlay::default();
             return self.cancel_interaction();
         }
+        // The placement crosshair goes first; the tool stays. One left on another page or
+        // document goes quietly.
+        let shown = self.crosshair().is_some();
+        self.tool.place_at = None;
+        if shown {
+            if let Ok(ds) = self.ds_mut() {
+                ds.revision += 1;
+            }
+            return Ok(());
+        }
         if self.end_origin_edit() {
             return Ok(());
         }
@@ -131,21 +154,9 @@ impl Session {
             self.ds_mut()?.focus = None;
             return Ok(());
         }
-        // Escape selects the parent, then nothing.
-        let doc = self.doc()?;
-        let parents: Vec<NodeId> =
-            sel.iter().filter_map(|i| doc.node(*i).and_then(|n| n.parent)).filter(|p| !doc.node(*p).is_some_and(Node::is_page)).collect();
-        if !parents.is_empty() {
-            let mut uniq = Vec::new();
-            for p in parents {
-                if !uniq.contains(&p) {
-                    uniq.push(p);
-                }
-            }
-            self.set_selection(uniq);
-        } else {
-            self.set_selection(vec![]);
-        }
+        // Escape clears the selection whatever its nesting (measured in Figma: it never selects the
+        // parent).
+        self.set_selection(vec![]);
         Ok(())
     }
 
@@ -174,6 +185,14 @@ impl Session {
     /// Snapshot of tool state for the UI / inspect.
     pub fn tool_info(&self) -> serde_json::Value {
         let shapes: Vec<serde_json::Value> = self.shape_handles().into_iter().map(|(h, at)| json!({"handle": h, "at": at})).collect();
-        json!({"tool": self.tool.tool.id(), "busy": self.tool.busy(), "overlay": self.tool.overlay, "arcHandles": self.arc_handles(), "shapeHandles": shapes})
+        let crosshair = self.crosshair().map(|p| [p.x, p.y]);
+        json!({"tool": self.tool.tool.id(), "busy": self.tool.busy(), "overlay": self.tool.overlay, "arcHandles": self.arc_handles(), "shapeHandles": shapes, "crosshair": crosshair})
+    }
+
+    /// The placement crosshair, while the document and page it was shown on are the ones in
+    /// front (`ToolState::place_at`).
+    pub fn crosshair(&self) -> Option<Point> {
+        let here = self.ds().ok().map(|d| (d.uid, d.page));
+        self.tool.place_at.filter(|_| here.is_some() && here == self.tool.place_on)
     }
 }

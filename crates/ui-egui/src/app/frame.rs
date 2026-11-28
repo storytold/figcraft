@@ -72,6 +72,44 @@ impl FigApp {
         }
     }
 
+    /// Whether the colour picker is being used right now for the selected layers' own look (a
+    /// paint, an effect, a text range or Selection colors): a drag on its value controls (the
+    /// palette, the hue and alpha sliders, a number field, the gradient bar and its stops), the
+    /// keyboard in one of its fields, the eyedropper sampling, or a drag of the canvas handles it
+    /// owns (gradient stops and handles, image crop). Only then does the canvas hide the selection
+    /// frame and a text's coloured selection, so the colour being chosen shows against the page.
+    /// Merely having the picker open, or pressing a button, a menu or a swatch, leaves it visible.
+    pub(crate) fn picker_hides_selection(&self, ctx: &egui::Context) -> bool {
+        let edits_selection = matches!(
+            self.ui.picker,
+            Some(
+                crate::colorpicker::PickerTarget::Paint { .. }
+                    | crate::colorpicker::PickerTarget::Effect { .. }
+                    | crate::colorpicker::PickerTarget::TextRange { .. }
+                    | crate::colorpicker::PickerTarget::SelectionColor { .. }
+            )
+        );
+        if !edits_selection {
+            return false;
+        }
+        // The picker draws after the canvas, so its card comes from the previous frame.
+        let card = self.ui.picker_popover.as_ref();
+        // A drag changes the colour live; a press alone does not. Buttons, menus, swatches and the
+        // paint-type switches are clicks and must not hide the selection while held (they used to,
+        // which flickered it). Dragging the card by its header moves the popover, not the colour.
+        let header_drag = card.map(|c| c.header_drag_id());
+        let dragging = ctx.dragged_id().is_some_and(|id| header_drag != Some(id))
+            && ctx.input(|i| i.pointer.any_down() && i.pointer.press_origin().is_some_and(|p| card.is_some_and(|c| c.rect.contains(p))));
+        // A value field keeps the keyboard after its click: hide until focus leaves the picker.
+        // Only a text edit counts: every clicked control takes focus in egui, and a focused
+        // palette square or swatch must not keep the selection hidden after the drag.
+        let typing = ctx.text_edit_focused()
+            && ctx
+                .memory(|m| m.focused())
+                .is_some_and(|id| ctx.read_response(id).is_some_and(|r| card.is_some_and(|c| c.rect.contains_rect(r.rect))));
+        dragging || typing || self.session.tool.pick_only || crate::handles::gradient_dragging(ctx) || crate::handles::crop_dragging(ctx)
+    }
+
     /// Leaving Design ends a pen path as Escape does and goes back to Move: Prototype and Inspect
     /// don't draw (#307). Checked as the frame starts (the control channel) and after the panels
     /// and shortcuts (the mode switcher, the tabs, Shift+E/Shift+D), before the canvas sees more.
@@ -243,6 +281,22 @@ impl FigApp {
                     }
                 }
                 ui.add_space(4.0);
+            }
+        });
+    }
+
+    /// The way back from a minimized interface by mouse: a small Panels button at the top left of
+    /// the canvas, where the navigation bar was (the shortcut works too).
+    pub(super) fn expand_button(&mut self, ctx: &egui::Context, at: egui::Pos2) {
+        use a11y::Tip as _;
+        let t = theme::Tokens::get(ctx);
+        egui::Area::new(egui::Id::unique("expand_interface")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::click());
+            let resp = resp.tip(i18n::tr("Expand the interface"));
+            ui.painter().rect(r, 8.0, t.panel, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            icons::paint(ui.painter(), r.shrink(8.0), icons::Icon::Panels, t.icon);
+            if resp.clicked() {
+                self.run("view.minimize", serde_json::json!({}));
             }
         });
     }

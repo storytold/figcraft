@@ -46,7 +46,7 @@ fn without_cmd_an_end_keeps_snapping_to_a_side() {
     let end = *drawn(&s, k).last().unwrap();
     drag_end(&mut s, end, Point::new(650.0, 25.0), false);
     assert_eq!(connector(&s, k).to, End::Node { node: b, side: Side::Right, at: None });
-    assert!(near(*drawn(&s, k).last().unwrap(), Point::new(700.0, 50.0)));
+    assert!(near(*drawn(&s, k).last().unwrap(), Point::new(700.0 + figcraft_doc::END_GAP, 50.0)), "END_GAP outside the side");
 }
 
 #[test]

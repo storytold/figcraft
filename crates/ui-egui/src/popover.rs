@@ -51,6 +51,9 @@ pub enum Open {
     /// Its right edge on `x` (the right panel's left edge), its top on `y` (the button's top),
     /// lifted when that would run its bottom past the screen's bottom.
     Anchor(Pos2),
+    /// [`Open::Anchor`] in a mirrored (right-to-left) window: its left edge on `x` (the Design
+    /// panel's right edge).
+    AnchorMirrored(Pos2),
     /// Its top-left exactly here.
     At(Pos2),
 }
@@ -121,6 +124,11 @@ impl Popover {
         }
     }
 
+    /// The id of the header's drag handle: a drag there moves the panel, not a value in it.
+    pub fn header_drag_id(&self) -> Id {
+        self.id.with("drag")
+    }
+
     /// `width` points wide instead of [`WIDTH`].
     pub fn width(mut self, width: f32) -> Self {
         self.width = width.max(1.0);
@@ -167,6 +175,7 @@ impl Popover {
                 let p = match open {
                     Open::At(p) => p,
                     Open::Anchor(a) => open_pos(a, self.size, screen),
+                    Open::AnchorMirrored(a) => open_pos(a, self.size, screen) + vec2(self.size.x, 0.0),
                 };
                 clamp(p, self.size, screen)
             }
@@ -177,6 +186,7 @@ impl Popover {
                 ui.set_invisible();
                 ctx.request_repaint();
             }
+            ui.set_max_height(max_height(screen));
             // The panel is painted into a place kept before the content: the shadow and the fill
             // go under it, though its size is only known once the slot is laid out.
             let bg = ui.painter().add(egui::Shape::Noop);
@@ -257,13 +267,13 @@ fn header_text(t: Tokens, dark: bool) -> Color32 {
     if dark { t.menu_text } else { t.text }
 }
 
-/// The X: a 24-point button, its icon inset 6 (the colour picker's header).
+/// The X: a 24-point button, its cross 16 points like every 24 pt icon button (the colour picker's header).
 fn close_button(ui: &mut Ui, id: Id, rect: Rect, dark: bool, t: Tokens) -> bool {
     let resp = ui.interact(rect, id, Sense::click()).tip(tr("Close"));
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), if dark { Color32::from_white_alpha(20) } else { t.hover });
     }
-    icons::paint(ui.painter(), rect.shrink(6.0), Icon::Close, if dark { t.menu_text } else { t.icon });
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(rect), Icon::Close, if dark { t.menu_text } else { t.icon });
     resp.clicked()
 }
 
@@ -274,6 +284,22 @@ fn open_pos(anchor: Pos2, size: Vec2, screen: Rect) -> Pos2 {
     let bottom = screen.max.y - SCREEN_GAP;
     let y = if anchor.y + size.y > bottom { bottom - size.y } else { anchor.y };
     pos2(anchor.x - size.x, y)
+}
+
+/// The left x of a window `width` wide that floats beside the Design panel (`panel`, its x range)
+/// `gap` out over the canvas: left of the panel, or right of it in a mirrored window.
+pub fn beside_panel(panel: egui::Rangef, width: f32, gap: f32, mirrored: bool) -> f32 {
+    if mirrored { panel.max + gap } else { panel.min - gap - width }
+}
+
+/// The height a popover's content is offered: the screen's, less [`EDGE`] above and below.
+///
+/// egui offers an area the size it had last frame, so content that fills what it is offered (a
+/// scrolling list) could only ever shrink: a search that narrowed a picker's list left it a few
+/// rows high after the search was cleared (#2043). The list takes what it needs of this, and the
+/// placement keeps the panel on the screen.
+pub(crate) fn max_height(screen: Rect) -> f32 {
+    (screen.height() - 2.0 * EDGE).max(HEADER_H)
 }
 
 /// Keeps the panel inside the screen: whole when it fits, its top-left corner when it doesn't.

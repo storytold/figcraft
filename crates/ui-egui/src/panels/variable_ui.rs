@@ -30,6 +30,9 @@ enum Target {
     Proto(crate::proto_editor::VarSlot),
     /// Bind it to `field` of the shared style `style`.
     Style { style: String, field: String },
+    /// Bind it to the weight of the shared text style `style`: a string variable names the face
+    /// (`fontStyle`), a number one sets the weight (`fontWeight`).
+    StyleWeight { style: String },
 }
 
 /// The open variable picker: what it does, the variable type (None: any), where it opens.
@@ -197,6 +200,13 @@ pub fn open_style(ui: &Ui, style: &str, field: &str, kind: VariableType, at: Pos
     ui.data_mut(|d| d.insert_temp(picker_id(), Picker { target, kind: Some(kind), at }));
 }
 
+/// Open the picker at `at` to bind a string (face name) or number (weight) variable to the weight of
+/// the shared text style `style`.
+pub fn open_style_weight(ui: &Ui, style: &str, at: Pos2) {
+    let target = Target::StyleWeight { style: style.to_string() };
+    ui.data_mut(|d| d.insert_temp(picker_id(), Picker { target, kind: None, at }));
+}
+
 /// Where the open picker is on screen (clicks in it don't close what opened it).
 pub fn picker_rect(ctx: &egui::Context) -> Option<Rect> {
     picker_open(ctx).then(|| ctx.memory(|m| m.area_rect(Id::unique("variable_picker_area")))).flatten()
@@ -343,6 +353,31 @@ pub fn bindable(
     bind_button(ui, area, ids, field, kind);
 }
 
+/// In a paint field's text area `text_r`: the chip of the colour variable `name` that `key` of
+/// `ids` is bound to (its last path part, the whole name on hover) and a button that detaches it.
+pub fn paint_chip(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], key: &str, name: &str, text_r: Rect, id: Id) {
+    let t = Tokens::get(ui.ctx());
+    let r = ui.max_rect();
+    let chip = Rect::from_min_max(pos2(text_r.min.x - 2.0, r.min.y + 3.0), pos2(text_r.max.x - 20.0, r.max.y - 3.0));
+    ui.painter().rect_filled(chip, CornerRadius::same(4), t.hover);
+    ui.painter().rect_stroke(chip, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let short = name.rsplit('/').next().unwrap_or(name).to_string();
+    ui.painter().with_clip_rect(chip.shrink2(vec2(5.0, 0.0))).text(
+        pos2(chip.min.x + 5.0, r.center().y),
+        Align2::LEFT_CENTER,
+        short,
+        regular(11.0),
+        t.text,
+    );
+    let _ = ui.interact(chip, id, Sense::hover()).on_hover_text(name);
+    let dr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
+    let dresp = ui.interact(dr, id.with("detach"), Sense::click()).tip(tr("Detach variable"));
+    icons::paint(ui.painter(), dr.shrink(3.0), Icon::Detach, t.icon_secondary);
+    if dresp.clicked() {
+        app.run("variable.bind", json!({"ids": ids, "field": key, "variable": null}));
+    }
+}
+
 /// A variable button at the right end of `rect` while the pointer is over it: opens the picker
 /// to bind `field` of `ids`.
 pub fn bind_button(ui: &mut Ui, rect: Rect, ids: &[NodeId], field: &str, kind: VariableType) {
@@ -398,7 +433,7 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
     let (scope, own) = match &p.target {
         Target::Bind { ids, field } => (ids.first().and_then(|id| figcraft_engine::cmd::variables::field_scope(&doc, *id, field)), None),
         Target::Alias { variable, .. } => (None, doc.variables.get_by_id(variable)),
-        Target::Proto(_) | Target::Style { .. } => (None, None),
+        Target::Proto(_) | Target::Style { .. } | Target::StyleWeight { .. } => (None, None),
     };
     // A style's fields offer variables scoped to one of the properties the field sets.
     let style_scopes = match &p.target {
@@ -406,7 +441,8 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
         _ => None,
     };
     // Prototypes and styles use this file's variables.
-    let local_only = matches!(p.target, Target::Proto(_) | Target::Style { .. });
+    let local_only = matches!(p.target, Target::Proto(_) | Target::Style { .. } | Target::StyleWeight { .. });
+    let weight_target = matches!(p.target, Target::StyleWeight { .. });
     let field = match &p.target {
         Target::Bind { field, .. } => Some(field.as_str()),
         _ => None,
@@ -417,12 +453,21 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
             && (q.is_empty() || v.name.to_lowercase().contains(&q))
             && scope.is_none_or(|s| v.in_scope(s))
             && style_scopes.is_none_or(|list| list.iter().any(|s| v.in_scope(s)))
+            && (!weight_target
+                || match v.kind {
+                    VariableType::String => v.in_scope("FONT_STYLE"),
+                    VariableType::Number => v.in_scope("FONT_WEIGHT"),
+                    _ => false,
+                })
             && (lib.is_some() || own.is_none_or(|o| figcraft_engine::cmd::variables::alias_target(&doc.variables, o, &v.id).is_ok()))
     };
     let groups = groups(&doc, &libs, keep);
     let mut chosen: Option<Pick> = None;
     let mut close = false;
     let area = egui::Area::new(Id::unique("variable_picker_area")).order(egui::Order::Foreground).fixed_pos(p.at + vec2(0.0, 4.0)).show(ctx, |ui| {
+        // The whole screen's height, not last frame's, so the list grows back after a search (#2043);
+        // egui keeps the area on the screen.
+        ui.set_max_height(crate::popover::max_height(ctx.content_rect()));
         egui::Frame::NONE.fill(t.menu).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
             ui.set_width(240.0);
             ui.horizontal(|ui| {
@@ -490,6 +535,11 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
             }
             (Target::Proto(slot), _) => crate::proto_editor::pick_variable(app, slot, &pick.id),
             (Target::Style { style, field }, _) => {
+                app.run("style.bind", json!({"style": style, "field": field, "variable": pick.id}));
+            }
+            (Target::StyleWeight { style }, _) => {
+                let number = app.session.ds().is_ok_and(|d| d.doc.variables.get_by_id(&pick.id).is_some_and(|v| v.kind == VariableType::Number));
+                let field = if number { "fontWeight" } else { "fontStyle" };
                 app.run("style.bind", json!({"style": style, "field": field, "variable": pick.id}));
             }
         }

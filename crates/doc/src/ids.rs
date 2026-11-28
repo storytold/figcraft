@@ -14,6 +14,8 @@
 //! space 0. The session server accepts a new object only with an id in its creator's space or
 //! space 0, so two people never make the same id.
 
+use std::collections::BTreeSet;
+
 use crate::{CollectionId, Document, ModeId, NodeId, StyleId, VariableId};
 
 /// What style ids start with.
@@ -74,25 +76,42 @@ impl Document {
 
     /// A new style id.
     pub fn new_style_id(&mut self) -> StyleId {
-        let taken: Vec<u64> = self.styles.iter().filter_map(|s| id_number(&s.id, STYLE_ID_PREFIX)).collect();
+        self.new_style_id_avoiding(&BTreeSet::new())
+    }
+
+    /// A new style id that is none of `avoid` either: ids of styles about to come in with a file
+    /// being imported.
+    pub fn new_style_id_avoiding(&mut self, avoid: &BTreeSet<StyleId>) -> StyleId {
+        let taken: Vec<u64> = self.styles.iter().map(|s| &s.id).chain(avoid).filter_map(|id| id_number(id, STYLE_ID_PREFIX)).collect();
         if let Some(n) = self.session_number(taken) {
             return format!("{STYLE_ID_PREFIX}{n}");
         }
         (self.styles.len() + 1..)
             .map(|k| format!("{STYLE_ID_PREFIX}{k}"))
-            .find(|id| self.style(id).is_none())
+            .find(|id| self.style(id).is_none() && !avoid.contains(id))
             .unwrap_or_else(|| format!("{STYLE_ID_PREFIX}0"))
     }
 
     /// A new variable id.
     pub fn new_variable_id(&mut self) -> VariableId {
-        let taken: Vec<u64> = self.variables.variables.iter().filter_map(|v| id_number(&v.id, VARIABLE_ID_PREFIX)).collect();
+        self.new_variable_id_avoiding(&BTreeSet::new())
+    }
+
+    /// A new variable id that is none of `avoid` either (see [`Self::new_style_id_avoiding`]).
+    pub fn new_variable_id_avoiding(&mut self, avoid: &BTreeSet<VariableId>) -> VariableId {
+        let taken = self.variables.variables.iter().map(|v| &v.id).chain(avoid).filter_map(|id| id_number(id, VARIABLE_ID_PREFIX)).collect();
         self.new_numbered_id(VARIABLE_ID_PREFIX, taken)
     }
 
     /// A new variable collection id.
     pub fn new_collection_id(&mut self) -> CollectionId {
-        let taken: Vec<u64> = self.variables.collections.iter().filter_map(|c| id_number(&c.id, COLLECTION_ID_PREFIX)).collect();
+        self.new_collection_id_avoiding(&BTreeSet::new())
+    }
+
+    /// A new variable collection id that is none of `avoid` either (see
+    /// [`Self::new_style_id_avoiding`]).
+    pub fn new_collection_id_avoiding(&mut self, avoid: &BTreeSet<CollectionId>) -> CollectionId {
+        let taken = self.variables.collections.iter().map(|c| &c.id).chain(avoid).filter_map(|id| id_number(id, COLLECTION_ID_PREFIX)).collect();
         self.new_numbered_id(COLLECTION_ID_PREFIX, taken)
     }
 

@@ -68,7 +68,12 @@ impl Backend for Store {
                 Err(err) => log::error!("file {file}: a change couldn't be logged: {err}"),
             }
         }
-        log.entries += journal.len();
+        // A refusal changes nothing in the document: it counts toward the log's size (bytes), but
+        // not toward the entries that make a snapshot rewrite worthwhile.
+        log.entries += journal.iter().filter(|j| !matches!(j, figcraft_collab::Journal::Refused { .. })).count();
+        if journal.iter().any(super::is_branch_journal) {
+            log.branch_dirty = true;
+        }
         log.dirty = true;
         e.meta.updated = now();
         if log.entries >= after || log.bytes + log.pending.len() as u64 >= max_bytes {
@@ -90,10 +95,10 @@ impl Backend for Store {
         let compact = self.files.get_mut(file).is_some_and(|entry| {
             let snapshot_seq = entry.meta.seq;
             entry.log.as_mut().is_some_and(|log| {
-                // Issued client ids and refusals are durable in the log; only edits need a
-                // new image-bearing snapshot. Still try a snapshot if syncing the log failed.
+                // Issued client ids and refusals are durable in the log; edits (on main or
+                // shared branches) need a new snapshot. Still try a snapshot if syncing failed.
                 synced = flush_log(file, log).is_ok();
-                !synced || (log.dirty && server.seq() > snapshot_seq)
+                !synced || (log.dirty && (server.seq() > snapshot_seq || log.branch_dirty))
             })
         });
         if compact {
@@ -276,6 +281,8 @@ impl Backend for Store {
             LibraryReq::Actions => self.library_actions(file).map_or_else(failed, LibraryReply::Actions),
             LibraryReq::ReportAssets(a) => self.report_assets(file, a).map_or_else(failed, |()| LibraryReply::Noted),
             LibraryReq::Assets => self.library_assets(file).map_or_else(failed, LibraryReply::Assets),
+            LibraryReq::ReportAssetActions(a) => self.report_asset_actions(file, a).map_or_else(failed, |()| LibraryReply::Noted),
+            LibraryReq::AssetActions => self.library_asset_actions(file).map_or_else(failed, LibraryReply::AssetActions),
         }
     }
 
