@@ -246,6 +246,11 @@ fn tail_message() -> Kv<'static> {
             "Grid",
             vec![("size", xy(100.0, 50.0)), ("transform", at(300.0, 400.0)), ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)]))],
         ),
+        // Its cells as a file may save them: one a pixel past its neighbour, one without a size.
+        table_cell(140, "!", "Cell A", (0.0, 0.0), Some((50.0, 25.0)), "A"),
+        table_cell(141, "\"", "Cell B", (49.0, 0.0), Some((52.0, 25.0)), "B"),
+        table_cell(142, "#", "Cell C", (0.0, 25.0), None, "C"),
+        table_cell(143, "$", "Cell D", (50.0, 26.0), Some((50.0, 24.0)), "D"),
         node(
             39,
             Some((1, ")")),
@@ -260,7 +265,19 @@ fn tail_message() -> Kv<'static> {
     o(vec![("nodeChanges", arr(nodes)), ("blobs", arr(blobs.into_iter().map(|b| o(vec![("bytes", Kv::Bytes(b))])).collect()))])
 }
 
-fn tail_canvas() -> Vec<u8> {
+/// A cell of the "Grid" table (37): grey, outlined, holding `text`.
+fn table_cell(id: u64, pos: &str, name: &str, (x, y): (f64, f64), size: Option<(f64, f64)>, text: &str) -> Kv<'static> {
+    let mut more = vec![
+        ("transform", at(x, y)),
+        ("fillPaints", arr(vec![solid(0.9, 0.9, 0.9)])),
+        ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+        ("textData", text_data(text)),
+    ];
+    more.extend(size.map(|(w, h)| ("size", xy(w, h))));
+    node(id, Some((37, pos)), "TABLE_CELL", name, more)
+}
+
+pub(in crate::fig) fn tail_canvas() -> Vec<u8> {
     canvas(&schema(), &tail_message())
 }
 
@@ -740,6 +757,70 @@ fn other_layer_kinds_import_as_the_closest_layers() {
     }
 }
 
+/// A table's cells as frames on its grid: the one saved a pixel off, the one without a size and
+/// the one past its neighbour take their row and column, and none overlaps another; their paint
+/// and text stay.
+#[test]
+fn table_cells_import_on_their_tables_grid() {
+    let (doc, warnings) = import(&tail_canvas(), "Tail").unwrap();
+    let grid = named(&doc, "Grid");
+    let cells: Vec<&figcraft_doc::Node> = grid.children.iter().map(|c| doc.node(*c).unwrap()).collect();
+    assert_eq!(cells.len(), 4);
+    let bounds: Vec<figcraft_doc::geom::Rect> = cells.iter().map(|c| doc.world_bounds(c.id).unwrap()).collect();
+    for (i, (cell, b)) in cells.iter().zip(&bounds).enumerate() {
+        assert!(b.width() > 0.0 && b.height() > 0.0, "{}: {b:?}", cell.name);
+        assert_eq!((cell.fills.len(), cell.strokes.len()), (1, 1), "{}", cell.name);
+        let text = doc.node(cell.children[0]).unwrap();
+        assert!(matches!(&text.kind, NodeKind::Text(t) if cell.name.ends_with(t.characters.as_str())), "{}", cell.name);
+        assert!(text.width <= cell.width && text.height <= cell.height, "{}: the text stays inside", cell.name);
+        for other in &bounds[i + 1..] {
+            assert!(b.intersect(*other).area() < 1e-9, "{}: {b:?} overlaps {other:?}", cell.name);
+        }
+    }
+    // Cells in one column share their left and right edges; cells in one row their top and bottom.
+    let by_name = |n: &str| bounds[cells.iter().position(|c| c.name == n).unwrap()];
+    let (a, b, c, d) = (by_name("Cell A"), by_name("Cell B"), by_name("Cell C"), by_name("Cell D"));
+    assert_eq!((a.x0, a.x1), (c.x0, c.x1));
+    assert_eq!((b.x0, b.x1), (d.x0, d.x1));
+    assert_eq!((a.y0, a.y1), (b.y0, b.y1));
+    assert_eq!((c.y0, c.y1), (d.y0, d.y1));
+    assert_eq!((a.x1, a.y1), (b.x0, c.y0), "the tracks meet without a gap");
+    assert!(warnings.iter().any(|w| w.starts_with("table cells were snapped")), "{warnings:?}");
+}
+
+/// Cells the grid can't be told from keep their saved bounds, and hostile ones never panic.
+#[test]
+fn table_cells_that_cannot_be_gridded_keep_their_saved_bounds() {
+    let with_cells = |cells: Vec<Kv<'static>>| {
+        let mut message = tail_message();
+        let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+        nodes.retain(|n| n.get("type").and_then(Kv::str) != Some("TABLE_CELL"));
+        nodes.extend(cells);
+        // Mapped as decoded, so values the encoder refuses (NaN) reach the mapping too.
+        let (json, mut warnings, networks) = map::to_rest(&message, "Tables", crate::rest::MAX_NODES);
+        let (doc, more) = crate::rest::import_with_networks(&json, &crate::rest::no_images, networks, crate::rest::MAX_NODES).unwrap();
+        warnings.extend(more);
+        (doc, warnings)
+    };
+    // Two cells in one slot.
+    let (doc, warnings) = with_cells(vec![
+        table_cell(140, "!", "Cell A", (0.0, 0.0), Some((50.0, 25.0)), "A"),
+        table_cell(141, "\"", "Cell B", (1.0, 0.0), Some((40.0, 25.0)), "B"),
+    ]);
+    assert_eq!(named(&doc, "Cell B").width, 40.0, "kept as saved");
+    assert!(warnings.iter().any(|w| w.contains("kept their cells' saved bounds")), "{warnings:?}");
+    // Non-finite and huge values, and a single sizeless cell with a sizeless table.
+    for (x, size) in [(f64::NAN, Some((10.0, 10.0))), (f64::INFINITY, None), (1e300, Some((1e300, 1e300))), (0.0, Some((f64::NAN, -1.0)))] {
+        let _ = with_cells(vec![table_cell(140, "!", "Cell A", (x, 0.0), size, "A"), table_cell(141, "\"", "Cell B", (0.0, 25.0), None, "B")]);
+    }
+    // A table as wide as the cell budget allows and past it.
+    for n in [64u64, map::MAX_TABLE_CELLS as u64 + 1] {
+        let cells =
+            (0..n).map(|i| table_cell(10_000 + i, "!", "Cell", ((i % 64) as f64 * 10.0, (i / 64) as f64 * 10.0), Some((10.0, 10.0)), "x")).collect();
+        let _ = with_cells(cells);
+    }
+}
+
 /// Connectors saved without their path: straight to the point on the layer, elbowed and curved
 /// from the side the end's point lies on, as a board connector would run.
 #[test]
@@ -854,15 +935,37 @@ fn a_labelled_connector_without_a_snapshot_keeps_its_label() {
     assert!(matches!(says.kind, NodeKind::Frame), "{:?}", says.kind);
     assert!(says.fills.is_empty() && says.strokes.is_empty(), "the frame only holds the line and the label");
     let kids: Vec<&figcraft_doc::Node> = says.children.iter().map(|c| doc.node(*c).unwrap()).collect();
-    assert_eq!(kids.len(), 2);
+    assert_eq!(kids.len(), 3, "the line, the label's background pill and the label");
     assert!(matches!(kids[0].kind, NodeKind::Vector { .. }) && kids[0].strokes.len() == 1, "the line keeps its stroke");
-    assert!(matches!(&kids[1].kind, NodeKind::Text(t) if t.characters == "yes"), "{:?}", kids[1].kind);
-    assert_eq!(kids[1].fills.len(), 1, "black when the connector gives no paint");
+    assert!(matches!(&kids[2].kind, NodeKind::Text(t) if t.characters == "yes"), "{:?}", kids[2].kind);
+    assert_eq!(kids[2].fills.len(), 1, "black when the connector gives no paint");
     // Centred on the line's middle, (200, 650) on the page.
-    let label = doc.world_transform(kids[1].id) * figcraft_doc::geom::Point::new(kids[1].width / 2.0, kids[1].height / 2.0);
+    let centre = |n: &figcraft_doc::Node| doc.world_transform(n.id) * figcraft_doc::geom::Point::new(n.width / 2.0, n.height / 2.0);
+    let label = centre(kids[2]);
     assert!((label.x - 200.0).abs() < 1e-6 && (label.y - 650.0).abs() < 1e-6, "{label:?}");
-    assert!(warnings.iter().any(|w| w.contains("centred on the line")), "{warnings:?}");
+    // The pill sits under the label, centred on it, painted, fully rounded and padded around it.
+    let pill = kids[1];
+    assert!(matches!(pill.kind, NodeKind::Rectangle), "{:?}", pill.kind);
+    assert_eq!(pill.fills.len(), 1);
+    let middle = centre(pill);
+    assert!((middle.x - label.x).abs() < 1e-6 && (middle.y - label.y).abs() < 1e-6, "{middle:?}");
+    assert!(pill.height > kids[2].height, "padded top and bottom");
+    assert!(pill.width < kids[2].width, "as wide as the text, not its 200-unit box");
+    assert!(pill.corners.radii.iter().all(|r| (r - pill.height / 2.0).abs() < 1e-6), "{:?}", pill.corners);
+    assert!(warnings.iter().any(|w| w.contains("centred on the line") && w.contains("pill")), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("without their background")), "every label got its pill: {warnings:?}");
     assert!(!warnings.iter().any(|w| w.contains("connector labels were skipped")), "{warnings:?}");
+    // With no room left in the layer budget the label stays bare, and the note says so.
+    fn layers(v: &Value) -> usize {
+        1 + v["children"].as_array().map_or(0, |kids| kids.iter().map(layers).sum())
+    }
+    let (full, _, _) = map::to_rest(&message, "Labels", crate::rest::MAX_NODES);
+    let (json, warnings, _) = map::to_rest(&message, "Labels", layers(&full["document"]) - 1);
+    let frame = json["document"]["children"][0]["children"].as_array().unwrap().iter().find(|l| l["name"] == "Says").expect("connector frame");
+    assert_eq!(layers(&json["document"]), layers(&full["document"]) - 1, "everything else was mapped");
+    assert_eq!(frame["children"].as_array().map(Vec::len), Some(2), "{frame}");
+    assert!(warnings.iter().any(|w| w.contains("without their background")), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("pill")), "{warnings:?}");
 }
 
 #[test]

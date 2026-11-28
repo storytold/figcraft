@@ -89,6 +89,19 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Landed (2026-10-26):** `.fig` import reads vector-region fill stacks; vector editing and path
   operations retain them with their source paint coordinates. `.fig` export writes them since
   2026-11-12 (#2302); a region's kept paint frame is left out, with a warning. Evidence: `crates/format/src/fig/tail_tests.rs`, `crates/engine/src/shapebuilder_region_paints_tests.rs`.
+- **Fixed (2026-11-28):** a connector label without a saved snapshot sits on a white, fully
+  rounded stand-in pill (padded by half the font size across and a quarter down, sized from an
+  estimate of the text's width), no longer bare on the line; at the layer budget the rest stay
+  bare and the warning says so. Table cells are put back on their table's grid: offsets within
+  2 px share a row or column, so a cell without a size or a pixel off its neighbour takes its
+  track and no two cells overlap (fills, strokes and text kept, the text keeps its inset); a table
+  whose grid can't be told (rotated or non-finite cells, two cells in one slot, over 4,096 cells or
+  512 tracks) keeps its saved bounds with a warning. The grid comes from cell geometry only: no
+  row or column fields of the file are read. Both are FigCraft-side passes over the mapped JSON
+  (`crates/format/src/fig/map.rs`); the shared mapper in craft-libs is unchanged. Vector-region
+  style and variable links were already resolved, falling back to the region's own paint
+  (`tail_tests::vector_region_*`). Evidence: `tail_tests::table_cells_*`,
+  `tail_tests::a_labelled_connector_without_a_snapshot_keeps_its_label`.
 - **Fixed (2026-10-29, #1236):** imported text keeps the line breaks the file saved with it
   (`derivedTextData`), so a font whose advances differ slightly from the file's (another build
   of the family, a stand-in) no longer wraps a word early or splits one in a narrow box. The
@@ -172,6 +185,16 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   family (Inter), left-aligned text; real files, other fonts, effects and component resolution are
   still unmeasured (`crates/text/src/metrics_tests.rs`, and a local check over such documents in
   `crates/engine/src/text_metrics_local_tests.rs`).
+- **Harness (2026-11-28):** `crates/format/src/fig/fidelity.rs` compares two documents layer by
+  layer (layer counts, box L∞ error, text, fill, stroke and opacity match rates, warnings) and two
+  renders pixel by pixel (SSD, RMSE, PSNR, luminance SSIM, channels past a tolerance), printing
+  JSON and a Markdown scorecard. A built-in corpus (components, instances, auto layout, text runs,
+  vectors with regions, connectors with and without snapshots, a table with cells, generated
+  documents with effects) round-trips through `.fig` with every layer matched and no new
+  warnings, and a rendered scene comes back pixel for pixel (`fidelity_tests`,
+  `crates/render/src/fig_round_trip_tests.rs`). `FIGCRAFT_FIG_CORPUS=<dir> cargo test -p
+  figcraft-format real_fig_corpus -- --ignored --nocapture` measures a local folder of real files
+  the same way; it has not been run on real files yet, so this gap stays open.
 - **Estimate:** 15–30 h once `.fig` or REST import of real files is available; needs files whose
   licence allows use (owner to supply or approve; never committed if not redistributable).
 
@@ -667,6 +690,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-28 | minor | Gap 1: connector labels without a saved snapshot get a stand-in background pill; table cells snap to their table's grid. Gap 3: a `.fig` fidelity and pixel-diff harness with a built-in round-trip corpus and a local real-file runner (not yet run on real files). Estimates unchanged |
 | 2026-11-28 | minor | Gap 24: code blocks from the toolbar's Text tools flyout and the `` ` `` key (`tool.codeBlock`), a language menu in the bar over a selected block, and handles on a block's left and right edges only (#2237, step 2); highlighting landed earlier the same day, so the line numbers and `.jam` import are what is missing. |
 | 2026-11-24 | minor | Gap 7: after an edit the browser converts and uploads only the redrawn areas of the canvas image to its texture, not all of it. Numbers unchanged |
 | 2026-11-24 | minor | Gap 7: a point moved in the vector editor redraws the segments that moved and their neighbours, not the vector's whole box (a full render of the view when the vector fills it). Numbers unchanged |

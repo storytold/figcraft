@@ -557,7 +557,7 @@ impl Gen {
 
 /// A random document: one or two pages of random layers, components and instances, flows and
 /// interactions.
-fn generate(seed: u64) -> Document {
+pub(super) fn generate(seed: u64) -> Document {
     let mut doc = Document::new(format!("Generated {seed}"));
     let (image, _, _) = crate::add_image(&mut doc, super::tests::png()).unwrap();
     let mut g = Gen { r: Lcg(seed.wrapping_mul(0x9E37_79B9).wrapping_add(17)), doc, image, frames: Vec::new(), layers: Vec::new() };

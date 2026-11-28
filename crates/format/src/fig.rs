@@ -26,6 +26,9 @@ mod export;
 mod export_slot_tests;
 #[cfg(test)]
 mod export_tests;
+pub mod fidelity;
+#[cfg(test)]
+mod fidelity_tests;
 #[cfg(test)]
 mod guides_tests;
 #[cfg(test)]

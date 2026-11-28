@@ -73,6 +73,8 @@ pub(super) fn to_rest(msg: &Kv, name: &str, max_nodes: usize) -> (Value, Vec<Str
 pub(super) fn to_rest_for(msg: &Kv, name: &str, max_nodes: usize, board: bool) -> (Value, Vec<String>, Vec<Option<VectorNetwork>>) {
     let options = rest::Options { max_nodes, geometry: &FigGeometry, outlined_stroke: Some(super::export::STASH), board };
     let mut mapped = rest::to_rest(msg, name, &options);
+    snap_table_cells(msg, &mut mapped.json, &mut mapped.warnings);
+    connector_label_pills(&mut mapped.json, max_nodes, &mut mapped.warnings);
     // Each network passes the importer's own checks, as the JSON's `vectorNetwork` does.
     let networks: Vec<Option<VectorNetwork>> =
         mapped.networks.into_iter().map(|n| serde_json::to_value(n?).ok().and_then(|v| crate::rest::network(&v))).collect();
@@ -82,6 +84,285 @@ pub(super) fn to_rest_for(msg: &Kv, name: &str, max_nodes: usize, board: bool) -
         uncount(&mut mapped.warnings, "connector layers import as vectors", native);
     }
     (mapped.json, mapped.warnings, networks)
+}
+
+/// Every layer of the mapped REST tree (already bounded by `max_nodes`), parents before their
+/// children, walked with an explicit stack so a deep file can't exhaust the call stack.
+fn each_tree_layer(json: &mut Value, f: &mut impl FnMut(&mut Value)) {
+    let Some(document) = json.get_mut("document") else { return };
+    let mut pending = vec![document];
+    while let Some(layer) = pending.pop() {
+        f(layer);
+        if let Some(children) = layer.get_mut("children").and_then(Value::as_array_mut) {
+            pending.extend(children.iter_mut().rev());
+        }
+    }
+}
+
+/// How many layers the mapped REST tree holds (the document and its pages included).
+fn tree_layer_count(json: &mut Value) -> usize {
+    let mut count = 0;
+    each_tree_layer(json, &mut |_| count += 1);
+    count
+}
+
+/// Note `what` once, or with its count (`what (×n)`) as the shared mapper counts its notes; none at 0.
+fn warn(what: &'static str, n: usize, warnings: &mut Vec<String>) {
+    match n {
+        0 => {}
+        1 => warnings.push(what.to_string()),
+        n => warnings.push(format!("{what} (×{n})")),
+    }
+}
+
+/// The shared mapper's warning for a label without its saved snapshot.
+const BARE_LABEL_WARNING: &str = "connector labels without a saved snapshot are centred on the line, without their background";
+/// Average advance of a glyph as a fraction of the font size: the pill is sized before the fonts
+/// lay the label out, so it can only estimate the text's width.
+const LABEL_ADVANCE: f64 = 0.6;
+
+/// A connector with a label but no saved snapshot of its background comes from the shared mapper
+/// as a frame holding its line (`;line`) and its label (`;label`), the label bare on the line.
+/// Each such label gets a white pill behind it (centred on the label, padded by half the font size
+/// across and a quarter of it down, fully rounded), as a labelled connector drawn here shows. At
+/// the layer budget the remaining labels stay bare, under the shared mapper's warning.
+fn connector_label_pills(json: &mut Value, max_nodes: usize, warnings: &mut Vec<String>) {
+    if !warnings.iter().any(|w| w.starts_with(BARE_LABEL_WARNING)) {
+        return;
+    }
+    let mut room = max_nodes.saturating_sub(tree_layer_count(json));
+    let mut added = 0;
+    each_tree_layer(json, &mut |layer| {
+        let Some(id) = layer.get("id").and_then(Value::as_str).map(str::to_owned) else { return };
+        let Some(children) = layer.get_mut("children").and_then(Value::as_array_mut) else { return };
+        let is_fallback = children.len() == 2
+            && children[0].get("id").and_then(Value::as_str) == Some(format!("{id};line").as_str())
+            && children[1].get("id").and_then(Value::as_str) == Some(format!("{id};label").as_str());
+        if !is_fallback {
+            return;
+        }
+        let Some(pill) = label_pill(&id, &children[1]) else { return };
+        if room == 0 {
+            return;
+        }
+        children.insert(1, pill);
+        room -= 1;
+        added += 1;
+    });
+    uncount(warnings, BARE_LABEL_WARNING, added);
+    warn("connector labels without a saved snapshot are centred on the line, on a stand-in background pill", added, warnings);
+}
+
+/// The background pill for fallback connector label `label` of connector `id`; `None` when the
+/// label is blank or its box isn't a finite, positive, unrotated one.
+fn label_pill(id: &str, label: &Value) -> Option<Value> {
+    let positive = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0);
+    let characters = label.get("characters").and_then(Value::as_str)?;
+    let longest = characters.lines().map(|line| line.trim().chars().count()).max().filter(|n| *n > 0)?;
+    let font_size = positive(label.get("style").and_then(|s| s.get("fontSize")).and_then(Value::as_f64)).unwrap_or(16.0);
+    let size = label.get("size")?;
+    let (box_w, box_h) = (positive(size.get("x").and_then(Value::as_f64))?, positive(size.get("y").and_then(Value::as_f64))?);
+    let rows = label.get("relativeTransform")?;
+    let cell = |r: usize, c: usize| rows.get(r).and_then(|row| row.get(c)).and_then(Value::as_f64).filter(|v| v.is_finite());
+    if (cell(0, 0)?, cell(0, 1)?, cell(1, 0)?, cell(1, 1)?) != (1.0, 0.0, 0.0, 1.0) {
+        return None;
+    }
+    let (x, y) = (cell(0, 2)?, cell(1, 2)?);
+    let (centre_x, centre_y) = (x + box_w / 2.0, y + box_h / 2.0);
+    let text_w = (longest as f64 * font_size * LABEL_ADVANCE).min(box_w);
+    let max = crate::rest::props::MAX_SIZE;
+    let (w, h) = ((text_w + font_size).min(max), (box_h + font_size / 2.0).min(max));
+    Some(serde_json::json!({
+        "id": format!("{id};labelBackground"),
+        "type": "RECTANGLE",
+        "name": "Label background",
+        "size": {"x": w, "y": h},
+        "relativeTransform": [[1.0, 0.0, centre_x - w / 2.0], [0.0, 1.0, centre_y - h / 2.0]],
+        "fills": [{"type": "SOLID", "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}}],
+        "strokes": [],
+        "cornerRadius": h / 2.0
+    }))
+}
+
+/// Cells further apart than this (in the table's units) start a new row or column.
+const TRACK_SNAP: f64 = 2.0;
+/// Largest table whose cells are snapped to a grid; bigger ones keep their saved bounds.
+pub(super) const MAX_TABLE_CELLS: usize = 4096;
+/// Most rows or columns a snapped table may have.
+const MAX_TABLE_TRACKS: usize = 512;
+
+/// The origins of the message's `TABLE` and `TABLE_CELL` records.
+fn table_origins(msg: &Kv) -> (std::collections::HashSet<String>, std::collections::HashSet<String>) {
+    let (mut tables, mut cells) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+    for node in msg.get("nodeChanges").map(Kv::list).unwrap_or_default() {
+        let set = match node.get("type").and_then(Kv::str) {
+            Some("TABLE") => &mut tables,
+            Some("TABLE_CELL") => &mut cells,
+            _ => continue,
+        };
+        if let Some(origin) = node.get("guid").and_then(origin) {
+            set.insert(origin);
+        }
+    }
+    (tables, cells)
+}
+
+/// One table cell as saved: its offset in the table and its size when the file gives a valid one.
+struct SavedCell {
+    child: usize,
+    x: f64,
+    y: f64,
+    size: Option<(f64, f64)>,
+}
+
+/// A table comes from the shared mapper as a frame holding its cells as frames, each at the
+/// bounds the file saved for it: a cell without a size is empty, and cells saved a pixel or two
+/// apart overlap or leave gaps. The cells are put back on the table's grid: their offsets are
+/// grouped into rows and columns ([`TRACK_SNAP`]), each track runs to the next one (the last to
+/// the furthest cell edge, else the table's own edge), and each cell takes the tracks it starts
+/// and ends on, so no two cells overlap. Fills, strokes and text stay as they were; a cell's text
+/// keeps its inset. A table this can't make sense of (a rotated or non-finite cell, two cells in
+/// one slot, more than [`MAX_TABLE_CELLS`] cells) keeps its saved bounds, with a warning.
+fn snap_table_cells(msg: &Kv, json: &mut Value, warnings: &mut Vec<String>) {
+    let (tables, cells) = table_origins(msg);
+    if tables.is_empty() || cells.is_empty() {
+        return;
+    }
+    let (mut snapped, mut kept) = (0usize, 0usize);
+    each_tree_layer(json, &mut |table| {
+        if !layer_origin(table).is_some_and(|o| tables.contains(o)) {
+            return;
+        }
+        match snap_table(table, &cells) {
+            Some(n) => snapped += n,
+            None => kept += 1,
+        }
+    });
+    warn("table cells were snapped to their table's rows and columns", snapped, warnings);
+    warn("tables whose rows and columns couldn't be told kept their cells' saved bounds", kept, warnings);
+}
+
+/// Snap `table`'s cells to its grid. Returns how many cells moved or changed size (`Some(0)` for
+/// a table without cells or already on its grid); `None` when the cells were left as saved.
+fn snap_table(table: &mut Value, cells: &std::collections::HashSet<String>) -> Option<usize> {
+    let positive = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0 && *v <= crate::rest::props::MAX_SIZE);
+    let extent = |axis: &str| positive(table.get("size").and_then(|s| s.get(axis)).and_then(Value::as_f64));
+    let (table_w, table_h) = (extent("x"), extent("y"));
+    let children = table.get_mut("children").and_then(Value::as_array_mut)?;
+    let mut saved = Vec::new();
+    for (child, layer) in children.iter().enumerate() {
+        if !layer_origin(layer).is_some_and(|o| cells.contains(o)) {
+            continue;
+        }
+        if saved.len() == MAX_TABLE_CELLS {
+            return None;
+        }
+        let (x, y) = translation(layer)?;
+        let size = layer.get("size");
+        let axis = |a: &str| positive(size.and_then(|s| s.get(a)).and_then(Value::as_f64));
+        saved.push(SavedCell { child, x, y, size: axis("x").zip(axis("y")) });
+    }
+    if saved.is_empty() {
+        return Some(0);
+    }
+    let columns = tracks(saved.iter().map(|c| (c.x, c.size.map(|s| c.x + s.0))), table_w)?;
+    let rows = tracks(saved.iter().map(|c| (c.y, c.size.map(|s| c.y + s.1))), table_h)?;
+    let mut taken = vec![false; (columns.len() - 1).checked_mul(rows.len() - 1).filter(|n| *n <= MAX_TABLE_CELLS * 16)?];
+    let mut placed = Vec::with_capacity(saved.len());
+    for cell in &saved {
+        let (c0, c1) = span(&columns, cell.x, cell.size.map(|s| cell.x + s.0));
+        let (r0, r1) = span(&rows, cell.y, cell.size.map(|s| cell.y + s.1));
+        // A cell put in a track it doesn't start near (the grouping and the nearest track disagree)
+        // means the grid wasn't told right: keep the table as saved.
+        if (columns[c0] - cell.x).abs() > TRACK_SNAP || (rows[r0] - cell.y).abs() > TRACK_SNAP {
+            return None;
+        }
+        for r in r0..r1 {
+            for c in c0..c1 {
+                let slot = taken.get_mut(r * (columns.len() - 1) + c)?;
+                if *slot {
+                    return None;
+                }
+                *slot = true;
+            }
+        }
+        placed.push((cell.child, columns[c0], rows[r0], columns[c1] - columns[c0], rows[r1] - rows[r0], cell));
+    }
+    let mut moved = 0;
+    for (child, x, y, w, h, cell) in placed {
+        if (cell.x, cell.y, cell.size) == (x, y, Some((w, h))) {
+            continue;
+        }
+        moved += 1;
+        let layer = &mut children[child];
+        layer["relativeTransform"] = serde_json::json!([[1.0, 0.0, x], [0.0, 1.0, y]]);
+        layer["size"] = serde_json::json!({"x": w, "y": h});
+        let id = layer.get("id").and_then(Value::as_str).map(|id| format!("{id};text"));
+        let Some(text) = layer
+            .get_mut("children")
+            .and_then(Value::as_array_mut)
+            .and_then(|kids| kids.iter_mut().find(|kid| kid.get("id").and_then(Value::as_str) == id.as_deref()))
+        else {
+            continue;
+        };
+        if let Some((inset_x, inset_y)) = translation(text) {
+            text["size"] = serde_json::json!({"x": (w - 2.0 * inset_x).max(0.0), "y": (h - 2.0 * inset_y).max(0.0)});
+        }
+    }
+    Some(moved)
+}
+
+/// The offset of a layer whose `relativeTransform` is a finite, unrotated, unscaled translation.
+fn translation(layer: &Value) -> Option<(f64, f64)> {
+    let rows = layer.get("relativeTransform")?;
+    let cell = |r: usize, c: usize| rows.get(r).and_then(|row| row.get(c)).and_then(Value::as_f64).filter(|v| v.is_finite());
+    let linear = (cell(0, 0)?, cell(0, 1)?, cell(1, 0)?, cell(1, 1)?);
+    let max = crate::rest::props::MAX_SIZE;
+    let (x, y) = (cell(0, 2)?, cell(1, 2)?);
+    (linear == (1.0, 0.0, 0.0, 1.0) && x.abs() <= max && y.abs() <= max).then_some((x, y))
+}
+
+/// One axis of a table's grid from its cells' `(start, end)` offsets: the track boundaries in
+/// order, the last one closing the last track. `None` when the tracks can't be told (too many, or
+/// the last one has no extent).
+fn tracks(cells: impl Iterator<Item = (f64, Option<f64>)>, extent: Option<f64>) -> Option<Vec<f64>> {
+    let (mut starts, mut far) = (Vec::new(), None::<f64>);
+    for (start, end) in cells {
+        starts.push(start);
+        if let Some(end) = end {
+            far = Some(far.map_or(end, |f| f.max(end)));
+        }
+    }
+    starts.sort_by(f64::total_cmp);
+    let mut boundaries: Vec<f64> = Vec::new();
+    let mut group: Vec<f64> = Vec::new();
+    for start in starts {
+        if group.last().is_some_and(|last| start - last > TRACK_SNAP) {
+            boundaries.push(group.iter().sum::<f64>() / group.len() as f64);
+            group.clear();
+        }
+        group.push(start);
+    }
+    if !group.is_empty() {
+        boundaries.push(group.iter().sum::<f64>() / group.len() as f64);
+    }
+    if boundaries.len() > MAX_TABLE_TRACKS {
+        return None;
+    }
+    let last = *boundaries.last()?;
+    let previous = boundaries.len().checked_sub(2).map(|i| last - boundaries[i]);
+    let end = [far, extent, previous.map(|w| last + w)].into_iter().flatten().find(|end| *end > last + TRACK_SNAP)?;
+    boundaries.push(end);
+    Some(boundaries)
+}
+
+/// The tracks `[first, last)` of `boundaries` a cell from `start` to `end` covers: the track it
+/// starts in, through the boundary nearest its end (one track when it has no end).
+fn span(boundaries: &[f64], start: f64, end: Option<f64>) -> (usize, usize) {
+    let nearest = |v: f64| (0..boundaries.len()).min_by(|a, b| (boundaries[*a] - v).abs().total_cmp(&(boundaries[*b] - v).abs())).unwrap_or(0);
+    let first = nearest(start).min(boundaries.len().saturating_sub(2));
+    let last = end.map_or(first + 1, nearest).clamp(first + 1, boundaries.len() - 1);
+    (first, last)
 }
 
 /// FigJam shapes whose generated records are complete are native board items in FigCraft. The
