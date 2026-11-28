@@ -30,7 +30,7 @@ mod mindmap;
 mod reshape;
 mod tools;
 
-pub use code::is_code_text;
+pub use code::{is_code_text, is_one_code_block};
 pub(crate) use connectors::end_handle_at;
 pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
@@ -273,6 +273,9 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             |s, _| board_tool(s, ToolId::MindMap)
         ),
+        spec!("tool.codeBlock", "Code block tool", "{} (a click places a code block centred there and starts typing in it)", false, |s, _| {
+            board_tool(s, ToolId::CodeBlock)
+        }),
         spec!("tool.shape", "Shapes", "{shape?} (a click places a shape with text)", false, |s, p| {
             if let Some(v) = string(p, "shape") {
                 s.tool.board.shape = shape_of("tool.shape", &v)?;

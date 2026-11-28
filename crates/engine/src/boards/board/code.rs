@@ -25,6 +25,12 @@ pub fn is_code_text(doc: &Document, text: NodeId) -> bool {
     owner_of_text(doc, text).and_then(|o| doc.node(o)).is_some_and(|n| matches!(n.board, Some(BoardItem::CodeBlock { .. })))
 }
 
+/// Whether the selection `sel` is one code block: its box has only its left and right edges to
+/// drag, as only its width is kept.
+pub fn is_one_code_block(doc: &Document, sel: &[NodeId]) -> bool {
+    matches!(sel, [id] if doc.node(*id).is_some_and(|n| matches!(n.board, Some(BoardItem::CodeBlock { .. }))))
+}
+
 /// The auto layout every code block has: its text stacked inside the padding.
 fn block_layout() -> AutoLayout {
     AutoLayout { mode: LayoutMode::Vertical, gap: 0.0, padding: CODE_PAD, ..AutoLayout::default() }

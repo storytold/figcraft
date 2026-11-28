@@ -129,6 +129,7 @@ static ROWS: &[Row] = &[
     pin(Tools, "tool.highlighter", &["U"], &[]),
     pin(Tools, "tool.eraser", &["E"], &[]),
     pin(Tools, "tool.stamp", &["W"], &[]),
+    pin(Tools, "tool.codeBlock", &["`"], &[]),
     pin(Tools, "board.nextSticky", &["Shift+Cmd+Enter"], &[]),
     pin(Tools, "board.mindMapAdd", &["Cmd+Enter"], &[]),
     // Vector edit mode
@@ -419,7 +420,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (137, 136, 1, 0, 2, 59));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (137, 136, 1, 0, 2, 60));
 }
 
 #[test]

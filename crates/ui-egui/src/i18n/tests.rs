@@ -130,9 +130,10 @@ fn dynamic_labels() -> Vec<&'static str> {
     use figcraft_engine::keymap::{GESTURES, Group};
     let mut v: Vec<&'static str> = figcraft_engine::ToolId::ALL.iter().map(|t| t.label()).collect();
     v.extend(figcraft_engine::vectoredit::VTool::ALL.iter().map(|t| t.label()));
-    // Board shapes and stamps (the board tools' flyouts and the contextual bar).
+    // Board shapes, stamps and code languages (the board tools' flyouts and the contextual bar).
     v.extend(figcraft_doc::BoardShape::ALL.iter().map(|b| b.label()));
     v.extend(figcraft_doc::Stamp::ALL.iter().map(|b| b.label()));
+    v.extend(figcraft_doc::CodeLanguage::ALL.iter().map(|l| l.label()));
     v.extend(figcraft_engine::board_templates::TEMPLATES.iter().map(|t| t.name));
     v.extend(Group::ALL.iter().map(|g| g.label()));
     v.extend(GESTURES.iter().flat_map(|(_, label, mac, other)| [*label, *mac, *other]));

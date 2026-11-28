@@ -202,6 +202,7 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.highlighter", &["U"]),
     k(Tools, "tool.eraser", &["E"]),
     k(Tools, "tool.stamp", &["W"]),
+    k(Tools, "tool.codeBlock", &["`"]),
     k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"])
         .label("Board: a new sticky beside the selected one, the next shape joined to it, or a mind map node's next sibling")
         .both(),
