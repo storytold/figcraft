@@ -245,7 +245,7 @@ fn current_variant_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, variant: &N
         row(ui, 32.0, |ui| {
             prop_label(ui, k, Icon::ComponentSet);
             let w = ui.available_width().max(60.0);
-            let resp = widgets::dropdown(ui, &cur, w, None);
+            let resp = widgets::dropdown(ui, &cur, w, None).on_hover_text(tr("This variant's value"));
             menu_popup(&resp).show(|ui| {
                 for v in vals {
                     if menu_item(ui, v, "") {
