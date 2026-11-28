@@ -341,7 +341,7 @@ pub fn ensure_vector(doc: &mut Document, id: NodeId) -> Result<()> {
         }
     }
     let node = doc.get_mut(id)?;
-    node.kind = NodeKind::Vector { network: net };
+    node.kind = NodeKind::Vector { network: net.into() };
     node.children.clear();
     if matches!(n.kind, NodeKind::Line) {
         node.stroke.align = StrokeAlign::Center;

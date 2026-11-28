@@ -188,7 +188,7 @@ fn a_handle_and_a_point_are_compared_on_the_page() {
         let mut seg = figcraft_doc::Segment::line(0, 1);
         seg.ta = (0.5, -0.9);
         n.segments.push(seg);
-        node.kind = figcraft_doc::NodeKind::Vector { network: n };
+        node.kind = figcraft_doc::NodeKind::Vector { network: n.into() };
         node.transform = figcraft_geom::Affine::scale_non_uniform(10.0, 1.0);
     }
     ex(&mut s, "vector.edit.begin", json!({"id": id}));
@@ -215,7 +215,7 @@ fn a_handle_on_another_point_is_still_the_handles() {
         let mut seg = figcraft_doc::Segment::line(0, 1);
         seg.ta = (10.0, 0.0);
         n.segments.push(seg);
-        node.kind = figcraft_doc::NodeKind::Vector { network: n };
+        node.kind = figcraft_doc::NodeKind::Vector { network: n.into() };
         node.transform = figcraft_geom::Affine::IDENTITY;
     }
     ex(&mut s, "vector.edit.begin", json!({"id": id}));

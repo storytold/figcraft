@@ -233,7 +233,7 @@ fn stroke_only_text_operands_use_glyphs_instead_of_the_text_box() {
     let b = d.create(page, NodeKind::BooleanOp { op: BoolOp::Union }, "B", 0.0, 0.0, 400.0, 100.0).unwrap();
     let mut text = TextData::new("Hi");
     text.style.font_size = 32.0;
-    let id = d.create(b, NodeKind::Text(text), "text", 0.0, 0.0, 400.0, 100.0).unwrap();
+    let id = d.create(b, NodeKind::Text(text.into()), "text", 0.0, 0.0, 400.0, 100.0).unwrap();
     let n = d.get_mut(id).unwrap();
     n.fills.clear();
     n.strokes = vec![Paint::solid(Color::BLACK)];

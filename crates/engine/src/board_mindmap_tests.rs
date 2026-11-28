@@ -30,8 +30,8 @@ fn map(s: &mut Session) -> (NodeId, [NodeId; 3], [NodeId; 3]) {
 
 fn text_data(s: &Session, n: NodeId) -> figcraft_doc::TextData {
     let t = text_of(s.doc().unwrap(), n).unwrap();
-    match node(s, t).kind {
-        NodeKind::Text(td) => td,
+    match &node(s, t).kind {
+        NodeKind::Text(td) => (**td).clone(),
         other => panic!("not text: {other:?}"),
     }
 }

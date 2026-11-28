@@ -11,7 +11,7 @@ use figcraft_doc::geom::Affine;
 use figcraft_doc::proto::{Interaction, Overflow, ScrollPosition};
 use figcraft_doc::{
     Annotation, AutoLayout, BoardItem, BoolOp, ChildLayout, CodeLink, CollectionId, Constraints, Corners, DevResource, DevStatus, Effect,
-    ExportSetting, Guide, LayoutGrid, MaskType, Measurement, ModeId, Node, NodeKind, Region, Segment, StrokeProps, StyleRefs, VariableId,
+    ExportSetting, Guide, LayoutGrid, MaskType, Measurement, ModeId, Node, NodeKind, Region, Segment, Shared, StrokeProps, StyleRefs, VariableId,
     VectorNetwork, Vertex,
 };
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ macro_rules! delta_fields {
             )*
         }
 
-        pub(super) fn apply_field_delta(node: &mut Node, delta: FieldDelta, vectors: &[VectorNetwork]) -> Result<(), Error> {
+        pub(super) fn apply_field_delta(node: &mut Node, delta: FieldDelta, vectors: &[Shared<VectorNetwork>]) -> Result<(), Error> {
             match delta {
                 FieldDelta::Kind(v) => node.kind = *v,
                 FieldDelta::VectorRef(idx) => {
@@ -278,7 +278,8 @@ fn exact_kind_eq(a: &NodeKind, b: &NodeKind) -> bool {
         | (NodeKind::Group, NodeKind::Group)
         | (NodeKind::Rectangle, NodeKind::Rectangle)
         | (NodeKind::Line, NodeKind::Line) => true,
-        (NodeKind::Vector { network: na }, NodeKind::Vector { network: nb }) => exact_vector_network_eq(na, nb),
+        (NodeKind::Vector { network: na }, NodeKind::Vector { network: nb }) => na.ptr_eq(nb) || exact_vector_network_eq(na, nb),
+        (NodeKind::Text(ta), NodeKind::Text(tb)) => ta.ptr_eq(tb) || eq_exact(&**ta, &**tb),
         _ => eq_exact(a, b),
     }
 }

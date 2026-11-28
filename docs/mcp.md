@@ -70,8 +70,9 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   and correct, for example `automation path rejected: /etc/x.png is outside the folders that may be
   written: /work/project/out`. Nothing is written and the server keeps serving.
 - Read and write authority are separate. With only `--automation-read-root` nothing can be written
-  to disk (`export` and the export commands without a `path` still return the bytes). Without either
-  flag nothing changes.
+  to disk (`export` and the export commands without a `path` still return the bytes). Headless MCP
+  refuses to start unless both `--automation-read-root` and `--automation-write-root` are supplied.
+  Attached MCP takes neither flag; the attached app's roots govern its file access.
 - The roots must be existing folders: a missing one, or a file, stops the server at startup.
   `initialize`'s `instructions` name the folders, so the agent knows where it may work.
 - **What is covered:** everything a call does, because the engine reaches the file system through
@@ -102,16 +103,42 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   refused too. A local volume's `\\?\Volume{…}\` path is let through. A link whose text is a native NT name
   (`\Device\…`, `\??\…`, `\GLOBAL??\…`) is refused as a device path, and so is a name that ends in a period or a space, in a
   path or as a link's target, since Windows trims it where it looks a name up.
-- **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
-  document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
-  `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
-  refuses, and `library.updates` / `library.list` report the refusal for each instead of the last
-  version fetched) and plugin directories are refused with `automation roots are set: commands
-  don't reach the network …`. The app started with the flags confines its own window too, so its
-  sharing is off as well. One exception: a root on a network share (a UNC path such as
-  `\\server\share\…`, or a mounted network drive) is still a root, so reading and writing inside
-  it reaches that file server, and saving there sends the document to it. Give only roots you would
-  let the agent's files go to.
+- **The network:** confined calls cannot reach a FigCraft or plugin server, except for headless
+  MCP's `collab.join` to a server explicitly allowed with `--automation-allow-server` (below).
+  Hosting, publishing and sharing a file (`collab.host`, `collab.publish`, `collab.share` …), team
+  libraries on a server (`library.check` refuses, and `library.updates` / `library.list` report the
+  refusal for each instead of the last version fetched) and plugin directories remain refused with
+  `automation roots are set: commands don't reach the network …`. The app started with the flags
+  confines its own window too, so its sharing is off as well. One exception: a root on a network
+  share (a UNC path such as `\\server\share\…`, or a mounted network drive) is still a root, so
+  reading and writing inside it reaches that file server, and saving there sends the document to
+  it. Give only roots you would let the agent's files go to.
+- **Joining one approved server (headless only):** add one or more
+  `--automation-allow-server wss://figcraft.example.com/` flags. Each URL must be a `ws://` or
+  `wss://` server address with no query or key. A join link is accepted only when its parsed
+  scheme, host and port match an allowed server and its path is within that server's path prefix.
+  The only newly permitted network operation is `collab.join` to such a server. Hosting, publishing
+  a new file, team libraries and plugin directories remain blocked; the server's administrative
+  key is not needed or accepted in the allowlist. Without this flag the network remains blocked,
+  as before.
+
+  This lets an agent join a file that was published once from the desktop app. Give headless MCP
+  the file's **edit link**, then call `collab.join` with it. The server-hosted document is the shared
+  source of truth: the agent's edits sync to the server and other clients in the live session, and
+  the server keeps confirmed edits after everyone disconnects. A later headless MCP process can
+  join again with the same link. The desktop app does not need to stay open on the publishing
+  machine. A local `.figcraft` file is not automatically kept in sync; use `file.saveAs` to save a
+  separate local snapshot inside a write root when needed.
+
+  For example:
+
+  ```sh
+  figcraft-cli mcp --automation-read-root /work/designs --automation-write-root /work/designs \
+    --automation-allow-server wss://figcraft.example.com/
+  ```
+
+  The edit link is a file-specific secret; give it only to the agent and clients you trust. Use an
+  edit link, not a view link, when the agent must change the file.
 - Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
   plugins installed from a plugin directory, the system fonts).
 - `--attach` with either flag is a usage error: the app runs the commands, so only the app can
@@ -1422,13 +1449,13 @@ Dart constants for Flutter (`format: "dart"`: an `abstract final class` per coll
 default mode's named after the collection and the others after the collection and the mode, with a
 `static const` `Color`, `double`, `String` or `bool` per variable; names become camelCase Dart
 identifiers kept apart, aliases are resolved to their value in that mode), and
-returns `{text}` (or writes `path` and returns `{path}`). `variable.import {variables}` (an object,
+returns `{text}` (or writes `path` and returns `{path}`). The JSON format also carries a top-level `textStyles` array beside `meta`, a FigCraft extension (the REST `styles` metadata has no values): each entry is what `style.list {type: "text"}` returns (`name`, `style`, `paragraph`, and `bound` holding the ids `meta.variables` is keyed by, which it holds only for the variables of the exported local collections, so a file's own export with `collections` left out of it names variables its `meta` lacks, and an import keeps such a binding on the style it replaces; an entry's `style` keys are snake_case and its `bound` keys camelCase, `bound.fontSize` binding `style.font_size`); CSS, Tailwind and Dart are variables only. `variable.import {variables}` (an object,
 JSON text or a path to a regular file of at most 256 MiB;
 `variableCollections` and `variables` under `meta` or at the top level) reads
 one back: a collection joins this file's collection of the same name
 (values matched by mode name, new modes and variables added, a same-named variable of another type
 skipped with a warning; library copies and extended collections are never targets), others are
-added; aliases are checked for loops; it returns `{collections, variables, updated, warnings}`,
+added; aliases are checked for loops; a `textStyles` array is read too (a style joins this file's text style of the same name, others are added; bindings follow the imported variables; one to a variable the JSON lacks (unless the style it replaces already holds that id), to a field the style lacks or to a variable of another type is dropped with a warning; at most 10,000 styles and 32 bindings each are read); it returns `{collections, variables, updated, styles: {added, updated}, warnings}`,
 with a warning when the JSON holds no variables (`no variables found: expected meta.variables …`)
 or fewer than its collections list in `variableIds`. The
 Variables editor's Import… and Export… buttons do the same through file dialogs.
@@ -1928,6 +1955,34 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   are snake_case, Dart enum members lowerCamel; names that would shadow framework types get one too, `Text` → `TextComponent`). `inspect.componentCode
   {id?, language?}` returns the parts: `{component, name, set, properties: [{name, param, type,
   default, value? (instances)}], definition, usage? (instances)}`.
+- **Uno C# Markup:** `inspect.code {id, language: uno}` (aliases `csharp-markup`, `cs-markup`) writes the layer and its subtree as a
+  `UserControl` class (file-scoped `namespace MyApp;`, the class named after the layer plus `View`, internal) whose constructor builds the
+  tree with Uno C# Markup (`Uno.Extensions.Markup`) and ends with `Content = root;`. Each element is a local with fluent property setters;
+  its children are added with `parent.Children.Add(child)` or `parent.Child = child`, never the fluent `.Children(…)` / `.Child(…)`,
+  whose load time doubles with every level of nesting. A frame with horizontal or vertical auto layout is a Toolkit `AutoLayout` that takes
+  the box itself (`Background`, `BorderBrush`, `BorderThickness`, `CornerRadius`, `Opacity`) with `Orientation`, `Spacing`, `Padding` (less
+  the stroke weight unless the layout includes strokes; where a side would go negative the border sits behind the layout in a `Grid`),
+  `PrimaryAxisAlignment`, `CounterAxisAlignment` and `Justify`; space around and evenly are written as space between, baseline alignment
+  and a wrapping layout are `// not mapped: …` notes (a wrapping layout is one line). Children are sized per axis: fixed writes `Width` /
+  `Height`, hug writes none, fill stretches with `.AutoLayout(primaryAlignment:, counterAlignment:)`, `MinWidth` / `MaxWidth` / `MinHeight`
+  / `MaxHeight` go on the child; a child that ignores the layout is `.AutoLayout(isIndependentLayout: true)` at its offset as a `Margin`
+  (a hugging parent with one is written at its current size), and "first on top" is a descending `.Canvas(zIndex: n)`. A grid is a `Grid`
+  with `ColumnDefinitions` / `RowDefinitions` (pixels, `Auto`, whole-number stars: fractional shares are scaled up to a factor of 100 or
+  rounded with a note; at most 64 tracks per axis), `ColumnSpacing` (the layout's gap) and `RowSpacing` (its cross gap), and each child in
+  its cell with `.Grid(row:, column:, rowSpan:, columnSpan:)` and its alignment in the cell. A frame without auto layout, a group or a
+  rectangle is a `Border` holding a `Canvas` whose children carry `.Canvas(left:, top:)`, with a stroke and children a `Grid` with the
+  border behind; one `// warning:` comment above the root counts such frames. Text is a `TextBlock` (`FontFamily`, `FontSize`,
+  `FontWeight`, `FontStyle`, `Foreground`, `LineHeight`, `CharacterSpacing` in thousandths of an em, `TextAlignment`, `TextWrapping`,
+  `TextTrimming`, `MaxLines`, `TextDecorations`; case is applied at run time; style runs are `Inlines` of `Run`s); an explicit line height
+  moves it down by the half-leading `(L - (ascent + descent) / upem * size) / 2` of the face FigCraft draws with (a top padding and a
+  negative bottom margin in a panel, the offset in a `Canvas`), so the code depends on the fonts installed where `inspect.code` runs;
+  with the family missing it is a note; a line height below the font's natural height keeps `LineHeight` and adds `LineStackingStrategy.BlockLineHeight`, with no shift. Vectors, booleans and shapes are a
+  `Microsoft.UI.Xaml.Shapes.Path` with `Data("F1 M …")` (`F1` non-zero, `F0` even-odd; at most 5,000 elements), one solid `Fill` and one
+  solid `Stroke`; gradients, several fills or strokes, effects and bigger outlines are an `Image` on `ms-appx:///Assets/<name>.png` with a
+  comment to export it. Image fills are an `ImageBrush` on `<name>.png` (names lowercase ASCII, unique in the snippet; the files are not
+  written). Shadows, blurs, blend modes, masks, gradients beyond the first stop, pattern fills, stroke alignment other than inside,
+  corner smoothing and arcs are `// not mapped: …` comments. Components and instances are written as the frames they are;
+  `inspect.componentCode` and code connect do not take `uno` yet.
 - **Code connect:** link a component (a variant links its set) to the code component it is built
   as, per language (`react`, `leptos`, `vue`, `swiftui`, `compose`, `arkui`, `flutter`): `codeConnect.set {id?, language?, importPath?,
   name?, template?}` (undoable; fields left out keep their value; the defaults are the generated

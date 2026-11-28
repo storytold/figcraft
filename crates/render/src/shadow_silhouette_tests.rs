@@ -37,9 +37,9 @@ fn a_sharp_shadow_under_a_stroked_layer_has_no_light_line_along_the_layers_edge(
     // its outline) and, where a font loads, a letter.
     let notch = [(0.0, 0.0), (60.0, 0.0), (60.0, 60.0), (40.0, 60.0), (30.0, 20.0), (20.0, 60.0), (0.0, 60.0)].map(|(x, y)| Point::new(x, y));
     let kinds = [
-        ("notch", NodeKind::Vector { network: VectorNetwork::from_points(&notch, true) }),
+        ("notch", NodeKind::Vector { network: VectorNetwork::from_points(&notch, true).into() }),
         ("ellipse", NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }),
-        ("letter", NodeKind::Text(letter)),
+        ("letter", NodeKind::Text(letter.into())),
     ];
     let shadow = hex("#000000").to_rgba8();
     for (name, kind) in &kinds {

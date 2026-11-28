@@ -679,6 +679,8 @@ mod clip_cover_tests;
 #[cfg(test)]
 mod dots_tests;
 #[cfg(test)]
+mod downscaled_image_tests;
+#[cfg(test)]
 mod effect_order_tests;
 #[cfg(test)]
 mod effects_behaviour_tests;

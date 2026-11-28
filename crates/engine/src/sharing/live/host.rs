@@ -77,7 +77,8 @@ fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool, vi
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
     check_sharable(cmd, &doc)?;
     let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc, short, view };
-    let (id, info) = s.live.start(cmd, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
+    let (id, info) =
+        s.live.start(cmd, None, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
     s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), ..Live::default() });
     Ok(id)
 }
@@ -98,7 +99,7 @@ fn start_publish(s: &mut Session, cmd: &str, server: &str, p: &Value, share: boo
     let name = string(p, "name").map(|n| n.trim().chars().filter(|c| !c.is_control()).take(256).collect::<String>()).filter(|n| !n.is_empty());
     let me = display_name(&s.prefs);
     let opts = PublishOptions { server: server.trim().to_string(), key, name: name.unwrap_or_else(|| doc.name.clone()), me, doc, share };
-    let (id, ()) = s.live.start(cmd, |l, id| l.publish(id, opts).map_err(|e| bad(cmd, e)))?;
+    let (id, ()) = s.live.start(cmd, None, |l, id| l.publish(id, opts).map_err(|e| bad(cmd, e)))?;
     // This tab becomes the server file's synced document once it is there.
     s.live.open(Live { id, status: Status::Connecting, doc_uid: Some(uid), tab: Some(uid), server: server.trim().to_string(), ..Live::default() });
     Ok(id)
@@ -162,7 +163,13 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
             if server.is_empty() {
                 return Err(EngineError::Disabled(CMD.into(), ONLINE_OFF.into()));
             }
-            start_publish(s, CMD, &server, p, true)?
+            let id = start_publish(s, CMD, &server, p, true)?;
+            // A file published with the key has no owner token: stopping and sharing again go as
+            // the server's operator, with the key in the address as `collab.share {server}` takes it.
+            if let Some(key) = string(p, "key").map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+                server = with_key(&server, &key);
+            }
+            id
         }
     };
     if let Some(live) = s.live.sessions.get_mut(&id) {
@@ -177,6 +184,20 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
         live.share = Some(Share { via, server, access, links });
     }
     Ok(s.live_summary())
+}
+
+/// `server` with `key` in its query (`?key=…`), escaped so any key reads back the same. It replaces
+/// a key the address carries: the one given is the one the file was published with.
+fn with_key(server: &str, key: &str) -> String {
+    let escaped: String = key
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { char::from(b).to_string() } else { format!("%{b:02X}") })
+        .collect();
+    let (base, query) = server.split_once('?').unwrap_or((server, ""));
+    let mut pairs: Vec<&str> = query.split('&').filter(|p| !p.is_empty() && p.split('=').next() != Some("key")).collect();
+    let key = format!("key={escaped}");
+    pairs.push(&key);
+    format!("{base}?{}", pairs.join("&"))
 }
 
 /// A way into a session this app hosts: its invite link and the join code that stands for it

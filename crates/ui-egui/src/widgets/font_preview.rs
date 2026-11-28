@@ -73,7 +73,7 @@ fn render(ctx: &egui::Context, style: &TextStyle, text: &str, ppp: f64) -> Optio
     let id = doc.alloc_id();
     let mut td = TextData::new(text);
     td.style = TextStyle { fills: None, link: None, style_id: None, ..style.clone() };
-    let mut n = Node::new(id, NodeKind::Text(td), "preview", 1.0, 1.0);
+    let mut n = Node::new(id, NodeKind::Text(td.into()), "preview", 1.0, 1.0);
     n.fills = vec![Paint::solid(Color::WHITE)];
     let (w, h) = figcraft_text::auto_size(&n)?;
     n.width = w.min(400.0);

@@ -312,6 +312,31 @@ fn sharing_online_uses_a_separate_key_param() {
 }
 
 #[test]
+fn stopping_a_file_shared_with_a_separate_key_asks_with_that_key() {
+    // A file published with the server key has no owner token (#2495): Stop sharing must go as
+    // the server's operator, with the key it was published with, not an empty token. The key
+    // given replaces one the address carries, as it did for the publish.
+    for (server, asked_with) in [
+        ("wss://share.example/", "wss://share.example/?key=Key%26Key%25Key1"),
+        ("wss://share.example/?key=Old&team=1", "wss://share.example/?team=1&key=Key%26Key%25Key1"),
+    ] {
+        let (mut s, script) = session();
+        ex(&mut s, "collab.share", json!({"server": server, "key": "Key&Key%Key1"}));
+        on_the_server(&mut s, &script, Some(("K7M2QX9TD", "4FHJ8R2WN")));
+        if let Some(p) = s.live_mut().and_then(|l| l.published.as_mut()) {
+            p.owner = None;
+        }
+        s.prefs.online_files.clear();
+        assert_eq!(ex(&mut s, "collab.stop", json!({}))["shared"], false);
+        let sc = script.lock().unwrap();
+        let [(asked, _, owner, revoke, false)] = sc.asked.as_slice() else { panic!("asked {:?}", sc.asked) };
+        // The address `collab.share {server: "…?key=…"}` would have given, the key escaped.
+        assert_eq!(asked, asked_with);
+        assert!(owner.is_empty() && !revoke.is_empty(), "the others' links go, with no owner token");
+    }
+}
+
+#[test]
 fn a_server_without_join_codes_leaves_the_links() {
     let (mut s, script) = session();
     ex(&mut s, "collab.share", json!({"via": "online", "server": "wss://old.example/?key=KeyKeyKeyKeyKeyKeyKey0", "name": "Poster"}));

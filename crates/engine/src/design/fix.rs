@@ -266,7 +266,7 @@ fn apply_radius(n: &mut Node, settings: &Settings) -> Option<bool> {
 /// Run `f` over a text layer's base style and its runs; true when any style changed.
 fn apply_text(n: &mut Node, f: fn(&mut TextStyle) -> bool) -> Option<bool> {
     let NodeKind::Text(t) = &mut n.kind else { return Some(false) };
-    let TextData { style, runs, .. } = t;
+    let TextData { style, runs, .. } = &mut **t;
     let mut changed = f(style);
     for run in runs {
         changed |= f(&mut run.style);
