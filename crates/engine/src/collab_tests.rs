@@ -114,7 +114,7 @@ fn every_command_edit_round_trips_through_its_changes() {
             replica = d.replica;
         }
         assert!(edits > 50, "seed {seed}: only {edits} edits");
-        let back = Replica::from_snapshot(&replica.snapshot().unwrap()).unwrap();
+        let back = Replica::from_snapshot(replica.snapshot().unwrap()).unwrap();
         assert_eq!(back, replica, "seed {seed}: snapshot");
     }
 }

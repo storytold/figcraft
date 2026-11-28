@@ -163,7 +163,7 @@ fn mirror_delta_preserves_paint_color_alpha_and_signed_zero() {
 
     let replica = Replica::new(doc);
     let decoded = decode_delta_snapshot(&encode_delta_snapshot(&replica).unwrap(), 16 << 20, Limits::default().max_nodes).unwrap();
-    let legacy = Replica::from_snapshot(&replica.snapshot().unwrap()).unwrap();
+    let legacy = Replica::from_snapshot(replica.snapshot().unwrap()).unwrap();
     assert_docs_json_eq(replica.document(), decoded.document(), "exact structural equality");
     assert_docs_json_eq(legacy.document(), decoded.document(), "legacy parity");
 }
@@ -311,7 +311,7 @@ fn full_metadata_and_design_review_roundtrip_matches_legacy_json() {
     doc.take_dirty();
 
     let replica = Replica::new(doc);
-    let legacy = Replica::from_snapshot(&replica.snapshot().unwrap()).unwrap();
+    let legacy = Replica::from_snapshot(replica.snapshot().unwrap()).unwrap();
     let decoded = decode_delta_snapshot(&encode_delta_snapshot(&replica).unwrap(), 64 << 20, Limits::default().max_nodes).unwrap();
     assert_eq!(decoded.document().design_review.radii.len(), figcraft_doc::MAX_RADII);
     assert_docs_json_eq(legacy.document(), decoded.document(), "full metadata parity");

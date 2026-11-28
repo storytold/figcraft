@@ -687,7 +687,7 @@ fn welcomes_are_packed_only_for_clients_that_read_them() {
     };
     message::unpack(&mut delta_welcome, 64 << 20).unwrap();
     let delta_doc = Client::join(delta_welcome).unwrap().document().clone();
-    let plain_doc = figcraft_collab::Replica::from_snapshot(&plain).unwrap().document().clone();
+    let plain_doc = figcraft_collab::Replica::from_snapshot(plain).unwrap().document().clone();
     assert_eq!(delta_doc, plain_doc, "delta snapshot opens the exact same document");
     host.stop();
 }
