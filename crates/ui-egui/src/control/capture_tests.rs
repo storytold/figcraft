@@ -576,6 +576,54 @@ fn injected_input_is_acknowledged_only_after_the_pass_that_applies_it() {
     assert!(!u.app.control_synthetic, "the fence ends with the frame");
 }
 
+/// Asserts a document switch that reaches the frame applying a batch waits for the next frame:
+/// the batch's Delete edits the file it was sent for, never the one switched to (#1503).
+#[test]
+fn a_switch_queued_behind_an_applied_batch_never_takes_its_input() {
+    let mut s = Session::empty();
+    let rect = |s: &mut Session, name: &str| {
+        s.execute("file.new", &json!({"name": name})).unwrap();
+        let id = NodeId(
+            s.execute("node.create", &json!({"type": "rectangle", "x": 0, "y": 0, "width": 40, "height": 20})).unwrap()["id"].as_u64().unwrap(),
+        );
+        s.execute("select.set", &json!({"ids": [id]})).unwrap();
+        id
+    };
+    let (a, b) = (rect(&mut s, "A"), rect(&mut s, "B"));
+    let index = |s: &Session, name: &str| s.docs.iter().position(|d| d.doc.name == name).expect("file");
+    s.active = index(&s, "A");
+    let mut u = Ui::new(s);
+    let (tx, input) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(30),
+        method: "ui.input".into(),
+        params: json!({"events": [{"move": [700.0, 450.0]}, {"key": "Delete"}]}),
+        reply: tx,
+        state: Default::default(),
+    });
+    u.frame(vec![]);
+    // The window takes A's batch; the switch to B arrives before that frame's control drain.
+    let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    assert!(!events.is_empty(), "A's batch is in the frame");
+    let (tx, switch) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(31),
+        method: "engine.execute".into(),
+        params: json!({"command": "doc.switch", "params": {"index": index(&u.app.session, "B")}}),
+        reply: tx,
+        state: Default::default(),
+    });
+    u.frame(events);
+    assert!(input.try_recv().expect("the batch is acknowledged").result.is_ok());
+    assert!(switch.try_recv().is_err(), "the switch waits for the frame after the batch");
+    u.frame(vec![]);
+    assert!(switch.try_recv().expect("the switch runs next").result.is_ok());
+    let file = |u: &Ui, name: &str| u.app.session.docs[index(&u.app.session, name)].doc.clone();
+    assert_eq!(u.app.session.active, index(&u.app.session, "B"));
+    assert!(!file(&u, "A").contains(a), "the batch edited the file it was sent for");
+    assert!(file(&u, "B").contains(b), "and left the file switched to alone");
+}
+
 /// Asserts a discarded pass neither acknowledges nor replays an injected batch; the presented
 /// pass acknowledges once.
 #[test]
