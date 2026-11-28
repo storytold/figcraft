@@ -36,7 +36,7 @@ jobs:
       RUST_BACKTRACE: 1
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@v2.22.4
+        uses: step-security/harden-runner@v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,7 +45,7 @@ jobs:
       # The same craft-fonts commit the Nightly producer pins (nightly.yml craft-fonts-ref), so the
       # bundle's notices and fonts match a shipped build.
       - name: Check out craft-fonts
-        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
         with:
           ref: 37827adc41fd165f9a9234ac40f94dbad353aa69
       - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@f5141455aac7b2eb4708aa259d8ffcdf10fde939
