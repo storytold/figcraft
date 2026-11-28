@@ -24,7 +24,8 @@ fn style(s: &mut Session, p: &Value, f: impl Fn(&mut TextStyle)) -> Result<Value
         let bound = super::styles::bound_before(doc, &[id]);
         if let NodeKind::Text(t) = &mut doc.get_mut(id)?.kind {
             if a == b {
-                t.restyle(0, t.char_count(), &f);
+                let len = t.char_count();
+                t.restyle(0, len, &f);
             } else {
                 t.restyle(a, b, &f);
             }

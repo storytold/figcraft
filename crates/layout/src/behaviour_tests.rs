@@ -142,7 +142,7 @@ fn build(c: &Case<'_>) -> (Document, NodeId, Vec<NodeId>, FakeMeasure) {
     let mut texts = HashMap::new();
     let mut ids = Vec::new();
     for k in c.kids {
-        let kind = if k.text.is_some() { NodeKind::Text(TextData::new("T")) } else { NodeKind::Rectangle };
+        let kind = if k.text.is_some() { NodeKind::Text(TextData::new("T").into()) } else { NodeKind::Rectangle };
         let kid = d.create(id, kind, "K", k.at.0, k.at.1, k.size.0, k.size.1).unwrap();
         let n = d.get_mut(kid).unwrap();
         if let (Some(t), NodeKind::Text(td)) = (k.text, &mut n.kind) {

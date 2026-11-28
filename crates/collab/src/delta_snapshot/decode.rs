@@ -125,7 +125,7 @@ struct DecodeState {
     doc: Document,
     positions: Positions,
     touched: BTreeSet<NodeId>,
-    vectors: Vec<VectorNetwork>,
+    vectors: Vec<figcraft_doc::Shared<VectorNetwork>>,
     vector_sizes: Vec<usize>,
     node_sizes: HashMap<NodeId, usize>,
     meta: Option<WireMeta>,
@@ -240,7 +240,7 @@ impl<'de> Visitor<'de> for VectorsSeed<'_> {
                 return Err(self.0.fail(err));
             }
             self.0.vector_sizes.push(size);
-            self.0.vectors.push(net);
+            self.0.vectors.push(figcraft_doc::Shared::new(net));
         }
         Ok(())
     }

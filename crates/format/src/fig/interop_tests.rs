@@ -34,7 +34,7 @@ fn sample() -> Document {
         n.stroke.weight = 2.0;
         n.stroke.align = StrokeAlign::Center;
     });
-    add(&mut doc, frame, NodeKind::Text(TextData::new("One\nTwo")), "Text", 60.0, 40.0, &|_| {});
+    add(&mut doc, frame, NodeKind::Text(TextData::new("One\nTwo").into()), "Text", 60.0, 40.0, &|_| {});
     doc
 }
 

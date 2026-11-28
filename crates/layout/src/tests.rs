@@ -181,7 +181,7 @@ impl Measure for FakeMeasure {
 }
 
 pub(super) fn text(d: &mut Document, parent: NodeId, name: &str) -> NodeId {
-    d.create(parent, NodeKind::Text(figcraft_doc::TextData::new(name)), name, 0.0, 0.0, 10.0, 10.0).unwrap()
+    d.create(parent, NodeKind::Text(figcraft_doc::TextData::new(name).into()), name, 0.0, 0.0, 10.0, 10.0).unwrap()
 }
 
 #[test]

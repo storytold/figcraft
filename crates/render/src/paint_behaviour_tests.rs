@@ -642,7 +642,7 @@ fn text_strokes_follow_their_alignment() {
         let (mut d, p) = page();
         let mut td = figcraft_doc::TextData::new("I");
         td.style.font_size = 120.0;
-        let t = d.create(p, NodeKind::Text(td), "T", 60.0, 30.0, 1.0, 1.0).unwrap();
+        let t = d.create(p, NodeKind::Text(td.into()), "T", 60.0, 30.0, 1.0, 1.0).unwrap();
         let n = d.get_mut(t).unwrap();
         n.fills.clear();
         n.strokes = vec![Paint::solid(hex("#000000"))];

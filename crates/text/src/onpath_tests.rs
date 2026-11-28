@@ -68,7 +68,7 @@ fn laid_out_glyphs_sit_on_the_path() {
     let mid = g.warp * Point::new(g.x + g.advance * 0.25, g.y - 5.0);
     assert_eq!(l.hit(mid.x, mid.y), g.char_start);
     // A text node on a path keeps its box.
-    let mut n = figcraft_doc::Node::new(figcraft_doc::NodeId(1), figcraft_doc::NodeKind::Text(t), "t", 10.0, 1000.0);
+    let mut n = figcraft_doc::Node::new(figcraft_doc::NodeId(1), figcraft_doc::NodeKind::Text(t.into()), "t", 10.0, 1000.0);
     if let figcraft_doc::NodeKind::Text(t) = &mut n.kind {
         t.auto_resize = TextAutoResize::WidthAndHeight;
     }

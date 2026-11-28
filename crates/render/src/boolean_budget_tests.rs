@@ -28,7 +28,7 @@ fn union_of_bars(n: usize) -> (Document, NodeId, NodeId) {
     for across in [true, false] {
         let network = VectorNetwork::from_path(&bars(n, across));
         let len = n as f64 * 4.0;
-        d.create(b, NodeKind::Vector { network }, "Bars", 0.0, 0.0, len, len).unwrap();
+        d.create(b, NodeKind::Vector { network: network.into() }, "Bars", 0.0, 0.0, len, len).unwrap();
     }
     d.fit_to_children(b).unwrap();
     (d, page, b)

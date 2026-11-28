@@ -122,7 +122,7 @@ fn component() -> NodeKind {
 }
 
 fn text(chars: &str) -> NodeKind {
-    NodeKind::Text(TextData::new(chars))
+    NodeKind::Text(TextData::new(chars).into())
 }
 
 /// Pick a (capped) prefix of a value list.

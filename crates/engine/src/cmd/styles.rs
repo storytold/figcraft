@@ -854,13 +854,13 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
         }
         let link = t2.text_style_link().flatten().map(str::to_string);
         if t2 != *t || link != n.styles.text {
-            updates.push((id, link, t2));
+            updates.push((id, link, (*t2).clone()));
         }
     }
     for (id, link, t2) in updates {
         if let Ok(n) = doc.get_mut(id) {
             n.styles.text = link;
-            n.kind = NodeKind::Text(t2);
+            n.kind = NodeKind::Text(t2.into());
         }
     }
 }
