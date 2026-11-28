@@ -98,10 +98,51 @@ pub fn try_import(bytes: &[u8], name: &str) -> Option<Result<(Document, Vec<Stri
 /// Build a document from a `.fig` file. Returns it with the warnings about what was skipped or
 /// approximated. `name`: the document name when the file doesn't carry one.
 pub fn import(bytes: &[u8], name: &str) -> Result<(Document, Vec<String>), FormatError> {
-    import_with_image_limit(bytes, name, MAX_IMAGE_BYTES)
+    import_with_budget(bytes, name, false).map(|imported| (imported.doc, imported.warnings)).map_err(|e| e.error)
 }
 
+/// Information about an import that reached a limit where a larger budget is available.
+#[derive(Debug)]
+pub struct ImportFailure {
+    pub error: FormatError,
+    pub retryable: bool,
+}
+
+impl From<FormatError> for ImportFailure {
+    fn from(error: FormatError) -> Self {
+        Self { error, retryable: false }
+    }
+}
+
+pub struct Imported {
+    pub doc: Document,
+    pub warnings: Vec<String>,
+    pub retryable: bool,
+}
+
+/// Try the same import with more room within the existing ceilings, on a 64-bit host.
+pub fn import_with_budget(bytes: &[u8], name: &str, higher: bool) -> Result<Imported, ImportFailure> {
+    import_inner(bytes, name, MAX_IMAGE_BYTES, higher)
+}
+
+#[cfg(test)]
 fn import_with_image_limit(bytes: &[u8], name: &str, image_limit: u64) -> Result<(Document, Vec<String>), FormatError> {
+    import_inner(bytes, name, image_limit, false).map(|imported| (imported.doc, imported.warnings)).map_err(|e| e.error)
+}
+
+/// More room for this file only, kept within the decoder and mapper's hard caps.
+fn budgets(packed: usize) -> ((usize, usize), (usize, usize)) {
+    let default = (craft_fig::value_budget(packed), layer_budget(packed));
+    if cfg!(target_pointer_width = "64") {
+        let values = default.0.saturating_mul(2).max(64_000_000).min(craft_fig::value_budget(usize::MAX));
+        let layers = default.1.saturating_mul(4).min(craft_fig::rest::MAX_FIG_NODES);
+        (default, (values, layers))
+    } else {
+        (default, default)
+    }
+}
+
+fn import_inner(bytes: &[u8], name: &str, image_limit: u64, higher: bool) -> Result<Imported, ImportFailure> {
     let mut archive = Archive::open_with(bytes, Limits { max_image: MAX_IMAGE, max_image_total: image_limit }).map_err(fig_err)?;
     // The budgets follow the compressed canvas, which the file itself bounds (its zip member may
     // inflate too).
@@ -112,8 +153,13 @@ fn import_with_image_limit(bytes: &[u8], name: &str, image_limit: u64) -> Result
     // of them takes gigabytes, and holding them all at once runs out of memory.
     let (schema, message) = decode_canvas(&std::mem::take(&mut archive.canvas)).map_err(fig_err)?;
     let root = schema.find("Message").ok_or_else(|| corrupt("the schema has no Message definition"))?;
-    let msg = schema.decode_message_within(root, &message, craft_fig::value_budget(packed)).map_err(|e| corrupt(e.to_string()))?;
-    let max_nodes = layer_budget(packed);
+    let (default, raised) = budgets(packed);
+    let (values, max_nodes) = if higher { raised } else { default };
+    let msg = schema.decode_message_within(root, &message, values).map_err(|e| ImportFailure {
+        // The shared decoder currently exposes a single string error type.
+        retryable: values < raised.0 && e.0 == "message: too many values",
+        error: corrupt(e.to_string()),
+    })?;
     drop(message);
     let file_name = archive.file_name.as_deref().filter(|n| !n.trim().is_empty()).unwrap_or(name);
     let (mut json, mut warnings, networks) = map::to_rest_for(&msg, file_name, max_nodes, board);
@@ -140,7 +186,12 @@ fn import_with_image_limit(bytes: &[u8], name: &str, image_limit: u64) -> Result
             warnings.push(w);
         }
     }
-    Ok((doc, warnings))
+    let layer_note = format!("the file has more than {max_nodes} layers;");
+    let component_scan = format!("the component reference scan reached the {max_nodes}-layer limit");
+    let library_scan = format!("the internal library scan reached the {max_nodes}-layer limit;");
+    let retryable = max_nodes < raised.1
+        && warnings.iter().any(|note| note.starts_with(&layer_note) || note.starts_with(&component_scan) || note.starts_with(&library_scan));
+    Ok(Imported { doc, warnings, retryable })
 }
 
 fn corrupt(msg: impl Into<String>) -> FormatError {

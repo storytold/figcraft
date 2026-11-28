@@ -182,3 +182,87 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         app.ui.import_report = None;
     }
 }
+
+pub(crate) struct FigRetry {
+    pending: crate::pending_open::PendingOpen,
+    partial: bool,
+    // None until first draw, then the widget that had focus before the modal, if any.
+    previous_focus: Option<Option<egui::Id>>,
+}
+
+pub(crate) fn offer_retry(app: &mut FigApp, command: &str, mut params: Value, partial: bool) -> bool {
+    if !matches!(command, "file.open" | "file.openRecent" | "file.import") || params.get("higherFigLimits").and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    let Some(source) = params.get("path").or_else(|| params.get("name")).and_then(Value::as_str) else { return false };
+    let label = std::path::Path::new(source).file_name().and_then(|n| n.to_str()).unwrap_or(source).chars().take(512).collect();
+    let (command, target) = if command == "file.import" && !partial {
+        let Ok(ds) = app.session.ds() else { return false };
+        ("file.import", Some(crate::pending_open::ImportTarget { uid: ds.uid, page: ds.page, name: ds.doc.name.clone() }))
+    } else {
+        // A new tab keeps the existing partial result, including any edits and appended pages.
+        params = if params.get("path").is_some() {
+            json!({"path": params["path"].take()})
+        } else {
+            json!({"name": params["name"].take(), "data": params["data"].take()})
+        };
+        ("file.open", None)
+    };
+    params["higherFigLimits"] = json!(true);
+    let pending = crate::pending_open::PendingOpen { label, params, command, target, read: None };
+    app.ui.fig_import_retry = Some(FigRetry { pending, partial, previous_focus: None });
+    true
+}
+
+pub(crate) fn show_retry(app: &mut FigApp, ctx: &egui::Context) {
+    let Some(retry) = app.ui.fig_import_retry.as_mut() else { return };
+    let first_frame = retry.previous_focus.is_none();
+    let previous_focus = ctx.memory(|m| m.focused());
+    let response = egui::Modal::new(egui::Id::unique("fig_import_retry")).show(ctx, |ui| {
+        ui.set_width((ui.ctx().content_rect().width() - 32.0).clamp(0.0, 420.0));
+        ui.heading(tr("Retry with higher import limits?"));
+        ui.label(&retry.pending.label);
+        ui.label(if retry.partial {
+            tr("Some layers were left out. Retrying opens a new tab and keeps the partial copy.")
+        } else {
+            tr("This file reached the import limit before it could open.")
+        });
+        ui.label(tr("Retrying may use significantly more memory and take longer. Save any open work first."));
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            let keep_or_cancel = if retry.partial { tr("Keep partial import") } else { tr("Cancel") };
+            let cancel = crate::widgets::button(ui, keep_or_cancel, false, true);
+            if first_frame && ui.is_visible() {
+                retry.previous_focus = Some(previous_focus);
+                cancel.request_focus();
+            }
+            let proceed = crate::widgets::button(ui, tr("Retry with higher limits"), true, true);
+            for button in [&cancel, &proceed] {
+                if button.has_focus() {
+                    let t = Tokens::get(ctx);
+                    ui.painter().rect_stroke(
+                        button.rect.expand(2.0),
+                        egui::CornerRadius::same(5),
+                        egui::Stroke::new(2.0, t.accent_text),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+            }
+            (cancel.clicked(), proceed.clicked())
+        })
+        .inner
+    });
+    let (cancel, proceed) = response.inner;
+    if (cancel || proceed || response.should_close())
+        && let Some(retry) = app.ui.fig_import_retry.take()
+    {
+        if let Some(focus) = retry.previous_focus.flatten() {
+            ctx.memory_mut(|m| m.request_focus(focus));
+        }
+        if proceed {
+            app.ui.pending_opens.insert(0, retry.pending);
+            app.ui.pending_open_frames = 0;
+            ctx.request_repaint();
+        }
+    }
+}

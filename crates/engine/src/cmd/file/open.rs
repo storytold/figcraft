@@ -1,5 +1,7 @@
 use super::import_ids::Renames;
-use super::load::{ext, file_stem, import_summary, load_path, load_with, read, rest_images, sibling_variables, variables_param};
+use super::load::{
+    ext, file_stem, import_summary, load_path, load_path_with_budget, load_with, read, rest_images, sibling_variables, variables_param,
+};
 use super::*;
 
 /// How many files File ▸ Open recent keeps.
@@ -41,7 +43,7 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
             s.prefs.recent_files.retain(|r| *r != path);
             return Err(bad(CMD, format!("{path} no longer exists")));
         }
-        return open(s, &json!({"path": path}));
+        return open(s, &json!({"path": path, "higherFigLimits": boolean(p, "higherFigLimits").unwrap_or(false)}));
     }
     let files: Vec<Value> = s
         .prefs
@@ -87,7 +89,7 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Stamped before reading: a change made during the read makes the next save refuse.
     let on_disk = crate::library::stat(&path).ok();
-    let (loaded, rest) = load_path(&path, variables.as_ref())?;
+    let (loaded, rest, retryable) = load_path_with_budget(&path, variables.as_ref(), boolean(p, "higherFigLimits").unwrap_or(false))?;
     remember(s, &path);
     let native = !rest && matches!(ext(&path).as_str(), "figcraft" | "json");
     let warnings = rest || matches!(ext(&path).as_str(), "svg" | "penpot");
@@ -110,6 +112,9 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     s.restore_view();
     let mut out = json!({"index": s.active, "summary": summary});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
+    if retryable {
+        out["retryWithHigherFigLimits"] = json!(true);
+    }
     Ok(out)
 }
 
@@ -139,13 +144,17 @@ fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) 
     let name = req_string("file.open", p, "name")?;
     let data = data.split_once(',').map_or(data, |(_, b)| b);
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| bad("file.open", e.to_string()))?;
-    let (loaded, rest) = load_with(&bytes, &name, variables, &figcraft_format::rest::no_images)?;
+    let (loaded, rest, retryable) =
+        load_with(&bytes, &name, variables, &figcraft_format::rest::no_images, boolean(p, "higherFigLimits").unwrap_or(false))?;
     let warnings = rest || matches!(ext(&name).as_str(), "svg" | "penpot");
     let summary = import_summary(&loaded.doc);
     s.docs.push(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches));
     s.active = s.docs.len() - 1;
     let mut out = json!({"index": s.active, "summary": summary});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
+    if retryable {
+        out["retryWithHigherFigLimits"] = json!(true);
+    }
     Ok(out)
 }
 
@@ -193,7 +202,8 @@ pub(super) fn import(s: &mut Session, p: &Value) -> Result<Value> {
                 None => &figcraft_format::rest::no_images,
             };
             let sibling = if variables.is_none() { path.as_deref().and_then(sibling_variables) } else { None };
-            let (other, rest) = load_with(&bytes, &name, variables.as_ref().or(sibling.as_ref()), images)?;
+            let higher = boolean(p, "higherFigLimits").unwrap_or(false);
+            let (other, rest, retryable) = load_with(&bytes, &name, variables.as_ref().or(sibling.as_ref()), images, higher)?;
             let summary = import_summary(&other.doc);
             let pages = append_pages(s.doc_mut()?, &other.doc)?;
             if !other.issues.is_empty() {
@@ -205,6 +215,9 @@ pub(super) fn import(s: &mut Session, p: &Value) -> Result<Value> {
             let mut out = json!({"pages": pages, "summary": summary});
             if rest || !other.issues.is_empty() {
                 out["warnings"] = json!(other.issues);
+            }
+            if retryable {
+                out["retryWithHigherFigLimits"] = json!(true);
             }
             Ok(out)
         }

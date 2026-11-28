@@ -5,7 +5,7 @@
 use figcraft_doc::{Document, NodeKind};
 
 use super::kiwi::{Kv, Schema};
-use super::{MAX_FIG_NODES, export, import, layer_budget, map};
+use super::{MAX_FIG_NODES, export, layer_budget, map};
 
 type Fields = Vec<(&'static str, Kv<'static>)>;
 
@@ -130,11 +130,20 @@ fn a_whole_file_past_the_cap_keeps_its_library_links_and_says_so_once() {
     // lift the cap above the REST import's 200 000.
     let file = super::tests::canvas(&Schema::parse(export::SCHEMA).unwrap(), &library_message(210, 1_000));
     assert_eq!(layer_budget(file.len()), crate::rest::MAX_NODES);
-    let (doc, warnings) = import(&file, "Design system.fig").unwrap();
+    let super::Imported { doc, warnings, retryable } = super::import_with_budget(&file, "Design system.fig", false).unwrap();
+    assert_eq!(retryable, cfg!(target_pointer_width = "64"));
     let cap: Vec<_> = warnings.iter().filter(|w| w.contains("layers; the rest were skipped")).collect();
     assert_eq!(cap.len(), 1, "{warnings:?}");
     assert!(!warnings.iter().any(|w| w.contains("aren't in the file")), "{warnings:?}");
     assert!(linked_to(&doc, "Library main") >= 190, "{warnings:?}");
+    if retryable {
+        let partial_count = doc.node_count();
+        drop(doc);
+        let retried = super::import_with_budget(&file, "Design system.fig", true).unwrap();
+        assert!(retried.doc.node_count() > partial_count);
+        assert!(!retried.warnings.iter().any(|w| w.contains("layers; the rest were skipped")));
+        assert!(!retried.retryable);
+    }
 }
 
 #[test]

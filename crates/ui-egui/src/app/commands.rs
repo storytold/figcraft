@@ -13,8 +13,12 @@ impl FigApp {
 
     /// Run a command, surfacing errors as a toast. Returns the result.
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
+        self.run_command(id, &params).map_err(|e| self.failed(id, &e)).ok()
+    }
+
+    fn run_command(&mut self, id: &str, params: &Value) -> figcraft_engine::Result<Value> {
         let layers_generation = self.session.clipboard.layers_generation;
-        let r = self.session.execute(id, &params);
+        let r = self.session.execute(id, params);
         self.clear_comment_draft_after_tool_set(id, r.is_ok());
         self.handle_ui_requests();
         self.invalidate_synthetic_copy(layers_generation);
@@ -25,7 +29,7 @@ impl FigApp {
         if let Ok(v) = &r {
             self.note_snapping(id, v);
         }
-        r.map_err(|e| self.failed(id, &e)).ok()
+        r
     }
 
     /// Snap to pixel grid turned on or off says which at the bottom, as in Figma: its shortcut
@@ -58,12 +62,22 @@ impl FigApp {
     /// [`run`](Self::run) for something the user did (a dialog, a drop, a paste, a recent file):
     /// a file it imports shows its import report. Programmatic calls use `run` and never open one.
     pub fn run_user(&mut self, id: &str, params: Value) -> Option<Value> {
-        let result = self.run(id, params.clone());
-        if let Some(result) = &result {
-            import_report::capture(self, id, &params, result);
+        match self.run_command(id, &params) {
+            Ok(result) => {
+                import_report::capture(self, id, &params, &result);
+                missing_fonts::check_later(self, id, Some(&result));
+                if result.get("retryWithHigherFigLimits").and_then(Value::as_bool) == Some(true) {
+                    import_report::offer_retry(self, id, params, true);
+                }
+                Some(result)
+            }
+            Err(error) => {
+                if !matches!(&error, figcraft_engine::EngineError::FigImportBudget(_)) || !import_report::offer_retry(self, id, params, false) {
+                    self.failed(id, &error);
+                }
+                None
+            }
         }
-        missing_fonts::check_later(self, id, result.as_ref());
-        result
     }
 
     /// Show command `id`'s error.

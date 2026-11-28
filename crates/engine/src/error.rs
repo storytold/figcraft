@@ -14,6 +14,9 @@ pub enum EngineError {
     NoNode(NodeId),
     #[error("{0}")]
     Other(String),
+    /// The default decoder budget was reached and the larger per-file budget is available.
+    #[error("{0}")]
+    FigImportBudget(String),
     /// A preview was asked for with no gesture open (something committed it under a held button).
     /// Not for the user: the canvas drops it, as the drag it belonged to is over.
     #[error("no gesture in progress")]
@@ -43,6 +46,7 @@ impl EngineError {
         match self {
             EngineError::BadParams { cmd, msg } => EngineError::BadParams { cmd, msg: format!("step {step}: {msg}") },
             EngineError::Other(msg) => EngineError::Other(format!("step {step}: {msg}")),
+            EngineError::FigImportBudget(msg) => EngineError::FigImportBudget(format!("step {step}: {msg}")),
             EngineError::Disabled(cmd, msg) => EngineError::Disabled(cmd, format!("step {step}: {msg}")),
             EngineError::Internal { cmd, msg } => EngineError::Internal { cmd, msg: format!("step {step}: {msg}") },
             e => e,

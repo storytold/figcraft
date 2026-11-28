@@ -175,7 +175,7 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
 /// shortcuts see it (it doesn't deselect), like a system dialog: from one of its fields too. A menu
 /// open over the dialog (Preferences ▸ Interface size) takes the first Escape and closes alone.
 pub fn keys(app: &mut FigApp, ctx: &Context) {
-    if egui::Popup::is_any_open(ctx) {
+    if app.ui.fig_import_retry.is_some() || egui::Popup::is_any_open(ctx) {
         return;
     }
     if !open(&app.ui) || !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -209,6 +209,7 @@ pub(crate) fn open(u: &crate::UiState) -> bool {
         || u.find.is_some()
         || u.batch_rename.is_some()
         || u.import_report.is_some()
+        || u.fig_import_retry.is_some()
         || u.missing_fonts.is_some()
         || u.confirm_close
         || matches!(u.close_tab, Some(crate::windows::TabClose::Ask(_)))
@@ -428,6 +429,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::online::dialogs(app, ctx);
     crate::windows::confirm_close(app, ctx);
     crate::windows::confirm_close_tab(app, ctx);
+    crate::import_report::show_retry(app, ctx);
 }
 
 /// Preferences ▸ Interface size: a size relative to the system's display scale (100 % is the

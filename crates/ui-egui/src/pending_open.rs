@@ -127,6 +127,9 @@ fn read_contents(app: &mut FigApp, ctx: &egui::Context) -> bool {
 /// The card while files wait, then (once it has been on screen and their contents are read) open
 /// them. Called before the import report, so a report for these files shows after them.
 pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
+    if app.ui.fig_import_retry.is_some() {
+        return;
+    }
     let reading = read_contents(app, ctx);
     if app.ui.pending_opens.is_empty() {
         app.ui.pending_open_frames = 0;
@@ -137,7 +140,8 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
         app.ui.pending_open_frames = 0;
         // Files dropped together land side by side: each starts where the previous one ends.
         let mut next_x: Option<f64> = None;
-        for mut pending in std::mem::take(&mut app.ui.pending_opens) {
+        let mut files = std::mem::take(&mut app.ui.pending_opens).into_iter();
+        for mut pending in files.by_ref() {
             let command = pending.command;
             let canvas = command == "file.import" && pending.params.get("x").is_some();
             if canvas && let Some(x) = next_x {
@@ -155,6 +159,15 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
                 });
                 next_x = right.map(|r| r + IMPORT_GAP).or(next_x);
             }
+            if app.ui.fig_import_retry.is_some() {
+                break;
+            }
+        }
+        app.ui.pending_opens.extend(files);
+        if let Some(x) = next_x
+            && let Some(next) = app.ui.pending_opens.iter_mut().find(|p| p.command == "file.import" && p.params.get("x").is_some())
+        {
+            next.params["x"] = json!(x);
         }
         return;
     }
