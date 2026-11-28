@@ -382,7 +382,7 @@ fn server_falls_back_to_legacy_snapshot_when_delta_exceeds_decode_budget() {
     // the server must fall back to `CatchUp::Snapshot` so capable clients still join cleanly.
     let mut doc = Document::new("HighAmplificationHonest");
     let page = doc.first_page().unwrap();
-    let src = doc.create(page, NodeKind::Text(TextData::new("T".repeat(256 * 1024))), "Big", 0.0, 0.0, 100.0, 20.0).unwrap();
+    let src = doc.create(page, NodeKind::Text(TextData::new("T".repeat(256 * 1024)).into()), "Big", 0.0, 0.0, 100.0, 20.0).unwrap();
     let src_snap = doc.node(src).unwrap().clone();
     for _ in 0..2000 {
         let mut m = src_snap.clone();
