@@ -4,7 +4,7 @@ use figcraft_color::{Color, Paint};
 use figcraft_doc::{
     AutoLayout, Brush, ChildLayout, DecorationStyle, DevStatus, Document, Effect, GridTrack, LayoutMode, LetterSpacing, LineHeight, ListStyle,
     MAX_LIST_INDENT, MaskType, Node, NodeId, NodeKind, Sizing, StrokeCap, StrokeProps, TextAutoResize, TextCase, TextData, TextDecoration,
-    WidthPoint, WidthPreset, WidthProfile, style_weight, valid_axis_tag, valid_feature_tag,
+    TextPosition, WidthPoint, WidthPreset, WidthProfile, style_weight, valid_axis_tag, valid_feature_tag,
 };
 use figcraft_geom::{Affine, Point};
 use serde_json::{Map, Value, json};
@@ -980,6 +980,7 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
         | "letterSpacing"
         | "textDecoration"
         | "textCase"
+        | "textPosition"
         | "hyperlink"
         | "textFills"
         | "fontVariations"
@@ -1401,6 +1402,10 @@ pub fn apply_text_style(cmd: &str, t: &mut TextData, start: usize, end: usize, k
         "textCase" => {
             let c: TextCase = enum_of(v).ok_or_else(|| bad(cmd, "textCase: original|upper|lower|title|smallCaps"))?;
             t.restyle(start, end, |s| s.case = c);
+        }
+        "textPosition" => {
+            let p: TextPosition = enum_of(v).ok_or_else(|| bad(cmd, "textPosition: none|superscript|subscript"))?;
+            t.set_position(start, end, p);
         }
         "hyperlink" => {
             let l = string_val(v);

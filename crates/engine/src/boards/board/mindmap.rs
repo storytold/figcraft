@@ -323,6 +323,50 @@ fn prune_branches(doc: &mut Document, before: &Document, touched: &BTreeSet<Node
     stirred
 }
 
+/// Whether `node` hangs (at any depth) under `top`. A chain of branches longer than there are
+/// branches is a loop, which counts as yes.
+fn hangs_under(bs: &[Branch], node: NodeId, top: NodeId) -> bool {
+    let mut at = node;
+    for _ in 0..=bs.len() {
+        let Some(b) = arriving(bs, at) else { return false };
+        if b.parent == top {
+            return true;
+        }
+        at = b.parent;
+    }
+    true
+}
+
+/// A node that moved by itself (a drag, a nudge) and whose middle is now on another node becomes
+/// that node's child, with everything under it: its branch leaves the new parent ("Dropping a node
+/// on another node makes it that node's child"). A first node, with no branch arriving, and a
+/// drop on a node under the moved one change nothing. The layers whose places follow are stirred.
+fn regraft(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+    let mut stirred = BTreeSet::new();
+    let is_node = |doc: &Document, id: NodeId| doc.node(id).is_some_and(|n| n.board == Some(BoardItem::MindNode));
+    for &id in touched {
+        let moved = is_node(doc, id) && before.node(id).zip(doc.node(id)).is_some_and(|(b, n)| b.transform != n.transform);
+        let Some(mid) = doc.world_bounds(id).map(|r| r.center()).filter(|_| moved) else { continue };
+        let bs = branches(doc);
+        let Some(a) = arriving(&bs, id) else { continue };
+        let page = doc.page_of(id);
+        let onto = doc
+            .nodes()
+            .map(|n| n.id)
+            .filter(|t| *t != id && is_node(doc, *t) && doc.page_of(*t) == page && doc.world_bounds(*t).is_some_and(|r| r.contains(mid)))
+            .find(|t| !hangs_under(&bs, *t, id));
+        let Some(onto) = onto.filter(|t| *t != a.parent) else { continue };
+        let left = map_side(&bs, onto);
+        let (out, back) = if left { (Side::Left, Side::Right) } else { (Side::Right, Side::Left) };
+        if let Some(BoardItem::Connector(c)) = doc.node_mut(a.line).and_then(|n| n.board.as_mut()) {
+            c.from = End::Node { node: onto, side: out, at: None };
+            c.to = End::Node { node: id, side: back, at: None };
+            stirred.extend([a.parent, onto, id]);
+        }
+    }
+    stirred
+}
+
 /// The boxes of the map under `root`, breadth first (so a parent always comes before its
 /// children), and the connectors that hold it together. `None`: a box is missing, or the map has
 /// more than [`MIND_MAX_NODES`] nodes (it is left as it is).
@@ -366,8 +410,9 @@ fn shift(doc: &mut Document, id: NodeId, d: Point) {
 
 /// After layout and before connectors follow: the maps an edit touched are laid out again from
 /// their first nodes (a map that is already in place is not written to, so the pass is idempotent).
-/// A branch that no longer joins two layers of its page is removed first: the only structural
-/// write, and what makes a deleted node's children float free and a detached node stay detached.
+/// A branch that no longer joins two layers of its page is removed first, which makes a deleted
+/// node's children float free and a detached node stay detached; then a node dropped on another
+/// node hangs from it ([`regraft`]). Those are the only structural writes.
 pub(crate) fn settle_mind_maps(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) {
     if !is_board(doc) || touched.is_empty() {
         return;
@@ -376,7 +421,8 @@ pub(crate) fn settle_mind_maps(doc: &mut Document, before: &Document, touched: &
     if !doc.nodes().any(|n| matches!(&n.board, Some(BoardItem::Connector(c)) if c.branch)) {
         return;
     }
-    let stirred = prune_branches(doc, before, touched);
+    let mut stirred = prune_branches(doc, before, touched);
+    stirred.extend(regraft(doc, before, touched));
     let bs = branches(doc);
     if bs.is_empty() {
         return;

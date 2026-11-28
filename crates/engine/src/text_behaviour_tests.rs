@@ -710,6 +710,62 @@ fn superscript_and_subscript_are_synthesised_without_glyphs_for_them() {
     assert_eq!(glyphs(&s), plain, "off again");
 }
 
+#[test]
+fn a_range_of_characters_is_raised_or_lowered_on_its_own() {
+    // #2338: a footnote marker, "ab(1)" with only "(1)" raised, through `text.style`.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "ab(1)", json!({"fontFamily": font, "fontSize": 40}));
+    let glyphs = |s: &Session| -> Vec<(f64, f64)> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.glyphs.iter().map(|g| (g.size, g.y)).collect()
+    };
+    let raised = |g: &[(f64, f64)], p: &[(f64, f64)]| g.len() == p.len() && g.iter().zip(p).all(|(g, p)| g.0 < p.0 && g.1 < p.1);
+    let plain = glyphs(&s);
+    assert_eq!(plain.len(), 5);
+    s.execute("text.style", &json!({"id": t, "start": 2, "end": 5, "textPosition": "superscript"})).unwrap();
+    let g = glyphs(&s);
+    assert_eq!(g[..2], plain[..2], "the chars before stay on the line");
+    assert!(raised(&g[2..], &plain[2..]), "smaller and raised: {g:?} against {plain:?}");
+    s.execute("text.style", &json!({"id": t, "start": 2, "end": 5, "textPosition": "subscript"})).unwrap();
+    let g = glyphs(&s);
+    assert!(g[2..].iter().zip(&plain[2..]).all(|(g, p)| g.0 < p.0 && g.1 > p.1), "smaller and lowered: {g:?} against {plain:?}");
+
+    // The layer's `sups` move onto its chars, so a range set to none sits on the line.
+    s.execute("text.style", &json!({"id": t, "textPosition": "none"})).unwrap();
+    assert_eq!(glyphs(&s), plain);
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": true}})).unwrap();
+    s.execute("text.style", &json!({"id": t, "start": 0, "end": 2, "textPosition": "none"})).unwrap();
+    let g = glyphs(&s);
+    assert_eq!(g[..2], plain[..2], "set to none despite the layer's sups");
+    assert!(raised(&g[2..], &plain[2..]), "the rest still raised: {g:?} against {plain:?}");
+    assert!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().features.is_empty(), "the chars hold the position now");
+
+    // A text style keeps the position and raises the chars it's applied to.
+    let u = text(&mut s, "ab(1)", json!({"fontFamily": font, "fontSize": 40}));
+    s.execute("style.create", &json!({"type": "text", "name": "Note", "value": {"fontFamily": font, "fontSize": 40, "position": "superscript"}}))
+        .unwrap();
+    s.execute("style.apply", &json!({"ids": [u], "style": "Note", "start": 2, "end": 5})).unwrap();
+    let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(u).unwrap()).unwrap();
+    let g: Vec<(f64, f64)> = l.glyphs.iter().map(|g| (g.size, g.y)).collect();
+    assert_eq!(g[..2], plain[..2]);
+    assert!(raised(&g[2..], &plain[2..]), "the style's chars raised: {g:?} against {plain:?}");
+
+    // A style that sets no position leaves the chars' own, and they stay linked to it when the
+    // layer's `sups` move onto them.
+    let v = text(&mut s, "ab(1)", json!({"fontFamily": font, "fontSize": 40}));
+    s.execute("style.create", &json!({"type": "text", "name": "Body", "value": {"fontFamily": font, "fontSize": 40}})).unwrap();
+    s.execute("style.apply", &json!({"ids": [v], "style": "Body"})).unwrap();
+    s.execute("text.setFeatures", &json!({"ids": [v], "features": {"sups": true}})).unwrap();
+    s.execute("text.style", &json!({"id": v, "start": 0, "end": 2, "textPosition": "none"})).unwrap();
+    let linked = |s: &Session| s.doc().unwrap().node(v).unwrap().kind.text().unwrap().spans().iter().all(|(_, _, st)| st.style_id.is_some());
+    assert!(linked(&s), "still linked to Body");
+    s.execute("style.apply", &json!({"ids": [v], "style": "Body"})).unwrap();
+    let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(v).unwrap()).unwrap();
+    let g: Vec<(f64, f64)> = l.glyphs.iter().map(|g| (g.size, g.y)).collect();
+    assert!(g[..2] == plain[..2] && raised(&g[2..], &plain[2..]), "applying Body again keeps the positions: {g:?}");
+}
+
 /// A synthetic monospaced TrueType font (outline-less glyphs, every printable ASCII character 500 of
 /// 1000 units wide), loaded into the font database so text measures the same on every machine.
 fn test_mono_font() -> &'static str {

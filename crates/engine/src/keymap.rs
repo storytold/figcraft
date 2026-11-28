@@ -161,7 +161,7 @@ pub static KEYS: &[Binding] = &[
     // Essential
     k(Essential, "app.actions", &["Cmd+K", "Cmd+/"]).label("Actions…"),
     k(Essential, "help.shortcuts", &["Ctrl+Shift+?"]).both(),
-    k(Essential, "view.toggleUi", &["Cmd+\\"]),
+    k(Essential, "view.toggleUi", &["Cmd+\\", "Cmd+."]),
     k(Essential, "view.fullscreen", &["Ctrl+Cmd+F"]).win(&["F11"]),
     k(Essential, "edit.pickColor", &["I", "Ctrl+C"]).win(&["I"]),
     k(Essential, "app.preferences", &["Cmd+,"]),
@@ -202,6 +202,7 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.highlighter", &["U"]),
     k(Tools, "tool.eraser", &["E"]),
     k(Tools, "tool.stamp", &["W"]),
+    k(Tools, "tool.codeBlock", &["`"]),
     k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"])
         .label("Board: a new sticky beside the selected one, the next shape joined to it, or a mind map node's next sibling")
         .both(),
