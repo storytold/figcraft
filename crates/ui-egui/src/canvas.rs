@@ -506,7 +506,13 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     app.canvas.cursor = None;
     if let (true, Some(at)) = (own_cursor && resp.hovered(), ctx.input(|i| i.pointer.hover_pos())) {
         let panning = app.canvas.space_pan || app.canvas.middle_pan.is_some();
-        let shown = crate::cursors::on_canvas(panning, ctx.input(|i| i.pointer.any_down()), app.canvas.zoom_tool, app.session.tool.overlay.cursor);
+        let mut shown =
+            crate::cursors::on_canvas(panning, ctx.input(|i| i.pointer.any_down()), app.canvas.zoom_tool, app.session.tool.overlay.cursor);
+        if let crate::cursors::Shown::Drawn(crate::cursors::Glyph::Dot { .. }) = shown
+            && let Some(tip) = app.session.ds().ok().and_then(|ds| app.session.ink_tip(app.to_page(at), ds.view.zoom))
+        {
+            shown = crate::cursors::ink(tip);
+        }
         shown.show(&ctx, at);
         if shown == crate::cursors::Shown::Drawn(crate::cursors::Glyph::Eyedropper)
             && let Some(c) = app.canvas.pixel_under(app.to_page(at), app.session.ds().ok().map(|ds| (ds.uid, ds.page)), bg)

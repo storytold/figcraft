@@ -352,6 +352,19 @@ impl Session {
         Ok(())
     }
 
+    /// The tip the ink cursor (`Cursor::Ink`) shows at page point `p` at `zoom` (screen pixels per page
+    /// unit): the colour a stroke started there takes and its width on screen, or for the Eraser no
+    /// colour and the width it reaches. `None` for the other tools.
+    pub fn ink_tip(&self, p: figcraft_geom::Point, zoom: f64) -> Option<(Option<figcraft_color::Color>, f64)> {
+        let tool = self.tool.tool;
+        if tool == ToolId::Eraser {
+            return Some((None, 2.0 * crate::board::ERASER_PX));
+        }
+        let ink = self.tool.ink(tool)?;
+        let color = if tool == ToolId::Pencil { self.pencil_color_at(p).ok() } else { ink.color };
+        Some((color, ink.weight * zoom))
+    }
+
     /// The colour a Pencil stroke starting at `p` will have: the one chosen for it, else (it goes
     /// into the frame under `p`, else the page) white when that is dark (`pencil_color`).
     pub(super) fn pencil_color_at(&self, p: figcraft_geom::Point) -> Result<figcraft_color::Color> {
