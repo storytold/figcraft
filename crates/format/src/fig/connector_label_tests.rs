@@ -44,7 +44,7 @@ fn paint() -> Kv<'static> {
     ])
 }
 
-fn synthetic_connector(version: f32, include_text: bool, text_x: f32) -> Kv<'static> {
+pub(super) fn synthetic_connector(version: f32, include_text: bool, text_x: f32) -> Kv<'static> {
     let line_geometry = Kv::Array(vec![obj(vec![("commandsBlob", Kv::Uint(0))])]);
     let line = record(0, vec![("transform", transform(7.0, 9.0)), ("size", point(20.0, 10.0)), ("fillGeometry", line_geometry)]);
     let text = record(1, vec![("transform", transform(text_x, 3.0)), ("size", point(80.0, 24.0))]);

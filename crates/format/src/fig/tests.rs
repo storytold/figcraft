@@ -12,7 +12,7 @@ use super::*;
 /// The fixture schema: `enum Name A B …`, `struct|message Name type field, type field[] …`.
 /// Message field ids count from 1; enum values from 0.
 const SCHEMA: &str = "
-enum NodeType NONE DOCUMENT CANVAS GROUP FRAME BOOLEAN_OPERATION VECTOR STAR LINE ELLIPSE RECTANGLE REGULAR_POLYGON ROUNDED_RECTANGLE TEXT SLICE SYMBOL INSTANCE STICKY VARIABLE VARIABLE_SET SHAPE_WITH_TEXT CONNECTOR TABLE
+enum NodeType NONE DOCUMENT CANVAS GROUP FRAME BOOLEAN_OPERATION VECTOR STAR LINE ELLIPSE RECTANGLE REGULAR_POLYGON ROUNDED_RECTANGLE TEXT SLICE SYMBOL INSTANCE STICKY VARIABLE VARIABLE_SET SHAPE_WITH_TEXT CONNECTOR TABLE TABLE_CELL
 enum PaintType SOLID GRADIENT_LINEAR IMAGE EMOJI
 enum ImageScaleMode STRETCH FIT FILL TILE
 enum WindingRule NONZERO ODD
@@ -388,7 +388,7 @@ fn zip_file(canvas: &[u8]) -> Vec<u8> {
     z.finish().unwrap().into_inner()
 }
 
-fn fixture() -> Vec<u8> {
+pub(super) fn fixture() -> Vec<u8> {
     zip_file(&canvas(&schema(), &message()))
 }
 
@@ -1528,7 +1528,7 @@ fn nested_instances_resized_again_drop_the_layout_derived_for_their_old_size() {
 }
 
 #[path = "tail_tests.rs"]
-mod tail;
+pub(super) mod tail;
 
 #[path = "image_filter_tests.rs"]
 mod image_filters;
