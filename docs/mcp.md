@@ -321,6 +321,9 @@ Or in a project's `.mcp.json`:
   `textDecorationOffset` (`auto`, px, or `"10%"` of the font size; the offset runs from the baseline
   down to an underline's top edge), `textDecorationSkipInk` (underlines break around descenders) and
   `textDecorationColor` (a colour, or `auto` for the text's) are character props too.
+  `textPosition` (`none`, `superscript`, `subscript`) is one as well, so `text.style` with
+  `start`/`end` raises or lowers only those chars; it wins over the layer's `sups` / `subs`
+  features, which move onto the chars the first time a position is set.
 - **Wrap style** (`auto`, `balance`, `pretty`) works at three levels: `wrapStyle` on `node.set`
   sets the layer (every paragraph); with `start`/`end` it sets the paragraphs those chars touch,
   and a paragraph's own style beats the layer's. `text.wrapStyle` sets the selected paragraphs while
@@ -374,7 +377,10 @@ Or in a project's `.mcp.json`:
   tracking shortcuts, a canvas drag) detaches that field's variable; fields the edit
   left as they were stay bound.
   `variable.addMode {from}` duplicates a mode, `variable.moveMode {collection, mode, to}` reorders
-  (index 0 is the default mode, which layers on Auto follow). `variable.update {codeSyntax: {WEB?,
+  (index 0 is the default mode, which layers on Auto follow). `variable.move {variables, before?}`
+  reorders variables within their collection (the order the Variables window and the pickers list),
+  `variable.sort {collection, group?, descending?}` sorts them by name, numbers by value (50 before
+  100). `variable.update {codeSyntax: {WEB?,
   iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one, SwiftUI the iOS one and
   Compose the Android one (a variable without one keeps its value there).
 - **Live previews**: `text.preview {command, params}` shows what `style.apply`,
@@ -404,7 +410,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `list_commands {filter?}` | Every command: id, label, menu, shortcut, undoable, params doc. |
 | `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, Leptos, Vue, SwiftUI, Jetpack Compose, ArkUI or Flutter for a layer; components take their properties as parameters and instances are calls, see Developer Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML, React, Leptos and Vue, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}` or a colour calculation (`{alpha}`, `{mix}`), `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Developer Mode below)). |
 | `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`), which keeps one copy of the document however many steps there are (an `edit.undo` step undoes the batch's edits so far together); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: name it with `"as": "card"` and `{"$ref": "card"}` anywhere in a later step's params becomes the `id` in its result (`{"$step": n}` does the same by zero-based position); `"field"` takes another key or a slash path such as `ids/0` (see Step references below). |
-| `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. |
+| `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. `warnings` reports a fontStyle that draws in another face. |
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
@@ -439,7 +445,8 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `components` | By id: `name`, `type`, `properties` with variants, `codeLinks` |
 | `fonts` | `family`, `styles`, and whether it's `installed` |
 | `assets` | What `inspect.assets` lists, for the layers in the tree |
-| `missing` | `{what, why}`: what the design doesn't specify. Always says that the file stores no breakpoints |
+| `responsive` | What the designer stated about other screen sizes, as `responsive.list` gives it for the target: `explicit`, `versions`, `rules`. Nothing is inferred from names or sizes |
+| `missing` | `{what, why}`: what the design doesn't specify. Says that the file stores no breakpoints unless `responsive` is `explicit` |
 | `truncated` | When `depth` or `maxNodes` cut the tree, or `maxBytes` made the tool ask for fewer layers: `layersLeftOut`, `assetsLeftOut`, `depth`, `maxNodes`; and `variables` when aliases went deeper than the 10,000 variables followed |
 
 Each layer in `nodes` has `id`, `name`, `type` and:
@@ -651,7 +658,8 @@ one undo step and returns the ids it made:
 - Tools for `pointer`: `tool.sticky {color?}`, `tool.shape {shape?}`, `tool.connector {style?: straight|elbow|curved}`
   (drag from one object to another), `tool.marker {color?}`, `tool.highlighter {color?}`,
   `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`, `tool.mindMap` (a click places a mind map, the first node's text starting
-  there, and types in it); Text and Section are the usual tools.
+  there, and types in it), `tool.codeBlock` (a click places a code block centred there and types in
+  it); Text and Section are the usual tools.
 
 ```json
 {"command": "file.newBoard", "params": {"name": "Retro"}}
@@ -739,7 +747,7 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   (`Shift+Cmd+\`) switch the right panel's tab or hide the left sidebar in the app (no-ops headless).
 - `doc.nextTab` / `doc.previousTab` (`Ctrl+Tab` / `Ctrl+Shift+Tab`): the next or previous open file.
 - Board tools (boards only): `tool.sticky` (`Q`), `tool.shape` (`B`), `tool.connector` (`X`),
-  `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), and
+  `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), `tool.codeBlock` (`` ` ``), and
   `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky; on a mind map node it
   makes the node's next sibling) and `board.mindMapAdd` (`Cmd/Ctrl+Enter` on a mind map node, also
   while typing in one). Keys no design-file shortcut uses; on a design file they refuse.
@@ -1561,9 +1569,12 @@ change where the next edit lands. `run_command`, `batch`, `create_node`, `set_pr
 `inspect_document`, `get_node`, `select`, `export`, `screenshot`, `save_file`, `undo` and `redo`
 take an optional `document`: the file's `id` (in `run_command {command: "doc.list"}`, and the `id`
 of the `document` outline `open_file` and `inspect_document` return) or the path of an open file.
-The call acts on that file and the tab in front stays in front, unless the command itself opens or
-switches to another file (`file.open`, `file.new`, `doc.switch`), as it would without `document`. A
-file that isn't open is an error. `doc.list` gives an agent each open file's `id`, name and state, not`nwhere it is on disk (#1117). `screenshot {window}` captures what the window shows, so it
+The call acts on that file and ordinary reads and edits keep the tab in front. Explicit file/tab
+commands (`file.open`, `file.new`, `doc.switch`, `doc.nextTab`, `doc.previousTab`) and player commands
+(`proto.present`, `proto.preview`) keep the requested file in front, including successful commands
+inside a batch. Failed groups discard their UI requests and explicit selection. A
+file that isn't open is an error. `doc.list` gives an agent each open file's `id`, name and state, not
+where it is on disk (#1117). `screenshot {window}` captures what the window shows, so it
 needs the file in front. Over the control channel, `engine.execute`, `document.inspect`,
 `node.get` and `ui.render` take the same `document`; other methods refuse one naming a file behind
 the tab in front. Headless sessions take it too.
@@ -1965,6 +1976,19 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   the defaults (old files open with the defaults). In the app, with nothing selected, the Inspect
   tab filters the callouts by category and edits the categories (colour, name, delete, add); each
   note has a category menu.
+- **Screen sizes:** a file has no breakpoints, so the designer states what happens at other sizes and
+  agents read that rather than guess. Undoable `responsive.set {ids?, viewport, group?}` marks frames
+  or sections as the `mobile`, `tablet` or `desktop` version of a design (`null` clears the mark;
+  `group` names the design, and `null` goes back to each frame's name). Undoable `responsive.rule {id?,
+  text}` adds a note to the **Responsive** annotation category, making the category if the file lacks
+  it; the note keeps to `annotation.add`'s limits, and pages are refused. Developer Mode makes both
+  edits, as it does annotations. `responsive.list {}` → `{versions: [{group, frames: [{id, name, viewport,
+  width, height, page}]}]}`, narrowest first; with `ids` or `id`, what is stated about those layers,
+  the layers above them and those inside them: `{explicit, versions, rules: [{id, layer, text}],
+  truncated?}` (`truncated`: too many layers to read every rule). Nothing is inferred from names or
+  sizes, and stored values that aren't one of the three versions are ignored. `design_context` gives
+  the same for its target under `responsive`. Marks are layer data (`figcraft.viewport`, `figcraft.viewportGroup`), so they save and sync
+  with no change to the file format. In the app, a frame's or section's Inspect tab has a **Screen sizes** section.
 - **Ready for dev:** frames at the top of a page or section, and sections, carry a handoff status
   (`node.set {devStatus: none|readyForDev|completed}`; other layers are refused a status).
   `inspect.readyForDev {status?: readyForDev|changed|completed|any, page?}` lists them across pages

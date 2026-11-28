@@ -59,7 +59,8 @@ impl Trigger {
     pub fn fires_on_key(&self, key: &str, mods: KeyMods) -> bool {
         let Trigger::KeyPress { key: want } = self else { return false };
         let (m, k) = KeyMods::split(want);
-        m == mods && (k.eq_ignore_ascii_case(key) || key_alias(k) == Some(key))
+        // The window uses Right while saved prototypes use ArrowRight; normalize both sides.
+        m == mods && (k.eq_ignore_ascii_case(key) || key_alias(k).is_some_and(|alias| key_alias(key) == Some(alias)))
     }
 }
 

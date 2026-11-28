@@ -469,7 +469,7 @@ fn type_settings(
         let face = uniform(styles, |s| (s.font_family.clone(), s.font_style.clone())).and_then(|(f, s)| figcraft_text::find_face(&f, &s));
         let face_name = face.as_ref().map(|f| format!("{} {}", f.family, f.style)).unwrap_or_else(|| tr("Mixed fonts").into());
         widgets::label(ui, &face_name, t.text_secondary);
-        position_row(app, ui, doc, ids, w);
+        position_row(app, ui, doc, ids, apply_style, w);
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for (tag, label, default_on) in FEATURES {
                 let state = common(doc, ids, |n| n.kind.text().map(|t| t.features.get(tag).copied())).flatten();
@@ -486,17 +486,22 @@ fn type_settings(
     }
 }
 
-/// Position: the layers' text as superscript or subscript (`sups`, `subs`; drawn smaller and
-/// raised or lowered where the font has no glyphs for them), or neither. `sups` wins when a layer
-/// has both, as when it is drawn (#2338).
-fn position_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId], w: f32) {
+/// Position: superscript or subscript (drawn smaller and raised or lowered where the font has no
+/// glyphs for them), or neither, for the selected chars while editing, else whole layers (#2338).
+fn position_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId], apply_style: &dyn Fn(&mut FigApp, &str, Value), w: f32) {
     caption(ui, tr("Position"));
-    let on = |t: &figcraft_doc::TextData, tag: &str| t.features.get(tag).copied().unwrap_or(false);
-    let active = common(doc, ids, |n| n.kind.text().map(|t| if on(t, "sups") { 1 } else { usize::from(on(t, "subs")) * 2 })).flatten();
+    let range = figcraft_engine::textedit::selected_range(&app.session);
+    let active = common(doc, ids, |n| {
+        let t = n.kind.text()?;
+        let sel = range.filter(|r| r.0 == n.id && r.1 < r.2);
+        let mut at = t.spans().into_iter().filter(|(s, e, _)| sel.is_none_or(|(_, a, b)| *s < b && *e > a)).map(|(_, _, st)| t.position_of(st));
+        let first = at.next()?;
+        at.all(|p| p == first).then_some(first as usize)
+    })
+    .flatten();
     let items = [("—", tr_noop("None")), ("X²", tr_noop("Superscript")), ("X₂", tr_noop("Subscript"))];
     if let Some(i) = text_seg(ui, "position", &items, active, w) {
-        let want = |k: usize| if i == k { json!(true) } else { Value::Null };
-        app.run("text.setFeatures", json!({"ids": ids, "features": {"sups": want(1), "subs": want(2)}}));
+        apply_style(app, "textPosition", json!((["none", "superscript", "subscript"].get(i).copied().unwrap_or("none"))));
     }
     ui.add_space(4.0);
 }

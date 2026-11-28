@@ -22,8 +22,6 @@
 //! - host mode: `?host=parent` (a same-origin page embedding FigCraft in an `<iframe>`) or
 //!   `data-host="page"` on the canvas (the page's own document) hands the page the app's files
 //!   instead of downloading them and reports unsaved changes (`host`);
-//! - live sessions: it joins sessions a desktop app hosts (File ▸ Join live session…) but can't
-//!   host one. A page served over `https://` can only reach sessions on the same computer
 //!
 //! URL query flags: `?webgl` forces the WebGL2 backend instead of WebGPU; `?control` installs
 //! `window.figcraft`, the page's control channel (`api.rs`), which is off without it; `?host=parent`

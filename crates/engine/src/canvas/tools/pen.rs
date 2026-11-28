@@ -1,4 +1,4 @@
-use super::handles::{PENCIL_STROKE, selected_end_at};
+use super::handles::selected_end_at;
 use super::{
     Affine, Document, Gesture, Guide, Node, NodeId, NodeKind, PenPath, Point, PointerEvent, Result, Session, StrokeAlign, ToolId, Vec2,
     VectorNetwork, at_45_degrees, frame_at, json, pen_handles,
@@ -334,9 +334,9 @@ impl Session {
         let mut local = fitted.clone();
         local.apply_affine(pw.inverse());
         let _ = d;
-        // Black, or white on a dark page or frame (#1741).
-        let (_, weight) = PENCIL_STROKE;
-        let color = super::handles::pencil_color(self.doc()?, parent);
+        // The ink chosen for the Pencil; by default black, or white on a dark page or frame (#1741).
+        let ink = self.tool.pencil_ink;
+        let (color, weight) = (ink.color.unwrap_or(super::handles::pencil_color(self.doc()?, parent)), ink.weight);
         let mut props = json!({"fills": [], "strokes": [color.to_css_hex()], "strokeWeight": weight, "strokeCap": "round", "strokeJoin": "round", "strokeAlign": "center"});
         // Pen pressure becomes the stroke's width profile (brushes follow it too).
         if let Some(points) = pressure_profile(points, pressure) {
@@ -352,9 +352,25 @@ impl Session {
         Ok(())
     }
 
-    /// The colour a Pencil stroke starting at `p` will have: it goes into the frame under `p`
-    /// (else the page), and is white when that is dark (`pencil_color`).
+    /// The tip the ink cursor (`Cursor::Ink`) shows at page point `p` at `zoom` (screen pixels per page
+    /// unit): the colour a stroke started there takes and its width on screen, or for the Eraser no
+    /// colour and the width it reaches. `None` for the other tools.
+    pub fn ink_tip(&self, p: figcraft_geom::Point, zoom: f64) -> Option<(Option<figcraft_color::Color>, f64)> {
+        let tool = self.tool.tool;
+        if tool == ToolId::Eraser {
+            return Some((None, 2.0 * crate::board::ERASER_PX));
+        }
+        let ink = self.tool.ink(tool)?;
+        let color = if tool == ToolId::Pencil { self.pencil_color_at(p).ok() } else { ink.color };
+        Some((color, ink.weight * zoom))
+    }
+
+    /// The colour a Pencil stroke starting at `p` will have: the one chosen for it, else (it goes
+    /// into the frame under `p`, else the page) white when that is dark (`pencil_color`).
     pub(super) fn pencil_color_at(&self, p: figcraft_geom::Point) -> Result<figcraft_color::Color> {
+        if let Some(c) = self.tool.pencil_ink.color {
+            return Ok(c);
+        }
         let page = self.page()?;
         let doc = self.doc()?;
         let parent = frame_at(doc, page, p, &[]).unwrap_or(page);

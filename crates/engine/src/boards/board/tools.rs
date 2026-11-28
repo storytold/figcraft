@@ -7,6 +7,7 @@ use super::{
     BoardItem, Connector, Document, ERASER_PX, End, EngineError, Gesture, NodeId, Point, PointerEvent, Result, SHAPE, STICKY, Session, Side, ToolId,
     id_of, is_board, json,
 };
+use figcraft_doc::{CODE_MIN_H, CODE_WIDTH};
 
 /// How near (screen pixels) the pointer must be to the middle of an object's side for a connector
 /// end to attach there, however small the object is on screen.
@@ -69,6 +70,15 @@ impl Session {
             ToolId::MindMap => {
                 // The first node's text starts at the click: its left edge there, its middle level with it.
                 let r = self.execute("board.mindMap", &json!({"x": ev.x, "y": ev.y - MIND_ROOT_H / 2.0}))?;
+                self.board_placed();
+                if let Some(id) = r.get("id").and_then(id_of) {
+                    edit_text(self, id)?;
+                }
+                Ok(())
+            }
+            ToolId::CodeBlock => {
+                let (x, y) = (ev.x - CODE_WIDTH / 2.0, ev.y - CODE_MIN_H / 2.0);
+                let r = self.execute("board.codeBlock", &json!({"x": x, "y": y}))?;
                 self.board_placed();
                 if let Some(id) = r.get("id").and_then(id_of) {
                     edit_text(self, id)?;

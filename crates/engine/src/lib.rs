@@ -72,6 +72,7 @@ pub use dev::dev_measurements;
 pub use dev::dev_resources;
 pub use dev::devcompare;
 pub use dev::devinspect;
+pub use dev::responsive;
 pub use dev::tailwind;
 pub use extensions::plugin_directory;
 pub use extensions::plugins;
@@ -125,6 +126,8 @@ pub use view_state::ViewState;
 pub struct Session {
     pub docs: Vec<DocState>,
     pub active: usize,
+    /// Explicit file-selection revision; command rollback restores it along with the selection.
+    document_selection_revision: u64,
     pub clipboard: Clipboard,
     /// Edit ▸ Set default properties: what new shapes and text drawn with the tools take.
     pub default_props: DefaultProps,
@@ -476,6 +479,8 @@ mod open_issues_tests;
 #[cfg(test)]
 mod outline_options_tests;
 #[cfg(test)]
+mod page_background_variable_tests;
+#[cfg(test)]
 mod page_clipboard_tests;
 #[cfg(test)]
 mod page_copy_navigation_tests;
@@ -557,6 +562,8 @@ mod proto_run_tests;
 mod proto_tail_tests;
 #[cfg(test)]
 mod reopen_tests;
+#[cfg(test)]
+mod responsive_tests;
 #[cfg(test)]
 mod rest_slot_tests;
 #[cfg(test)]

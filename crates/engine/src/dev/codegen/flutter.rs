@@ -2,9 +2,9 @@ use figcraft_doc::AutoLayout;
 
 use super::swift::one_line;
 use super::{
-    CodeLang, CrossAlign, Ctx, GradientKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, Paint, PaintKind, Param,
-    Sizing, TextAlignH, TextDecoration, drop_shadow, first_fill, gradient_axis, gradient_stops, kotlin_color, literal, native_gradient_kind, num,
-    radius, stroke_color, visible_fills,
+    CodeLang, CrossAlign, Ctx, Document, GradientKind, ImageScaleMode, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind,
+    Paint, PaintKind, Param, Sizing, TextAlignH, TextDecoration, drop_shadow, first_fill, gradient_axis, gradient_stops, image_asset, kotlin_color,
+    literal, native_gradient_kind, num, paints_a_box, pattern_notes, radius, stroke_color, visible_fills,
 };
 
 // ------------------------------------------------------------------ Flutter (Dart)
@@ -104,24 +104,29 @@ fn flutter_gradient(g: &figcraft_color::Gradient, w: f64, h: f64, opacity: f32) 
     }
 }
 
-/// One paint as a `BoxDecoration` part (`color: ...` or `gradient: ...`); `None` for an image or
-/// pattern, which no native target writes yet.
-fn flutter_paint(n: &Node, p: &Paint) -> Option<String> {
+/// One paint as a `BoxDecoration` part (`color: ...`, `gradient: ...` or `image: ...`); `None` for
+/// a pattern (see [`pattern_notes`]).
+fn flutter_paint(doc: &Document, n: &Node, p: &Paint) -> Option<String> {
     match &p.kind {
         PaintKind::Solid { .. } => Some(format!("color: {}", kotlin_color(p.solid_color()?))),
         PaintKind::Gradient(g) => Some(format!("gradient: {}", flutter_gradient(g, n.width, n.height, p.opacity))),
-        PaintKind::Image(_) | PaintKind::Pattern(_) => None,
+        PaintKind::Image(i) => {
+            let (stem, ext) = image_asset(doc, i);
+            let fit = match i.scale_mode {
+                ImageScaleMode::Fit => "fit: BoxFit.contain",
+                ImageScaleMode::Tile => "fit: BoxFit.none, repeat: ImageRepeat.repeat",
+                ImageScaleMode::Fill | ImageScaleMode::Crop => "fit: BoxFit.cover",
+            };
+            let opacity = if p.opacity < 1.0 { format!(", opacity: {}", num(f64::from(p.opacity))) } else { String::new() };
+            Some(format!("image: DecorationImage(image: AssetImage({}), {fit}{opacity})", literal(&format!("{stem}.{ext}"), true)))
+        }
+        PaintKind::Pattern(_) => None,
     }
 }
 
-/// Whether a layer is written as a `Container`: the layers with a box to paint.
-fn paints_a_box(n: &Node) -> bool {
-    matches!(n.kind, NodeKind::Ellipse { .. } | NodeKind::Rectangle | NodeKind::Group) || n.kind.is_frame_like()
-}
-
 /// A layer's fills as `BoxDecoration` parts, bottom first.
-fn flutter_fill_parts(n: &Node) -> Vec<String> {
-    visible_fills(n).filter_map(|(_, p)| flutter_paint(n, p)).collect()
+fn flutter_fill_parts(doc: &Document, n: &Node) -> Vec<String> {
+    visible_fills(n).filter_map(|(_, p)| flutter_paint(doc, n, p)).collect()
 }
 
 /// A layer's fill, shape, corner radius, stroke and shadow as a `BoxDecoration`; `None` when it has
@@ -166,8 +171,8 @@ struct Painted {
 /// Opens a `DecoratedBox` for each fill under the top one, the bottom fill outermost, and returns
 /// what is left for the `Container`. The outermost box carries the drop shadow: a decoration paints
 /// its shadow first, so on the `Container` it would lie over the lower fills.
-fn flutter_fill_boxes(n: &Node, depth: &mut usize, close: &mut Vec<String>, out: &mut String) -> Painted {
-    let mut parts = flutter_fill_parts(n);
+fn flutter_fill_boxes(doc: &Document, n: &Node, depth: &mut usize, close: &mut Vec<String>, out: &mut String) -> Painted {
+    let mut parts = flutter_fill_parts(doc, n);
     let top = parts.pop();
     let shadow = parts.is_empty();
     for (at, part) in parts.iter().enumerate() {
@@ -239,8 +244,11 @@ fn flutter_placed(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, place: Pl
     }
     // An instance is a call, made once: it gets no fill boxes, so this is its final depth.
     let call = flutter_call(ctx, n, depth);
-    let painted =
-        if call.is_none() && paints_a_box(n) { flutter_fill_boxes(n, &mut depth, &mut close, out) } else { Painted { fill: None, shadow: true } };
+    let painted = if call.is_none() && paints_a_box(n) {
+        flutter_fill_boxes(ctx.doc, n, &mut depth, &mut close, out)
+    } else {
+        Painted { fill: None, shadow: true }
+    };
     // A wrapper leaves its line open ("child: "), so the widget carries no indentation of its own.
     let mut body = String::new();
     flutter_widget(ctx, n, depth, call, &painted, &mut body);
@@ -302,6 +310,7 @@ fn flutter_widget(ctx: &Ctx, n: &Node, depth: usize, call: Option<String>, paint
         }
         NodeKind::Ellipse { .. } | NodeKind::Rectangle => {
             out.push_str(&format!("{pad}Container(\n{inner}width: {},\n{inner}height: {},\n", num(n.width), num(n.height)));
+            out.push_str(&pattern_notes(n, &inner));
             if let Some(d) = box_decoration(n, &inner, painted.fill.as_deref(), true, painted.shadow) {
                 out.push_str(&format!("{inner}decoration: {d},\n"));
             }
@@ -315,6 +324,7 @@ fn flutter_widget(ctx: &Ctx, n: &Node, depth: usize, call: Option<String>, paint
             let mut kids = String::new();
             let padded_inside = !(children.is_empty() && slot.is_none()) && flutter_children(ctx, n, &children, slot, depth + 1, &mut kids);
             out.push_str(&format!("{pad}Container(\n{inner}width: {},\n{inner}height: {},\n", num(n.width), num(n.height)));
+            out.push_str(&pattern_notes(n, &inner));
             if !padded_inside && let Some(p) = flutter_padding(n) {
                 out.push_str(&format!("{inner}padding: {p},\n"));
             }

@@ -675,6 +675,8 @@ mod boolean_radius_tests;
 #[cfg(test)]
 mod bounds_memo_tests;
 #[cfg(test)]
+mod clip_cover_tests;
+#[cfg(test)]
 mod dots_tests;
 #[cfg(test)]
 mod effect_order_tests;
@@ -709,6 +711,8 @@ mod magnified_image_tests;
 #[cfg(test)]
 mod mask_bounds_tests;
 #[cfg(test)]
+mod outline_shadow_tests;
+#[cfg(test)]
 mod paint_behaviour_tests;
 #[cfg(test)]
 mod pan_bench_tests;
@@ -723,12 +727,18 @@ mod retained_tests;
 #[cfg(test)]
 mod rtl_list_tests;
 #[cfg(test)]
+mod shadow_silhouette_tests;
+#[cfg(test)]
 mod solo_tests;
 #[cfg(test)]
 mod spread_tests;
+#[cfg(test)]
+mod stroke_fringe_tests;
 #[cfg(test)]
 mod stroke_reach_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod width_tests;
+#[cfg(test)]
+mod zoom_bench_tests;

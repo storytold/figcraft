@@ -592,7 +592,7 @@ pub fn present_owner_active(app: &FigApp) -> bool {
 }
 
 /// Puts the presenter on screen back into its tab, where it keeps its state.
-fn pause_present(app: &mut FigApp) {
+pub(crate) fn pause_present(app: &mut FigApp) {
     let Some(p) = app.ui.present.take() else { return };
     let id = app.ui.present_active;
     if let Some(t) = app.ui.presents.iter_mut().find(|t| Some(t.id) == id) {

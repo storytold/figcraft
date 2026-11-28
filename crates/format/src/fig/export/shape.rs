@@ -176,6 +176,9 @@ impl<'d> Exporter<'d> {
         if !td.features.is_empty() {
             self.warn("OpenType features were left out");
         }
+        if styles.clone().any(|st| st.position != figcraft_doc::TextPosition::None) {
+            self.warn("superscript and subscript were left out");
+        }
     }
 
     /// The editable network (with per-point corner radii, handle mirroring and end caps) and,

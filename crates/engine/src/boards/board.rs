@@ -30,7 +30,7 @@ mod mindmap;
 mod reshape;
 mod tools;
 
-pub use code::is_code_text;
+pub use code::{is_code_text, is_one_code_block};
 pub(crate) use connectors::end_handle_at;
 pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
@@ -99,15 +99,28 @@ const LINE_WEIGHT: f64 = 2.0;
 /// Marker and highlighter strokes: (weight, opacity).
 const MARKER: (f64, f32) = (4.0, 1.0);
 const HIGHLIGHTER: (f64, f32) = (20.0, 0.45);
+/// The ink colours the drawing tools offer (`tool.ink`): name and colour.
+pub const INK_COLORS: [(&str, Color); 8] = [
+    ("black", INK),
+    ("gray", Color::from_rgb8_const(0x8A, 0x88, 0x83)),
+    ("red", Color::from_rgb8_const(0xE0, 0x3E, 0x3E)),
+    ("orange", Color::from_rgb8_const(0xF2, 0x86, 0x1F)),
+    ("yellow", Color::from_rgb8_const(0xFF, 0xD2, 0x1F)),
+    ("green", Color::from_rgb8_const(0x2F, 0xA8, 0x4F)),
+    ("blue", Color::from_rgb8_const(0x2D, 0x7F, 0xF9)),
+    ("violet", Color::from_rgb8_const(0x8B, 0x5C, 0xF6)),
+];
+/// The stroke weights `tool.ink` takes.
+pub const INK_WEIGHTS: std::ops::RangeInclusive<f64> = 0.1..=100.0;
 /// How far the eraser reaches around the pointer (screen pixels).
-const ERASER_PX: f64 = 8.0;
+pub const ERASER_PX: f64 = 8.0;
 /// The text sizes the contextual bar offers.
 pub const TEXT_SIZES: [(&str, f64); 4] = [("S", 12.0), ("M", 16.0), ("L", 24.0), ("XL", 36.0)];
 /// The text sizes a sticky's menu offers (FigJam's, measured 2026-11-12): name and size.
 pub const STICKY_SIZES: [(&str, f64); 5] = [("Small", 16.0), ("Medium", 24.0), ("Large", 40.0), ("Extra large", 64.0), ("Huge", 96.0)];
 
 /// The board tools' choices: the colour new stickies get, the shape and stamp the tools place,
-/// how new connectors run and the marker's and highlighter's colours.
+/// how new connectors run and the marker's and highlighter's colours and weights.
 #[derive(Clone, Debug)]
 pub struct BoardTool {
     pub sticky: Color,
@@ -118,6 +131,8 @@ pub struct BoardTool {
     pub routing: Routing,
     pub marker: Color,
     pub highlighter: Color,
+    pub marker_weight: f64,
+    pub highlighter_weight: f64,
 }
 
 impl Default for BoardTool {
@@ -131,6 +146,8 @@ impl Default for BoardTool {
             routing: Routing::Elbow,
             marker: INK,
             highlighter: Color::from_rgb8_const(0xFF, 0xD2, 0x1F),
+            marker_weight: MARKER.0,
+            highlighter_weight: HIGHLIGHTER.0,
         }
     }
 }
@@ -225,7 +242,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.ink",
             "Marker stroke",
-            "{path (SVG path data on the page) | points [[x,y],..], highlighter? (wide and see-through), color?, select? (default true)} → {id}",
+            "{path (SVG path data on the page) | points [[x,y],..], highlighter? (wide and see-through), color?, weight? (default the tool's, as tool.ink sets them), select? (default true)} → {id}",
             true,
             ink_cmd
         ),
@@ -256,6 +273,9 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             |s, _| board_tool(s, ToolId::MindMap)
         ),
+        spec!("tool.codeBlock", "Code block tool", "{} (a click places a code block centred there and starts typing in it)", false, |s, _| {
+            board_tool(s, ToolId::CodeBlock)
+        }),
         spec!("tool.shape", "Shapes", "{shape?} (a click places a shape with text)", false, |s, p| {
             if let Some(v) = string(p, "shape") {
                 s.tool.board.shape = shape_of("tool.shape", &v)?;
@@ -280,6 +300,13 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             board_tool(s, ToolId::Highlighter)
         }),
+        spec!(
+            "tool.ink",
+            "Ink",
+            "{tool? (pencil|marker|highlighter; default the current one), color? (black|gray|red|orange|yellow|green|blue|violet or any colour; the Pencil also takes auto: black, or white on a dark page or frame), weight? (0.1 to 100)} → {tool, color, weight}  the ink that tool's new strokes get (omit color and weight to read it)",
+            false,
+            tool_ink
+        ),
         spec!("tool.eraser", "Eraser", "{} (drag over marker and highlighter strokes to remove them)", false, |s, _| board_tool(s, ToolId::Eraser)),
         spec!("tool.stamp", "Stamp", "{stamp?} (a click places the stamp)", false, |s, p| {
             if let Some(v) = string(p, "stamp") {
@@ -312,6 +339,53 @@ pub(crate) fn refuse_on_board(s: &Session, cmd: &str) -> Result<()> {
 fn board_tool(s: &mut Session, t: ToolId) -> Result<Value> {
     require(s, &format!("tool.{}", t.id()))?;
     crate::cmd::view::tool(s, t)
+}
+
+/// `weight`: an ink stroke's weight, in [`INK_WEIGHTS`].
+fn weight_param(cmd: &str, p: &Value) -> Result<Option<f64>> {
+    match num(p, "weight") {
+        Some(w) if !INK_WEIGHTS.contains(&w) => Err(bad(cmd, "`weight` is 0.1 to 100")),
+        w => Ok(w),
+    }
+}
+
+/// `tool.ink`: set or read a drawing tool's ink.
+fn tool_ink(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "tool.ink";
+    let tool = match string(p, "tool") {
+        Some(t) => ToolId::from_id(&t)
+            .filter(|t| s.tool.ink(*t).is_some())
+            .ok_or_else(|| bad(cmd, format!("`tool` is pencil, marker or highlighter, not `{t}`")))?,
+        None if s.tool.ink(s.tool.tool).is_some() => s.tool.tool,
+        None => return Err(bad(cmd, "name a `tool` (pencil, marker or highlighter): the current tool draws no ink")),
+    };
+    let color = match get(p, "color") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(v)) if tool == ToolId::Pencil && v.eq_ignore_ascii_case("auto") => Some(None),
+        Some(v) => {
+            let named = v.as_str().and_then(|v| INK_COLORS.iter().find(|(n, _)| n.eq_ignore_ascii_case(v))).map(|c| c.1);
+            Some(Some(named.or_else(|| color_of(v)).ok_or_else(|| bad(cmd, "`color` is an ink colour (black, blue…) or a colour such as #2D7FF9"))?))
+        }
+    };
+    let weight = weight_param(cmd, p)?;
+    let b = &mut s.tool.board;
+    match tool {
+        ToolId::Marker => {
+            b.marker = color.flatten().unwrap_or(b.marker);
+            b.marker_weight = weight.unwrap_or(b.marker_weight);
+        }
+        ToolId::Highlighter => {
+            b.highlighter = color.flatten().unwrap_or(b.highlighter);
+            b.highlighter_weight = weight.unwrap_or(b.highlighter_weight);
+        }
+        _ => {
+            let ink = &mut s.tool.pencil_ink;
+            ink.color = color.unwrap_or(ink.color);
+            ink.weight = weight.unwrap_or(ink.weight);
+        }
+    }
+    let ink = s.tool.ink(tool).unwrap_or_default();
+    Ok(json!({"tool": tool.id(), "color": ink.color.map_or_else(|| "auto".to_string(), |c| c.to_css_hex()), "weight": ink.weight}))
 }
 
 fn shape_of(cmd: &str, v: &str) -> Result<BoardShape> {

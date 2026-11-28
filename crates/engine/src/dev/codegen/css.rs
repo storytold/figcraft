@@ -392,6 +392,11 @@ fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tok
         TextDecoration::Underline => put("text-decoration", "underline".into()),
         TextDecoration::Strikethrough => put("text-decoration", "line-through".into()),
     }
+    match tx.position_of(s) {
+        figcraft_doc::TextPosition::None => {}
+        figcraft_doc::TextPosition::Superscript => put("vertical-align", "super".into()),
+        figcraft_doc::TextPosition::Subscript => put("vertical-align", "sub".into()),
+    }
     decoration_decls(s, put);
     if tx.leading_trim == figcraft_doc::LeadingTrim::CapHeight {
         put("text-box", "trim-both cap alphabetic".into());

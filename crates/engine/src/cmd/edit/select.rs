@@ -8,7 +8,7 @@ pub(super) fn layers_at(s: &mut Session, p: &Value) -> Result<Value> {
     let zoom = s.ds()?.view.zoom.max(1e-6);
     let sel = s.selection();
     let result = crate::booleans::result_outline(doc, &sel);
-    let opts = figcraft_doc::geometry::HitOpts { locked: true };
+    let opts = figcraft_doc::geometry::HitOpts { locked: true, ..Default::default() };
     let layers: Vec<Value> = figcraft_doc::geometry::layers_at_opts(doc, s.page()?, figcraft_geom::Point::new(x, y), 2.0 / zoom, Some(&result), opts)
         .into_iter()
         .filter_map(|(id, depth)| {
