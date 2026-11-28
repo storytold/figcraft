@@ -525,6 +525,15 @@ Images are compared at up to 2,000 pixels a side, the larger of the frame and th
 the scale. Each layer claims the pixels it draws on, so a see-through part of a shape leaves a
 difference to the layer under it.
 
+### Building from a design
+
+The `implement_design` prompt takes an agent through building the selected design in a codebase with
+these tools: `design_context` for what the designer set, `component_mappings` and `sync_mappings` to
+reuse connected components, `export_assets` for the files, the annotations and `responsive` for what
+the design states beyond its size, and `compare_design` to check the result. It tells the agent to
+ask when nothing is selected and before changing the design, and to report what it approximated,
+assumed or couldn't check instead of presenting it as done.
+
 ### Compact layer trees
 
 `inspect_document` and `get_node` accept `fields`, an array of exact, case-sensitive top-level node
@@ -2309,6 +2318,7 @@ A name a tool or command doesn't take (`run_command {args}` for `params`, a step
 | `prototype_flow` | `screens` (comma-separated), `transition` |
 | `fix_comments` | `page` (default "all"), `auto_resolve` (default "yes"), `author` (default "AI") |
 | `watch_comments` | `minutes` (default 5) |
+| `implement_design` | `destination`: where it goes in the code (default: ask if it isn't clear) |
 
 Each returns a step-by-step plan naming the exact tools and commands to use and how to verify.
 
