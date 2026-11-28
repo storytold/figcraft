@@ -591,6 +591,7 @@ pub struct UiState {
     pub pending_open_frames: u8,
     /// The latest successful file import's summary and compatibility notes.
     pub import_report: Option<import_report::Report>,
+    pub(crate) fig_import_retry: Option<import_report::FigRetry>,
     /// Files the user opened whose fonts are yet to be checked (by document uid).
     pub font_checks: Vec<u64>,
     pub missing_fonts: Option<missing_fonts::Shown>,
@@ -769,6 +770,7 @@ impl Default for UiState {
             pending_opens: Vec::new(),
             pending_open_frames: 0,
             import_report: None,
+            fig_import_retry: None,
             font_checks: Vec::new(),
             missing_fonts: None,
             sampled_color: None,

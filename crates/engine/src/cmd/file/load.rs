@@ -67,17 +67,21 @@ pub fn load(path: &str) -> Result<(Document, Vec<String>)> {
 }
 
 pub fn load_bytes(bytes: &[u8], name_hint: &str) -> Result<(Document, Vec<String>)> {
-    load_with(bytes, name_hint, None, &figcraft_format::rest::no_images).map(|(l, _)| (l.doc, l.issues))
+    load_with(bytes, name_hint, None, &figcraft_format::rest::no_images, false).map(|(l, _, _)| (l.doc, l.issues))
 }
 
 /// [`load`] with the version history, also telling whether the file was REST API file JSON. A REST
 /// import reads its variables from `variables`, else from a variables JSON next to the file.
 pub fn load_path(path: &str, variables: Option<&Value>) -> Result<(figcraft_format::Loaded, bool)> {
+    load_path_with_budget(path, variables, false).map(|(loaded, rest, _)| (loaded, rest))
+}
+
+pub(super) fn load_path_with_budget(path: &str, variables: Option<&Value>, higher: bool) -> Result<(figcraft_format::Loaded, bool, bool)> {
     let bytes = read(path)?;
     let sibling = if variables.is_none() { sibling_variables(path) } else { None };
-    let (mut loaded, rest) = load_with(&bytes, path, variables.or(sibling.as_ref()), &rest_images(path))?;
+    let (mut loaded, rest, retryable) = load_with(&bytes, path, variables.or(sibling.as_ref()), &rest_images(path), higher)?;
     crate::library::resolve_links(&mut loaded.doc, path);
-    Ok((loaded, rest))
+    Ok((loaded, rest, retryable))
 }
 
 /// Load from bytes. Returns the document with its notes (repairs of a native file, or import
@@ -89,11 +93,12 @@ pub(super) fn load_with(
     name_hint: &str,
     variables: Option<&Value>,
     images: figcraft_format::rest::ImageResolver,
-) -> Result<(figcraft_format::Loaded, bool)> {
-    let (mut loaded, rest) = load_any(bytes, name_hint, variables, images)?;
+    higher: bool,
+) -> Result<(figcraft_format::Loaded, bool, bool)> {
+    let (mut loaded, rest, retryable) = load_any(bytes, name_hint, variables, images, higher)?;
     let notes = crate::components::break_component_cycles(&mut loaded.doc);
     loaded.issues.extend(notes);
-    Ok((loaded, rest))
+    Ok((loaded, rest, retryable))
 }
 
 fn load_any(
@@ -101,7 +106,8 @@ fn load_any(
     name_hint: &str,
     variables: Option<&Value>,
     images: figcraft_format::rest::ImageResolver,
-) -> Result<(figcraft_format::Loaded, bool)> {
+    higher: bool,
+) -> Result<(figcraft_format::Loaded, bool, bool)> {
     match ext(name_hint).as_str() {
         "svg" => {
             let mut doc = Document::new(file_stem(name_hint));
@@ -109,7 +115,7 @@ fn load_any(
             let notes = figcraft_svg::import_svg_with_notes(&mut doc, bytes, page, 0.0, 0.0, &file_stem(name_hint))
                 .map_err(|e| EngineError::Other(e.to_string()))?
                 .notes;
-            Ok((figcraft_format::Loaded { issues: notes, ..doc.into() }, false))
+            Ok((figcraft_format::Loaded { issues: notes, ..doc.into() }, false, false))
         }
         "penpot" => {
             let (mut doc, mut notes) = figcraft_format::penpot::import(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
@@ -122,7 +128,7 @@ fn load_any(
             let families = figcraft_text::family_names();
             let mut font_notes = missing_penpot_font_warnings(&doc, &families);
             font_notes.append(&mut notes); // Show missing-font details first in the UI toast.
-            Ok((figcraft_format::Loaded { issues: font_notes, ..doc.into() }, true))
+            Ok((figcraft_format::Loaded { issues: font_notes, ..doc.into() }, true, false))
         }
         e if matches!(e, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff") || figcraft_format::raw::is_extension(e) => {
             let mut doc = Document::new(file_stem(name_hint));
@@ -130,27 +136,28 @@ fn load_any(
             let (hash, w, h) = crate::cmd::create::add_readable_image(&mut doc, bytes.to_vec()).map_err(EngineError::Other)?;
             let id = doc.create(page, NodeKind::Rectangle, &file_stem(name_hint), 0.0, 0.0, f64::from(w), f64::from(h))?;
             doc.get_mut(id)?.fills = vec![figcraft_color::Paint::image(hash, figcraft_color::ImageScaleMode::Fill)];
-            Ok((doc.into(), false))
+            Ok((doc.into(), false, false))
         }
         _ => {
-            if let Some(r) = load_fig(bytes, &file_stem(name_hint)) {
-                return Ok((r?, true));
+            if let Some(r) = load_fig_with_budget(bytes, &file_stem(name_hint), higher) {
+                let (loaded, retryable) = r?;
+                return Ok((loaded, true, retryable));
             }
             if let Some(r) = load_sketch(bytes, &file_stem(name_hint)) {
-                return Ok((r?, true));
+                return Ok((r?, true, false));
             }
             if let Some(r) = figcraft_format::rest::try_import_with(bytes, variables, images) {
                 let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
                 link_instances(&mut doc);
                 installed_fonts_first();
-                return Ok((figcraft_format::Loaded { issues: warnings, ..doc.into() }, true));
+                return Ok((figcraft_format::Loaded { issues: warnings, ..doc.into() }, true, false));
             }
             let mut loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
             // Older files saved an untouched default title even after the user chose a filename.
             if loaded.doc.name.is_empty() || loaded.doc.name == "Untitled" {
                 loaded.doc.name = file_stem(name_hint);
             }
-            Ok((loaded, false))
+            Ok((loaded, false, false))
         }
     }
 }
@@ -393,12 +400,21 @@ fn installed_fonts_first() {
 
 /// Gives `None` when `bytes` are not a `.fig` file. Then other readers can try.
 pub(crate) fn load_fig(bytes: &[u8], name: &str) -> Option<Result<figcraft_format::Loaded>> {
-    let r = figcraft_format::fig::try_import(bytes, name)?;
-    Some(r.map_err(|e| EngineError::Other(e.to_string())).map(|(mut doc, warnings)| {
-        link_instances(&mut doc);
-        installed_fonts_first();
-        figcraft_format::Loaded { issues: warnings, ..doc.into() }
-    }))
+    load_fig_with_budget(bytes, name, false).map(|r| r.map(|(loaded, _)| loaded))
+}
+
+fn load_fig_with_budget(bytes: &[u8], name: &str, higher: bool) -> Option<Result<(figcraft_format::Loaded, bool)>> {
+    if !figcraft_format::fig::is_fig(bytes) {
+        return None;
+    }
+    let r = figcraft_format::fig::import_with_budget(bytes, name, higher);
+    Some(r.map_err(|e| if e.retryable { EngineError::FigImportBudget(e.error.to_string()) } else { EngineError::Other(e.error.to_string()) }).map(
+        |mut imported| {
+            link_instances(&mut imported.doc);
+            installed_fonts_first();
+            (figcraft_format::Loaded { issues: imported.warnings, ..imported.doc.into() }, imported.retryable)
+        },
+    ))
 }
 
 /// The most layers all of a Penpot file's raw SVG placeholders may expand to together.

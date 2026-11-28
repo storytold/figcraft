@@ -214,3 +214,58 @@ fn a_paste_that_left_something_out_is_reported_like_an_import() {
     // A paste that left nothing out opens no report.
     assert!(Report::from_result("edit.pasteDesignLayers", &json!({}), &json!({"ids": [], "warnings": []})).is_none());
 }
+
+#[test]
+fn a_partial_import_survives_cancelling_or_failing_the_higher_limits_retry() {
+    let mut u = crate::layers_drag_tests::Ui::new(Session::new());
+    let uid = u.app.session.ds().unwrap().uid;
+    let node = u.app.run("node.create", json!({"type": "rectangle", "name": "Partial layer"})).unwrap();
+    let node = figcraft_doc::NodeId(node["id"].as_u64().unwrap());
+    let source = json!({"data": "not valid base64!", "name": "Partial.fig"});
+    let partial = json!({"warnings": ["Layer limit reached"], "summary": {"name": "Partial"}});
+    crate::import_report::capture(&mut u.app, "file.import", &source, &partial);
+    let key = |key| {
+        [true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE }).to_vec()
+    };
+    let assert_partial_exists = |app: &FigApp| {
+        assert_eq!(app.session.docs.len(), 1);
+        let previous = app.session.ds().unwrap();
+        assert_eq!(previous.uid, uid);
+        assert_eq!(previous.doc.node(node).unwrap().name, "Partial layer");
+        assert_eq!(app.ui.import_report.as_ref().unwrap().uid, uid);
+    };
+
+    assert!(crate::import_report::offer_retry(&mut u.app, "file.import", source.clone(), true));
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let output = u.frame_output(vec![]);
+    let text = shown_texts(output.shapes);
+    assert!(text.iter().any(|text| text == "Keep partial import"));
+    let tree = output.platform_output.accesskit_update.unwrap();
+    for label in ["Keep partial import", "Retry with higher limits"] {
+        assert!(tree.nodes.iter().any(|(_, n)| n.role() == egui::accesskit::Role::Button && n.label() == Some(label)));
+    }
+    assert_eq!(crate::a11y::focused_name(&u.ctx), "Keep partial import");
+    assert!(u.app.ui.pending_opens.is_empty());
+    u.frame(key(egui::Key::Escape));
+    assert!(u.app.ui.fig_import_retry.is_none());
+    assert!(u.app.ui.pending_opens.is_empty());
+    assert_partial_exists(&u.app);
+
+    assert!(crate::import_report::offer_retry(&mut u.app, "file.import", source, true));
+    u.frame(vec![]);
+    u.frame(vec![]);
+    u.frame(key(egui::Key::Tab));
+    u.frame(key(egui::Key::Enter));
+    assert!(u.app.ui.fig_import_retry.is_none());
+    let queued = u.app.ui.pending_opens.first().expect("keyboard confirms the retry");
+    assert_eq!(queued.command, "file.open");
+    assert_eq!(queued.params["higherFigLimits"], true);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    assert!(u.app.ui.pending_opens.is_empty());
+    assert!(u.app.ui.fig_import_retry.is_none());
+    assert!(u.app.ui.last_error.is_some());
+    assert_partial_exists(&u.app);
+}
