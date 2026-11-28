@@ -173,6 +173,46 @@ fn a_bend_click_curves_a_sharp_point_between_its_neighbours() {
     assert!(n.incident(v).iter().all(|(sg, st)| n.handle(*sg, *st) == Some((0.0, 0.0))));
 }
 
+/// #2166: with the Bend tool, or Cmd/Ctrl with Move, a press that wobbles a pixel or two before
+/// it lets go is a click: a sharp point curves between its neighbours as a still click does, and a
+/// segment stays as it is. Past the click slop the drag pulls the point's handles towards it.
+#[test]
+fn a_bend_click_that_wobbles_is_still_a_click() {
+    for cmd in [false, true] {
+        let mut s = Session::new();
+        let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [50, 30], [100, 0]], "closed": false}));
+        let id = crate::params::id_of(&r["id"]).unwrap();
+        ex(&mut s, "vector.edit.begin", json!({"id": id}));
+        if !cmd {
+            ex(&mut s, "vector.edit.tool", json!({"tool": "bend"}));
+        }
+        let v = vertex_at(&net(&s, id), 50.0, 30.0);
+        let gesture = |s: &mut Session, from: (f64, f64), to: (f64, f64)| {
+            for (kind, (x, y)) in [(PointerKind::Down, from), (PointerKind::Move, to), (PointerKind::Up, to)] {
+                let mut e = ev(kind, x, y);
+                e.cmd = cmd;
+                s.pointer(&e).unwrap();
+            }
+        };
+        let handles = |s: &Session| {
+            let n = net(s, id);
+            n.incident(v).iter().map(|(sg, st)| n.handle(*sg, *st).unwrap()).collect::<Vec<_>>()
+        };
+        // A segment pressed and wobbled is not bent.
+        let before = net(&s, id);
+        gesture(&mut s, (25.0, 15.0), (26.0, 16.0));
+        assert_eq!(net(&s, id).segments, before.segments, "cmd={cmd}: a wobble doesn't bend the segment");
+        // Pressed beside the point and wobbled: the click's curve, along the neighbours' line.
+        gesture(&mut s, (51.0, 30.0), (52.0, 31.0));
+        let hs = handles(&s);
+        assert!(hs.iter().all(|h| h.0.abs() > 1.0 && h.1.abs() < 1e-6), "cmd={cmd}: the automatic curve, not a handle drag: {hs:?}");
+        // Dragged down past the slop: the handles follow the pointer.
+        gesture(&mut s, (50.0, 30.0), (50.0, 60.0));
+        let hs = handles(&s);
+        assert!(hs.iter().all(|h| h.1.abs() > h.0.abs()), "cmd={cmd}: pulled towards the pointer: {hs:?}");
+    }
+}
+
 /// Between a handle's end and a point both within reach, the nearer on the page wins, also under a
 /// non-uniform scale (10× wide here), where local distances would pick the point.
 #[test]
