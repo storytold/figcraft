@@ -45,6 +45,9 @@ impl<'de> Deserialize<'de> for Json {
                 f.write_str("JSON text")
             }
             fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Json, E> {
+                // A full snapshot holds one of these per property: while one is read, on the web
+                // the heap grows in large steps ([`crate::heap`]).
+                crate::heap::keep_ahead();
                 // serde_json caps nesting depth, so hostile input can't overflow the stack.
                 serde_json::from_str(v).map(Json).map_err(E::custom)
             }

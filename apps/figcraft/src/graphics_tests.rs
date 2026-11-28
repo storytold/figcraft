@@ -1,6 +1,7 @@
 //! The graphics attempts: no Vulkan on Windows at first (a faulting Vulkan driver crashed the app
-//! as its window opened), another backend and then lower requirements when the graphics fail
-//! before the first frame (#965, #1438), and never more starts than attempts.
+//! as its window opened), never OpenGL beside Direct3D 12 there (its hidden window hung the app on
+//! an input language change, #2264), another backend and then lower requirements when the graphics
+//! fail before the first frame (#965, #1438), and never more starts than attempts.
 
 use std::time::Duration;
 
@@ -13,8 +14,6 @@ use crate::graphics::{ATTEMPT_ENV, Attempt, Plan, STARTUP_FRAMES, apply, attempt
 /// What eframe offers when `WGPU_BACKEND` isn't set.
 const DEFAULTS: Backends = Backends::PRIMARY.union(Backends::GL);
 
-const DX12_GL: Backends = Backends::DX12.union(Backends::GL);
-
 const fn normal(backends: Backends) -> Attempt {
     Attempt { backends, lower: false }
 }
@@ -26,8 +25,19 @@ const fn lower(backends: Backends) -> Attempt {
 #[test]
 fn windows_starts_on_direct3d_then_vulkan_then_opengl_then_lower_requirements() {
     let list = attempts(None, true, false, DEFAULTS);
-    assert_eq!(list, [normal(DX12_GL), normal(Backends::VULKAN), normal(Backends::GL), lower(DX12_GL)]);
+    assert_eq!(list, [normal(Backends::DX12), normal(Backends::VULKAN), normal(Backends::GL), lower(Backends::DX12), lower(Backends::GL)]);
     assert!(!list[0].backends.contains(Backends::VULKAN), "a Vulkan driver that faults can't be picked at first");
+}
+
+#[test]
+fn windows_never_starts_opengl_beside_direct3d_but_still_falls_back_to_it() {
+    let list = attempts(None, true, false, DEFAULTS);
+    for attempt in &list {
+        assert!(!attempt.backends.contains(Backends::DX12 | Backends::GL), "OpenGL's hidden window hangs a Direct3D 12 start: {attempt:?}");
+    }
+    assert!(list.iter().any(|a| a.backends.contains(Backends::VULKAN)), "Vulkan is still tried");
+    assert!(list.iter().any(|a| a.backends.contains(Backends::GL) && !a.lower), "OpenGL is still tried");
+    assert!(list.iter().any(|a| a.backends.contains(Backends::GL) && a.lower), "and with lower requirements");
 }
 
 #[test]

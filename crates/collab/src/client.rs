@@ -90,7 +90,7 @@ impl Client {
             return Err(Error::Protocol("expected a welcome with the document".into()));
         };
         let mut confirmed = match catch_up {
-            CatchUp::Snapshot(snapshot) => Replica::from_snapshot(&snapshot)?,
+            CatchUp::Snapshot(snapshot) => Replica::from_snapshot(snapshot)?,
             CatchUp::DeltaSnapshot(bytes) => {
                 let limits = crate::Limits::default();
                 crate::delta_snapshot::decode_delta_snapshot(&bytes, 1 << 30, limits.max_nodes)?
@@ -604,7 +604,7 @@ impl Client {
                 }
             }
             CatchUp::Snapshot(snapshot) => {
-                let mut confirmed = Replica::from_snapshot(&snapshot)?;
+                let mut confirmed = Replica::from_snapshot(snapshot)?;
                 confirmed.document_mut().set_client_id(self.id);
                 self.rejoin_with_confirmed(confirmed, seq, last_batch, processed)?;
             }

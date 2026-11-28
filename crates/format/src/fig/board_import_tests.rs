@@ -720,3 +720,74 @@ fn a_jam_shape_whose_text_only_the_outer_node_carries_keeps_it() {
     assert!(frame.board.is_none(), "the generated layers keep the outer text");
     assert!(frame.children.iter().filter_map(|id| doc.node(*id)?.kind.text()).any(|t| t.characters == "Outer saved text"));
 }
+
+/// A synthetic whiteboard of two boxes and connectors: one joining them by named and automatic
+/// magnets, one from a box to a free point, and one inside a frame.
+fn connected_board() -> Vec<u8> {
+    let box_at = |id, name: &str, x| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, 600.0))]);
+    let joined = |id, name: &str, parent: u64, start: Kv<'static>, finish: Kv<'static>| {
+        node(
+            id,
+            Some((parent, "+")),
+            "CONNECTOR",
+            name,
+            vec![
+                ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+                ("connectorStart", start),
+                ("connectorEnd", finish),
+                ("connectorLineStyle", e("ELBOWED")),
+            ],
+        )
+    };
+    let on = |node, magnet: &'static str| o(vec![("endpointNodeID", g(node)), ("magnet", e(magnet))]);
+    let message = o(vec![
+        (
+            "nodeChanges",
+            arr(vec![
+                node(0, None, "DOCUMENT", "Synthetic board", vec![]),
+                node(1, Some((0, "!")), "CANVAS", "Page", vec![]),
+                box_at(60, "A", 0.0),
+                box_at(61, "B", 300.0),
+                joined(62, "Joined", 1, on(60, "BOTTOM"), on(61, "AUTO")),
+                joined(63, "Loose", 1, on(60, "NONE"), o(vec![("position", xy(50.0, 900.0))])),
+                node(64, Some((1, "-")), "FRAME", "Frame", vec![("size", xy(400.0, 400.0)), ("transform", at(0.0, 0.0))]),
+                joined(65, "Framed", 64, on(60, "AUTO"), on(61, "AUTO")),
+            ]),
+        ),
+        ("blobs", arr(vec![o(vec![("bytes", Kv::Bytes(triangle_blob()))])])),
+    ]);
+    let mut bytes = canvas(&board_schema(), &message);
+    bytes.splice(..8, *b"fig-jam.");
+    bytes
+}
+
+/// #1808: on a whiteboard a connector is a native board connector attached to the layers it joins,
+/// so it follows them when they move; a free end keeps its point.
+#[test]
+fn a_jam_connector_is_attached_to_the_layers_it_joins() {
+    use figcraft_doc::{BoardItem, End, Routing, Side};
+    let (doc, warnings) = import(&connected_board(), "Synthetic board").unwrap();
+    let (a, b) = (named(&doc, "A").id, named(&doc, "B").id);
+    let Some(BoardItem::Connector(c)) = &named(&doc, "Joined").board else { panic!("{:?}", named(&doc, "Joined").board) };
+    assert!(matches!(c.from, End::Node { node, side: Side::Bottom, .. } if node == a), "{c:?}");
+    assert!(matches!(c.to, End::Node { node, side: Side::Auto, .. } if node == b), "{c:?}");
+    assert_eq!(c.routing, Routing::Elbow);
+    assert!(matches!(named(&doc, "Joined").kind, figcraft_doc::NodeKind::Vector { .. }), "it keeps the line it was drawn with");
+
+    let Some(BoardItem::Connector(loose)) = &named(&doc, "Loose").board else { panic!("the loose connector is attached too") };
+    assert!(matches!(loose.from, End::Node { node, .. } if node == a));
+    assert_eq!(loose.to, End::Point { x: 50.0, y: 900.0 }, "a free end keeps its point on the page");
+
+    assert!(named(&doc, "Framed").board.is_none(), "one inside a frame stays a plain line");
+    let note: Vec<_> = warnings.iter().filter(|w| w.starts_with("connector layers import as vectors")).collect();
+    assert_eq!(note, ["connector layers import as vectors"], "only the one left a line is reported: {warnings:?}");
+}
+
+/// In a `.fig` design file connectors stay plain lines.
+#[test]
+fn a_fig_connector_stays_a_line() {
+    let mut bytes = connected_board();
+    bytes.splice(..8, *b"fig-kiwi");
+    let (doc, _) = import(&bytes, "Synthetic design").unwrap();
+    assert!(doc.nodes().all(|n| n.board.is_none()));
+}

@@ -237,7 +237,11 @@ Or in a project's `.mcp.json`:
     and a parent set to `hug` turns the children that filled it `fixed`. Across the flow the parent keeps
     hugging and the child takes the line's cross size (the largest sibling that doesn't fill, its min
     counted, padding outside); the parent turns `fixed` ("Height set to Fixed for <name>") only when no
-    such sibling is left, and `fill` across a wrapping row that hugs that axis is refused. A
+    such sibling is left, and `fill` across a wrapping row that hugs that axis is refused. `node.set`
+    lists each layer it turned `fixed` this way in `warnings` (such as `2 “Root” (frame): sizingV Hug → Fixed,
+    because a layer in it now fills it`), and names a variant it leaves reaching past its
+    component set when the set clips and has no auto layout (the set keeps its size, so the part
+    outside is hidden; `layout.add` on the set makes it grow with its variants). A
     layer moved out of auto layout (or whose frame loses it) keeps its size as `fixed`. Fill
     children share the space like CSS flexbox, within their min/max.
   - `minWidth` / `maxWidth` / `minHeight` / `maxHeight` (px, `null` removes) bound Hug, Fill and
@@ -437,8 +441,8 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `list_commands {filter?}` | Every command: id, label, menu, shortcut, undoable, params doc. |
 | `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, Leptos, Vue, SwiftUI, Jetpack Compose, ArkUI or Flutter for a layer; components take their properties as parameters and instances are calls, see Developer Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML, React, Leptos and Vue, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}` or a colour calculation (`{alpha}`, `{mix}`), `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Developer Mode below)). |
 | `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`), which keeps one copy of the document however many steps there are (an `edit.undo` step undoes the batch's edits so far together); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: name it with `"as": "card"` and `{"$ref": "card"}` anywhere in a later step's params becomes the `id` in its result (`{"$step": n}` does the same by zero-based position); `"field"` takes another key or a slash path such as `ids/0` (see Step references below). |
-| `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. `warnings` reports a fontStyle that draws in another face. |
-| `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
+| `create_node {type, x, y, width, height, parent, index, name, text, path, props, fields?, outline?}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. `warnings` reports a fontStyle that draws in another face. `fields` / `outline` shrink `node` as they do for `get_node`; a bad option is an error and creates nothing. |
+| `set_properties {ids, props, fields?, outline?}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers (up to 20), which `fields` / `outline` shrink as they do for `get_node`; a bad option is an error and sets nothing. |
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
@@ -551,6 +555,15 @@ differs by that 2% in the area compared; it doesn't verify the rest of the frame
 Images are compared at up to 2,000 pixels a side, the larger of the frame and the capture setting
 the scale. Each layer claims the pixels it draws on, so a see-through part of a shape leaves a
 difference to the layer under it.
+
+### Building from a design
+
+The `implement_design` prompt takes an agent through building the selected design in a codebase with
+these tools: `design_context` for what the designer set, `component_mappings` and `sync_mappings` to
+reuse connected components, `export_assets` for the files, the annotations and `responsive` for what
+the design states beyond its size, and `compare_design` to check the result. It tells the agent to
+ask when nothing is selected and before changing the design, and to report what it approximated,
+assumed or couldn't check instead of presenting it as done.
 
 ### Compact layer trees
 
@@ -2371,9 +2384,11 @@ A name a tool or command doesn't take (`run_command {args}` for `params`, a step
 | `mobile_screen` | `screen` (required), `device` (default "iPhone 16"), `brand_color` |
 | `design_system` | `name`, `primary` |
 | `landing_page` | `product` (required), `width` (default 1440), `accent` |
+| `design_review` | `target`: selection, page or document (default "page") |
 | `prototype_flow` | `screens` (comma-separated), `transition` |
 | `fix_comments` | `page` (default "all"), `auto_resolve` (default "yes"), `author` (default "AI") |
 | `watch_comments` | `minutes` (default 5) |
+| `implement_design` | `destination`: where it goes in the code (default: ask if it isn't clear) |
 
 Each returns a step-by-step plan naming the exact tools and commands to use and how to verify.
 

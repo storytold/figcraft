@@ -77,7 +77,7 @@ fn an_edit_past_the_review_limits_is_refused_but_a_snapshot_clamps() {
     // A snapshot holding settings over the limits (an old file's) opens clamped to what fits:
     // the preset, grid and disabled rules exactly as saved, the lists to the limit.
     let snap = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
-    let (r2, left_out, clamped) = Replica::from_snapshot_leaving_out(&snap).unwrap();
+    let (r2, left_out, clamped) = Replica::from_snapshot_leaving_out(snap).unwrap();
     assert!(clamped, "the settings needed clamping, and the caller is told");
     assert_eq!(left_out, 0, "nothing needed leaving out");
     let cfg = &r2.document().design_review;
@@ -99,7 +99,7 @@ fn an_edit_with_too_many_disabled_rules_is_refused_and_a_snapshot_truncates_them
     assert!(err.contains("200 disabled rules pass the 64 limit `design.configure` keeps"), "{err}");
     // A snapshot with a longer list opens with the ones that fit, not without the settings.
     let snap = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
-    let (r2, left_out, clamped) = Replica::from_snapshot_leaving_out(&snap).unwrap();
+    let (r2, left_out, clamped) = Replica::from_snapshot_leaving_out(snap).unwrap();
     assert!(clamped);
     assert_eq!(left_out, 0, "nothing needed leaving out");
     let cfg = &r2.document().design_review;
@@ -232,9 +232,9 @@ fn snapshots_rebuild_the_same_state() {
     b.styles.push(style("s"));
     let r = diff(&a, &b).unwrap().replica;
     let snap = r.snapshot().unwrap();
-    let back = Replica::from_snapshot(&snap).unwrap();
+    let back = Replica::from_snapshot(snap).unwrap();
     assert_eq!(back, r);
-    assert!(Replica::from_snapshot(&[]).is_err(), "a snapshot needs a page");
+    assert!(Replica::from_snapshot(Vec::new()).is_err(), "a snapshot needs a page");
 }
 
 #[test]

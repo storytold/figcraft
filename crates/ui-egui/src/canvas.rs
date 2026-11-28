@@ -120,6 +120,11 @@ impl CanvasState {
         self.submitted.as_ref().map(|k| k.skip.as_slice())
     }
 
+    /// Whether the canvas shows a finished render that leaves no layer out.
+    pub(crate) fn shows_whole_render(&self) -> bool {
+        self.texture.is_some() && !self.tex_skipped
+    }
+
     /// The file and page the texture shows.
     pub(crate) fn tex_of(&self) -> Option<(u64, NodeId)> {
         self.tex_of

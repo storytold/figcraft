@@ -1,6 +1,7 @@
-//! TLS for `wss://` addresses (native): rustls with ring, trusting Mozilla's root certificates
-//! (compiled in) plus any in the PEM file `FIGCRAFT_CA_FILE` names (a private authority or a
-//! self-signed server). Certificates are always verified.
+//! TLS for `wss://` addresses (native): rustls with ring, trusting the public root certificates of
+//! webpki-roots (compiled in), the authorities this computer trusts (its certificate store, unless
+//! `FIGCRAFT_NO_SYSTEM_ROOTS` is set) and any in the PEM file `FIGCRAFT_CA_FILE` names (a private
+//! authority or a self-signed server). Certificates are always verified.
 //!
 //! A connection's reader and writer threads share one TLS session ([`Tls`]), each holding it only
 //! to decrypt or encrypt: the reader waits for bytes on its own socket handle without it, and a
@@ -19,6 +20,9 @@ use rustls::{CertificateError, ClientConfig, ClientConnection, RootCertStore};
 
 /// The variable naming a PEM file of extra certificate authorities to trust.
 pub const CA_FILE: &str = "FIGCRAFT_CA_FILE";
+
+/// The variable that, set, leaves the operating system's certificate store out.
+pub const NO_SYSTEM_ROOTS: &str = "FIGCRAFT_NO_SYSTEM_ROOTS";
 
 /// One connection's TLS session, shared by its reader and writer.
 pub type Tls = Arc<Mutex<ClientConnection>>;
@@ -44,7 +48,7 @@ pub fn handshake(stream: &TcpStream, host: &str) -> Result<Tls, String> {
 fn explain(host: &str, e: &io::Error) -> String {
     let why = |c: &CertificateError| match c {
         CertificateError::UnknownIssuer => format!(
-            "isn't signed by an authority this app trusts (for a private or self-signed certificate, set {CA_FILE} to its authority's PEM file)"
+            "isn't signed by an authority this app trusts (for a private or self-signed certificate, add its authority to this computer's trusted certificates, or set {CA_FILE} to its authority's PEM file)"
         ),
         CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. } => "is for another name".into(),
         CertificateError::Expired | CertificateError::ExpiredContext { .. } => "has expired".into(),
@@ -67,6 +71,15 @@ fn config() -> Result<Arc<ClientConfig>, String> {
 
 fn make_config() -> Result<Arc<ClientConfig>, String> {
     let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    // A private authority an administrator installed (a company's, a proxy's) is trusted as the
+    // computer's other apps trust it (#2342). An unreadable store adds nothing.
+    if std::env::var_os(NO_SYSTEM_ROOTS).is_none() {
+        let system = rustls_native_certs::load_native_certs();
+        for e in &system.errors {
+            log::warn!("system certificate store: {e}");
+        }
+        roots.add_parsable_certificates(system.certs);
+    }
     if let Some(path) = std::env::var_os(CA_FILE) {
         let shown = std::path::Path::new(&path).display().to_string();
         let certs: Vec<CertificateDer> = CertificateDer::pem_file_iter(&path)
