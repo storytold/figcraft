@@ -34,11 +34,17 @@ pub(crate) struct Script {
     pub(crate) msgs_to: Vec<u64>,
     /// The people removed: `(session, client)`.
     pub(crate) removed: Vec<(u64, u32)>,
+    /// The scripted link's answer to an automation server allowlist check.
+    pub(crate) automation_join_allowed: bool,
 }
 
 pub(crate) struct Mock(pub(crate) Arc<Mutex<Script>>);
 
 impl LiveLink for Mock {
+    fn automation_join_allowed(&self, link: &str, allowed_servers: &[String]) -> bool {
+        self.0.lock().unwrap().automation_join_allowed && allowed_servers.iter().any(|server| link.contains(server))
+    }
+
     fn host(&mut self, session: u64, opts: HostOptions) -> Result<SessionInfo, String> {
         let mut s = self.0.lock().unwrap();
         s.session = session;
@@ -50,6 +56,7 @@ impl LiveLink for Mock {
         i.url = format!("ws://{}/?file=f&token=t", i.address);
         Ok(i)
     }
+
     fn join_resuming(&mut self, session: u64, link: &str, name: &str, resume: Option<crate::live::Resume>) -> Result<(), String> {
         self.0.lock().unwrap().resumed = resume;
         self.join(session, link, name)
@@ -101,6 +108,43 @@ impl LiveLink for Mock {
         let session = s.session;
         std::mem::take(&mut s.events).into_iter().map(|e| (session, e)).collect()
     }
+}
+
+#[test]
+fn confined_headless_session_may_join_only_an_explicitly_allowed_server() {
+    let dir = std::env::temp_dir().join(format!("figcraft-join-allow-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let roots = Arc::new(
+        crate::file_access::Roots::new(&[], &[dir.to_string_lossy().into_owned()])
+            .unwrap()
+            .with_allowed_servers(vec!["wss://figcraft.example.com/".into()]),
+    );
+    let script = Arc::new(Mutex::new(Script { automation_join_allowed: true, ..Script::default() }));
+    let mut s = Session::new();
+    s.live.install(Box::new(Mock(script.clone())));
+
+    crate::file_access::confined(Some(&roots), || {
+        assert!(
+            s.execute(
+                "collab.join",
+                &json!({"link": "figcraft://join?server=wss://figcraft.example.com/&file=0123456789abcdef&token=AbCdEfGhIjKlMnOpQrStUv"})
+            )
+            .is_ok()
+        );
+        assert!(
+            s.execute(
+                "collab.join",
+                &json!({"link": "figcraft://join?server=wss://elsewhere.example.com/&file=0123456789abcdef&token=AbCdEfGhIjKlMnOpQrStUv"})
+            )
+            .is_err()
+        );
+        assert!(s.execute("collab.publish", &json!({"server": "wss://figcraft.example.com/"})).is_err());
+        assert!(s.execute("collab.host", &json!({})).is_err());
+        assert!(s.execute("plugin.directory.list", &json!({"server": "wss://figcraft.example.com/"})).is_err());
+    });
+    assert_eq!(script.lock().unwrap().joined.len(), 1);
+    assert!(script.lock().unwrap().published.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A session you are in as `role`, as client `me`, everyone in it editing.

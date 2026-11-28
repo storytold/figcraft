@@ -135,6 +135,9 @@ struct Line {
     dashed: bool,
     /// Every selected connector is a mind map's branch: no line types.
     branch: bool,
+    /// The first connector's start lies to the right of its end on the canvas, so the bar shows its
+    /// end point's menu first (#1744).
+    start_right: bool,
     ids: Vec<NodeId>,
 }
 
@@ -171,6 +174,7 @@ fn has(app: &FigApp) -> Option<Has> {
                     weight: s.weight,
                     dashed: !s.dashes.is_empty(),
                     branch: true,
+                    start_right: start_right(&ds.doc, c),
                     ids: Vec::new(),
                 });
                 line.branch &= c.branch;
@@ -494,17 +498,26 @@ fn line_part(app: &mut FigApp, ui: &mut Ui, line: &Line, at: Pos2, t: &Tokens) {
         }
         x = divider(ui, t, x - 2.0, at.y);
     }
-    for (start, cap) in [(true, line.start), (false, line.end)] {
-        cap_menu(app, ui, t, pos2(x, at.y), start, cap);
+    // Each end's menu sits on the side where that end lies on the canvas, so the left menu sets
+    // the left end whichever way the connector was drawn (#1744).
+    let ends = if line.start_right { [(false, line.end), (true, line.start)] } else { [(true, line.start), (false, line.end)] };
+    for (i, (start, cap)) in ends.into_iter().enumerate() {
+        cap_menu(app, ui, t, pos2(x, at.y), start, cap, i == 0);
         x += CAP_W + 2.0;
     }
     x = divider(ui, t, x - 2.0, at.y);
     style_menu(app, ui, t, pos2(x, at.y), line);
 }
 
+/// Whether connector `c`'s start lies to the right of its end on the canvas.
+fn start_right(doc: &figcraft_doc::Document, c: &figcraft_doc::Connector) -> bool {
+    let points = figcraft_engine::board::route(doc, c).unwrap_or_default();
+    matches!((points.first(), points.last()), (Some(a), Some(b)) if a.x > b.x)
+}
+
 /// The menu of a connector's start (`start`) or end point at `at` (its left edge and middle),
-/// showing `cap`.
-fn cap_menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens, at: Pos2, start: bool, cap: StrokeCap) {
+/// showing `cap`, its pictures pointing left when it is the left one of the two (`left`).
+fn cap_menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens, at: Pos2, start: bool, cap: StrokeCap, left: bool) {
     let r = Rect::from_min_size(pos2(at.x, at.y - CELL / 2.0), vec2(CAP_W, CELL));
     let label = if start { tr("Start point") } else { tr("End point") };
     let resp = ui.interact(r, ui.scope_id().with(("bb_cap", start)), Sense::click()).on_hover_text(label);
@@ -514,12 +527,12 @@ fn cap_menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens, at: Pos2, start: bool, ca
     }
     // The picture ends 14 before the rectangle it is given: 4 in from this cell's left edge.
     let art = Rect::from_min_max(pos2(r.min.x, r.min.y), pos2(r.min.x + 62.0, r.max.y));
-    crate::right::cap_art(ui.painter(), art, t.icon, cap, start);
+    crate::right::cap_art(ui.painter(), art, t.icon, cap, left);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 7.0, at.y), vec2(12.0, 12.0)), Icon::Chevron, t.icon_secondary);
     let key = if start { "startCap" } else { "endCap" };
     crate::right::menu_popup(&resp).show(|ui| {
         for c in StrokeCap::ALL {
-            let art = |p: &egui::Painter, row: Rect, ink: Color32| crate::right::cap_art(p, row, ink, c, start);
+            let art = |p: &egui::Painter, row: Rect, ink: Color32| crate::right::cap_art(p, row, ink, c, left);
             if crate::right::menu_item_with(ui, tr(c.label()), "", crate::right::CAP_ART_W, art) {
                 app.run("board.setStyle", json!({key: c}));
                 ui.close();

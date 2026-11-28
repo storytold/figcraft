@@ -1,7 +1,7 @@
 use super::common::{layout_grid, node_field, prop_type, resolved_type, scope_name, variant_pairs};
 use super::{
-    AUX, Action, Affine, Bound, Color, Exporter, Fields, Kv, LAYERS, MAX_NODES, Node, NodeId, NodeKind, Overlay, OverlayPosition, Paint, StyleKind,
-    TextData, VariableValue, arr, b, color, e, fl, guid, matrix, o, position, root_fields, s, u, xy,
+    AUX, Action, Affine, Bound, Color, Exporter, Fields, Kv, LAYERS, MAX_NODES, Node, NodeId, NodeKind, Overlay, OverlayPosition, Paint, SlotContent,
+    StyleKind, TextData, VariableValue, arr, b, color, e, fl, guid, matrix, o, position, root_fields, s, u, xy,
 };
 
 impl<'d> Exporter<'d> {
@@ -73,8 +73,48 @@ impl<'d> Exporter<'d> {
                 }
             }
         }
-        // The page that holds styles and variables takes the next id, then their nodes.
-        let mut next = u32::try_from(self.ids.len() + 1).unwrap_or(u32::MAX);
+        self.next_layer = u32::try_from(self.ids.len()).unwrap_or(u32::MAX);
+        // An instance's own slot content is a private frame on the hidden page, named by the
+        // instance's SLOT property assignment. Reserve GUIDs for that frame and for the layers
+        // written under it: an instance's layers otherwise have none, since its main's stand in.
+        let slot_frames: Vec<NodeId> = doc
+            .ids()
+            .filter(|id| {
+                doc.node(*id).is_some_and(|n| {
+                    n.overrides.contains("slot") && n.source.and_then(|s| doc.node(s)).and_then(|s| s.prop_refs.get("slot")).is_some()
+                })
+            })
+            .collect();
+        for id in slot_frames {
+            let Some(n) = doc.node(id) else { continue };
+            let Some(prop) = n.source.and_then(|s| doc.node(s)).and_then(|s| s.prop_refs.get("slot")).cloned() else { continue };
+            let Some(inst) = doc.ancestors(id).into_iter().find(|a| doc.node(*a).is_some_and(|x| matches!(x.kind, NodeKind::Instance { .. }))) else {
+                continue;
+            };
+            let Some(NodeKind::Instance { component, .. }) = doc.node(inst).map(|x| &x.kind) else { continue };
+            let Some(def) = self.def_for(*component, &prop, "SLOT") else {
+                self.warn("slot content without a matching slot property was left out");
+                continue;
+            };
+            let content: Vec<NodeId> = n.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|x| x.source.is_none())).collect();
+            let mut pending = content.clone();
+            while let Some(c) = pending.pop() {
+                let Some(x) = doc.node(c) else { continue };
+                // Mirrored layers come from a main and are not written as private content.
+                if x.source.is_some() || !self.private_layers.insert(c) {
+                    continue;
+                }
+                let local = self.next_layer_local();
+                self.ids.insert(c, local);
+                pending.extend(x.children.iter().copied());
+            }
+            let frame = self.next_layer_local();
+            self.slot_frames.insert(id, SlotContent { frame, content, def });
+            self.instance_slots.entry(inst).or_default().push(id);
+        }
+        // The page that holds styles, variables and private slot content takes the next id; its
+        // nodes start one after that page's own GUID.
+        let mut next = self.next_layer.saturating_add(1);
         let mut node = || {
             next = next.saturating_add(1);
             next
@@ -104,10 +144,10 @@ impl<'d> Exporter<'d> {
     /// collections and the variables, each a node of its own.
     pub(super) fn assets(&mut self, pages: usize) {
         let doc = self.doc;
-        if self.style_ids.is_empty() && self.set_ids.is_empty() {
+        if self.style_ids.is_empty() && self.set_ids.is_empty() && self.slot_frames.is_empty() {
             return;
         }
-        let page = u32::try_from(self.ids.len() + 1).unwrap_or(u32::MAX);
+        let page = self.next_layer.saturating_add(1);
         let mut f: Fields = vec![
             ("guid", guid(LAYERS, page)),
             ("phase", e("CREATED")),
@@ -257,6 +297,21 @@ impl<'d> Exporter<'d> {
                 self.warn("variables' publishing, code syntax and inheritance settings were left out");
             }
             self.nodes.push(o(f));
+        }
+        // Private slot content frames, one per instance slot whose content is its own. Their layers
+        // are ordinary layers below the frame, using the GUIDs reserved in `assign`. A reader takes
+        // the frame's children through the instance's SLOT assignment, never as page layers.
+        let slots: Vec<_> = self.slot_frames.clone().into_iter().collect();
+        for (slot, info) in slots {
+            let mut f = head(info.frame, "FRAME", "Slot content");
+            f.extend(root_fields());
+            f.push(("isSlotContent", b(true)));
+            self.nodes.push(o(f));
+            let parent = doc.node(slot);
+            let frame_guid = guid(LAYERS, info.frame);
+            for (i, c) in info.content.iter().enumerate() {
+                self.emit(*c, frame_guid.clone(), i, parent, 1);
+            }
         }
     }
 

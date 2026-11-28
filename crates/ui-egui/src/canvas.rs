@@ -65,6 +65,9 @@ pub struct CanvasState {
     tex_skipped: bool,
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
+    /// Which of the worker's images the texture holds ([`render_worker::Done::frame`]), when it
+    /// is one of them: what the next render may hand over patches of.
+    tex_frame: Option<u64>,
     /// Refined images of the files and pages shown before, newest first: switching back to one
     /// shows its image at once while it renders again, instead of a blank canvas (and, where
     /// renders are slow, a coarse preview).
@@ -154,6 +157,7 @@ impl Default for CanvasState {
             tex_coarse: false,
             tex_skipped: false,
             tex_seq: 0,
+            tex_frame: None,
             kept: Vec::new(),
             surround: None,
             submitted: None,
@@ -191,6 +195,20 @@ struct Kept {
     seq: u64,
 }
 
+/// `part` put on `image` at (x, y) `at`, as [`egui::TextureHandle::set_partial`] puts it on the
+/// texture; rows that don't lie in the image are left out.
+fn put_patch(image: &mut egui::ColorImage, at: [usize; 2], part: &egui::ColorImage) {
+    let (w, [x, y]) = (image.size[0], at);
+    for (r, row) in part.pixels.chunks(part.size[0].max(1)).enumerate() {
+        let start = (y + r) * w + x;
+        if x + row.len() <= w
+            && let Some(into) = image.pixels.get_mut(start..start + row.len())
+        {
+            into.copy_from_slice(row);
+        }
+    }
+}
+
 impl CanvasState {
     /// When the file or page shown is no longer the one the texture is of, set the texture aside
     /// (if refined) and bring back the image kept for `shown`, if any. Images of files that are no
@@ -206,6 +224,8 @@ impl CanvasState {
                 self.kept.insert(0, Kept { texture, view, of, seq: self.tex_seq });
             }
             self.tex_coarse = false;
+            // The worker's image is of the other file or page: this texture is none of its.
+            self.tex_frame = None;
             self.tex_skipped = false;
             if let Some(k) = back {
                 (self.texture, self.tex_view, self.tex_of, self.tex_seq) = (Some(k.texture), Some(k.view), Some(k.of), k.seq);
@@ -219,6 +239,31 @@ impl CanvasState {
     /// this too: the canvas isn't shown there, and closing the last file leads to it.
     pub(crate) fn drop_closed(&mut self, open: impl Fn(u64) -> bool) {
         self.kept.retain(|k| open(k.of.0));
+    }
+
+    /// Put a finished render's pixels on the texture, and on the copy kept of it
+    /// ([`Self::pixel_under`] reads that, so the colour it gives is the one shown).
+    fn take_pixels(&mut self, ctx: &egui::Context, pixels: render_worker::Pixels, filter: egui::TextureOptions) {
+        match pixels {
+            render_worker::Pixels::Whole(image) => {
+                let image = Arc::new(image);
+                match &mut self.texture {
+                    Some(t) => t.set(Arc::clone(&image), filter),
+                    None => self.texture = Some(ctx.load_texture("figcraft-canvas", Arc::clone(&image), filter)),
+                }
+                self.tex_pixels = Some(image);
+            }
+            // Patches of the image the texture holds (the worker was told which).
+            render_worker::Pixels::Patches(parts) => {
+                let Some(t) = &mut self.texture else { return };
+                for (at, part) in parts {
+                    if let Some(kept) = &mut self.tex_pixels {
+                        put_patch(Arc::make_mut(kept), at, &part);
+                    }
+                    t.set_partial(at, part, filter);
+                }
+            }
+        }
     }
 
     pub(crate) fn pixel_under(&self, p: Point, of: Option<(u64, NodeId)>, page: Color32) -> Option<Color32> {
@@ -396,6 +441,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
     let docs = &app.session.docs;
     app.canvas.switch_texture(shown, |uid| docs.iter().any(|d| d.uid == uid));
+    // The browser's worker hands over only what changed of the image the texture holds.
+    #[cfg(target_arch = "wasm32")]
+    worker.texture_holds(app.canvas.tex_frame.filter(|_| app.canvas.texture.is_some() && app.canvas.tex_of == shown && !app.canvas.tex_coarse));
     if let Some(done) = worker.poll()
         && shows(&app.canvas, &done, shown)
     {
@@ -409,12 +457,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         } else {
             egui::TextureOptions::LINEAR
         };
-        let pixels = Arc::new(done.image);
-        match &mut app.canvas.texture {
-            Some(t) => t.set(Arc::clone(&pixels), filter),
-            None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", Arc::clone(&pixels), filter)),
-        }
-        app.canvas.tex_pixels = Some(pixels);
+        app.canvas.take_pixels(&ctx, done.image, filter);
+        app.canvas.tex_frame = (done.frame != 0 && !done.coarse).then_some(done.frame);
         let done_at = done.at;
         let latency = Some(done.at.elapsed().as_secs_f64() * 1000.0);
         if done.coarse {
@@ -429,17 +473,19 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_seq = done.seq;
         drag_sprite::arrived(&mut app.canvas, done_at, done.coarse);
     }
+    // The image around the view always comes whole (nothing tells its worker what is held).
     if let Some(around) = worker.surround()
         && shown == Some((around.uid, around.page))
+        && let render_worker::Pixels::Whole(image) = around.image
     {
         let of = (around.uid, around.page);
         match &mut app.canvas.surround {
             Some((t, view, at)) => {
-                t.set(around.image, egui::TextureOptions::LINEAR);
+                t.set(image, egui::TextureOptions::LINEAR);
                 (*view, *at) = (around.view, of);
             }
             None => {
-                let t = ctx.load_texture("figcraft-canvas-surround", around.image, egui::TextureOptions::LINEAR);
+                let t = ctx.load_texture("figcraft-canvas-surround", image, egui::TextureOptions::LINEAR);
                 app.canvas.surround = Some((t, around.view, of));
             }
         }

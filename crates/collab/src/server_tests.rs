@@ -417,15 +417,15 @@ fn a_review_edit_reaches_only_the_peers_that_read_it() {
     let for_new = for_client(&out, capable.id());
     assert_eq!(accepted_changes(&for_new).len(), 2, "the capable peer hears both: {for_new:?}");
 
-    // A capable newcomer's catch-up (a fresh join, so a snapshot) carries the settings.
+    // A capable newcomer's catch-up (a fresh join, so a delta snapshot) carries the settings.
     let (_, out) = s.join(hello("tok")).unwrap();
-    let Some(Outgoing::To(_, ServerMsg::Welcome { catch_up, .. })) =
+    let Some(Outgoing::To(_, welcome @ ServerMsg::Welcome { .. })) =
         out.into_iter().find(|o| matches!(o, Outgoing::To(_, ServerMsg::Welcome { .. })))
     else {
         panic!("no welcome");
     };
-    let crate::message::CatchUp::Snapshot(changes) = catch_up else { panic!("not a snapshot") };
-    assert!(changes.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::DesignReview, .. })), "{changes:?}");
+    let joined = Client::join(welcome).unwrap();
+    assert!(!joined.document().design_review.is_default(), "capable newcomer carries design review settings");
 
     // An old newcomer's catch-up carries none, and still has the rename.
     let (_, out) = s.join(hello_of("0.18.0 signals hosting comments packed")).unwrap();

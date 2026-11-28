@@ -27,7 +27,7 @@ pub(crate) fn start_join(
     resume: Option<Resume>,
 ) -> Result<SessionId> {
     let (name, tab) = (display_name(&s.prefs), s.tab());
-    let (id, ()) = s.live.start(cmd, |l, id| l.join_resuming(id, link, &name, resume).map_err(|e| bad(cmd, e)))?;
+    let (id, ()) = s.live.start(cmd, Some(link), |l, id| l.join_resuming(id, link, &name, resume).map_err(|e| bad(cmd, e)))?;
     let server = share.as_ref().map(|s| s.server.clone()).unwrap_or_default();
     // The session's file opens in a tab of its own; until then the join shows on this one.
     s.live.open(Live { id, status: Status::Connecting, tab, server, published, share, ..Live::default() });
