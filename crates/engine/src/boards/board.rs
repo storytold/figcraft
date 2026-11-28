@@ -113,7 +113,7 @@ pub const INK_COLORS: [(&str, Color); 8] = [
 /// The stroke weights `tool.ink` takes.
 pub const INK_WEIGHTS: std::ops::RangeInclusive<f64> = 0.1..=100.0;
 /// How far the eraser reaches around the pointer (screen pixels).
-const ERASER_PX: f64 = 8.0;
+pub const ERASER_PX: f64 = 8.0;
 /// The text sizes the contextual bar offers.
 pub const TEXT_SIZES: [(&str, f64); 4] = [("S", 12.0), ("M", 16.0), ("L", 24.0), ("XL", 36.0)];
 /// The text sizes a sticky's menu offers (FigJam's, measured 2026-11-12): name and size.
