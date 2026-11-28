@@ -93,13 +93,20 @@ fn dispatch(cli: Cli, io: &mut Io) -> CliResult<i32> {
     match cli.command {
         Command::Info(a) => confined(&a.roots, || files::info(&a.file, a.json, io)),
         Command::Export(a) => {
-            let target =
-                files::Target { print: a.print(), vd_compat: a.vd_compat, scale: a.scale.scale, format: a.format, page: a.page, node: a.node };
+            let target = files::Target {
+                print: a.print(),
+                vd_compat: a.vd_compat,
+                scale: a.scale.scale,
+                format: a.format,
+                page: a.page,
+                node: a.node,
+                strict: a.strict,
+            };
             confined(&a.roots, || files::export(&a.file, &a.out, &target, io))
         }
-        Command::Convert(a) => confined(&a.roots, || files::convert(&a.input, &a.output, io)),
+        Command::Convert(a) => confined(&a.roots, || files::convert(&a.input, &a.output, a.strict, io)),
         Command::Render(a) => confined(&a.roots, || files::render(&a.file, &a.out, a.scale.scale, a.page.as_deref(), io)),
-        Command::Run(a) => confined(&a.roots, || files::run_script(&a.script, a.input.as_deref(), a.out.as_deref(), io)),
+        Command::Run(a) => confined(&a.roots, || files::run_script(&a.script, a.input.as_deref(), a.out.as_deref(), a.strict, io)),
         Command::Commands(a) => {
             commands(a.json, a.filter.as_deref(), io);
             Ok(0)
@@ -220,6 +227,25 @@ fn check(command: &Command) -> CliResult<()> {
         }
         Err(CliError::Usage(format!("{flag} {path} is the input, which it would replace: choose another file, or pass --in-place")))
     };
+    // `--strict` holds a writer to what it reports, so it is refused where nothing would be checked.
+    let unchecked = |what: &str, formats: &str| {
+        Err(CliError::Usage(format!("--strict checks {formats}, the formats that report what they leave out; {what} isn't one of them")))
+    };
+    match command {
+        Command::Export(a) if a.strict && !files::export_reports_losses(a.format.as_deref(), &a.out) => {
+            return unchecked(&format!("--out {}", a.out), "fig, penpot and xml exports");
+        }
+        Command::Export(a) if a.strict && a.vd_compat == figcraft_doc::VdCompat::Ignore && files::export_writes_xml(a.format.as_deref(), &a.out) => {
+            return Err(CliError::Usage("--strict can't check --vd-compat ignore, which drops what it can't draw without saying so".into()));
+        }
+        Command::Convert(a) if a.strict && !files::save_reports_losses(&a.output) => {
+            return unchecked(&format!("OUT {}", a.output), ".fig, .penpot and .figcraft output");
+        }
+        Command::Run(a) if a.strict && !a.out.as_deref().is_some_and(files::save_reports_losses) => {
+            return unchecked(&format!("--out {}", a.out.as_deref().unwrap_or("")), ".fig, .penpot and .figcraft output");
+        }
+        _ => {}
+    }
     match command {
         Command::Convert(a) => refuse("OUT", &a.output, &a.input, a.in_place)?,
         Command::Run(a) => {

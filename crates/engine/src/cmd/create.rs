@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "node.create",
             "Create layer",
-            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? | characters? (for text), path? | points? (vector: SVG path data | [[x,y],..]; x/y move their own origin, so the layer's left/top is x/y plus their box's unscaled offset), closed? (vector), props? {node.set keys}, select? (default true)}",
+            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? | characters? (for text), path? | points? (vector: SVG path data | [[x,y],..]; x/y move their own origin, so the layer's left/top is x/y plus their box's unscaled offset), closed? (vector), props? {node.set keys}, select? (default true), children? ([node.create params without parent, each with children? of its own]: made inside it in the same undo step; the result mirrors the tree, {id, children: [{id, children?}, …]})}",
             true,
             create
         ),
@@ -298,7 +298,41 @@ fn keep_fixed_text_height(cmd: &str, doc: &mut Document, nid: NodeId, p: &Value)
     Ok(())
 }
 
+/// `node.create`: the layer, then each of its `children` inside it (each a `node.create` params
+/// object, with children of its own), in one command so one undo step. The result mirrors the
+/// tree: `{id, children: [{id, children: […]}, …]}`, so a batch step names any layer in it with a
+/// `field` path (`children/1/id`). A refused child names its place (`children[1].children[0]: …`)
+/// and nothing is made.
 pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "node.create";
+    let mut out = create_layer(s, p)?;
+    let Some(kids) = get(p, "children") else { return Ok(out) };
+    let Value::Array(kids) = kids else { return Err(bad(cmd, "`children` must be a list of node.create params")) };
+    // The path of the child the error came from, in front of the error.
+    let at = |i: usize, e: crate::EngineError| match e {
+        crate::EngineError::BadParams { cmd, msg } => {
+            let msg = if msg.starts_with("children[") { format!("children[{i}].{msg}") } else { format!("children[{i}]: {msg}") };
+            crate::EngineError::BadParams { cmd, msg }
+        }
+        other => other,
+    };
+    let mut made = Vec::with_capacity(kids.len());
+    for (i, kid) in kids.iter().enumerate() {
+        let Value::Object(kid) = kid else { return Err(at(i, bad(cmd, "a child is a node.create params object"))) };
+        if kid.contains_key("parent") {
+            return Err(at(i, bad(cmd, "a child's parent is the layer it is listed under: leave `parent` out")));
+        }
+        let mut kid = kid.clone();
+        kid.insert("parent".into(), out["id"].clone());
+        kid.insert("select".into(), json!(false));
+        let kid = Value::Object(kid);
+        made.push(super::refuse_unknown_params(cmd, &kid).and_then(|()| create(s, &kid)).map_err(|e| at(i, e))?);
+    }
+    out["children"] = Value::Array(made);
+    Ok(out)
+}
+
+fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "node.create";
     let t = string(p, "type").ok_or_else(|| bad(cmd, "`type` is required"))?;
     let (mut kind, base) = kind_for(&t).ok_or_else(|| bad(cmd, format!("unknown type `{t}`")))?;

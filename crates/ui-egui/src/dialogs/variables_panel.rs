@@ -322,8 +322,12 @@ fn header(app: &mut FigApp, ui: &mut Ui, open: &mut bool) {
     bar.spacing_mut().item_spacing.x = 16.0;
     let export = widgets::button(&mut bar, tr("Export…"), false, true);
     crate::right::menu_popup(&export).show(|ui| {
-        for (label, format) in [(tr("Variables JSON…"), "json"), (tr("CSS custom properties…"), "css"), (tr("Dart constants for Flutter…"), "dart")]
-        {
+        for (label, format) in [
+            (tr("Variables JSON…"), "json"),
+            (tr("Design tokens (DTCG)…"), "dtcg"),
+            (tr("CSS custom properties…"), "css"),
+            (tr("Dart constants for Flutter…"), "dart"),
+        ] {
             if menu_item(ui, label, "") {
                 export_dialog(app, format);
                 ui.close();
@@ -349,7 +353,9 @@ fn header(app: &mut FigApp, ui: &mut Ui, open: &mut bool) {
 /// Export this file's collections through a save dialog, or as a download where the platform has
 /// no save dialogs (the browser).
 pub(crate) fn export_dialog(app: &mut FigApp, format: &str) {
-    let name = app.session.doc().map(|d| format!("{}.variables.{format}", d.name)).unwrap_or_else(|_| format!("variables.{format}"));
+    // Design tokens files are named `.tokens.json`, as the DTCG format suggests.
+    let (kind, ext) = if format == "dtcg" { ("tokens", "json") } else { ("variables", format) };
+    let name = app.session.doc().map(|d| format!("{}.{kind}.{ext}", d.name)).unwrap_or_else(|_| format!("{kind}.{ext}"));
     if app.services.downloads() {
         let Some(r) = app.run("variable.export", json!({"format": format})) else { return };
         let text = r["text"].as_str().unwrap_or_default();
@@ -361,7 +367,7 @@ pub(crate) fn export_dialog(app: &mut FigApp, format: &str) {
         return;
     }
     let format = format.to_owned();
-    let ext = format.clone();
+    let ext = ext.to_owned();
     app.pick_save(tr("Export variables"), &name, &[&ext], move |app, p| {
         if app.run("variable.export", json!({"format": format, "path": p.to_string_lossy()})).is_some() {
             let file = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();

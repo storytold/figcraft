@@ -57,7 +57,7 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
-    let variables = variables_param("file.open", p)?;
+    let variables = variables_param("file.open", p, false)?;
     if string(p, "path").is_none()
         && let Some(d) = string(p, "data")
     {
@@ -151,7 +151,7 @@ fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) 
 
 pub(super) fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let path = string(p, "path");
-    let variables = variables_param("file.import", p)?;
+    let variables = variables_param("file.import", p, false)?;
     let (bytes, name) = if let Some(path) = &path {
         (read(path)?, path.clone())
     } else if let Some(d) = string(p, "data") {

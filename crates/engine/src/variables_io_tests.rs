@@ -835,3 +835,50 @@ fn css_export_gives_clashing_variable_names_their_own_property() {
     assert_ne!(blue, "brand-primary", "{css}");
     assert!(css.contains(&format!("--link: var(--{blue});")), "{css}");
 }
+
+// Design tokens (#1687): the DTCG file variable.export writes reads back as the same variables,
+// modes, aliases and scopes, and a mode picked for `$value` changes what tools without our
+// extensions see.
+#[test]
+fn design_tokens_export_and_import_round_trip() {
+    let mut s = Session::new();
+    theme(&mut s);
+    let out = ex(&mut s, "variable.export", json!({"format": "dtcg"}));
+    assert!(out.get("warnings").is_none(), "{out}");
+    let text = out["text"].as_str().unwrap().to_string();
+    let file: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(file["Theme"]["color"]["primary"]["$type"], "color", "a group per collection, a token per variable by its path");
+    assert_eq!(file["Theme"]["radius"]["$value"]["unit"], "px", "a corner radius is a length");
+
+    let mut t = Session::new();
+    let r = ex(&mut t, "variable.import", json!({"variables": text}));
+    assert_eq!((r["collections"].as_u64(), r["variables"].as_u64()), (Some(1), Some(5)), "{r}");
+    assert_eq!(by_name(&t), by_name(&s));
+    assert_eq!(t.doc().unwrap().variables.get("radius").unwrap().description, "Corners");
+    // Back into the same file: nothing new, nothing changed.
+    let before = s.doc().unwrap().variables.clone();
+    let r = ex(&mut s, "variable.import", json!({"variables": file}));
+    assert_eq!((r["variables"].as_u64(), r["updated"].as_u64()), (Some(0), Some(5)), "{r}");
+    assert_eq!(s.doc().unwrap().variables, before);
+
+    let dark: Value =
+        serde_json::from_str(ex(&mut s, "variable.export", json!({"format": "dtcg", "mode": "Dark"}))["text"].as_str().unwrap()).unwrap();
+    assert_ne!(dark["Theme"]["radius"]["$value"], file["Theme"]["radius"]["$value"], "`mode` picks the values tools read");
+    assert_eq!(dark["Theme"]["accent"]["$value"], "{Theme.color.primary}", "an alias in that mode is a reference");
+}
+
+// A tokens file without our extensions fills the default mode of this file's collection of the
+// same name, instead of adding a mode.
+#[test]
+fn plain_design_tokens_update_the_default_mode() {
+    let mut s = Session::new();
+    theme(&mut s);
+    let file = json!({"Theme": {"radius": {"$type": "dimension", "$value": {"value": 10, "unit": "px"}}}});
+    let r = ex(&mut s, "variable.import", json!({"variables": file}));
+    assert_eq!(r["updated"].as_u64(), Some(1), "{r}");
+    let coll = s.doc().unwrap().variables.collection("Theme").unwrap().clone();
+    assert_eq!(coll.modes.len(), 2, "no mode added");
+    let radius = s.doc().unwrap().variables.get("radius").unwrap().clone();
+    assert_eq!(radius.values.get(&coll.modes[0].id), Some(&VariableValue::Number(10.0)));
+    assert_eq!(radius.values.get(&coll.modes[1].id), Some(&VariableValue::Number(6.5)), "the other mode keeps its value");
+}
