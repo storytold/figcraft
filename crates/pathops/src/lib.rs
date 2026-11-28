@@ -4,14 +4,31 @@
 //!   sweep-line topology from `linesweeper`); results use the even-odd rule.
 //! - [`stroke_outline`]: a stroke as a fill, with Figma's Inside / Center / Outside alignment,
 //!   dashes, caps, joins, arrowheads, variable width profiles ([`width`]) and brushes ([`brush`]).
+//! - [`round_corners`]: a corner radius (and smoothing) on every corner still sharp in a closed path,
+//!   as a boolean group draws its result.
+//!
+//! Every sweep is capped ([`MAX_SEGMENTS`], [`MAX_CROSSINGS`], and [`MAX_FOLD_SEGMENTS`] over a
+//! fold): past the caps an operation is refused with [`PathOpsError::TooComplex`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod brush;
 #[cfg(test)]
 mod brush_tests;
+mod budget;
+#[cfg(test)]
+mod budget_tests;
+#[cfg(test)]
+mod dash_cap_tests;
+#[cfg(test)]
+mod dash_ends_tests;
+#[cfg(test)]
+mod dot_dash_tests;
 #[cfg(test)]
 mod ops_tests;
 mod points;
+mod round;
+#[cfg(test)]
+mod round_tests;
 #[cfg(test)]
 mod rounded_side_strokes_tests;
 #[cfg(test)]
@@ -23,32 +40,50 @@ mod width_tests;
 use figcraft_doc::{BoolOp, StrokeAlign, StrokeCap, StrokeJoin, StrokeProps, VectorNetwork, WindingRule};
 use figcraft_geom::kurbo::{self, BezPath, Cap, Join, PathEl, PathSeg, Point, Shape, Vec2};
 
+pub use budget::{Complexity, FoldBudget, MAX_CROSSINGS, MAX_FOLD_SEGMENTS, MAX_SEGMENTS, complexity};
+pub use round::round_corners;
+
 #[derive(Debug, PartialEq)]
 pub enum PathOpsError {
     /// The inputs contain NaN or infinite coordinates.
     BadInput,
+    /// The inputs are past [`MAX_SEGMENTS`] or [`MAX_CROSSINGS`]: the operation is refused rather
+    /// than run for unbounded time and memory.
+    TooComplex,
 }
 
 impl std::fmt::Display for PathOpsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "path contains invalid coordinates")
+        match self {
+            Self::BadInput => write!(f, "path contains invalid coordinates"),
+            Self::TooComplex => {
+                write!(f, "the shapes are too complex to combine (over {MAX_SEGMENTS} segments or {MAX_CROSSINGS} possible crossings)")
+            }
+        }
     }
 }
 
-/// Close every open subpath (a filled open path paints as if closed).
+/// Close every open subpath (a filled open path paints as if closed). A subpath of a lone move
+/// fills nothing and is left out.
 pub fn closed(path: &BezPath) -> BezPath {
     let mut out = BezPath::new();
     let mut open = false;
+    let mut pending: Option<PathEl> = None;
     for el in path.elements() {
         match el {
             PathEl::MoveTo(_) => {
                 if open {
                     out.close_path();
                 }
-                open = true;
+                open = false;
+                pending = Some(*el);
+                continue;
             }
             PathEl::ClosePath => open = false,
-            _ => {}
+            _ => open = true,
+        }
+        if let Some(m) = pending.take() {
+            out.push(m);
         }
         out.push(*el);
     }
@@ -63,7 +98,8 @@ pub use figcraft_geom::measure::finite_path as finite;
 
 /// Run the sweep library on `f`. Version 0.4 can panic on rare near-degenerate input (an internal
 /// `unwrap` while ordering curves, hit by some font outlines): that is bad input, not a crash.
-// shortcut: no catch where panics abort (wasm32); drop this once a linesweeper release no longer panics there.
+// shortcut: wasm32 can't catch it (panics abort there): the page stops and its panic hook keeps the
+// unsaved files (apps/figcraft-web/src/recovery.rs); drop this once linesweeper no longer panics.
 fn sweep<T>(f: impl FnOnce() -> Result<T, PathOpsError>) -> Result<T, PathOpsError> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(Err(PathOpsError::BadInput))
 }
@@ -80,7 +116,9 @@ fn binary_by(a: &BezPath, b: &BezPath, rule: linesweeper::FillRule, op: lineswee
     if !finite(a) || !finite(b) {
         return Err(PathOpsError::BadInput);
     }
-    let contours = sweep(|| linesweeper::binary_op(&closed(a), &closed(b), rule, op).map_err(|_| PathOpsError::BadInput))?;
+    let (a, b) = (closed(a), closed(b));
+    budget::check([&a, &b])?;
+    let contours = sweep(|| linesweeper::binary_op(&a, &b, rule, op).map_err(|_| PathOpsError::BadInput))?;
     let mut out = BezPath::new();
     for c in contours.contours() {
         out.extend(c.path.elements().iter().copied());
@@ -91,6 +129,13 @@ fn binary_by(a: &BezPath, b: &BezPath, rule: linesweeper::FillRule, op: lineswee
 /// Normalise a single path's winding (non-zero) into simple even-odd contours.
 pub fn simplify(path: &BezPath) -> Result<BezPath, PathOpsError> {
     binary(path, &BezPath::new(), linesweeper::BinaryOp::Union)
+}
+
+/// Normalize one path using its fill rule. Unlike [`faces`], this emits every contour without a
+/// face-count cap, so render silhouettes preserve large imported networks.
+pub fn simplify_with_rule(path: &BezPath, even_odd: bool) -> Result<BezPath, PathOpsError> {
+    let rule = if even_odd { linesweeper::FillRule::EvenOdd } else { linesweeper::FillRule::NonZero };
+    binary_by(path, &BezPath::new(), rule, linesweeper::BinaryOp::Union)
 }
 
 /// Combine `acc` (the operands so far) with the next operand `p` by `op`.
@@ -112,13 +157,17 @@ pub fn boolean(paths: &[BezPath], op: BoolOp) -> Result<BezPath, PathOpsError> {
 
 /// Fold `operands` bottom to top, each combined with the result of those below it by its own
 /// operation (the bottom operand's operation is unused): what a boolean group whose operands carry
-/// their own operations paints. A lone operand comes out simplified.
+/// their own operations paints. A lone operand comes out simplified. Past [`MAX_FOLD_SEGMENTS`]
+/// swept over all the steps, the fold is refused ([`FoldBudget`]).
 pub fn boolean_ops<'a>(operands: impl IntoIterator<Item = (&'a BezPath, BoolOp)>) -> Result<BezPath, PathOpsError> {
     let mut it = operands.into_iter();
     let Some((first, _)) = it.next() else { return Ok(BezPath::new()) };
     let mut acc: Option<BezPath> = None;
+    let mut budget = FoldBudget::default();
     for (p, op) in it {
-        acc = Some(boolean_step(acc.as_ref().unwrap_or(first), p, op)?);
+        let below = acc.as_ref().unwrap_or(first);
+        budget.spend(below, p)?;
+        acc = Some(boolean_step(below, p, op)?);
     }
     match acc {
         Some(a) => Ok(a),
@@ -199,17 +248,23 @@ pub fn faces(paths: &[(BezPath, bool)]) -> Result<Vec<ArrangementFace>, PathOpsE
     if paths.len() > MAX_ARRANGEMENT_INPUTS || paths.iter().any(|(p, _)| !finite(p)) {
         return Err(PathOpsError::BadInput);
     }
+    budget::check(paths.iter().map(|(p, _)| p))?;
     // Self-intersecting or self-overlapping inputs (a centred stroke outlined around a sharp
     // corner folds over itself and touches the shape's fill) leave the winding on each side of a
     // segment ambiguous where they touch, which made the sweep report overlapping faces. Reducing
     // every input to the simple contours of the area it fills first keeps the faces disjoint.
-    let closed_paths: Vec<BezPath> = paths.iter().map(|(p, even_odd)| plain(&closed(p), *even_odd)).collect();
+    // Closing adds edges, so what `plain` sweeps is checked first.
+    let closed_inputs: Vec<BezPath> = paths.iter().map(|(p, _)| closed(p)).collect();
+    budget::check(&closed_inputs)?;
+    let closed_paths: Vec<BezPath> = closed_inputs.iter().zip(paths).map(|(p, (_, even_odd))| plain(p, *even_odd)).collect();
     if closed_paths.iter().all(|p| p.elements().is_empty()) {
         return Ok(Vec::new());
     }
     let bbox = closed_paths.iter().filter(|p| !p.elements().is_empty()).map(Shape::bounding_box).reduce(|a, b| a.union(b));
     let m = bbox.map(|b| b.x0.abs().max(b.x1.abs()).max(b.y0.abs()).max(b.y1.abs())).unwrap_or(0.0);
     let eps = (m * f64::EPSILON * 64.0).max(1e-6);
+    // Simplifying split the inputs where they crossed themselves: the arrangement is checked too.
+    budget::check(&closed_paths)?;
     sweep(|| arrange(&closed_paths, eps))
 }
 
@@ -277,9 +332,9 @@ pub fn union_faces<'a>(faces: impl IntoIterator<Item = &'a BezPath>) -> Result<B
 }
 
 pub(crate) fn kcap(c: StrokeCap) -> Cap {
-    match c {
-        StrokeCap::Round | StrokeCap::CircleFilled => Cap::Round,
-        StrokeCap::Square | StrokeCap::DiamondFilled => Cap::Square,
+    match c.shape() {
+        StrokeCap::Round => Cap::Round,
+        StrokeCap::Square => Cap::Square,
         _ => Cap::Butt,
     }
 }
@@ -302,17 +357,28 @@ pub fn stroke_center(path: &BezPath, width: f64, props: &StrokeProps) -> BezPath
         return BezPath::new();
     }
     let width = width.min(MAX_STROKE_WIDTH);
-    let mut style = kurbo::Stroke::new(width)
+    let caps = props.band_caps();
+    let style = kurbo::Stroke::new(width)
         .with_join(kjoin(props.join))
         .with_miter_limit(props.miter_limit.clamp(1.0, 100.0))
-        .with_start_cap(kcap(props.cap_start))
-        .with_end_cap(kcap(props.cap_end));
+        .with_start_cap(kcap(caps[0]))
+        .with_end_cap(kcap(caps[1]));
     // Each subpath restarts the pattern, so it can add up to one more pattern's worth of dashes.
     let subpaths = path.elements().iter().filter(|e| matches!(e, PathEl::MoveTo(_))).count() as f64;
-    if let Some(pat) = width::dash_pattern(props).filter(|p| width::dashes_fit(path.perimeter(1.0) + subpaths * p.iter().sum::<f64>(), p)) {
-        style = style.with_dashes(0.0, pat);
+    // A zero-length dash is a dot of its cap, in viewers too; older squares stay undrawn here.
+    let dots = caps.into_iter().any(|c| matches!(kcap(c), Cap::Round)) || props.dash_cap == Some(StrokeCap::Square);
+    let pattern = width::dash_pattern(props).map(|p| p.into_iter().map(|d| if dots && d == 0.0 { 1e-3 } else { d }).collect::<Vec<_>>());
+    let opts = kurbo::StrokeOpts::default();
+    let Some(pat) = pattern.filter(|p| width::dashes_fit(path.perimeter(1.0) + subpaths * p.iter().sum::<f64>(), p)) else {
+        return kurbo::stroke(path.iter(), &style, &opts, 0.05);
+    };
+    // Each subpath fits the pattern to its own length.
+    let mut out = BezPath::new();
+    for sub in figcraft_geom::split_subpaths(path) {
+        let (dashes, offset) = width::subpath_dashes(&sub, &pat);
+        out.extend(kurbo::stroke(sub.iter(), &style.clone().with_dashes(offset, dashes), &opts, 0.05));
     }
-    kurbo::stroke(path.iter(), &style, &kurbo::StrokeOpts::default(), 0.05)
+    out
 }
 
 /// The painted stroke area of a shape as a fill path (local coordinates). `closed` says whether the
@@ -409,6 +475,8 @@ fn path_end(path: &BezPath, at_end: bool) -> Option<(Point, Vec2)> {
 
 /// The filled arrowhead shape for `cap` at one end of an open path.
 pub fn arrowhead(path: &BezPath, cap: StrokeCap, weight: f64, at_end: bool) -> Option<BezPath> {
+    // Capped like a stroke's width: the circle below is flattened at a fixed tolerance.
+    let weight = weight.min(MAX_STROKE_WIDTH);
     let (tip, dir) = path_end(path, at_end)?;
     let n = Vec2::new(-dir.y, dir.x);
     let s = (weight * 3.0).max(6.0);
@@ -567,7 +635,8 @@ fn elliptical_rect(r: figcraft_geom::Rect, [tl, tr, br, bl]: [(f64, f64); 4]) ->
         if rx > 0.0 && ry > 0.0 {
             let c = Point::new(corner.x + sx * rx, corner.y + sy * ry);
             p.line_to((c.x + rx * start.cos(), c.y + ry * start.sin()));
-            kurbo::Arc::new(c, (rx, ry), start, FRAC_PI_2, 0.0).to_cubic_beziers(0.01, |a, b, e| p.curve_to(a, b, e));
+            kurbo::Arc::new(c, (rx, ry), start, FRAC_PI_2, 0.0)
+                .to_cubic_beziers(figcraft_geom::arc_tolerance(rx.max(ry)), |a, b, e| p.curve_to(a, b, e));
         } else {
             p.line_to(corner);
         }
@@ -708,6 +777,15 @@ mod tests {
         let center = stroke_outline(&r, &StrokeProps { align: StrokeAlign::Center, ..props }, true);
         let b = center.bounding_box();
         assert!((b.x0 + 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn an_absurd_arrow_weight_is_capped() {
+        let mut line = BezPath::new();
+        line.move_to((0.0, 0.0));
+        line.line_to((100.0, 0.0));
+        let head = arrowhead(&line, StrokeCap::CircleFilled, 1e300, true).unwrap();
+        assert!(head.elements().len() < 10_000, "{}", head.elements().len());
     }
 
     #[test]

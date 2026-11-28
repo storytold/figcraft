@@ -72,12 +72,52 @@ impl Replica {
 
     /// Rebuild a replica from a [`snapshot`](Self::snapshot).
     pub fn from_snapshot(changes: &[Change]) -> Result<Replica, Error> {
+        Self::from_snapshot_leaving_out(changes).map(|(r, _, _)| r)
+    }
+
+    /// [`from_snapshot`](Self::from_snapshot), and how many image entries it left out: a
+    /// snapshot saved before the image checks may hold one they refuse, and opens without it.
+    /// Review settings past the current limits are clamped to them, not dropped (see
+    /// [`docprops::clamp_snapshot_design_review`]); the last value says whether that happened,
+    /// because a session whose settings had to be clamped can no longer replay its saved batches
+    /// for clients that resume (they hold the value past the limits).
+    pub(crate) fn from_snapshot_leaving_out(changes: &[Change]) -> Result<(Replica, usize, bool), Error> {
         let mut r = Replica { doc: Document::without_pages(""), positions: Positions::new() };
-        r.apply(changes, Mode::Strict)?;
+        let mut changes = changes.to_vec();
+        let clamped = docprops::clamp_snapshot_design_review(&mut changes);
+        let left_out = r.apply_kept(&mut changes, Change::is_image)?;
         if r.doc.pages.is_empty() {
             return Err(Error::Invalid("a snapshot needs a page".into()));
         }
-        Ok(r)
+        Ok((r, left_out, clamped))
+    }
+
+    /// Apply `changes` strictly. When they don't apply together — history written under older
+    /// rules, or changes that apply one by one but fail the batch's checks together — apply those
+    /// that do, one by one in order, and leave the rest out of `changes`, as long as `may_leave_out`
+    /// allows it (otherwise that change's error). Returns how many were left out.
+    pub(crate) fn apply_kept(&mut self, changes: &mut Vec<Change>, may_leave_out: impl Fn(&Change) -> bool) -> Result<usize, Error> {
+        let mut all = self.clone();
+        if all.apply(changes, Mode::Strict).is_ok() {
+            *self = all;
+            return Ok(0);
+        }
+        let given = changes.len();
+        let mut kept = Vec::with_capacity(given);
+        for c in changes.drain(..) {
+            let mut t = self.clone();
+            match t.apply(std::slice::from_ref(&c), Mode::Strict) {
+                Ok(_) => {
+                    *self = t;
+                    kept.push(c);
+                }
+                Err(e) if !may_leave_out(&c) => return Err(e),
+                Err(_) => {}
+            }
+        }
+        let left_out = given - kept.len();
+        *changes = kept;
+        Ok(left_out)
     }
 
     /// The whole state as changes that build it from nothing (pages and their trees in order,
@@ -140,9 +180,15 @@ impl Replica {
     }
 
     /// Where `id` with `key` goes among `siblings` (sorted by `(key, id)`; `id` itself skipped):
-    /// how many of them sort before it.
+    /// how many of them sort before it. A binary search on each side of `id`, which may still
+    /// sit where its old key put it.
     fn slot(&self, siblings: &[NodeId], id: NodeId, key: &str) -> usize {
-        siblings.iter().filter(|c| **c != id && (self.key(**c), **c) < (key, id)).count()
+        let before = |c: &NodeId| (self.key(*c), *c) < (key, id);
+        let (head, tail) = match siblings.iter().position(|c| *c == id) {
+            Some(i) => (siblings.get(..i).unwrap_or_default(), siblings.get(i + 1..).unwrap_or_default()),
+            None => (siblings, &[][..]),
+        };
+        head.partition_point(before) + tail.partition_point(before)
     }
 
     /// Apply `changes` in order. Node changes come first in a batch made by [`diff`](crate::diff);
@@ -151,8 +197,9 @@ impl Replica {
         self.doc.take_dirty();
         let mut out = Applied::default();
         let (mut relist, mut relist_all) = (BTreeSet::new(), false);
+        let mut index = docprops::Index::default();
         for c in changes {
-            match self.apply_one(c, &mut out) {
+            match self.apply_one(c, &mut out, &mut index) {
                 Ok(Relist::No) => {}
                 Ok(Relist::Page(p)) => {
                     relist.insert(p);
@@ -173,7 +220,7 @@ impl Replica {
     }
 
     /// Apply one change. Returns what of the page list needs rebuilding.
-    fn apply_one(&mut self, c: &Change, out: &mut Applied) -> Result<Relist, Error> {
+    fn apply_one(&mut self, c: &Change, out: &mut Applied, index: &mut docprops::Index) -> Result<Relist, Error> {
         match c {
             Change::Create { id, kind, parent, position, props } => {
                 frac::validate(position).map_err(|e| Error::Invalid(e.to_string()))?;
@@ -194,7 +241,9 @@ impl Replica {
                         self.doc.insert_page(node).map_err(doc_err)?;
                     }
                     (false, Some(p)) => {
-                        let at = self.slot(&self.doc.get(*p).map_err(doc_err)?.children, *id, position);
+                        // A new id sits in no sibling list yet: no scan for it, just the binary search.
+                        let siblings = &self.doc.get(*p).map_err(doc_err)?.children;
+                        let at = siblings.partition_point(|c| (self.key(*c), *c) < (position.as_str(), *id));
                         self.doc.insert(node, *p, Some(at)).map_err(doc_err)?;
                     }
                     _ => return Err(Error::Invalid("pages, and only pages, have no parent".into())),
@@ -256,7 +305,7 @@ impl Replica {
                 Ok(if page { Relist::Page(*id) } else { Relist::No })
             }
             Change::SetDoc { .. } | Change::Put { .. } | Change::Remove { .. } => {
-                Ok(if docprops::apply(&mut self.doc, c)? { Relist::All } else { Relist::No })
+                Ok(if docprops::apply_indexed(&mut self.doc, c, index)? { Relist::All } else { Relist::No })
             }
         }
     }
@@ -277,7 +326,7 @@ impl Replica {
     }
 
     /// The checks a server makes on what a batch touched.
-    fn check(&self, touched: &BTreeSet<NodeId>) -> Result<(), Error> {
+    pub(crate) fn check(&self, touched: &BTreeSet<NodeId>) -> Result<(), Error> {
         if self.doc.pages.is_empty() {
             return Err(Error::Invalid("a file needs at least one page".into()));
         }

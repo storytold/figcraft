@@ -106,3 +106,67 @@ fn other_content_is_refused_without_changes() {
     assert_eq!(s.doc().unwrap().nodes().count(), before);
     assert!(s.clipboard.nodes.is_empty());
 }
+
+// The next three pin the paste-placement rules measured in Figma's web app on 2026-11-08 (a
+// synthetic file): in place when the original is in view, at the view's centre when it is off
+// screen, and in a selected frame's centre when the frame is elsewhere. The fourth pins
+// FigCraft's own branch for a selected frame that contains the original (in place inside it),
+// which was not measured.
+
+fn copied_rect(s: &mut Session) -> NodeId {
+    let r = id(&s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 50, "height": 50})).unwrap());
+    s.execute("edit.copy", &json!({"ids": [r]})).unwrap();
+    r
+}
+
+fn pasted(s: &mut Session) -> NodeId {
+    let r = s.execute("edit.paste", &json!({})).unwrap();
+    params::id_of(&r["ids"][0]).unwrap()
+}
+
+#[test]
+fn paste_with_the_original_in_view_lands_in_place_above_it() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    let r = copied_rect(&mut s);
+    s.execute("view.set", &json!({"zoom": 1, "cx": 125, "cy": 125})).unwrap();
+    let c = pasted(&mut s);
+    let b = s.doc().unwrap().world_bounds(c).unwrap();
+    assert_eq!((b.x0, b.y0), (100.0, 100.0));
+    assert_eq!(s.selection(), [c]);
+    assert_eq!(s.doc().unwrap().node(page).unwrap().children, [r, c]);
+}
+
+#[test]
+fn paste_with_the_original_off_screen_lands_at_the_view_centre() {
+    let mut s = Session::new();
+    copied_rect(&mut s);
+    s.execute("view.set", &json!({"zoom": 1, "cx": 5000, "cy": 3000})).unwrap();
+    let c = pasted(&mut s);
+    let b = s.doc().unwrap().world_bounds(c).unwrap();
+    assert_eq!((b.center().x, b.center().y), (5000.0, 3000.0));
+}
+
+#[test]
+fn paste_into_a_selected_far_frame_lands_at_its_centre() {
+    let mut s = Session::new();
+    copied_rect(&mut s);
+    let f = id(&s.execute("frame.create", &json!({"x": 2000, "y": 1000, "width": 300, "height": 300})).unwrap());
+    s.execute("select.set", &json!({"ids": [f]})).unwrap();
+    let c = pasted(&mut s);
+    assert_eq!(s.doc().unwrap().node(c).unwrap().parent, Some(f));
+    let b = s.doc().unwrap().world_bounds(c).unwrap();
+    assert_eq!((b.center().x, b.center().y), (2150.0, 1150.0));
+}
+
+#[test]
+fn paste_into_a_selected_frame_holding_the_original_keeps_its_place() {
+    let mut s = Session::new();
+    copied_rect(&mut s);
+    let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 500, "height": 500})).unwrap());
+    s.execute("select.set", &json!({"ids": [f]})).unwrap();
+    let c = pasted(&mut s);
+    assert_eq!(s.doc().unwrap().node(c).unwrap().parent, Some(f));
+    let b = s.doc().unwrap().world_bounds(c).unwrap();
+    assert_eq!((b.x0, b.y0), (100.0, 100.0));
+}

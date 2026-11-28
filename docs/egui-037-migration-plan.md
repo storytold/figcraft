@@ -157,7 +157,7 @@ Entry points:
 - Headless/UI tests: `Context::default().run_ui(...)` in many `crates/ui-egui/src/*_tests.rs`
   files; `crates/ui-egui/src/idle_tests.rs` has the frame/idle harness; `windows_tests.rs` has the
   `run_logic` hidden-window harness.
-- Render/control: `crates/ui-egui/src/render_worker.rs`; `crates/ui-egui/src/control.rs`.
+- Render/control: `crates/ui-egui/src/canvas/render_worker.rs`; `crates/ui-egui/src/control.rs`.
 
 Build/test entry points:
 
@@ -217,8 +217,8 @@ deadline work merely because a pass index is nonzero.
 | `crates/ui-egui/src/control.rs:119`, `idle_tests.rs:275` | `egui::UserData` not found | Removed with the callback API |
 | `crates/ui-egui/src/control.rs:367` + 11 test files | `Event::MouseWheel` missing field `source` | Add `MouseWheelSource` |
 | `crates/ui-egui/src/dialogs.rs:108` | `Role::SelectableLabel` not found | 0.37 keeps deprecated `pub type WidgetType = Role`; only renamed variants such as `SelectableLabel` are gone. Map to `Role::Button` |
-| `crates/ui-egui/src/frame_labels.rs:63` | non-exhaustive match missing `Shape::Band` | Add the 0.37 shape variant |
-| `crates/ui-egui/src/typography.rs:1312` | `ScrollArea` state `offset` private | Use `clamped_offset()` |
+| `crates/ui-egui/src/canvas/frame_labels.rs:63` | non-exhaustive match missing `Shape::Band` | Add the 0.37 shape variant |
+| `crates/ui-egui/src/panels/typography.rs:1312` | `ScrollArea` state `offset` private | Use `clamped_offset()` |
 | Many files | `Id::new`/`Ui::id()` deprecation warnings | CI clippy `-D warnings` turns these into failures; replace mechanically |
 
 `clip_rect_margin` is not removed in 0.37; it remains as a deprecated unused field. Remove its use
@@ -254,7 +254,7 @@ by egui/default fonts; leaving any of them on crates.io creates mixed egui-famil
 `egui_glow` only if a glow build is introduced. If a crate is not resolved in the final graph,
 remove its patch row and record the `cargo tree` evidence.
 
-`egui_extras` must be patched because `crates/ui-egui/src/credits.rs` uses
+`egui_extras` must be patched because `crates/ui-egui/src/dialogs/credits.rs` uses
 `TableBuilder`/`TableRow`/`TableBody`; a 0.36 `egui_extras` would pull a second egui 0.36.
 
 `craft-window` is a git dependency, not a path patch. Pin it to the final craft-libs revision whose
@@ -373,10 +373,10 @@ Optional new provenance patches, only if measurements require them:
 | 63 uses, e.g. `tabs.rs`, `layers.rs`, `right.rs`, `widgets.rs` | `ui.id()` | `ui.scope_id()` | Renamed; same scope ID |
 | any `UiBuilder::new().id(...)` (none found now) | `.id(id)` | `.scope_id(id)` | Deprecated; verify by grep after codemod |
 | `crates/ui-egui/src/dialogs.rs` `tab_strip` | `WidgetType::SelectableLabel` | `egui::Role::Button` | `WidgetType` survives as deprecated `pub type WidgetType = Role`; only `SelectableLabel` is gone |
-| `crates/ui-egui/src/credits.rs` `sort_header` | `WidgetType::Button`/`Label` | `egui::Role::Button`/`Role::Label` | Same mapping; aliases may compile but should not produce warnings |
+| `crates/ui-egui/src/dialogs/credits.rs` `sort_header` | `WidgetType::Button`/`Label` | `egui::Role::Button`/`Role::Label` | Same mapping; aliases may compile but should not produce warnings |
 | `crates/ui-egui/src/control.rs` `ui.input` scroll branch; 11 test files | `Event::MouseWheel { unit, delta, phase, modifiers }` | add `source: egui::MouseWheelSource` | Use `Wheel` for synthetic wheel input, `Unknown` where unspecified |
-| `crates/ui-egui/src/frame_labels.rs` `turn` | exhaustive `Shape` match | add `Shape::Band(_)` | 0.37 `BandShape`; label drawing never adds one, leave it unchanged with a comment or rotate via its `angle` if a Band ever appears |
-| `crates/ui-egui/src/typography.rs` `font_picker` | `shown.state.offset.y` | `shown.state.clamped_offset().y` | `State::offset` private/deprecated; `clamped_offset` is the drawn position |
+| `crates/ui-egui/src/canvas/frame_labels.rs` `turn` | exhaustive `Shape` match | add `Shape::Band(_)` | 0.37 `BandShape`; label drawing never adds one, leave it unchanged with a comment or rotate via its `angle` if a Band ever appears |
+| `crates/ui-egui/src/panels/typography.rs` `font_picker` | `shown.state.offset.y` | `shown.state.clamped_offset().y` | `State::offset` private/deprecated; `clamped_offset` is the drawn position |
 | `crates/ui-egui/src/control.rs` `PendingShot`/`drain` | polls `Event::Screenshot` | capture-slot callback | API removed; see 6.3 |
 | tests in `idle_tests.rs` | synthetic `Event::Screenshot` | complete a test capture slot | API removed |
 

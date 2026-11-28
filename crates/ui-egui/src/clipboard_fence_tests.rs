@@ -62,7 +62,7 @@ impl Win {
     fn with_session(s: Session) -> Self {
         let recorded = Arc::new(Mutex::new(Recorded::default()));
         let app = FigApp::new(s, Box::new(Clipboard(recorded.clone())));
-        let mut win = Self { ctx: egui::Context::default(), app, time: 0.0, recorded };
+        let mut win = Self { ctx: crate::framework::headless_context(), app, time: 0.0, recorded };
         for _ in 0..3 {
             win.frame(vec![]);
         }
@@ -76,6 +76,7 @@ impl Win {
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
     }
@@ -228,4 +229,19 @@ fn a_programmatic_copy_does_not_let_a_stale_mirror_hide_the_users_paste() {
         .collect();
     assert_eq!(texts.iter().filter(|t| t.as_str() == "hello").count(), 2, "the user's text was pasted");
     assert_eq!(texts.iter().filter(|t| t.as_str() == "other").count(), 1, "the programmatic selection was not pasted");
+}
+
+#[test]
+fn a_synthetic_copy_for_ai_keeps_the_clipboard_then_a_user_copy_writes() {
+    let mut s = Session::new();
+    s.execute("comment.add", &json!({"x": 10, "y": 10, "text": "Fix the padding", "author": "You"})).unwrap();
+    let mut w = Win::with_session(s);
+    w.app.control_synthetic = true;
+    crate::comments::copy_for_ai(&mut w.app, None);
+    assert_eq!(w.writes(), (0, 0), "synthetic input must not replace the user's clipboard");
+    w.app.control_synthetic = false;
+    crate::comments::copy_for_ai(&mut w.app, None);
+    assert_eq!(w.writes(), (1, 0), "the user's copy writes once");
+    let recorded = w.recorded.lock().unwrap();
+    assert!(recorded.last_text.as_deref().is_some_and(|t| t.contains("Fix the padding")), "{:?}", recorded.last_text);
 }

@@ -1,6 +1,6 @@
 use super::*;
 use figcraft_color::{Color, ColorStop, Gradient, GradientKind, Paint};
-use figcraft_doc::{Effect, EffectKind, NodeKind, Shadow, StrokeAlign, TextData};
+use figcraft_doc::{Effect, EffectKind, NodeKind, Region, Segment, Shadow, StrokeAlign, TextData, VectorNetwork, Vertex, WindingRule};
 
 fn px(p: &Pixmap, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * p.width() + x) * 4) as usize;
@@ -26,6 +26,177 @@ fn solid_rect_and_page_background() {
     let pix = render_view(&d, p, &view(100, 100), &Options::default()).unwrap();
     assert_eq!(px(&pix, 30, 20), [255, 0, 0, 255]);
     assert_eq!(px(&pix, 5, 5), [0xF5, 0xF5, 0xF5, 255]);
+}
+
+#[test]
+fn vector_regions_use_their_own_paints_and_empty_regions_do_not_erase() {
+    let mut d = figcraft_doc::Document::new("regions");
+    let page = d.first_page().unwrap();
+    let network = VectorNetwork {
+        vertices: [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)]
+            .into_iter()
+            .map(|(x, y)| Vertex::new(x, y))
+            .collect(),
+        segments: (0..8).map(|i| Segment::line(i, (i + 1) % 4 + (i / 4) * 4)).collect(),
+        regions: vec![
+            Region {
+                loops: vec![vec![0, 1, 2, 3]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+                ..Default::default()
+            },
+            Region {
+                loops: vec![vec![4, 5, 6, 7]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("0000FF").unwrap())]),
+                ..Default::default()
+            },
+            Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(vec![]), ..Default::default() },
+        ],
+    };
+    let id = d.create(page, NodeKind::Vector { network }, "V", 10.0, 10.0, 20.0, 10.0).unwrap();
+    d.get_mut(id).unwrap().fills.clear();
+    let pix = render_view(&d, page, &view(40, 30), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
+    assert_eq!(px(&pix, 15, 15), [255, 0, 0, 255]);
+    assert_eq!(px(&pix, 25, 15), [0, 0, 255, 255]);
+    assert_eq!(d.get(id).unwrap().fills.len(), 0);
+}
+
+#[test]
+fn region_paint_space_preserves_gradient_image_and_pattern_placement() {
+    use figcraft_color::{ImageScaleMode, PaintKind, PatternPaint};
+    use figcraft_doc::RegionPaintSpace;
+    use figcraft_geom::{Affine, Rect, Shape};
+
+    let mut d = Document::new("paint frames");
+    let page = d.first_page().unwrap();
+    let tile = d.create(page, NodeKind::Rectangle, "Tile", 500.0, 500.0, 8.0, 6.0).unwrap();
+    d.get_mut(tile).unwrap().fills = vec![Paint::solid(Color::from_hex("F05020").unwrap())];
+    let mut image = Pixmap::new(8, 4).unwrap();
+    for (i, pixel) in image.pixels_mut().iter_mut().enumerate() {
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba((i % 8 * 30) as u8, (i / 8 * 60) as u8, 30, 255).unwrap();
+    }
+    d.images.insert(
+        "region-frame-image".into(),
+        figcraft_doc::ImageData { bytes: std::sync::Arc::new(encode_png(&image).unwrap()), width: 8, height: 4 },
+    );
+    let mut pattern = PatternPaint::new(tile.0);
+    pattern.spacing = (3.0, 4.0);
+    let paints = [
+        Paint::gradient(Gradient::default_for(GradientKind::Linear, Color::BLACK)),
+        Paint::image("region-frame-image", ImageScaleMode::Fill),
+        Paint::image("region-frame-image", ImageScaleMode::Tile),
+        Paint { kind: PaintKind::Pattern(pattern), ..Paint::solid(Color::WHITE) },
+    ];
+    let frame = Affine::translate((35.0, 25.0)) * Affine::rotate(0.3);
+    let id = d.create(page, NodeKind::Rectangle, "Source", 0.0, 0.0, 60.0, 30.0).unwrap();
+    for paint in paints {
+        let n = d.get_mut(id).unwrap();
+        n.kind = NodeKind::Rectangle;
+        n.transform = frame;
+        n.width = 60.0;
+        n.height = 30.0;
+        n.fills = vec![paint.clone()];
+        let before = render_view(&d, page, &view(120, 100), &Options::default()).unwrap();
+        let mut path = Rect::new(0.0, 0.0, 60.0, 30.0).to_path(0.1);
+        path.apply_affine(frame);
+        let mut network = VectorNetwork::from_path(&path);
+        for region in &mut network.regions {
+            region.fills = Some(vec![paint.clone()]);
+            region.paint_space = Some(RegionPaintSpace { width: 60.0, height: 30.0, transform: frame });
+        }
+        let n = d.get_mut(id).unwrap();
+        n.kind = NodeKind::Vector { network };
+        n.transform = Affine::IDENTITY;
+        n.width = 120.0;
+        n.height = 100.0;
+        n.fills.clear();
+        let after = render_view(&d, page, &view(120, 100), &Options::default()).unwrap();
+        for (a, b) in before.data().iter().zip(after.data()) {
+            assert!(a.abs_diff(*b) <= 1, "paint moved after reboxing: {:?}", paint.kind);
+        }
+    }
+}
+
+#[test]
+fn styled_vector_mask_unions_region_windings_and_excludes_unpainted_regions() {
+    let mut d = figcraft_doc::Document::new("region mask");
+    let page = d.first_page().unwrap();
+    let group = d.create(page, NodeKind::Group, "Mask group", 0.0, 0.0, 60.0, 20.0).unwrap();
+    let mut network = VectorNetwork::default();
+    let mut regions = Vec::new();
+    for x in [0.0, 10.0, 30.0, 40.0, 50.0] {
+        let v = network.vertices.len();
+        network.vertices.extend([(x, 0.0), (x + 20.0, 0.0), (x + 20.0, 20.0), (x, 20.0)].map(|(x, y)| Vertex::new(x, y)));
+        let s = network.segments.len();
+        network.segments.extend((0..4).map(|i| Segment::line(v + i, v + (i + 1) % 4)));
+        let fills = match regions.len() {
+            0 => Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+            1 => Some(vec![Paint::solid(Color::from_hex("0000FF").unwrap())]),
+            2 => Some(vec![Paint { visible: false, ..Paint::solid(Color::from_hex("00FF00").unwrap()) }]),
+            3 => None,
+            _ => Some(Vec::new()),
+        };
+        regions.push(Region {
+            loops: vec![(s..s + 4).collect()],
+            winding: if regions.len() == 1 { WindingRule::EvenOdd } else { WindingRule::NonZero },
+            fills,
+            ..Default::default()
+        });
+    }
+    network.regions = regions;
+    let mask = d.create(group, NodeKind::Vector { network }, "Mask", 0.0, 0.0, 60.0, 20.0).unwrap();
+    {
+        let n = d.get_mut(mask).unwrap();
+        n.fills.clear();
+        n.is_mask = true;
+        n.mask_type = figcraft_doc::MaskType::Vector;
+    }
+    let content = d.create(group, NodeKind::Rectangle, "Content", 0.0, 0.0, 60.0, 20.0).unwrap();
+    d.get_mut(content).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let pix = render_view(&d, page, &view(60, 20), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
+    assert_eq!(px(&pix, 5, 10), [0, 0, 0, 255], "visible left region masks");
+    assert_eq!(px(&pix, 15, 10), [0, 0, 0, 255], "overlap remains in union despite mixed winding");
+    assert_eq!(px(&pix, 35, 10), [255, 255, 255, 255], "hidden region excluded from styled silhouette");
+    assert_eq!(px(&pix, 45, 10), [255, 255, 255, 255], "unpainted inherited region excluded");
+    assert_eq!(px(&pix, 55, 10), [255, 255, 255, 255], "explicit-empty region excluded");
+}
+
+#[test]
+fn inherited_paint_frames_keep_overlapping_regions_in_vector_masks() {
+    use figcraft_geom::{Affine, Point, Shape};
+
+    let mut d = Document::new("inherited region mask");
+    let page = d.first_page().unwrap();
+    let group = d.create(page, NodeKind::Group, "Mask group", 0.0, 0.0, 40.0, 20.0).unwrap();
+    let mut network = VectorNetwork::default();
+    for x in [0.0, 10.0] {
+        let v = network.vertices.len();
+        let s = network.segments.len();
+        network.vertices.extend([(x, 0.0), (x + 20.0, 0.0), (x + 20.0, 20.0), (x, 20.0)].map(|(x, y)| Vertex::new(x, y)));
+        network.segments.extend((0..4).map(|i| Segment::line(v + i, v + (i + 1) % 4)));
+        network.regions.push(Region {
+            loops: vec![(s..s + 4).collect()],
+            winding: WindingRule::EvenOdd,
+            fills: None,
+            paint_space: Some(figcraft_doc::RegionPaintSpace { width: 20.0, height: 20.0, transform: Affine::translate((x, 0.0)) }),
+        });
+    }
+    let mask = d.create(group, NodeKind::Vector { network }, "Mask", 0.0, 0.0, 30.0, 20.0).unwrap();
+    let n = d.get_mut(mask).unwrap();
+    n.fills = vec![Paint::solid(Color::BLACK)];
+    n.is_mask = true;
+    n.mask_type = figcraft_doc::MaskType::Vector;
+    let (outline, rule) = node_outline(&d, d.node(mask).unwrap()).unwrap();
+    assert_eq!(rule, FillRule::Winding);
+    assert_ne!(outline.winding(Point::new(15.0, 10.0)), 0, "independent inherited regions retain their overlap");
+    let content = d.create(group, NodeKind::Rectangle, "Content", 0.0, 0.0, 40.0, 20.0).unwrap();
+    d.get_mut(content).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let pix = render_view(&d, page, &view(40, 20), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
+    for x in [5, 15, 25] {
+        assert_eq!(px(&pix, x, 10), [0, 0, 0, 255]);
+    }
+    assert_eq!(px(&pix, 35, 10), [255, 255, 255, 255]);
 }
 
 #[test]
@@ -147,6 +318,37 @@ fn side_strokes_follow_rounded_corners() {
     }
     for (x, y) in [(14, 40), (129, 40), (126, 12), (126, 67), (70, 10), (70, 69)] {
         assert_eq!(px(&pix, x, y), [255, 255, 255, 255], "({x}, {y})");
+    }
+}
+
+/// #1351: a stroke on one side of a rectangle or frame with rounded corners stays on that side, for
+/// every alignment, with no stroke on the other edges.
+#[test]
+fn a_rounded_shape_strokes_only_the_side_asked_for() {
+    // On each edge, top to left: a point of an outside stroke and one of an inside stroke, which a
+    // centred stroke covers too.
+    let edges = [[(70, 18), (70, 21)], [(131, 50), (128, 50)], [(70, 81), (70, 78)], [(8, 50), (11, 50)]];
+    for kind in [NodeKind::Rectangle, NodeKind::Frame] {
+        for align in [StrokeAlign::Inside, StrokeAlign::Center, StrokeAlign::Outside] {
+            for side in 0..4 {
+                let mut d = figcraft_doc::Document::new("t");
+                let p = d.first_page().unwrap();
+                let f = d.create(p, kind.clone(), "F", 10.0, 20.0, 120.0, 60.0).unwrap();
+                let n = d.get_mut(f).unwrap();
+                n.corners.radii = [16.0; 4];
+                n.fills = vec![Paint::solid(Color::WHITE)];
+                n.strokes = vec![Paint::solid(Color::BLACK)];
+                n.stroke.align = align;
+                n.stroke.sides = Some(std::array::from_fn(|i| if i == side { 4.0 } else { 0.0 }));
+                let pix = render_view(&d, p, &view(150, 100), &Options::default()).unwrap();
+                let black = |(x, y): (u32, u32)| px(&pix, x, y) == [0, 0, 0, 255];
+                let at = edges[side][usize::from(align != StrokeAlign::Outside)];
+                assert!(black(at), "{kind:?} {align:?} side {side} has its stroke at {at:?}");
+                for (i, edge) in edges.iter().enumerate().filter(|(i, _)| *i != side) {
+                    assert!(!edge.iter().any(|at| black(*at)), "{kind:?} {align:?} side {side} leaves edge {i} alone");
+                }
+            }
+        }
     }
 }
 
@@ -294,9 +496,16 @@ fn exports_carry_the_colour_profile() {
         let icc = dec.icc_profile().unwrap();
         assert_eq!(icc.is_some(), !profile.is_srgb(), "{profile:?}");
         assert_eq!(image::load_from_memory(&png).unwrap().to_rgba8().get_pixel(5, 5).0, [0, 255, 0, 255]);
-        for f in [ExportFormat::Jpg, ExportFormat::Webp] {
-            assert!(!encode_export(&pix, f, profile).unwrap().is_empty());
-        }
+        // A JPEG always embeds the profile (it has no small sRGB marker); an sRGB WebP is untagged.
+        let jpg = encode_export(&pix, ExportFormat::Jpg, profile).unwrap();
+        let icc = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&jpg)).unwrap().icc_profile().unwrap();
+        assert_eq!(icc, Some(profile.icc()), "{profile:?}");
+        assert_eq!(jpg, encode_export_with(&pix, ExportFormat::Jpg, profile, 90).unwrap(), "quality 90 by default");
+        assert_ne!(jpg, encode_export_with(&pix, ExportFormat::Jpg, profile, 30).unwrap());
+        let webp = encode_export(&pix, ExportFormat::Webp, profile).unwrap();
+        let icc = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&webp)).unwrap().icc_profile().unwrap();
+        assert_eq!(icc.is_some(), !profile.is_srgb(), "{profile:?}");
+        assert_eq!(webp, encode_export_with(&pix, ExportFormat::Webp, profile, 30).unwrap(), "WebP takes no quality");
         assert!(encode_export(&pix, ExportFormat::Svg, profile).is_err());
     }
     assert_eq!(png_insert_chunk(b"not a png".to_vec(), b"sRGB", &[0]), b"not a png");
@@ -374,5 +583,97 @@ fn rect_clip_frame_matches_same_rect_fill_on_fractional_edges() {
         for (px_x, px_y) in [(0, 0), (0, 5), (5, 0), (5, 5), (10, 5), (5, 10), (10, 10), (11, 11)] {
             assert_eq!(px(&a, px_x, px_y), px(&e, px_x, px_y), "frame {x},{y} {w}x{h} at ({px_x},{px_y})");
         }
+    }
+}
+
+#[test]
+fn jpeg_export_keeps_full_chroma() {
+    let mut pix = Pixmap::new(8, 8).unwrap();
+    pix.fill(tiny_skia::Color::from_rgba8(160, 64, 192, 255));
+    let jpeg = encode_export_with(&pix, ExportFormat::Jpg, ColorProfile::Srgb, 90).unwrap();
+
+    // SOF0 for the generated 8-bit, three-component baseline JPEG.
+    let header = [0xff, 0xc0, 0, 17, 8, 0, 8, 0, 8, 3];
+    let frame = jpeg.windows(19).find(|segment| segment.starts_with(&header)).expect("RGB JPEG frame");
+    assert_eq!([frame[11], frame[14], frame[17]], [0x11; 3], "JPEG component sampling factors");
+}
+
+#[test]
+fn export_output_and_icc_parity() {
+    use figcraft_color::ColorProfile;
+    use figcraft_doc::ExportFormat;
+    use image::ImageDecoder;
+
+    let has_png_chunk = |bytes: &[u8], kind: &[u8; 4], payload: &[u8]| {
+        bytes.windows(4).enumerate().any(|(i, w)| w == kind && bytes.get(i + 4..i + 4 + payload.len()) == Some(payload))
+    };
+
+    let mut pix = Pixmap::new(8, 8).unwrap();
+    // Premultiplied 50% alpha: `(100*255+64)/128 = 199`, `(50*255+64)/128 = 100`, `(25*255+64)/128 = 50`.
+    let straight = [199u8, 100, 50, 128];
+    let pm = tiny_skia::PremultipliedColorU8::from_rgba(100, 50, 25, 128).unwrap();
+    pix.pixels_mut().fill(pm);
+
+    // Untagged PNG and WebP preserve alpha and carry no ICC profile.
+    let raw_png = encode_png(&pix).unwrap();
+    assert!(image::codecs::png::PngDecoder::new(std::io::Cursor::new(&raw_png)).unwrap().icc_profile().unwrap().is_none());
+    assert_eq!(image::load_from_memory(&raw_png).unwrap().to_rgba8().get_pixel(4, 4).0, straight);
+
+    let raw_webp = encode_webp(&pix).unwrap();
+    assert!(image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&raw_webp)).unwrap().icc_profile().unwrap().is_none());
+    assert_eq!(image::load_from_memory(&raw_webp).unwrap().to_rgba8().get_pixel(4, 4).0, straight);
+
+    // JPEG composites alpha over the given background and clamps quality to 1..=100.
+    let blue_bg = Color::from_hex("0000FF").unwrap();
+    let jpg_min = encode_jpeg(&pix, blue_bg, 0).unwrap();
+    assert_eq!(jpg_min, encode_jpeg(&pix, blue_bg, 1).unwrap());
+    let jpg_max = encode_jpeg(&pix, blue_bg, 200).unwrap();
+    assert_eq!(jpg_max, encode_jpeg(&pix, blue_bg, 100).unwrap());
+    let jpg_px = image::load_from_memory(&jpg_max).unwrap().to_rgb8().get_pixel(4, 4).0;
+    assert!(jpg_px[2] > 140 && jpg_px[0] > 80, "expected red+blue composite, got {jpg_px:?}");
+
+    for profile in ColorProfile::ALL {
+        let png = encode_export(&pix, ExportFormat::Png, profile).unwrap();
+        let png_icc = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&png)).unwrap().icc_profile().unwrap();
+        if profile.is_srgb() {
+            assert_eq!(png_icc, None);
+            assert!(has_png_chunk(&png, b"sRGB", &[0]));
+            assert!(!has_png_chunk(&png, b"cICP", &[]));
+        } else {
+            assert_eq!(png_icc, Some(profile.icc()));
+            assert!(has_png_chunk(&png, b"cICP", &profile.cicp()));
+            assert!(!has_png_chunk(&png, b"sRGB", &[]));
+        }
+        assert_eq!(image::load_from_memory(&png).unwrap().to_rgba8().get_pixel(4, 4).0, straight);
+
+        let webp = encode_export(&pix, ExportFormat::Webp, profile).unwrap();
+        let webp_icc = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&webp)).unwrap().icc_profile().unwrap();
+        assert_eq!(webp_icc, (!profile.is_srgb()).then(|| profile.icc()));
+        assert_eq!(image::load_from_memory(&webp).unwrap().to_rgba8().get_pixel(4, 4).0, straight);
+
+        let jpg = encode_export_with(&pix, ExportFormat::Jpg, profile, 90).unwrap();
+        let jpg_icc = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&jpg)).unwrap().icc_profile().unwrap();
+        assert_eq!(jpg_icc, Some(profile.icc()));
+    }
+}
+
+#[test]
+fn export_display_p3_roundtrips_icc_through_decode() {
+    use figcraft_color::ColorProfile;
+    use figcraft_doc::ExportFormat;
+
+    // Saturated Display P3 red: `ColorProfile::Srgb` red [255, 0, 0] converted to Display P3 values.
+    let p3_red = ColorProfile::Srgb.conversion_to(ColorProfile::DisplayP3).apply(Color::new(1.0, 0.0, 0.0, 1.0)).to_rgba8();
+    let mut pix = Pixmap::new(8, 8).unwrap();
+    pix.fill(tiny_skia::Color::from_rgba8(p3_red[0], p3_red[1], p3_red[2], 255));
+
+    for format in [ExportFormat::Png, ExportFormat::Jpg, ExportFormat::Webp] {
+        let encoded = encode_export(&pix, format, ColorProfile::DisplayP3).unwrap();
+        let source = crate::image_profile::Source::of(&encoded);
+        assert!(source.name.as_deref().is_some_and(|n| n.contains("P3")), "{format:?}: {:?}", source.name);
+        let decoded = images::decode(&encoded).unwrap();
+        let px = decoded.pixel(4, 4).unwrap();
+        // Converting the Display P3 export back into sRGB restores sRGB red [255, 0, 0].
+        assert!(px.red() >= 250 && px.green() <= 5 && px.blue() <= 5, "{format:?}: {px:?}");
     }
 }

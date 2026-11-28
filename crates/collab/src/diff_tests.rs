@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use figcraft_color::{Color, Paint};
-use figcraft_doc::{Comment, DevSnapshot, Document, ImageData, Message, Node, NodeId, NodeKind, Style, StyleKind};
+use figcraft_doc::{Comment, DesignPreset, DevSnapshot, Document, ImageData, MAX_DISABLED, Message, Node, NodeId, NodeKind, Style, StyleKind};
 
 use crate::change::{Change, DocProp, Entry, Json, Prop};
 use crate::replica::{Mode, Replica};
@@ -46,6 +46,65 @@ fn property_edits_send_only_what_changed() {
     assert_eq!(changes.len(), 2);
     assert!(changes.iter().all(|c| matches!(c, Change::Set { id, prop: Prop::Opacity | Prop::Fills, .. } if *id == kids[1])));
     assert!(round_trip(&a, a.document()).is_empty(), "nothing changed");
+}
+
+#[test]
+fn design_review_settings_round_trip_and_reach_a_snapshot() {
+    let (a, _, _, _) = setup();
+    let mut b = a.document().clone();
+    b.design_review.preset = DesignPreset::Strict;
+    b.design_review.grid = 8.0;
+    let changes = round_trip(&a, &b);
+    assert!(changes.contains(&Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() }));
+    let snapshot = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
+    assert!(snapshot.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::DesignReview, .. })), "a snapshot carries the review settings");
+}
+
+#[test]
+fn an_edit_past_the_review_limits_is_refused_but_a_snapshot_clamps() {
+    let (a, _, _, _) = setup();
+    // An edit peer trying to hand the file tens of thousands of radii is refused at apply.
+    let mut b = a.document().clone();
+    b.design_review.preset = DesignPreset::Strict;
+    b.design_review.grid = 8.0;
+    b.design_review.radii = (0..40).map(|i| i as f64).collect();
+    b.design_review.brand = vec![Color::from_rgb8_const(1, 2, 3); 40];
+    b.design_review.disabled = vec!["radius.off-scale".into()];
+    let mut r = a.clone();
+    let change = Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() };
+    let err = r.apply(std::slice::from_ref(&change), Mode::Strict).unwrap_err().to_string();
+    assert!(err.contains("pass the 32 limit `design.configure` keeps"), "{err}");
+    // A snapshot holding settings over the limits (an old file's) opens clamped to what fits:
+    // the preset, grid and disabled rules exactly as saved, the lists to the limit.
+    let snap = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
+    let (r2, left_out, clamped) = Replica::from_snapshot_leaving_out(&snap).unwrap();
+    assert!(clamped, "the settings needed clamping, and the caller is told");
+    assert_eq!(left_out, 0, "nothing needed leaving out");
+    let cfg = &r2.document().design_review;
+    assert_eq!(cfg.preset, DesignPreset::Strict, "the preset survives");
+    assert_eq!(cfg.grid, 8.0, "the grid survives");
+    assert_eq!(cfg.disabled, vec!["radius.off-scale".to_string()], "the disabled rules survive");
+    assert_eq!(cfg.radii, (0..32).map(|i| i as f64).collect::<Vec<_>>(), "the radii keep their first 32");
+    assert_eq!(cfg.brand, vec![Color::from_rgb8_const(1, 2, 3); 32], "the brand colours keep their first 32");
+}
+
+#[test]
+fn an_edit_with_too_many_disabled_rules_is_refused_and_a_snapshot_truncates_them() {
+    let (a, _, _, _) = setup();
+    let mut b = a.document().clone();
+    b.design_review.disabled = (0..200).map(|i| format!("rule.{i}")).collect();
+    let mut r = a.clone();
+    let change = Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() };
+    let err = r.apply(std::slice::from_ref(&change), Mode::Strict).unwrap_err().to_string();
+    assert!(err.contains("200 disabled rules pass the 64 limit `design.configure` keeps"), "{err}");
+    // A snapshot with a longer list opens with the ones that fit, not without the settings.
+    let snap = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
+    let (r2, left_out, clamped) = Replica::from_snapshot_leaving_out(&snap).unwrap();
+    assert!(clamped);
+    assert_eq!(left_out, 0, "nothing needed leaving out");
+    let cfg = &r2.document().design_review;
+    assert_eq!(cfg.disabled.len(), MAX_DISABLED, "the list keeps its first {MAX_DISABLED}");
+    assert_eq!(cfg.disabled.first().map(String::as_str), Some("rule.0"));
 }
 
 #[test]
@@ -102,7 +161,7 @@ fn pages_add_reorder_and_delete() {
 fn kind_changes_and_transforms_round_trip() {
     let (a, _, frame, kids) = setup();
     let mut b = a.document().clone();
-    b.get_mut(frame).unwrap().kind = NodeKind::Component { description: "A card".into(), props: BTreeMap::new() };
+    b.get_mut(frame).unwrap().kind = NodeKind::Component { description: "A card".into(), props: BTreeMap::new(), prop_order: Vec::new() };
     b.get_mut(kids[0]).unwrap().kind = NodeKind::Ellipse { start: 0.0, sweep: 3.0, inner: 0.25 };
     b.get_mut(kids[0]).unwrap().transform = figcraft_geom::Affine::new([0.5, 0.1, -0.1, 2.0, 1.0 / 3.0, -7.25]);
     round_trip(&a, &b);
@@ -131,9 +190,10 @@ fn document_level_data_round_trips() {
         x: 1.0,
         y: 2.0,
         anchor: None,
-        first: Message { author: "Ada".into(), text: "Hi".into(), created: 1, edited: 0, reactions: vec![] },
+        first: Message { author: "Ada".into(), text: "Hi".into(), created: 1, edited: 0, reactions: vec![], agent: false },
         resolved: false,
-        replies: vec![],
+        // An AI agent's reply reaches the others with its name and marker.
+        replies: vec![Message { agent: true, ..Message::new("Claude (agent)", "Done", 2) }],
         read_by: None,
     });
     b.images.insert("hash".into(), ImageData { bytes: Arc::new(vec![1, 2, 3, 250]), width: 2, height: 1 });
@@ -249,4 +309,74 @@ fn invalid_changes_are_refused_and_lenient_mode_skips_them() {
     // Deleting what's already gone does nothing.
     let mut r = a.clone();
     assert!(r.apply(&[Change::Delete { id: NodeId(12345) }, Change::Remove { entry: Entry::Comment(1) }], Mode::Strict).is_ok());
+}
+
+/// Where `id` goes among `kids`, as placement worked before it searched: after every other sibling
+/// that sorts before it by `(key, id)`, counted one by one.
+fn place_counting(kids: &mut Vec<NodeId>, keys: &BTreeMap<NodeId, String>, id: NodeId) {
+    kids.retain(|c| *c != id);
+    let key = |c: NodeId| keys.get(&c).map_or("", String::as_str);
+    let at = kids.iter().filter(|c| (key(**c), **c) < (key(id), id)).count();
+    kids.insert(at, id);
+}
+
+#[test]
+fn many_sibling_placements_keep_the_order_of_counting_them() {
+    // The reference counts, so it's quadratic: placing 20,000 here took 20 s before the search
+    // and 0.3 s after (debug build).
+    const N: u64 = 5_000;
+    let mut doc = Document::new("Order");
+    let page = doc.first_page().unwrap();
+    let parents = [page, doc.create(page, NodeKind::Frame, "A", 0.0, 0.0, 10.0, 10.0).unwrap()];
+    let mut r = Replica::new(doc);
+    let mut rng = crate::sim::Rng::new(1065);
+    // Few whole keys and the fractions between them: many ties (broken by id), many fractions.
+    let whole = crate::frac::n_between(None, None, 12).unwrap();
+    let mut pool = whole.clone();
+    pool.extend(whole.windows(2).map(|w| crate::frac::between(Some(&w[0]), Some(&w[1])).unwrap()));
+    let mut keys: BTreeMap<NodeId, String> = parents.iter().map(|p| (*p, r.key(*p).to_string())).collect();
+    let mut kids: BTreeMap<NodeId, Vec<NodeId>> = parents.iter().map(|p| (*p, r.document().node(*p).unwrap().children.clone())).collect();
+    let mut parent_of = BTreeMap::new();
+    // One batch of creations in a scrambled id order, under either parent.
+    let mut creates = Vec::new();
+    for i in 0..N {
+        let (id, p, key) = (NodeId(1_000_000 + (i * 7919) % N), parents[rng.below(2)], pool[rng.below(pool.len())].clone());
+        keys.insert(id, key.clone());
+        parent_of.insert(id, p);
+        place_counting(kids.get_mut(&p).unwrap(), &keys, id);
+        creates.push(Change::Create { id, kind: Json::of(&NodeKind::Rectangle).unwrap(), parent: Some(p), position: key, props: vec![] });
+    }
+    // Then a batch of moves: to another key (often a tie), or under either parent (its own too).
+    let mut moves = Vec::new();
+    for _ in 0..N / 2 {
+        let id = NodeId(1_000_000 + rng.below(N as usize) as u64);
+        if rng.chance(0.5) {
+            let key = pool[rng.below(pool.len())].clone();
+            keys.insert(id, key.clone());
+            place_counting(kids.get_mut(&parent_of[&id]).unwrap(), &keys, id);
+            moves.push(Change::Set { id, prop: Prop::Position, value: Json::of(&key).unwrap() });
+        } else {
+            let p = parents[rng.below(2)];
+            let old = parent_of.insert(id, p).unwrap();
+            kids.get_mut(&old).unwrap().retain(|c| *c != id);
+            place_counting(kids.get_mut(&p).unwrap(), &keys, id);
+            moves.push(Change::Set { id, prop: Prop::Parent, value: Json::of(&Some(p)).unwrap() });
+        }
+    }
+    r.apply(&creates, Mode::Strict).unwrap();
+    r.apply(&moves, Mode::Strict).unwrap();
+    for p in parents {
+        assert_eq!(r.document().node(p).unwrap().children, kids[&p], "children of {p}");
+    }
+}
+
+#[test]
+fn a_chain_of_new_nested_layers_is_created_parents_first() {
+    let (a, _, frame, _) = setup();
+    let mut b = a.document().clone();
+    let mut parent = frame;
+    for i in 0..400 {
+        parent = b.create(parent, NodeKind::Frame, &format!("F{i}"), 0.0, 0.0, 10.0, 10.0).unwrap();
+    }
+    assert_eq!(round_trip(&a, &b).iter().filter(|c| matches!(c, Change::Create { .. })).count(), 400);
 }

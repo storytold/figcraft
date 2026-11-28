@@ -1,8 +1,9 @@
 //! Inspect behaviour suite, written from the public documentation of design tools' inspect and
 //! developer handoff modes: the reported layout (size, position, rotation, radius, opacity, blend),
-//! colour formats, units, typography, the generated CSS, SwiftUI and Compose for common layers,
-//! the asset list and redline measurements. Each rule is a table row or an assert with a one-line
-//! derivation; where the documentation is silent the row says so and pins today's behaviour.
+//! colour formats, units, typography, the generated CSS, SwiftUI, Compose and Flutter for common
+//! layers, the asset list and redline measurements. Each rule is a table row or an assert with a
+//! one-line derivation; where the documentation is silent the row says so and pins today's
+//! behaviour.
 
 // The tables read best as tuples.
 #![allow(clippy::type_complexity)]
@@ -241,12 +242,16 @@ fn native_code_for_a_simple_layer() {
     set(&mut s, &[r], json!({"cornerRadius": 8}));
     let swift = code(&mut s, r, json!({"language": "swiftui"}));
     let compose = code(&mut s, r, json!({"language": "compose"}));
+    let flutter = code(&mut s, r, json!({"language": "flutter"}));
     // (code, expected fragment, derivation)
-    let rows: [(&str, &str, &str); 4] = [
+    let rows: [(&str, &str, &str); 7] = [
         (&swift, "frame(width: 100, height: 50)", "SwiftUI sizes a view with frame, in points"),
         (&swift, "Color(red: 1, green: 0, blue: 0, opacity: 1)", "docs silent: the fill as a SwiftUI colour"),
         (&compose, "Modifier.size(100.dp, 50.dp)", "Compose sizes in dp"),
         (&compose, "RoundedCornerShape(8.dp)", "docs silent: corner radius as a rounded shape"),
+        (&flutter, "width: 100,\n  height: 50,", "Flutter sizes a Container in logical pixels"),
+        (&flutter, "Color(0xFFFF0000)", "docs silent: the fill as a Flutter colour"),
+        (&flutter, "borderRadius: BorderRadius.circular(8)", "docs silent: corner radius as a rounded border"),
     ];
     for (c, want, why) in rows {
         assert!(c.contains(want), "{want}: {why}\n{c}");
@@ -349,4 +354,36 @@ fn rem_conversion_keeps_the_original_pixels() {
     let f = crate::codegen::px_to_rem;
     assert_eq!(f("padding: 3px;", 16.0), "padding: 0.1875rem;");
     assert_eq!(f("gap: 0.5px;", 16.0), "gap: 0.03125rem;");
+}
+
+#[test]
+fn text_gradient_fill_clips_to_the_glyphs() {
+    let mut s = Session::new();
+    let fills = json!([{"type": "linearGradient", "stops": ["#D98200", "#FF6B4A"]}]);
+    let t = id(&ex(&mut s, "node.create", json!({"type": "text", "text": "Gradient", "props": {"fontSize": 48, "fills": fills}})));
+    let c = css(&mut s, t);
+    assert!(c.contains("background: linear-gradient("), "{c}");
+    assert!(c.contains("-webkit-background-clip: text;"), "{c}");
+    assert!(c.contains("\nbackground-clip: text;"), "{c}");
+    assert!(c.contains("color: transparent;"), "{c}");
+    let tw = code(&mut s, t, json!({"language": "tailwind"}));
+    assert!(tw.contains("bg-clip-text") && tw.contains("text-transparent"), "{tw}");
+    // A box keeps its gradient as a plain background.
+    let r = rect(&mut s, 0.0, 0.0, 50.0, 50.0, None);
+    let set = s.execute("node.set", &json!({"id": r, "props": {"fills": fills}}));
+    assert!(set.is_ok(), "{set:?}");
+    let box_css = css(&mut s, r);
+    assert!(box_css.contains("background: linear-gradient("), "{box_css}");
+    assert!(!box_css.contains("background-clip"), "{box_css}");
+}
+
+#[test]
+fn text_gradient_under_a_solid_fill_keeps_the_solid_ink() {
+    let mut s = Session::new();
+    let fills = json!([{"type": "linearGradient", "stops": ["#D98200", "#FF6B4A"]}, {"type": "solid", "color": "#112233"}]);
+    let t = id(&ex(&mut s, "node.create", json!({"type": "text", "text": "Gradient", "props": {"fontSize": 48, "fills": fills}})));
+    let c = css(&mut s, t);
+    assert!(!c.contains("color: transparent;"), "{c}");
+    assert!(!c.contains("background-clip"), "{c}");
+    assert!(c.contains("color: #112233;"), "{c}");
 }

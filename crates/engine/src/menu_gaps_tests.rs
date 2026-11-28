@@ -84,3 +84,20 @@ fn outlined_layers_draw_as_outlines_and_the_rest_normally() {
     assert_eq!(outlined.pixel(20, 20).unwrap(), empty, "only its outline");
     assert_eq!(outlined.pixel(80, 20).unwrap(), plain.pixel(80, 20).unwrap(), "the other layer draws normally");
 }
+
+#[test]
+fn open_recent_rejects_negative_and_fractional_index() {
+    let dir = std::env::temp_dir().join(format!("figcraft-recent-bad-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.figcraft").to_string_lossy().to_string();
+    let b = dir.join("b.figcraft").to_string_lossy().to_string();
+    let mut s = Session::new();
+    s.execute("file.save", &json!({"path": a})).unwrap();
+    s.execute("file.saveAs", &json!({"path": b})).unwrap();
+    let recent = s.prefs.recent_files.clone();
+    for i in [json!(-1), json!(1.5), json!(-0.5)] {
+        assert!(s.execute("file.openRecent", &json!({"index": i})).is_err(), "index {i} must be an error");
+    }
+    assert_eq!(s.prefs.recent_files, recent);
+    let _ = std::fs::remove_dir_all(&dir);
+}

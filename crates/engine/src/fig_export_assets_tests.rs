@@ -122,6 +122,27 @@ fn variables_styles_and_instance_sizes_come_back() {
     assert!(after.iter().any(|l| l.contains("\"In the dark\"") && l.contains("FFFFFF")), "{after:#?}");
 }
 
+/// #1829: a text style's paragraph spacing and indent and its list style go through a `.fig`
+/// file with it (the style's sample layer carries them, as a Figma file's does).
+#[test]
+fn a_text_styles_paragraph_values_come_back_from_a_fig_file() {
+    let mut s = Session::new();
+    let t = id(&run(&mut s, "text.create", json!({"text": "One\nTwo", "x": 0, "y": 0})));
+    run(&mut s, "node.set", json!({"ids": [t], "paragraphSpacing": 12, "paragraphIndent": 8, "listStyle": "bulleted"}));
+    run(&mut s, "style.create", json!({"type": "text", "name": "Audit", "from": t}));
+    let path = std::env::temp_dir().join(format!("figcraft-fig-text-style-{}.fig", std::process::id()));
+    run(&mut s, "file.export", json!({"format": "fig", "path": path.to_string_lossy()}));
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    let _ = std::fs::remove_file(&path);
+    let doc = s.doc().unwrap();
+    let st = doc.styles.iter().find(|x| x.name == "Audit").unwrap();
+    let figcraft_doc::StyleKind::Text { paragraph, .. } = &st.kind else { panic!("{:?}", st.kind) };
+    assert_eq!((paragraph.paragraph_spacing, paragraph.paragraph_indent, paragraph.list), (12.0, 8.0, figcraft_doc::ListStyle::Bulleted));
+    // The layer the style was made from is linked to it again, showing the same values.
+    let layer = doc.nodes().find(|n| n.kind.text().is_some()).unwrap();
+    assert_eq!(layer.styles.text.as_deref(), Some(st.id.as_str()));
+}
+
 #[test]
 fn every_example_keeps_its_variables_and_styles() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
@@ -205,4 +226,27 @@ fn nested_instances_of_variants_link_to_their_mains_layers() {
     run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
     let _ = std::fs::remove_file(&path);
     assert_eq!(outline(s.doc().unwrap()), before);
+}
+
+#[test]
+fn stored_variable_ids_keep_exported_binding_identity() {
+    let mut s = Session::new();
+    run(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    let shadow = run(&mut s, "variable.create", json!({"collection": "Theme", "name": "shadow", "type": "color", "value": "#FF0000"}));
+    let surface = run(&mut s, "variable.create", json!({"collection": "Theme", "name": "surface", "type": "color", "value": "#0D99FF"}));
+    let r = id(&run(&mut s, "node.create", json!({"type": "rectangle", "props": {"name": "Bound", "fill": {"$var": surface["id"]}}})));
+    run(&mut s, "select.set", json!({"ids": [r]}));
+    run(&mut s, "style.create", json!({"type": "paint", "name": "Surface"}));
+    run(&mut s, "node.set", json!({"id": r, "props": {"name": "Styled"}}));
+    run(&mut s, "node.create", json!({"type": "rectangle", "props": {"name": "Bound", "fill": {"$var": surface["id"]}}}));
+    run(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"]}));
+    let (bytes, _) = figcraft_format::fig::export(s.doc().unwrap(), None).unwrap();
+    let (back, _) = figcraft_format::fig::import(&bytes, "identity").unwrap();
+    let bound = back.nodes().find(|n| n.name == "Bound").unwrap().bound.values().next().unwrap();
+    assert_eq!(back.variables.get_by_id(bound).unwrap().name, "surface");
+    let style = back.styles.iter().find(|s| s.name == "Surface").unwrap();
+    assert!(!style.bound.is_empty());
+    for bound in style.bound.values() {
+        assert_eq!(back.variables.get_by_id(bound).unwrap().name, "surface");
+    }
 }

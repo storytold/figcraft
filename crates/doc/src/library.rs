@@ -152,6 +152,11 @@ pub struct LibraryLink {
     pub name: String,
     /// Where the library file is.
     pub path: String,
+    /// Where the library file is from the folder of the document that links it ('/'-separated;
+    /// written on save): followed first when the document is opened, so the link survives moving
+    /// or cloning the folder that holds both. Empty for server links and older files.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub relative: String,
     /// The library version this document last saw (when it was added or its updates accepted).
     pub version: u64,
 }
@@ -204,9 +209,84 @@ pub struct Libraries {
     /// Library variables copied into the document's variables.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<ImportedRecord>,
+    /// How many instances of each library component this document has detached (reported to
+    /// the library's server with its usage); at most [`MAX_DETACH_COUNTS`] components.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub detached: Vec<DetachCount>,
+    /// How many instances of each library component this document has inserted (placed, pasted
+    /// or duplicated; reported like [`Self::detached`]), at most [`MAX_DETACH_COUNTS`] components.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inserted: Vec<DetachCount>,
+    /// How often this document has inserted and detached each library style and variable
+    /// (reported like [`Self::detached`]), at most [`MAX_DETACH_COUNTS`] of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asset_counts: Vec<AssetCount>,
+}
+
+/// Most library components a document counts detaches for.
+pub const MAX_DETACH_COUNTS: usize = 1_000;
+
+/// Instances of one library component a document has detached (or, in
+/// [`Libraries::inserted`], inserted).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachCount {
+    /// The library's id.
+    pub library: String,
+    /// The component's (or set's) id in the library.
+    pub key: NodeId,
+    pub count: u32,
+}
+
+/// Inserts and detaches of one library style or variable in a document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetCount {
+    /// The library's id.
+    pub library: String,
+    /// Its id in the library.
+    pub key: String,
+    pub inserted: u32,
+    pub detached: u32,
+}
+
+/// Count one more instance of component `key` of library `library` in `list` (a component not
+/// counted yet is left out once [`MAX_DETACH_COUNTS`] are).
+fn count(list: &mut Vec<DetachCount>, library: &str, key: NodeId) {
+    if let Some(d) = list.iter_mut().find(|d| d.library == library && d.key == key) {
+        d.count = d.count.saturating_add(1);
+    } else if list.len() < MAX_DETACH_COUNTS {
+        list.push(DetachCount { library: library.to_string(), key, count: 1 });
+    }
 }
 
 impl Libraries {
+    /// Count one more detached instance of component `key` of library `library` (a component not
+    /// counted yet is left out once [`MAX_DETACH_COUNTS`] are).
+    pub fn count_detach(&mut self, library: &str, key: NodeId) {
+        count(&mut self.detached, library, key);
+    }
+
+    /// Count one more inserted instance of component `key` of library `library`, as
+    /// [`Self::count_detach`] counts detaches.
+    pub fn count_insert(&mut self, library: &str, key: NodeId) {
+        count(&mut self.inserted, library, key);
+    }
+
+    /// Count `n` more inserts (or, with `detach`, detaches) of style or variable `key` of library
+    /// `library` (one not counted yet is left out once [`MAX_DETACH_COUNTS`] are).
+    pub fn count_asset(&mut self, library: &str, key: &str, detach: bool, n: u32) {
+        let at = self.asset_counts.iter().position(|c| c.library == library && c.key == key);
+        let at = at.or_else(|| {
+            let room = self.asset_counts.len() < MAX_DETACH_COUNTS;
+            room.then(|| self.asset_counts.push(AssetCount { library: library.to_string(), key: key.to_string(), inserted: 0, detached: 0 }))?;
+            Some(self.asset_counts.len() - 1)
+        });
+        if let Some(c) = at.and_then(|at| self.asset_counts.get_mut(at)) {
+            let total = if detach { &mut c.detached } else { &mut c.inserted };
+            *total = total.saturating_add(n);
+        }
+    }
+
+    /// Whether nothing is enabled, kept or counted.
     pub fn is_empty(&self) -> bool {
         self.enabled.is_empty()
             && self.store.is_none()
@@ -214,6 +294,9 @@ impl Libraries {
             && self.styles.is_empty()
             && self.collections.is_empty()
             && self.variables.is_empty()
+            && self.detached.is_empty()
+            && self.inserted.is_empty()
+            && self.asset_counts.is_empty()
     }
 
     /// Serde helper: leave the field out of files that use no libraries.
@@ -260,7 +343,7 @@ impl Document {
         let id = self.alloc_id();
         let node = Node::new(
             id,
-            NodeKind::Page { background: figcraft_color::Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default(), guides: Vec::new() },
+            NodeKind::Page { background: figcraft_color::Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default(), opening: false },
             STORE_NAME,
             0.0,
             0.0,
@@ -300,6 +383,11 @@ pub fn paint_images<'a>(paints: impl IntoIterator<Item = &'a Paint>, out: &mut B
 /// Image hashes a node paints (fills, strokes, text and text run fills).
 pub fn node_images(n: &Node, out: &mut BTreeSet<String>) {
     paint_images(n.fills.iter().chain(&n.strokes), out);
+    if let NodeKind::Vector { network } = &n.kind {
+        for r in &network.regions {
+            paint_images(r.fills.iter().flatten(), out);
+        }
+    }
     if let NodeKind::Text(t) = &n.kind {
         paint_images(t.style.fills.iter().flatten(), out);
         for r in &t.runs {

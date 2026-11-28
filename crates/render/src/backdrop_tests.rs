@@ -254,14 +254,63 @@ fn glass_edges_bend_split_and_catch_the_light() {
     let (rim, middle) = changed(&split, &bent);
     assert!(rim > 0 && middle == 0, "dispersion: rim {rim}, middle {middle}");
 
-    // The light (from the top left by default) brightens the top-left rim more than the
-    // bottom-right one, and only near the edge.
+    // The light (from the top left by default) is a line on the 1-unit bevel: the top-left corner
+    // catches it all, the bottom-right one (facing away) 0.6 as much, the top side (45° from it)
+    // 0.574 and the bottom side 0.6 × 0.574, and the top-right corner (side on) none. Further in
+    // only the faint gradient across the curve shows, and nothing past `depth`.
     let (d, f, _) = glass_scene(Glass { light_intensity: 1.0, ..plain });
     let lit = render_node(&d, f, 1.0).unwrap();
     let gain = |x: u32, y: u32| i32::from(px(&lit, x, y)[1]) - i32::from(px(&flat, x, y)[1]);
-    assert!(gain(82, 42) > gain(197, 117), "{} vs {}", gain(82, 42), gain(197, 117));
-    assert!(gain(82, 42) > 40, "{}", gain(82, 42));
+    let (top_left, bottom_right, top, bottom, top_right) = (gain(80, 40), gain(199, 119), gain(140, 40), gain(140, 119), gain(199, 40));
+    assert!(
+        top_left > bottom_right && bottom_right > top && top > bottom && bottom > top_right.abs(),
+        "{top_left} {bottom_right} {top} {bottom} {top_right}"
+    );
+    assert!(top_left > 120 && top_right.abs() <= 2, "{top_left} {top_right}");
+    assert!(gain(140, 44).abs() <= 13, "4 px in: the gradient only, {}", gain(140, 44));
     assert_eq!(gain(140, 80), 0);
+}
+
+#[test]
+fn splay_turns_the_bend_towards_the_centre() {
+    // Refraction only, so the bend alone moves the stripes' edges.
+    let bend = Glass { frost: 0.0, refraction: 1.0, dispersion: 0.0, light_intensity: 0.0, depth: 16.0, ..Glass::default() };
+    let (d, f, _) = glass_scene(bend.clone());
+    let edge = render_node(&d, f, 1.0).unwrap();
+    let (d, f, _) = glass_scene(Glass { splay: 1.0, ..bend });
+    let centre = render_node(&d, f, 1.0).unwrap();
+    let diff = |xs: std::ops::Range<u32>, ys: std::ops::Range<u32>| {
+        let mut most = 0;
+        for y in ys {
+            for x in xs.clone() {
+                most = most.max(px(&edge, x, y).iter().zip(px(&centre, x, y)).map(|(a, b)| a.abs_diff(b)).max().unwrap());
+            }
+        }
+        most
+    };
+    // Halfway along the left side the edge's normal and the way from the centre (140, 80) agree:
+    // nearly the same pixels. In the top-left corner they part, and so does what shows there.
+    assert!(diff(80..96, 78..82) <= 8, "mid-left: {}", diff(80..96, 78..82));
+    assert!(diff(80..96, 40..56) > 40, "corner: {}", diff(80..96, 40..56));
+}
+
+/// Glass with nothing under it (an export of the pane alone): the light on the bevel still shows,
+/// the alpha rising with it, and the flat inside and the outside stay clear.
+#[test]
+fn glass_over_nothing_still_catches_the_light() {
+    let mut d = Document::new("glass");
+    let p = d.first_page().unwrap();
+    let pane = d.create(p, NodeKind::Rectangle, "Glass", 40.0, 30.0, 120.0, 80.0).unwrap();
+    let n = d.get_mut(pane).unwrap();
+    n.fills.clear();
+    n.effects = vec![Effect { kind: EffectKind::Glass(Glass { light_intensity: 1.0, ..Glass::default() }), visible: true }];
+    let out = render_area(&d, &[pane], Rect::new(0.0, 0.0, 200.0, 140.0), 1.0).unwrap();
+    // The top-left corner faces the light (from the top left): white, as opaque as it is bright.
+    let corner = px(&out, 40, 30);
+    assert!(corner[3] > 100 && corner.iter().all(|v| v.abs_diff(corner[3]) <= 2), "{corner:?}");
+    assert!(out.data().chunks_exact(4).all(|q| q[0] <= q[3] && q[1] <= q[3] && q[2] <= q[3]), "premultiplied");
+    assert_eq!(px(&out, 100, 70), [0; 4]);
+    assert_eq!(px(&out, 10, 10), [0; 4]);
 }
 
 #[test]

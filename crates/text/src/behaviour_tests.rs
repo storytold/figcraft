@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::breaks::{break_between, grapheme_starts};
-use figcraft_doc::{LeadingTrim, LetterSpacing, LineHeight, TextAlignH, TextAutoResize, TextData, TextDecoration};
+use figcraft_doc::{LeadingTrim, LetterSpacing, LineHeight, ListStyle, ParaList, TextAlignH, TextAutoResize, TextData, TextDecoration};
 
 /// The default face once system fonts are indexed (a Latin face where the system has one, so CJK
 /// and emoji come from fallback faces), or None (skip) on a machine without fonts.
@@ -98,6 +98,36 @@ fn letter_spacing_percent_and_pixels() {
         let w = layout(&t, None, None).width;
         assert!((w - plain - extra).abs() < 1e-3, "{why}: {w} vs {plain} + {extra}");
     }
+}
+
+/// "Use Backspace or Delete at the beginning of a list item to delete the counter, but keep the
+/// same level of indentation" (Create bulleted and numbered lists): a plain paragraph at a list
+/// level starts where that level's item text starts, even once no list is left; a plain
+/// paragraph at level 0 starts at the box as always.
+#[test]
+fn a_plain_paragraph_at_a_list_level_starts_where_the_items_text_does() {
+    if face().is_none() {
+        return;
+    }
+    let level = |list: ListStyle, indent: u8| ParaList { list, indent, start_offset: 0, ..ParaList::default() };
+    let mut t = text("a\nb\nc", TextAutoResize::WidthAndHeight);
+    t.paragraphs = vec![level(ListStyle::Bulleted, 1), level(ListStyle::None, 1), level(ListStyle::None, 0)];
+    let l = layout(&t, None, None);
+    // Where a line's text starts: its first character's glyph (the indent is in the glyphs); a
+    // list marker shares that character and sits in the gutter to its left, so the text is the
+    // rightmost of them.
+    let text_x = |l: &TextLayout, li: usize| {
+        l.glyphs.iter().filter(|g| g.char_start == l.lines[li].char_start).map(|g| g.x).fold(f64::NAN, |a, b| if a.is_nan() { b } else { a.max(b) })
+    };
+    let (x0, x1, x2) = (text_x(&l, 0), text_x(&l, 1), text_x(&l, 2));
+    assert!((x1 - x0).abs() < EPS, "the plain paragraph keeps the item's text start: {x1} vs {x0}");
+    assert!(x0 > 20.0, "a nested item's text starts two gutters in: {x0}");
+    assert!(x2.abs() < EPS, "a level-0 plain paragraph starts at the box: {x2}");
+    // No list left at all: the level still indents, by the same gutters.
+    let mut alone = text("b", TextAutoResize::WidthAndHeight);
+    alone.paragraphs = vec![level(ListStyle::None, 1)];
+    let a = layout(&alone, None, None);
+    assert!((text_x(&a, 0) - x1).abs() < EPS, "{} vs {x1}", text_x(&a, 0));
 }
 
 #[test]
@@ -332,6 +362,91 @@ fn thai_comes_from_a_thai_font_when_one_is_installed() {
     let drawn: std::collections::BTreeSet<usize> = glyphs.iter().flat_map(|g| g.char_start..g.char_end).collect();
     let want: std::collections::BTreeSet<usize> = (3..chars.len()).filter(|i| chars[*i] != ' ').collect();
     assert_eq!(drawn, want, "every Thai char is in a drawn cluster");
+}
+
+#[test]
+fn thai_emergency_break_can_back_up_to_the_first_letter() {
+    // #1219: in "กเม" the overflow lands between the leading vowel and its consonant; the only
+    // safe break is right after the first letter, so the vowel moves down with "ม".
+    let s = "กเม";
+    let thai = ["Noto Sans Thai", "Noto Sans Thai UI", "Leelawadee UI", "Thonburi", "Tahoma"];
+    if face().is_none() || !thai.iter().any(|t| find_face(t, "Regular").is_some_and(|t| s.chars().all(|c| t.has_char(c)))) {
+        return;
+    }
+    let mut t = text(s, TextAutoResize::Height);
+    t.style.font_size = 16.0;
+    let two = layout(&t, None, None).caret(2).0;
+    let lines = layout(&t, Some(two + 0.5), None).lines;
+    assert_eq!(lines.get(1).map(|l| l.char_start), Some(1), "the leading vowel stays with its consonant");
+}
+
+#[test]
+fn thai_emergency_breaks_keep_marks_and_leading_vowels_with_their_letter() {
+    // #1219: Thai writes no spaces between words, so a paragraph is one run with no break
+    // opportunity and wraps where it overflows. Even that emergency break must not start a line
+    // with a mark (it belongs to the letter before it) or end one with a leading vowel (it is
+    // written before the consonant it is read with). Skips without a Thai face.
+    let s = "ระบบช่วยให้ทีมพัฒนาซอฟต์แวร์จัดทำเอกสารที่มีโครงสร้างได้ในที่เดียว";
+    let chars: Vec<char> = s.chars().collect();
+    let thai = ["Noto Sans Thai", "Noto Sans Thai UI", "Leelawadee UI", "Thonburi", "Tahoma"];
+    if face().is_none() {
+        return;
+    }
+    if !thai.iter().any(|t| find_face(t, "Regular").is_some_and(|t| chars.iter().all(|c| t.has_char(*c)))) {
+        return;
+    }
+    let mut t = text(s, TextAutoResize::Height);
+    t.style.font_size = 16.0;
+    let total = layout(&t, None, None).caret(chars.len()).0;
+    let is_mark = |c: char| matches!(c, '\u{0E31}' | '\u{0E34}'..='\u{0E3A}' | '\u{0E47}'..='\u{0E4E}');
+    let is_leading_vowel = |c: char| ('\u{0E40}'..='\u{0E44}').contains(&c);
+    let mut breaks = 0;
+    for k in 1..40 {
+        let width = total * f64::from(k) / 40.0;
+        for line in layout(&t, Some(width), None).lines.iter().skip(1) {
+            let (Some(start), Some(&first)) = (line.char_start.checked_sub(1), chars.get(line.char_start)) else { continue };
+            let Some(&before) = chars.get(start) else { continue };
+            assert!(!is_mark(first), "at {width:.1} px a line starts with U+{:04X}: {s}", first as u32);
+            assert!(!is_leading_vowel(before), "at {width:.1} px a line ends with {before:?} before {first:?}: {s}");
+            breaks += 1;
+        }
+    }
+    assert!(breaks > 0, "the sentence wraps at least once across these widths");
+}
+
+/// Wrapped Thai lines start words at every width that fits the widest word (#1219).
+#[test]
+fn thai_lines_break_between_words() {
+    // #1219: Thai writes no spaces, so lines break where a word starts (ICU4X's word data), never
+    // inside a word that fits on a line: at every width from the widest word's to the sentence's,
+    // each wrapped line starts a word. Font-free: without a Thai face, missing glyphs measure too.
+    let words = ["ระบบ", "ช่วย", "ให้", "ทีม", "พัฒนา", "ซอฟต์แวร์", "จัด", "ทำ", "เอกสาร", "ที่", "มี", "โครงสร้าง", "ได้", "ใน", "ที่", "เดียว"];
+    if face().is_none() {
+        return;
+    }
+    let starts: Vec<usize> = words
+        .iter()
+        .scan(0, |at, w| {
+            let start = *at;
+            *at += w.chars().count();
+            Some(start)
+        })
+        .collect();
+    let s = words.concat();
+    let width = |s: &str| layout(&text(s, TextAutoResize::WidthAndHeight), None, None).caret(s.chars().count()).0;
+    let widest = words.iter().map(|w| width(w)).fold(0.0, f64::max) + 1.0;
+    let total = width(&s);
+    let t = text(&s, TextAutoResize::Height);
+    let mut wraps = 0;
+    for k in 0..20 {
+        let box_width = widest + (total - widest) * f64::from(k) / 20.0;
+        let l = layout(&t, Some(box_width), None);
+        for line in l.lines.iter().skip(1) {
+            assert!(starts.contains(&line.char_start), "at {box_width:.1} px a line starts inside a word: {:?}", line_texts(&t, &l));
+            wraps += 1;
+        }
+    }
+    assert!(wraps >= 20, "the sentence wraps at every width below its own");
 }
 
 #[test]

@@ -1,16 +1,22 @@
 //! Creating nodes.
 
-use figcraft_color::{ImageScaleMode, Paint};
-use figcraft_doc::*;
+use figcraft_color::{ImageFilters, ImageScaleMode, Paint};
+use figcraft_doc::{Document, Node, NodeId, NodeKind, Sizing, StrokeCap, TextAutoResize, TextData, VectorNetwork};
 use figcraft_geom::Point;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{boolean, f64_of, get, id, num, num_or, opt_id, req_targets, string};
 use crate::{Result, Session, bad, spec};
+
+pub const PLACED_IMAGE_MAX_SIDE: f64 = 4096.0;
 
 /// Frame presets shown by the Frame tool (category, name, width, height).
 pub const FRAME_PRESETS: &[(&str, &str, f64, f64)] = &[
+    ("Phone", "iPhone 17", 402.0, 874.0),
+    ("Phone", "iPhone 17 Pro", 402.0, 874.0),
+    ("Phone", "iPhone 17 Pro Max", 440.0, 956.0),
+    ("Phone", "iPhone Air", 420.0, 912.0),
     ("Phone", "iPhone 16", 393.0, 852.0),
     ("Phone", "iPhone 16 Pro", 402.0, 874.0),
     ("Phone", "iPhone 16 Pro Max", 440.0, 956.0),
@@ -53,37 +59,61 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "node.create",
             "Create layer",
-            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? (for text), path? (SVG path data for vector), props? {node.set keys}, select? (default true)}",
+            "{type: rectangle|ellipse|polygon|star|line|arrow|vector|text|frame|section|component|slice, x?, y? (relative to the parent frame; groups don't count), width?, height?, parent? (id; default: the page), index?, name?, text? | characters? (for text), path? | points? (vector: SVG path data | [[x,y],..]; x/y move their own origin, so the layer's left/top is x/y plus their box's unscaled offset), closed? (vector), props? {node.set keys}, select? (default true)}",
             true,
             create
         ),
         spec!(
             "frame.create",
             "Create frame",
-            "{preset? (name from FRAME_PRESETS), x?, y?, width?, height?, parent?, name?, props?} (a preset without x/y lands to the right of the page's frames)",
+            "{preset? (name from FRAME_PRESETS), x?, y?, width?, height?, parent?, index?, name?, props?, select? (default true)} (a preset without x/y lands to the right of the page's frames)",
             true,
             frame_create
         ),
-        spec!("shape.rectangle", "Rectangle", "{x, y, width, height, parent?, props?}", true, |s, p| create_kind(s, p, "rectangle")),
-        spec!("shape.ellipse", "Ellipse", "{x, y, width, height, parent?, props?}", true, |s, p| create_kind(s, p, "ellipse")),
-        spec!("shape.polygon", "Polygon", "{x, y, width, height, parent?, props? {pointCount}}", true, |s, p| create_kind(s, p, "polygon")),
-        spec!("shape.star", "Star", "{x, y, width, height, parent?, props? {pointCount, innerRadius}}", true, |s, p| create_kind(s, p, "star")),
-        spec!("shape.line", "Line", "{x, y, width (length), parent?, props? {rotation}}", true, |s, p| create_kind(s, p, "line")),
-        spec!("shape.arrow", "Arrow", "{x, y, width (length), parent?, props?}", true, |s, p| create_kind(s, p, "arrow")),
-        spec!("text.create", "Text", "{text, x, y, parent?, width? (fixed width wraps), props? (fontSize, fontFamily, …)}", true, |s, p| {
-            create_kind(s, p, "text")
+        spec!("shape.rectangle", "Rectangle", "{x, y, width, height, parent?, index?, name?, props?, select? (default true)}", true, |s, p| {
+            create_kind(s, p, "rectangle")
         }),
+        spec!("shape.ellipse", "Ellipse", "{x, y, width, height, parent?, index?, name?, props?, select? (default true)}", true, |s, p| create_kind(
+            s, p, "ellipse"
+        )),
+        spec!(
+            "shape.polygon",
+            "Polygon",
+            "{x, y, width, height, parent?, index?, name?, props? {pointCount}, select? (default true)}",
+            true,
+            |s, p| create_kind(s, p, "polygon")
+        ),
+        spec!(
+            "shape.star",
+            "Star",
+            "{x, y, width, height, parent?, index?, name?, props? {pointCount, innerRadius}, select? (default true)}",
+            true,
+            |s, p| create_kind(s, p, "star")
+        ),
+        spec!("shape.line", "Line", "{x, y, width (length), parent?, index?, name?, props? {rotation}, select? (default true)}", true, |s, p| {
+            create_kind(s, p, "line")
+        }),
+        spec!("shape.arrow", "Arrow", "{x, y, width (length), parent?, index?, name?, props?, select? (default true)}", true, |s, p| create_kind(
+            s, p, "arrow"
+        )),
+        spec!(
+            "text.create",
+            "Text",
+            "{text | characters, x?, y? (ignored inside an auto layout parent unless props.absolute is true, which keeps the transform they set), parent?, index?, name? (default: the first line), width? (fixed width wraps), props? (fontSize, fontWeight, fontFamily, …), select? (default true)}",
+            true,
+            |s, p| { create_kind(s, p, "text") }
+        ),
         spec!(
             "vector.create",
             "Vector",
-            "{path (SVG path data) | points [[x,y],..], closed?, x?, y?, width?, height? (scale the path; one keeps its proportion), parent?, props?}",
+            "{path (SVG path data) | points [[x,y],..], closed?, x?, y? (move the path's own origin: the layer's left/top is x/y plus the box's unscaled offset), width?, height? (scale the path; one keeps its proportion), parent?, index?, name?, props?, select? (default true)}",
             true,
             |s, p| create_kind(s, p, "vector")
         ),
         spec!(
             "image.place",
             "Place image",
-            "{data (base64) | path, x?, y?, width?, height?, parent?, target? (an existing layer: the image is added on top of its fills instead of making a layer), mode? (fill|fit|crop|tile)} → {id, image, width, height, imageProfile (its embedded colour profile; null: taken as sRGB)}",
+            "{data (base64) | path, x?, y?, width?, height?, parent?, name? (default Image), target? (an existing layer: the image is added on top of its fills instead of making a layer), mode? (fill|fit|crop|tile)} → {id, image, width, height, imageProfile (its embedded colour profile; null: taken as sRGB)}",
             true,
             place_image
         ),
@@ -147,7 +177,7 @@ pub fn kind_for(t: &str) -> Option<(NodeKind, &'static str)> {
         "text" => (NodeKind::Text(TextData::default()), "Text"),
         "frame" => (NodeKind::Frame, "Frame"),
         "section" => (NodeKind::Section { contents_hidden: false }, "Section"),
-        "component" => (NodeKind::Component { description: String::new(), props: Default::default() }, "Component"),
+        "component" => (NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() }, "Component"),
         "group" => (NodeKind::Group, "Group"),
         "slice" => (NodeKind::Slice, "Slice"),
         _ => return None,
@@ -164,7 +194,7 @@ fn create_kind(s: &mut Session, p: &Value, t: &str) -> Result<Value> {
 
 /// Parse SVG path data (`M L H V C S Q T A Z`, absolute and relative) into a bezier path.
 pub fn parse_path_data(d: &str) -> Option<figcraft_geom::BezPath> {
-    figcraft_geom::BezPath::from_svg(d).ok()
+    figcraft_geom::svg_path(d).ok()
 }
 
 /// A vector's geometry made from SVG path data (see [`path_network`]).
@@ -183,7 +213,9 @@ pub(crate) struct PathShape {
 pub(crate) fn path_network(cmd: &str, d: &str, width: Option<f64>, height: Option<f64>) -> Result<PathShape> {
     use figcraft_geom::Shape;
     let empty = || bad(cmd, "`path` draws nothing: a vector needs a visible line or area");
-    let mut path = parse_path_data(d).ok_or_else(|| bad(cmd, "`path` is not valid SVG path data"))?;
+    let mut path = figcraft_geom::svg_path(d).map_err(|e| {
+        if e.contains("too large") { bad(cmd, "`path` has coordinates too large to draw") } else { bad(cmd, "`path` is not valid SVG path data") }
+    })?;
     let bb = path.bounding_box();
     if !(bb.x0.is_finite() && bb.y0.is_finite() && bb.width().is_finite() && bb.height().is_finite()) {
         return Err(bad(cmd, "`path` has coordinates too large to draw"));
@@ -234,6 +266,38 @@ fn vector_scale(width: Option<f64>, height: Option<f64>, bw: f64, bh: f64, what:
     })
 }
 
+/// A fixed-size text (auto-resize `none`/`truncate` in `props`) is measured as auto-height
+/// before `props` are applied, so the measured height overwrites the top-level `height`. Put
+/// the top-level `height` back through the normal command path, unless `props` set a height
+/// of their own (which wins).
+fn keep_fixed_text_height(cmd: &str, doc: &mut Document, nid: NodeId, p: &Value) -> Result<()> {
+    if let Some(h) = num(p, "height")
+        && get(p, "props").and_then(Value::as_object).is_none_or(|o| !o.contains_key("height") && !o.contains_key("h"))
+        && doc
+            .node(nid)
+            .is_some_and(|n| matches!(&n.kind, NodeKind::Text(t) if matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate)))
+    {
+        let mut fixed = serde_json::Map::new();
+        fixed.insert("height".into(), json!(h));
+        // With the proportions locked, `apply` would treat a lone height as a linked resize and
+        // rescale the width; pin the current width so the box keeps it. The width key does not
+        // change a fixed text's mode (`fix_size` leaves None/Truncate alone).
+        if let Some(n) = doc.node(nid)
+            && n.constrain_proportions
+            && n.width.is_finite()
+        {
+            fixed.insert("width".into(), json!(n.width));
+        }
+        // The width pin also re-fixes the horizontal sizing; keep what the props asked for.
+        let sizing_h = doc.node(nid).map(|n| n.child_layout.sizing_h);
+        super::props::apply(cmd, doc, nid, &fixed)?;
+        if let Some(sizing_h) = sizing_h {
+            doc.get_mut(nid)?.child_layout.sizing_h = sizing_h;
+        }
+    }
+    Ok(())
+}
+
 pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "node.create";
     let t = string(p, "type").ok_or_else(|| bad(cmd, "`type` is required"))?;
@@ -243,7 +307,9 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc()?;
     let pn = doc.get(parent)?;
     if !pn.kind.is_container() {
-        return Err(bad(cmd, format!("{parent} can't contain layers")));
+        let name = pn.name.trim();
+        let what = if name.is_empty() { pn.kind.type_name().to_string() } else { format!("{} \"{}\"", pn.kind.type_name(), name) };
+        return Err(bad(cmd, format!("{parent} ({what}) can't contain layers")));
     }
     if base == "Section" && !doc.takes_sections(parent) {
         return Err(bad(cmd, "sections go on the page or in other sections"));
@@ -272,7 +338,14 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
             }
             (w, h, offset) = (shape.width, shape.height, shape.offset);
         } else if let Some(Value::Array(pts)) = get(p, "points") {
-            let pts: Vec<Point> = pts.iter().filter_map(|v| Some(Point::new(f64_of(v.get(0)?)?, f64_of(v.get(1)?)?))).collect();
+            let pts: Vec<Point> = pts
+                .iter()
+                .map(|v| {
+                    let xy = v.as_array().filter(|a| a.len() == 2)?;
+                    Some(Point::new(f64_of(&xy[0])?, f64_of(&xy[1])?))
+                })
+                .collect::<Option<_>>()
+                .ok_or_else(|| bad(cmd, "`points` entries must be numeric [x, y] pairs"))?;
             if pts.len() < 2 {
                 return Err(bad(cmd, "`points` needs at least two [x, y] pairs"));
             }
@@ -332,11 +405,35 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     doc.insert(node, parent, index)?;
     if let Some(Value::Object(props)) = get(p, "props") {
         super::props::apply(cmd, doc, nid, props)?;
+        // An auto layout frame hugs the axes the caller left unset — the incumbent's default, and
+        // the difference between a card and a 100pt-tall box that silently clips its rows.
+        // Explicit width/height and explicit sizing keep their fixed/fill behaviour.
+        if doc.node(nid).is_some_and(|n| n.layout.is_some()) {
+            let asked = |axis: &str, keys: &[&str]| {
+                let long = if axis == "h" { "width" } else { "height" };
+                let short = if axis == "h" { "w" } else { "h" };
+                num(p, long).is_some() || props.contains_key(long) || props.contains_key(short) || keys.iter().any(|k| props.contains_key(*k))
+            };
+            if let Some(n) = doc.node_mut(nid) {
+                if !asked("h", &["sizingH", "layoutSizingHorizontal"]) {
+                    n.child_layout.sizing_h = Sizing::Hug;
+                }
+                if !asked("v", &["sizingV", "layoutSizingVertical"]) {
+                    n.child_layout.sizing_v = Sizing::Hug;
+                }
+            }
+        }
     }
+    keep_fixed_text_height(cmd, doc, nid, p)?;
+    // A `fontStyle` the family lacks draws in its nearest face, the same as `node.set` says.
+    let warnings = match get(p, "props") {
+        Some(Value::Object(props)) if doc.node(nid).is_some_and(|n| n.kind.text().is_some()) => super::edit::font_style_warnings(doc, &[nid], props),
+        _ => Vec::new(),
+    };
     if boolean(p, "select").unwrap_or(true) {
         ds.selection = vec![nid];
     }
-    Ok(json!({"id": nid}))
+    if warnings.is_empty() { Ok(json!({"id": nid})) } else { Ok(json!({"id": nid, "warnings": warnings})) }
 }
 
 fn frame_create(s: &mut Session, p: &Value) -> Result<Value> {
@@ -384,14 +481,45 @@ fn free_spot(s: &Session, w: f64, h: f64) -> Result<(f64, f64)> {
     })
 }
 
+/// An image file to place: no larger than a document takes an image from outside (#1114).
 #[cfg(not(target_arch = "wasm32"))]
 fn read_path(path: &str) -> Result<Vec<u8>> {
-    crate::file_access::read(path)
+    crate::file_access::read_capped(path, figcraft_doc::ImageData::MAX_BYTES)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn read_path(path: &str) -> Result<Vec<u8>> {
     Err(crate::EngineError::Other(format!("{path}: files can't be read in the browser")))
+}
+
+/// Register image `bytes` with `doc`, as [`figcraft_format::add_image`] does, once they prove to
+/// decode: their header alone can look fine on a damaged file, which would then show as an empty
+/// box with nothing said (#1474). The decode is the renderer's own, cached, so drawing the image
+/// next doesn't repeat it. Returns the hash and pixel size.
+pub(crate) fn add_readable_image(doc: &mut Document, bytes: Vec<u8>) -> std::result::Result<(String, u32, u32), String> {
+    let known = doc.images.contains_key(&figcraft_format::image_hash(&bytes));
+    let (hash, w, h) = figcraft_format::add_image(doc, bytes).map_err(|e| e.to_string())?;
+    let pixels = figcraft_render::images::get(&hash, doc.images.get(&hash), &ImageFilters::default(), doc.color_profile);
+    if pixels.is_none() {
+        if !known {
+            doc.images.remove(&hash);
+        }
+        return Err("this image can't be read: the file is damaged or too large".into());
+    }
+    Ok((hash, w, h))
+}
+
+/// The image `cmd` was given: `data` (base64) or a `path`, whose size is capped.
+pub(super) fn image_bytes(cmd: &str, p: &Value) -> Result<Vec<u8>> {
+    if let Some(b64) = string(p, "data") {
+        use base64::Engine as _;
+        let b64 = b64.split_once(',').map(|(_, d)| d.to_string()).unwrap_or(b64);
+        base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| bad(cmd, format!("`data`: {e}")))
+    } else if let Some(path) = string(p, "path") {
+        read_path(&path)
+    } else {
+        Err(bad(cmd, "pass `data` (base64) or `path`"))
+    }
 }
 
 /// Layers that can show an image inside their own outline.
@@ -416,15 +544,7 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, "`target` must be a layer that can have a fill"));
         }
     }
-    let bytes = if let Some(b64) = string(p, "data") {
-        use base64::Engine as _;
-        let b64 = b64.split_once(',').map(|(_, d)| d.to_string()).unwrap_or(b64);
-        base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| bad(cmd, format!("`data`: {e}")))?
-    } else if let Some(path) = string(p, "path") {
-        read_path(&path)?
-    } else {
-        return Err(bad(cmd, "pass `data` (base64) or `path`"));
-    };
+    let bytes = image_bytes(cmd, p)?;
     let mode = match string(p, "mode").unwrap_or_default().to_ascii_lowercase().as_str() {
         "fit" => ImageScaleMode::Fit,
         "crop" => ImageScaleMode::Crop,
@@ -433,7 +553,7 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if let Some(id) = target {
         let doc = s.doc_mut()?;
-        let (hash, _, _) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+        let (hash, _, _) = add_readable_image(doc, bytes).map_err(crate::EngineError::Other)?;
         let profile = figcraft_render::images::profile_name(&hash, doc.images.get(&hash));
         let node = doc.get_mut(id)?;
         add_image_fill(node, hash.clone(), mode);
@@ -443,13 +563,12 @@ pub fn place_image(s: &mut Session, p: &Value) -> Result<Value> {
     let parent = crate::params::opt_id(cmd, p, "parent")?.unwrap_or(page);
     let ds = s.ds_mut()?;
     let doc = ds.doc_mut();
-    let (hash, iw, ih) = figcraft_format::add_image(doc, bytes).map_err(|e| bad(cmd, e.to_string()))?;
+    let density = figcraft_format::pixel_density(&bytes);
+    let (hash, iw, ih) = add_readable_image(doc, bytes).map_err(crate::EngineError::Other)?;
     let profile = figcraft_render::images::profile_name(&hash, doc.images.get(&hash));
-    let (iw, ih) = (f64::from(iw), f64::from(ih));
-    // Fit large images into 1000 px like Figma does when placing.
-    let k = (1000.0 / iw.max(ih)).min(1.0);
-    let w = num(p, "width").unwrap_or(iw * k);
-    let h = num(p, "height").unwrap_or(if num(p, "width").is_some() { w * ih / iw.max(1.0) } else { ih * k });
+    let (placed_w, placed_h) = figcraft_format::placed_size(iw, ih, density, PLACED_IMAGE_MAX_SIDE);
+    let w = num(p, "width").unwrap_or(placed_w);
+    let h = num(p, "height").unwrap_or(if num(p, "width").is_some() { w * f64::from(ih) / f64::from(iw).max(1.0) } else { placed_h });
     let nid = doc.alloc_id();
     let name = string(p, "name").unwrap_or_else(|| "Image".into());
     let mut node = Node::new(nid, NodeKind::Rectangle, name, w, h);

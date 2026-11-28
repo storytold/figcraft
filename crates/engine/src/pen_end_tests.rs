@@ -1,5 +1,6 @@
-//! Ending a pen path with Escape or Enter (#760): the path's vector stays in edit mode with the pen,
-//! so the next path is drawn into the same layer; another Escape leaves edit mode.
+//! Ending a pen path with Escape (#760): the path's vector stays in edit mode with the pen, so the
+//! next path is drawn into the same layer; another Escape leaves edit mode. (Enter goes on with the
+//! Move tool instead: `pen_vector_edit_tests`.)
 
 use crate::Session;
 use crate::tools::{PointerEvent, PointerKind, ToolId};
@@ -41,8 +42,8 @@ fn drawn(end: fn(&mut Session)) -> (Session, figcraft_doc::NodeId) {
 }
 
 #[test]
-fn escape_and_enter_keep_the_vector_in_edit_mode_with_the_pen() {
-    // Escape, and Enter (its key runs `pen_end`).
+fn escape_keeps_the_vector_in_edit_mode_with_the_pen() {
+    // Escape, and `pen_end` that it runs.
     let ends: [fn(&mut Session); 2] = [|s| s.escape().unwrap(), |s| s.pen_end().unwrap()];
     for end in ends {
         let (mut s, id) = drawn(end);

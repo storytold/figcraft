@@ -30,6 +30,155 @@ fn kind(s: &Session, n: NodeId) -> NodeKind {
 }
 
 #[test]
+fn adding_auto_layout_converts_a_single_group_and_arranges_its_children_directly() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    let (a, b) = (rect(&mut s, page, 10.0, 20.0), rect(&mut s, page, 90.0, 20.0));
+    let group = id(ex(&mut s, "object.group", json!({"ids": [a, b], "name": "Actions"})));
+    let siblings = s.doc().unwrap().node(page).unwrap().children.clone();
+    let before = [page_box(&s, group), page_box(&s, a), page_box(&s, b)];
+
+    let result = ex(&mut s, "layout.add", json!({"ids": [group], "direction": "horizontal"}));
+    assert_eq!(result["ids"], json!([group]), "the group's identity is retained");
+    let doc = s.doc().unwrap();
+    let frame = doc.node(group).unwrap();
+    assert!(matches!(frame.kind, NodeKind::Frame));
+    assert_eq!(frame.name, "Actions");
+    assert_eq!(frame.parent, Some(page));
+    assert_eq!(frame.children, vec![a, b], "no intermediate group or wrapper frame");
+    assert!(frame.layout.is_some() && frame.fills.is_empty() && !frame.clip);
+    assert_eq!(doc.node(page).unwrap().children, siblings);
+    assert_eq!([page_box(&s, group), page_box(&s, a), page_box(&s, b)], before);
+
+    // The second child now follows changes to the first through auto layout.
+    ex(&mut s, "node.set", json!({"id": a, "props": {"width": 60}}));
+    assert_eq!(page_box(&s, b), [110.0, 20.0, 150.0, 40.0]);
+    s.undo().unwrap();
+    s.undo().unwrap();
+    let restored = s.doc().unwrap().node(group).unwrap();
+    assert!(matches!(restored.kind, NodeKind::Group) && restored.layout.is_none());
+    assert_eq!(restored.children, vec![a, b]);
+    assert_eq!([page_box(&s, group), page_box(&s, a), page_box(&s, b)], before);
+    s.redo().unwrap();
+    assert!(matches!(kind(&s, group), NodeKind::Frame));
+    assert!(s.doc().unwrap().node(group).unwrap().layout.is_some());
+}
+
+#[test]
+fn adding_auto_layout_to_multiple_groups_still_wraps_the_selection() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    let (a, b) = (rect(&mut s, page, 10.0, 20.0), rect(&mut s, page, 90.0, 20.0));
+    let g1 = id(ex(&mut s, "object.group", json!({"ids": [a]})));
+    let g2 = id(ex(&mut s, "object.group", json!({"ids": [b]})));
+    let result = ex(&mut s, "layout.add", json!({"ids": [g1, g2]}));
+    let frame = crate::params::id_of(&result["ids"][0]).unwrap();
+    let doc = s.doc().unwrap();
+    assert!(matches!(doc.node(frame).unwrap().kind, NodeKind::Frame));
+    assert_eq!(doc.node(frame).unwrap().children, vec![g1, g2]);
+    assert!(matches!(kind(&s, g1), NodeKind::Group) && matches!(kind(&s, g2), NodeKind::Group));
+}
+
+#[test]
+fn adding_auto_layout_preserves_mask_runs_and_their_rendering() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    let (right, left) = (rect(&mut s, page, 300.0, 0.0), rect(&mut s, page, 0.0, 0.0));
+    let (mask, content) = (rect(&mut s, page, 100.0, 0.0), rect(&mut s, page, 80.0, 0.0));
+    let (mask2, content2) = (rect(&mut s, page, 200.0, 0.0), rect(&mut s, page, 180.0, 0.0));
+    let group = id(ex(&mut s, "object.group", json!({"ids": [right, left, mask, content, mask2, content2]})));
+    ex(&mut s, "node.set", json!({"ids": [mask, mask2], "props": {"isMask": true}}));
+    // Absolute layers keep the overlaps, isolating paint order from normal flow placement.
+    ex(&mut s, "node.set", json!({"ids": [mask, content, mask2, content2], "props": {"absolute": true}}));
+    let before = figcraft_render::render_node(s.doc().unwrap(), group, 1.0).unwrap();
+    ex(&mut s, "layout.add", json!({"ids": [group]}));
+    let doc = s.doc().unwrap();
+    let frame = doc.node(group).unwrap();
+    assert_eq!(frame.children, vec![left, right, mask, content, mask2, content2], "sort the unmasked prefix, retain mask runs");
+    let runs: Vec<Vec<NodeId>> = doc.paint_runs(frame).iter().map(|r| frame.children[r.clone()].to_vec()).collect();
+    assert_eq!(runs, vec![vec![left], vec![right], vec![mask, content], vec![mask2, content2]]);
+    let after = figcraft_render::render_node(doc, group, 1.0).unwrap();
+    assert_eq!((after.width(), after.height(), after.data()), (before.width(), before.height(), before.data()));
+    s.undo().unwrap();
+    assert_eq!(s.doc().unwrap().node(group).unwrap().children, vec![right, left, mask, content, mask2, content2]);
+}
+
+#[test]
+fn a_hidden_mask_keeps_its_boundary_but_unmasked_children_still_sort() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    let mask = rect(&mut s, page, 100.0, 0.0);
+    let content = rect(&mut s, page, 80.0, 0.0);
+    let hidden_mask = rect(&mut s, page, 200.0, 0.0);
+    let (right, left) = (rect(&mut s, page, 300.0, 0.0), rect(&mut s, page, 250.0, 0.0));
+    let group = id(ex(&mut s, "object.group", json!({"ids": [mask, content, hidden_mask, right, left]})));
+    ex(&mut s, "node.set", json!({"ids": [mask, hidden_mask], "props": {"isMask": true}}));
+    ex(&mut s, "node.set", json!({"id": hidden_mask, "props": {"visible": false}}));
+    ex(&mut s, "layout.add", json!({"ids": [group], "direction": "horizontal"}));
+    let doc = s.doc().unwrap();
+    let frame = doc.node(group).unwrap();
+    assert_eq!(frame.children, vec![mask, content, hidden_mask, left, right]);
+    let runs: Vec<Vec<NodeId>> = doc.paint_runs(frame).iter().map(|r| frame.children[r.clone()].to_vec()).collect();
+    assert_eq!(runs, vec![vec![mask, content], vec![hidden_mask], vec![left], vec![right]]);
+}
+
+#[test]
+fn adding_auto_layout_infers_gaps_from_flow_children_only() {
+    for props in [json!({"visible": false}), json!({"absolute": true})] {
+        let mut s = Session::new();
+        let page = s.page().unwrap();
+        let a = rect(&mut s, page, 0.0, 0.0);
+        let excluded = rect(&mut s, page, 80.0, 0.0);
+        let b = rect(&mut s, page, 160.0, 0.0);
+        let group = id(ex(&mut s, "object.group", json!({"ids": [a, excluded, b]})));
+        ex(&mut s, "node.set", json!({"id": excluded, "props": props}));
+        let before = [page_box(&s, a), page_box(&s, b)];
+        ex(&mut s, "layout.add", json!({"ids": [group]}));
+        let layout = s.doc().unwrap().node(group).unwrap().layout.as_ref().unwrap();
+        assert_eq!(layout.gap, 120.0);
+        assert_eq!([page_box(&s, a), page_box(&s, b)], before);
+    }
+}
+
+#[test]
+fn hidden_children_do_not_influence_inferred_direction_or_padding() {
+    let mut s = Session::new();
+    let frame = id(ex(&mut s, "frame.create", json!({"width": 300, "height": 200})));
+    let (a, b) = (rect(&mut s, frame, 10.0, 20.0), rect(&mut s, frame, 90.0, 20.0));
+    let hidden = rect(&mut s, frame, 0.0, 1000.0);
+    ex(&mut s, "node.set", json!({"id": hidden, "props": {"visible": false}}));
+    let before = [page_box(&s, a), page_box(&s, b)];
+    ex(&mut s, "layout.add", json!({"ids": [frame]}));
+    let layout = s.doc().unwrap().node(frame).unwrap().layout.as_ref().unwrap();
+    assert_eq!(layout.mode, figcraft_doc::LayoutMode::Horizontal);
+    assert_eq!(layout.padding, [20.0, 170.0, 160.0, 10.0]);
+    assert_eq!(layout.gap, 40.0);
+    assert_eq!([page_box(&s, a), page_box(&s, b)], before);
+}
+
+#[test]
+fn converting_a_group_preserves_fill_on_each_axis_in_its_parent() {
+    for (h, v) in [("fill", "fixed"), ("fixed", "fill"), ("fill", "fill")] {
+        let mut s = Session::new();
+        let parent = id(ex(&mut s, "frame.create", json!({"width": 500, "height": 300})));
+        let (a, b) = (rect(&mut s, parent, 0.0, 0.0), rect(&mut s, parent, 80.0, 0.0));
+        let group = id(ex(&mut s, "object.group", json!({"ids": [a, b]})));
+        let sibling = rect(&mut s, parent, 200.0, 0.0);
+        ex(&mut s, "node.set", json!({"id": parent, "props": {"layout": "horizontal", "padding": 0, "gap": 10}}));
+        ex(&mut s, "node.set", json!({"id": group, "props": {"sizingH": h, "sizingV": v}}));
+        let before = [page_box(&s, group), page_box(&s, sibling)];
+        ex(&mut s, "layout.add", json!({"ids": [group]}));
+        let cl = &s.doc().unwrap().node(group).unwrap().child_layout;
+        assert_eq!(cl.sizing_h, if h == "fill" { Sizing::Fill } else { Sizing::Hug });
+        assert_eq!(cl.sizing_v, if v == "fill" { Sizing::Fill } else { Sizing::Hug });
+        assert_eq!([page_box(&s, group), page_box(&s, sibling)], before);
+        s.undo().unwrap();
+        assert!(matches!(kind(&s, group), NodeKind::Group));
+        assert_eq!([page_box(&s, group), page_box(&s, sibling)], before);
+    }
+}
+
+#[test]
 fn a_frame_becomes_a_group_around_its_layers() {
     let mut s = Session::new();
     let f = id(ex(

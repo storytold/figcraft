@@ -4,12 +4,49 @@ use figcraft_doc::{Document, NodeId, NodeKind};
 
 use crate::change::{Change, Json, Prop};
 use crate::message::{
-    Accepted, Access, Admin, AdminReply, CatchUp, ClientMsg, EditingText, FileInfo, FileRow, FileUsage, Hello, HostInfo, LibraryReply, LibraryReq,
-    LinkInfo, Manage, NewLink, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, Peer, PluginEntry, PluginReply, PluginReq, Presence, Processed,
-    ReportInfo, Resume, ServerMsg, Signal, Usage, WIRE_VERSION, decode, decode_json, encode, encode_json,
+    Accepted, Access, Admin, AdminReply, CatchUp, ClientMsg, Detached, EditingText, FileDetached, FileInfo, FileRow, FileUsage, Hello, HostInfo,
+    LibraryReply, LibraryReq, LinkInfo, Manage, NewLink, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, Peer, PluginEntry, PluginReply, PluginReq,
+    Presence, Processed, ReportInfo, Resume, ServerMsg, Signal, Usage, WIRE_VERSION, WeekActions, decode, decode_json, encode, encode_json,
 };
 use crate::sim::Rng;
 use crate::{Error, Replica, diff};
+
+#[test]
+fn legacy_welcome_without_secret_preserves_access_and_snapshot() {
+    for access in [Access::View, Access::Comment, Access::Edit] {
+        let welcome = ServerMsg::Welcome {
+            session: 77,
+            client_id: 4,
+            seq: 10,
+            catch_up: CatchUp::Snapshot(Replica::new(Document::new("Legacy share")).snapshot().unwrap()),
+            processed: Processed::default(),
+            peers: vec![],
+            access,
+            secret: 0,
+        };
+        let mut legacy = encode(&welcome).unwrap();
+        assert_eq!(legacy.pop(), Some(0), "omit only the final reconnect secret");
+        assert!(decode::<ServerMsg>(&legacy, legacy.len()).is_err(), "the strict decoder reproduces the old-host failure");
+        assert_eq!(crate::message::decode_server(&legacy, legacy.len()).unwrap(), welcome);
+        assert!(crate::message::decode_server(&legacy, legacy.len() - 1).is_err(), "keep the size limit");
+        assert!(crate::message::decode_server(&legacy[..legacy.len() - 1], legacy.len()).is_err(), "access is mandatory");
+        let mut partial_secret = legacy.clone();
+        partial_secret.push(0x80);
+        assert!(crate::message::decode_server(&partial_secret, usize::MAX).is_err(), "do not hide a truncated secret");
+        legacy[0] = WIRE_VERSION + 1;
+        assert!(crate::message::decode_server(&legacy, usize::MAX).is_err(), "keep the wire version check");
+    }
+}
+
+#[test]
+fn server_compatibility_keeps_current_messages_and_rejects_trailing_bytes() {
+    for msg in samples().1 {
+        let mut bytes = encode(&msg).unwrap();
+        assert_eq!(crate::message::decode_server(&bytes, bytes.len()).unwrap(), msg);
+        bytes.push(0);
+        assert!(crate::message::decode_server(&bytes, usize::MAX).is_err(), "trailing bytes after {msg:?}");
+    }
+}
 
 #[test]
 fn encoding_into_a_prefix_keeps_the_wire_body() {
@@ -71,6 +108,10 @@ fn samples() -> (Vec<ClientMsg>, Vec<ServerMsg>) {
         ClientMsg::Library(LibraryReq::Fetch { have: Some(3), usage: Some(Usage { file: "Checkout".into(), components: vec![(NodeId(7), 12)] }) }),
         ClientMsg::Library(LibraryReq::Publish { archive: vec![0x50, 0x4B, 3, 4] }),
         ClientMsg::Library(LibraryReq::Usage),
+        ClientMsg::Library(LibraryReq::ReportDetached(Detached { file: "Checkout".into(), components: vec![(NodeId(7), 2)] })),
+        ClientMsg::Library(LibraryReq::Detached),
+        ClientMsg::Library(LibraryReq::ReportInserted(Detached { file: "Checkout".into(), components: vec![(NodeId(7), 5)] })),
+        ClientMsg::Library(LibraryReq::Actions),
         ClientMsg::Signal(Signal::chat("Hi ☕")),
         ClientMsg::Signal(Signal::spotlight(true)),
         ClientMsg::OpenPlugins(OpenPlugins { protocol: PROTOCOL, key: String::new(), client_version: "0.3.1".into() }),
@@ -139,6 +180,17 @@ fn samples() -> (Vec<ClientMsg>, Vec<ServerMsg>) {
         ServerMsg::Admin(Box::new(AdminReply::Done)),
         ServerMsg::Admin(Box::new(AdminReply::Failed { reason: "no".into() })),
         ServerMsg::Library(Box::new(LibraryReply::Ready { access: Access::View })),
+        ServerMsg::Library(Box::new(LibraryReply::Noted)),
+        ServerMsg::Library(Box::new(LibraryReply::Detached(vec![FileDetached {
+            detached: Detached { file: "Checkout".into(), components: vec![(NodeId(7), 2)] },
+            updated: 1_700_000_000,
+        }]))),
+        ServerMsg::Library(Box::new(LibraryReply::Actions(vec![WeekActions {
+            week: 1_699_833_600,
+            component: NodeId(7),
+            insertions: 5,
+            detachments: 2,
+        }]))),
         ServerMsg::Library(Box::new(LibraryReply::Library { version: 2, archive: vec![1, 2, 3] })),
         ServerMsg::Library(Box::new(LibraryReply::Unchanged { version: 2 })),
         ServerMsg::Library(Box::new(LibraryReply::Empty)),
@@ -293,4 +345,17 @@ fn message_sizes() {
     assert!(eb < ej && cb < cj);
     assert!(cb <= 32, "a cursor update is tiny: {cb}");
     assert!(eb <= 96, "a move is small: {eb}");
+}
+
+/// The library messages from before detach counts keep their bytes (the newer ones were added
+/// after them), so apps and servers on either side of the change still read each other.
+#[test]
+fn older_library_messages_keep_their_encoding() {
+    let body = |b: Vec<u8>| b[1..].to_vec();
+    assert_eq!(body(encode(&LibraryReq::Fetch { have: None, usage: None }).unwrap()), [0, 0, 0]);
+    assert_eq!(body(encode(&LibraryReq::Usage).unwrap()), [2]);
+    assert_eq!(body(encode(&LibraryReply::Usage(Vec::new())).unwrap()), [5, 0]);
+    assert_eq!(body(encode(&LibraryReply::Failed { reason: "x".into() }).unwrap()), [6, 1, b'x']);
+    let usage = FileUsage { usage: Usage { file: "A".into(), components: vec![(NodeId(7), 2)] }, updated: 3 };
+    assert_eq!(body(encode(&usage).unwrap()), [1, b'A', 1, 7, 2, 3]);
 }

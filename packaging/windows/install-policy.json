@@ -1,0 +1,126 @@
+{
+  "id": "figcraft",
+  "name": "FigCraft",
+  "upgradeCode": "7F8B9827-D065-41B7-A514-2A454B21F484",
+  "sources": [
+    "figcraft.wxs"
+  ],
+  "icon": "assets/app-icon/figcraft.ico",
+  "localization": [
+    "figcraft.en-us.wxl"
+  ],
+  "extensions": [
+    "UI",
+    "Util"
+  ],
+  "payloads": [
+    "NOTICE",
+    "figcraft-cli.exe",
+    "figcraft.exe"
+  ],
+  "registry": [
+    [
+      "-1",
+      "Software\\Classes\\Figcraft.Image\\shell\\open\\command",
+      "",
+      "\"[#FigcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.svg\\OpenWithProgids",
+      "Figcraft.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.png\\OpenWithProgids",
+      "Figcraft.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.jpg\\OpenWithProgids",
+      "Figcraft.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.jpeg\\OpenWithProgids",
+      "Figcraft.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Figcraft.Sketch\\shell\\open\\command",
+      "",
+      "\"[#FigcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.sketch\\OpenWithProgids",
+      "Figcraft.Sketch",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe",
+      "FriendlyAppName",
+      "FigCraft"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe\\shell\\open\\command",
+      "",
+      "\"[#FigcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      ".figcraft",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      ".svg",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      ".png",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      ".jpg",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      ".jpeg",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      ".sketch",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\figcraft.exe",
+      "",
+      "[#FigcraftExe]"
+    ],
+    [
+      "-1",
+      "Software\\FigCraft",
+      "InstallDir",
+      "[INSTALLFOLDER]"
+    ]
+  ],
+  "mode": "dualScope"
+}

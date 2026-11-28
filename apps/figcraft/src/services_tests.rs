@@ -43,6 +43,7 @@ fn start(dir: &std::path::Path) -> FigApp {
 /// Draw two frames (the first only sets the fonts up).
 fn frames(fig: &mut FigApp, ctx: &egui::Context) {
     for _ in 0..2 {
+        fig.before_input(ctx);
         ctx.run_ui(egui::RawInput::default(), |ui| fig.ui(ui)).textures_delta.clear();
     }
 }
@@ -51,7 +52,7 @@ fn frames(fig: &mut FigApp, ctx: &egui::Context) {
 fn plugins_are_kept_when_the_app_is_killed() {
     let dir = root("killed");
     let folder = plugin(&dir);
-    let ctx = egui::Context::default();
+    let ctx = figcraft_ui_egui::framework::headless_context();
     let mut fig = start(&dir);
     assert!(fig.run("plugin.import", json!({"path": folder.to_string_lossy()})).is_some());
     frames(&mut fig, &ctx);
@@ -141,4 +142,14 @@ fn the_next_dialog_starts_in_the_folder_of_the_last_pick() {
     assert_eq!(start_folder(Some(dir.clone())), Some(dir.clone()));
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(start_folder(Some(dir)), None, "a folder deleted since: the system's own");
+}
+
+/// The update prompt's What's new and Download, and the About and Credits links, open through
+/// `ctx.open_url`. eframe drops those with only a log warning unless it is built with `links`.
+#[test]
+fn links_in_the_interface_open_in_the_browser() {
+    let manifest = include_str!("../Cargo.toml");
+    let eframe: Vec<&str> = manifest.lines().filter(|l| l.trim_start().starts_with("eframe =")).collect();
+    assert!(!eframe.is_empty(), "the app depends on eframe");
+    assert!(eframe.iter().any(|l| l.contains("\"links\"")), "eframe is built with `links`: {eframe:?}");
 }

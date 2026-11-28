@@ -28,6 +28,8 @@ use crate::right::{menu_item, menu_item_with, menu_popup};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::widgets;
 
+pub mod agent;
+
 /// In the browser: what joining needs (a page can't host, and https pages can't reach `ws://`).
 const BROWSER_NOTE: &str = tr_noop(
     "In the browser you can join sessions the desktop app hosts and files on a FigCraft server. A page opened over https reaches other computers only through wss:// links (a server behind TLS).",
@@ -39,6 +41,14 @@ const UNDO_NOTE: &str = tr_noop("Undo takes back only your own changes; what oth
 /// What a view link means for you.
 const VIEW_NOTE: &str = tr_noop("View only: you see every change as it happens but can't edit. Leave to keep a copy you can edit.");
 
+/// What a comment link means for you.
+const COMMENT_NOTE: &str =
+    tr_noop("Can comment: you see every change as it happens and can comment, but can't edit. Leave to keep a copy you can edit.");
+
+/// What a share code can let people do, most first, as the Share popover offers it.
+const LEVELS: [(Access, &str); 3] =
+    [(Access::Edit, tr_noop("Can edit")), (Access::Comment, tr_noop("Can comment")), (Access::View, tr_noop("Can view"))];
+
 /// What a published file's links are.
 const PUBLISHED_NOTE: &str = tr_noop(
     "Anyone with the edit link can change the file; the view link only lets people look. The links carry their secrets: share them like passwords. `figcraft-server links` makes more and revokes them.",
@@ -47,6 +57,11 @@ const PUBLISHED_NOTE: &str = tr_noop(
 /// What the owner token is for (shown once, when a file is published without the server key).
 const OWNER_NOTE: &str = tr_noop(
     "This computer remembers the owner token, so the file can be managed from the home screen's Online list. Copy it to manage the file from somewhere else: it is a password for this file and won't be shown again.",
+);
+
+/// The same in the browser, which remembers nothing once the page closes.
+const BROWSER_OWNER_NOTE: &str = tr_noop(
+    "This page keeps the owner token only while it is open. Copy it to manage the file later: it is a password for this file and won't be shown again.",
 );
 
 /// What a server open to the public can see.
@@ -93,6 +108,9 @@ pub struct LiveUi {
     focus_join: bool,
     /// Share on the local network (else online, through the server in Preferences).
     pub local: bool,
+    /// What the code a local network share starts with lets people do: edit, or only look (the
+    /// edit code then doesn't show until it is picked).
+    pub local_access: Access,
     /// The Share popover's Advanced part shows; what it sets for a local network share: only
     /// this computer can join, and the port (empty: the usual one).
     pub advanced: bool,
@@ -108,6 +126,9 @@ pub struct LiveUi {
     /// The join started from the home screen: what it is doing shows under the field, and its
     /// file's tab shows when it opens.
     pub home_join: Option<SessionId>,
+    /// A join started from a join field, with what was typed for it: the Join dialog shows it
+    /// from the click until its file is ready, or why it failed, to try again.
+    pub joining: Option<(SessionId, String)>,
     /// Remove from server… was clicked: its confirmation shows.
     pub confirm_remove: bool,
     /// What the server for online sharing said about its hosting (`collab.serverInfo`), and the
@@ -418,6 +439,67 @@ pub fn chat_box(app: &mut FigApp, ctx: &egui::Context) {
     app.ui.live.chat = Some(chat);
 }
 
+/// While the active document's live session is disconnected: a thin strip across the top of the
+/// canvas that says so, with what can be done about it. Returns how much of the canvas it takes.
+pub fn connection_banner(app: &mut FigApp, ctx: &egui::Context, canvas: Rect) -> f32 {
+    const H: f32 = 30.0;
+    let live = app.session.live();
+    if !app.session.docs.get(app.session.active).is_some_and(|d| crate::tabs::live_lost(app, d.uid)) {
+        return 0.0;
+    }
+    let (text, retry, gone) = match &live.status {
+        Status::Failed { reason } => {
+            (trf("Not connected: {reason}. Your work is still in this tab.", &[("reason", &failure_text(reason))]), Some(tr("Try again")), true)
+        }
+        Status::Reconnecting { .. } => {
+            (tr("Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…").to_string(), Some(tr("Retry now")), false)
+        }
+        _ => (tr("Disconnected. Reconnecting…").to_string(), None, false),
+    };
+    let t = Tokens::get(ctx);
+    let ink = text_on(t.danger);
+    let (mut try_now, mut save, mut dismiss) = (false, false, false);
+    let strip = Rect::from_min_size(canvas.min, vec2(canvas.width(), H));
+    egui::Area::new(egui::Id::unique("live_connection_banner")).order(egui::Order::Foreground).fixed_pos(strip.min).show(ctx, |ui| {
+        ui.set_min_size(strip.size());
+        ui.set_max_size(strip.size());
+        ui.painter().rect_filled(strip, egui::CornerRadius::ZERO, t.danger);
+        let button = |ui: &mut Ui, label: &str| {
+            ui.add(
+                egui::Button::new(egui::RichText::new(label).font(regular(11.0)).color(ink))
+                    .fill(Color32::TRANSPARENT)
+                    .stroke(Stroke::new(1.0, ink))
+                    .corner_radius(egui::CornerRadius::same(4)),
+            )
+            .clicked()
+        };
+        let inner = strip.shrink2(vec2(12.0, 0.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if gone {
+                dismiss = button(ui, tr("Dismiss"));
+                save = button(ui, tr("Save a copy…"));
+            }
+            if let Some(label) = retry {
+                try_now = button(ui, label);
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(text).font(regular(11.0)).color(ink)).truncate());
+            });
+        });
+    });
+    if try_now {
+        app.run("collab.reconnect", json!({}));
+    }
+    if save {
+        app.save_as_dialog();
+    }
+    if dismiss {
+        app.run("collab.leave", json!({}));
+    }
+    H
+}
+
 /// While you spotlight, or someone does and you stopped following them: a banner on the canvas to
 /// stop, or to follow again.
 pub fn spotlight_banner(app: &mut FigApp, ctx: &egui::Context, canvas: Rect) {
@@ -468,8 +550,9 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
     let (in_session, spotlighting) = (live.status == Status::Live, live.spotlighting);
     let can_remove = figcraft_engine::live::can_remove_people(&app.session);
     let mut remove = None;
-    // Room for the avatars after yours and the chevron.
-    let fit = (((area.width() - 2.0 * R - 18.0) / STEP).floor() as usize).max(1);
+    let agent = agent::shown(app, ui.ctx()).map(|p| p.name.clone());
+    // Room for the avatars after yours (and the agent's) and the chevron.
+    let fit = (((area.width() - 2.0 * R - 18.0 - STEP * f32::from(u8::from(agent.is_some()))) / STEP).floor() as usize).max(1);
     let (show, more) = if peers.len() > fit { (fit - 1, peers.len() - (fit - 1)) } else { (peers.len(), 0) };
     let mut x = area.min.x + R + 2.0;
     let ring = |ui: &Ui, c: Pos2| ui.painter().circle_stroke(c, R + 1.0, Stroke::new(2.0, t.panel));
@@ -521,6 +604,10 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
         ui.painter().circle_filled(c, R, t.pressed);
         ui.painter().text(c, Align2::CENTER_CENTER, format!("+{more}"), semibold(10.0), t.text);
     }
+    if let Some(name) = &agent {
+        x += STEP;
+        agent::avatar(ui, pos2(x, cy), R, name);
+    }
     let chev = Rect::from_center_size(pos2(x + R + 10.0, cy), vec2(16.0, 24.0));
     let cresp = ui.interact(chev, ui.scope_id().with("live_people"), Sense::click());
     a11y::menu_button(&cresp, tr("People in this file"), a11y::menu_open(&cresp));
@@ -528,14 +615,38 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
         ui.painter().rect_filled(chev, CornerRadius::same(4), t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(chev.center(), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
-    menu_popup(&cresp).width(220.0).show(|ui| {
+    clicked = people_menu(app, &cresp, (&me_name, me_fill), &peers, follow).or(clicked);
+    if let Some(id) = clicked {
+        let params = if follow == Some(id) { json!({}) } else { json!({"client": id}) };
+        app.run("collab.follow", params);
+    }
+    if spotlight {
+        app.run("collab.spotlight", json!({"on": !spotlighting}));
+    }
+    // A server is asked without the window waiting for it.
+    if let Some(id) = remove {
+        app.run_background(&ui.ctx().clone(), "collab.removePerson", json!({"client": id}), Box::new(|_, _, _| {}));
+    }
+}
+
+/// The people row's chevron menu: you and everyone else; the person clicked (to follow).
+fn people_menu(
+    app: &FigApp,
+    cresp: &egui::Response,
+    (me_name, me_fill): (&str, Color32),
+    peers: &[(u32, String, Color32)],
+    follow: Option<u32>,
+) -> Option<u32> {
+    let t = Tokens::get(&cresp.ctx);
+    let mut clicked = None;
+    menu_popup(cresp).width(220.0).show(|ui| {
         let row = |ui: &mut Ui, label: &str, fill: Color32, check: bool| {
             menu_item_with(ui, label, if check { tr("Following") } else { "" }, 22.0, |p, r, _| {
                 avatar(p, pos2(r.max.x - 15.0, r.center().y), 8.0, label, fill)
             })
         };
         row(ui, &trf("{name} (you)", &[("name", &me_name)]), me_fill, false);
-        for (id, name, fill) in &peers {
+        for (id, name, fill) in peers {
             if row(ui, name, *fill, follow == Some(*id)) {
                 clicked = Some(*id);
                 ui.close();
@@ -549,17 +660,7 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
             );
         }
     });
-    if let Some(id) = clicked {
-        let params = if follow == Some(id) { json!({}) } else { json!({"client": id}) };
-        app.run("collab.follow", params);
-    }
-    if spotlight {
-        app.run("collab.spotlight", json!({"on": !spotlighting}));
-    }
-    // A server is asked without the window waiting for it.
-    if let Some(id) = remove {
-        app.run_background(&ui.ctx().clone(), "collab.removePerson", json!({"client": id}), Box::new(|_, _, _| {}));
-    }
+    clicked
 }
 
 /// The Share button's popover: the live session (start, invite link, stop or leave) and export.
@@ -685,15 +786,94 @@ pub fn join_field(app: &mut FigApp, ui: &mut Ui, typed: &mut String, id: egui::I
     if focus {
         resp.request_focus();
     }
-    let filled = !typed.trim().is_empty();
+    // One join at a time: the field waits while one is on its way.
+    let filled = !typed.trim().is_empty() && !join_pending(app);
     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     let go = widgets::button(ui, tr("Join"), true, filled).clicked() || enter;
-    let joined = if go && filled { app.run("collab.join", json!({"code": typed.trim()})) } else { None };
-    let session = joined.and_then(|j| j["session"].as_u64());
+    let session = if go && filled { start_join(app, typed.trim()) } else { None };
     if session.is_some() {
         typed.clear();
     }
     session
+}
+
+/// Join with `typed` (a code or an invite link); the Join dialog follows the join. Its session, if
+/// it started.
+fn start_join(app: &mut FigApp, typed: &str) -> Option<SessionId> {
+    let session = app.run("collab.join", json!({"code": typed})).and_then(|j| j["session"].as_u64())?;
+    app.ui.live.joining = Some((session, typed.to_string()));
+    Some(session)
+}
+
+/// A join started from a join field is on its way (not ready and not failed).
+fn join_pending(app: &FigApp) -> bool {
+    app.ui.live.joining.as_ref().and_then(|(id, _)| app.session.live.get(*id)).is_some_and(|l| !l.syncing() && l.status.active())
+}
+
+/// Call off the join the Join dialog follows (it may have failed: it is forgotten).
+fn cancel_join(app: &mut FigApp) {
+    if let Some((id, _)) = app.ui.live.joining.take() {
+        app.run("collab.leave", json!({"session": id}));
+    }
+}
+
+/// What the join the Join dialog follows is doing: `None` when there is none to show (its file
+/// is ready, and then shows, or it ended elsewhere); else why it failed, or `None` inside while
+/// it is on its way.
+fn join_progress(app: &mut FigApp) -> Option<Option<String>> {
+    let (id, _) = app.ui.live.joining.as_ref()?;
+    let Some(live) = app.session.live.get(*id) else {
+        app.ui.live.joining = None;
+        return None;
+    };
+    if live.syncing() {
+        app.ui.live.joining = None;
+        app.ui.home = false;
+        return None;
+    }
+    Some(match &live.status {
+        Status::Failed { reason } => Some(failure_text(reason).into_owned()),
+        _ => None,
+    })
+}
+
+/// The join started from a join field, from the click until its file is ready: joining (Cancel
+/// calls it off), or why it failed (Try again joins with the same code). Whether it showed.
+fn joining_dialog(app: &mut FigApp, ctx: &egui::Context) -> bool {
+    let Some(failed) = join_progress(app) else { return false };
+    let t = Tokens::get(ctx);
+    let (mut open, mut cancel, mut retry) = (true, false, false);
+    crate::dialogs::window(tr("Join live session"), ctx).id(egui::Id::unique("Join live session")).open(&mut open).show(ctx, |ui| {
+        ui.set_width(380.0);
+        match &failed {
+            None => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    widgets::label(ui, tr("Joining live session…"), t.text);
+                });
+            }
+            Some(reason) => widgets::label(ui, reason, t.danger),
+        }
+        ui.horizontal(|ui| {
+            retry = failed.is_some() && widgets::button(ui, tr("Try again"), true, true).clicked();
+            cancel = widgets::button(ui, tr("Cancel"), false, true).clicked();
+        });
+    });
+    if retry {
+        retry_join(app);
+    } else if cancel || !open {
+        cancel_join(app);
+    }
+    true
+}
+
+/// Join again with what the failed join was started with; the failed one goes once the new one
+/// is on its way.
+fn retry_join(app: &mut FigApp) {
+    let Some((old, typed)) = app.ui.live.joining.clone() else { return };
+    if start_join(app, &typed).is_some() {
+        app.run("collab.leave", json!({"session": old}));
+    }
 }
 
 /// What join `session` is doing, under the field it was started from (the home screen): on its
@@ -714,84 +894,124 @@ pub(crate) fn failure_text(reason: &str) -> Cow<'_, str> {
 }
 
 /// Not in a session: your name, how to share (online or on the local network), start; or join
-/// one with a code. Everything else is under Advanced.
+/// one with a code. Everything else is under Advanced. The browser shares online only (a page
+/// can't host a session).
 fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    ui.horizontal(|ui| {
-        widgets::label(ui, tr("Your name"), t.text);
-        let name = app.session.prefs.user_name.clone();
-        if let Some(n) = widgets::text_field(ui, egui::Id::unique("live_name"), &name, 160.0, tr("Your name")) {
-            app.run("pref.userName", json!({"name": n}));
-        }
-    });
-    if !app.session.live.can_host() {
-        widgets::label(ui, tr("Sharing a file needs the desktop app; here you can join one."), t.text_secondary);
+    name_row(app, ui, t, egui::Id::unique("live_name"));
+    let server = app.session.prefs.publish_server.trim().to_string();
+    let hosts = app.session.live.can_host();
+    if !hosts && server.is_empty() {
+        widgets::label(ui, tr("Online sharing is off: no server is set in Preferences. Here you can join a shared file."), t.text_secondary);
         widgets::label(ui, tr("Join with a code"), t.text);
         join_row(app, ui, JOIN_WIDTH);
         widgets::label(ui, tr(BROWSER_NOTE), t.text_secondary);
         return;
     }
     // Without a server in Preferences only the local network is left.
-    let server = app.session.prefs.publish_server.trim().to_string();
-    let local = app.ui.live.local || server.is_empty();
+    let local = hosts && (app.ui.live.local || server.is_empty());
     if server.is_empty() {
         widgets::label(ui, tr("Sharing on the local network (online sharing is off: no server is set in Preferences)."), t.text_secondary);
-    } else if let Some(i) = widgets::segmented_text(ui, &[tr("Online"), tr("Local network")], usize::from(local)) {
+    } else if hosts && let Some(i) = widgets::segmented_text(ui, &[tr("Online"), tr("Local network")], usize::from(local)) {
         app.ui.live.local = i == 1;
     }
     if local {
         widgets::label(ui, tr("People on your network join with a code. Nothing goes through a server."), t.text_secondary);
+        local_access_choice(app, ui);
     } else {
         online_note(app, ui, t, &server);
     }
     if widgets::button(ui, tr("Start sharing"), true, true).clicked() {
-        let mut params = json!({"via": if local { "local" } else { "online" }});
-        if local && app.ui.live.this_computer {
-            params["bind"] = json!("local");
-        }
-        if let (true, Ok(port)) = (local, app.ui.live.port.trim().parse::<u16>()) {
-            params["port"] = json!(port);
-        }
-        // The key goes out only to the server it belongs to (the server in Preferences): changing
-        // the server must not send the old server's key to a new one.
-        if !local
-            && let Some((at, key)) = app.ui.live.share_key.as_ref()
-            && *at == server
-            && !key.is_empty()
-        {
-            params["key"] = json!(key);
-        }
-        app.run("collab.share", params);
+        start_sharing(app, local, &server);
     }
-    join_and_advanced(app, ui, t, |app, ui, t| {
-        if local {
-            if widgets::checkbox(ui, app.ui.live.this_computer, tr("This computer only")) {
-                app.ui.live.this_computer = !app.ui.live.this_computer;
+    join_and_advanced(app, ui, t, |app, ui, t| share_advanced(app, ui, t, local, &server));
+}
+
+/// What the code of a local network share lets people do, picked before it starts: edit the file
+/// or only look at it.
+fn local_access_choice(app: &mut FigApp, ui: &mut Ui) {
+    let levels: Vec<(Access, &str)> = LEVELS.into_iter().filter(|(a, _)| *a != Access::Comment).collect();
+    let labels: Vec<&str> = levels.iter().map(|(_, l)| tr(l)).collect();
+    let at = levels.iter().position(|(a, _)| *a == app.ui.live.local_access).unwrap_or_default();
+    if let Some((a, _)) = widgets::segmented_text(ui, &labels, at).and_then(|i| levels.get(i)) {
+        app.ui.live.local_access = *a;
+    }
+}
+
+/// Start sharing the open file on the local network, or online on `server` (the one in
+/// Preferences).
+fn start_sharing(app: &mut FigApp, local: bool, server: &str) {
+    let mut params = json!({"via": if local { "local" } else { "online" }});
+    if local {
+        params["access"] = json!(app.ui.live.local_access.id());
+    }
+    if local && app.ui.live.this_computer {
+        params["bind"] = json!("local");
+    }
+    if let (true, Ok(port)) = (local, app.ui.live.port.trim().parse::<u16>()) {
+        params["port"] = json!(port);
+    }
+    // The key goes out only to the server it belongs to (the server in Preferences): changing
+    // the server must not send the old server's key to a new one.
+    if !local
+        && let Some((at, key)) = app.ui.live.share_key.as_ref()
+        && at == server
+        && !key.is_empty()
+    {
+        params["key"] = json!(key);
+    }
+    app.run("collab.share", params);
+}
+
+/// The Advanced part of starting a share: where on this computer (the local network), or the
+/// server's key and another server (online).
+fn share_advanced(app: &mut FigApp, ui: &mut Ui, t: &Tokens, local: bool, server: &str) {
+    if local {
+        if widgets::checkbox(ui, app.ui.live.this_computer, tr("This computer only")) {
+            app.ui.live.this_computer = !app.ui.live.this_computer;
+        }
+        ui.horizontal(|ui| {
+            widgets::label(ui, tr("Port"), t.text);
+            if let Some(port) = widgets::text_field_named(ui, egui::Id::unique("live_port"), &app.ui.live.port, 70.0, tr("Port")) {
+                // Digits only; empty: the usual port, or any free one.
+                app.ui.live.port = port.trim().parse::<u16>().map(|p| p.to_string()).unwrap_or_default();
             }
-            ui.horizontal(|ui| {
-                widgets::label(ui, tr("Port"), t.text);
-                if let Some(port) = widgets::text_field_named(ui, egui::Id::unique("live_port"), &app.ui.live.port, 70.0, tr("Port")) {
-                    // Digits only; empty: the usual port, or any free one.
-                    app.ui.live.port = port.trim().parse::<u16>().map(|p| p.to_string()).unwrap_or_default();
-                }
-            });
-        } else {
-            widgets::label(ui, tr("Another server, or one that needs its key. The usual server is set in Preferences."), t.text_secondary);
-            // The server key (a server that needs one; the address in Preferences is without it).
-            // It is remembered for the server it was typed for, so it never leaks to another one.
-            ui.horizontal(|ui| {
-                widgets::label(ui, tr("Server key"), t.text);
-                let shown = app.ui.live.share_key.as_ref().and_then(|(at, key)| (*at == server).then_some(key.as_str())).unwrap_or_default();
-                if let Some(key) = widgets::secret_field_named(ui, egui::Id::unique("live_share_key"), shown, 200.0, tr("Server key")) {
-                    let key: String = key.trim().chars().filter(|c| !c.is_whitespace() && !c.is_control()).take(128).collect();
-                    app.ui.live.share_key = if key.is_empty() { None } else { Some((server.trim().to_string(), key)) };
-                }
-            });
-            if widgets::button(ui, tr("Publish to another server…"), false, true).clicked() {
-                open_publish(app);
-                ui.close();
-            }
+        });
+        return;
+    }
+    widgets::label(ui, tr("Another server, or one that needs its key. The usual server is set in Preferences."), t.text_secondary);
+    // The server key (a server that needs one; the address in Preferences is without it).
+    // It is remembered for the server it was typed for, so it never leaks to another one.
+    ui.horizontal(|ui| {
+        widgets::label(ui, tr("Server key"), t.text);
+        let shown = app.ui.live.share_key.as_ref().and_then(|(at, key)| (at == server).then_some(key.as_str())).unwrap_or_default();
+        if let Some(key) = widgets::secret_field_named(ui, egui::Id::unique("live_share_key"), shown, 200.0, tr("Server key")) {
+            let key: String = key.trim().chars().filter(|c| !c.is_whitespace() && !c.is_control()).take(128).collect();
+            app.ui.live.share_key = if key.is_empty() { None } else { Some((server.trim().to_string(), key)) };
         }
     });
+    if widgets::button(ui, tr("Publish to another server…"), false, true).clicked() {
+        open_publish(app);
+        ui.close();
+    }
+}
+
+/// "Your name" and its field (the Share popover, the Join dialog).
+fn name_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, id: egui::Id) {
+    ui.horizontal(|ui| {
+        widgets::label(ui, tr("Your name"), t.text);
+        name_field(app, ui, id, 160.0);
+    });
+}
+
+/// The field for your name (`pref.userName`), the one name comments are signed with and others
+/// see you as in live sessions: empty while it is the default. A new name is kept at once (the
+/// browser has no quitting to keep it at).
+pub fn name_field(app: &mut FigApp, ui: &mut Ui, id: egui::Id, width: f32) {
+    let shown = figcraft_engine::live::display_name(&app.session.prefs);
+    if let Some(name) = widgets::text_field(ui, id, &shown, width, tr("Your name")) {
+        app.run("pref.userName", json!({"name": name}));
+        app.services.save_prefs(&app.session.prefs);
+    }
 }
 
 /// Under what starts a share: the join field, then the Advanced part (`advanced` draws it while
@@ -895,7 +1115,6 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
     if live.status != Status::Live {
         return stop(app, ui);
     }
-    let view = share.access == Access::View;
     let link = share.link().unwrap_or_default().to_string();
     let me = live.info.as_ref().map(|i| i.name.clone()).unwrap_or_default();
     let names: Vec<String> = std::iter::once(trf("{name} (you)", &[("name", &me)])).chain(live.peers.values().map(|p| p.name.clone())).collect();
@@ -923,16 +1142,12 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
             link_rows(app, ui, &[(tr("Invite link"), &link, tr("Invite link copied"))]);
         }
     }
-    // A server has a link (and a code) for looking only; a session this app hosts doesn't.
-    if share.links.as_ref().is_some_and(|l| l.view.is_some())
-        && let Some(i) = widgets::segmented_text(ui, &[tr("Can edit"), tr("Can view")], usize::from(view))
-        && (i == 1) != view
-    {
-        app.run("collab.share", json!({"access": if i == 1 { "view" } else { "edit" }}));
-    }
-    let who = match (online, view) {
-        (true, true) => tr("Anyone with this code can look at the file, not change it."),
-        (true, false) => tr("Anyone with this code can edit the file."),
+    access_choice(app, ui, share);
+    let who = match (online, share.access) {
+        (true, Access::View) => tr("Anyone with this code can look at the file, not change it."),
+        (true, Access::Comment) => tr("Anyone with this code can look at the file and comment on it, not change it."),
+        (true, Access::Edit) => tr("Anyone with this code can edit the file."),
+        (false, Access::View) => tr("Anyone on your network with this code can look at the file, not change it, while this app stays open."),
         (false, _) => tr("Anyone on your network with this code can edit the file, while this app stays open."),
     };
     widgets::label(ui, who, t.text_secondary);
@@ -943,6 +1158,21 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
         expiry_line(ui, t, h.expires);
     }
     stop(app, ui);
+}
+
+/// What the code shown lets people do, to pick from the levels the share has links for: a server
+/// has links (and codes) for looking only and for commenting; a session this app hosts on the
+/// local network has one for looking only.
+fn access_choice(app: &mut FigApp, ui: &mut Ui, share: &Share) {
+    let levels: Vec<(Access, &str)> = LEVELS.into_iter().filter(|(a, _)| share.links.as_ref().is_some_and(|l| l.of(*a).is_some())).collect();
+    if levels.len() < 2 {
+        return;
+    }
+    let labels: Vec<&str> = levels.iter().map(|(_, l)| tr(l)).collect();
+    let at = levels.iter().position(|(a, _)| *a == share.access).unwrap_or_default();
+    if let Some((a, _)) = widgets::segmented_text(ui, &labels, at).filter(|i| *i != at).and_then(|i| levels.get(i)) {
+        app.run("collab.share", json!({"access": a.id()}));
+    }
 }
 
 /// Hosting: the invite link and URL to copy, and stop.
@@ -961,9 +1191,13 @@ fn host_ui(app: &mut FigApp, ui: &mut Ui) {
 /// and leave (the file stays open as your copy).
 fn guest_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     let live = app.session.live();
-    let view = live.info.as_ref().is_some_and(|i| i.access == Access::View);
+    let (what, note) = match live.info.as_ref().map_or(Access::Edit, |i| i.access) {
+        Access::Edit => (tr_noop("Can edit"), UNDO_NOTE),
+        Access::Comment => (tr_noop("Can comment"), COMMENT_NOTE),
+        Access::View => (tr_noop("View only"), VIEW_NOTE),
+    };
     if let Some(i) = live.info.as_ref() {
-        widgets::label(ui, &format!("{} · {}", i.address, if view { tr("View only") } else { tr("Can edit") }), t.text_secondary);
+        widgets::label(ui, &format!("{} · {}", i.address, tr(what)), t.text_secondary);
         if !i.pages.is_empty() {
             let pages: Vec<&str> = i.pages.iter().map(|p| p.name.as_str()).take(8).collect();
             widgets::label(ui, &trf("Pages: {pages}", &[("pages", &pages.join(", "))]), t.text_secondary);
@@ -978,7 +1212,7 @@ fn guest_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
         host_line(ui, t, &h.operator, &h.terms);
         expiry_line(ui, t, h.expires);
     }
-    widgets::label(ui, tr(if view { VIEW_NOTE } else { UNDO_NOTE }), t.text_secondary);
+    widgets::label(ui, tr(note), t.text_secondary);
     if widgets::button(ui, tr("Leave session"), false, true).on_hover_text(tr("Your copy of the file stays open")).clicked() {
         app.run("collab.leave", json!({}));
     }
@@ -1089,20 +1323,27 @@ pub fn open_invite(app: &mut FigApp, link: &str) {
     open_join(app, link.trim());
 }
 
-/// Escape closes the Join or Publish dialog (before the canvas's shortcuts see it: it doesn't
-/// deselect).
+/// Escape closes the Join or Publish dialog, and calls off the join the Join dialog follows
+/// (before the canvas's shortcuts see it: it doesn't deselect).
 pub fn dialog_keys(app: &mut FigApp, ctx: &egui::Context) {
-    let live = &mut app.ui.live;
-    if (live.join.is_some() || live.publish.is_some()) && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-        live.join = None;
-        live.publish = None;
+    let live = &app.ui.live;
+    if (live.join.is_some() || live.publish.is_some() || live.joining.is_some())
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        app.ui.live.join = None;
+        app.ui.live.publish = None;
+        cancel_join(app);
     }
 }
 
-/// File ▸ Join live session: type a join code or paste an invite link.
+/// File ▸ Join live session: type a join code or paste an invite link; then the join, until its
+/// file is ready.
 pub fn join_dialog(app: &mut FigApp, ctx: &egui::Context) {
     // The editor takes Escape before its shortcuts; the home screen has none.
     dialog_keys(app, ctx);
+    if joining_dialog(app, ctx) {
+        return;
+    }
     let Some(mut link) = app.ui.live.join.take() else { return };
     let t = Tokens::get(ctx);
     let mut open = true;
@@ -1116,6 +1357,7 @@ pub fn join_dialog(app: &mut FigApp, ctx: &egui::Context) {
             go = join_field(app, ui, &mut link, egui::Id::unique("live_join_link"), 300.0, focus).is_some();
             cancel = widgets::button(ui, tr("Cancel"), false, true).clicked();
         });
+        name_row(app, ui, &t, egui::Id::unique("live_join_name"));
         widgets::label(ui, tr("You'll get the shared file as a new tab and edit it together."), t.text_secondary);
         if !app.session.live.can_host() {
             widgets::label(ui, tr(BROWSER_NOTE), t.text_secondary);
@@ -1132,10 +1374,6 @@ pub fn join_dialog(app: &mut FigApp, ctx: &egui::Context) {
 /// Open the Publish to server dialog for the open file, with the last address used this run in
 /// it (the server in Preferences is what Share ▸ Online uses: this dialog is for another one).
 pub fn open_publish(app: &mut FigApp) {
-    if !app.session.live.can_host() {
-        app.toast(tr("Publishing to a server needs the desktop app; in the browser you can join a server's files"));
-        return;
-    }
     let name = app.session.doc().map(|d| d.name.clone()).unwrap_or_default();
     app.ui.live.publish = Some(PublishForm { server: app.ui.live.last_server.clone(), name, info: None });
     app.ui.live.focus_publish = true;
@@ -1273,12 +1511,14 @@ fn published_dialog(app: &mut FigApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut open = true;
     let mut done = false;
+    // The browser keeps only your name across reloads, so nothing remembers the token there.
+    let note = if app.session.live.can_host() { OWNER_NOTE } else { BROWSER_OWNER_NOTE };
     crate::dialogs::window(tr("File published"), ctx).id(egui::Id::unique("File published")).open(&mut open).show(ctx, |ui| {
         ui.set_width(400.0);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
         widgets::label(ui, &trf("{name} is on the server.", &[("name", &p.name)]), t.text);
         link_rows(app, ui, &[(tr("Owner token"), &owner, tr("Owner token copied"))]);
-        widgets::label(ui, tr(OWNER_NOTE), t.danger);
+        widgets::label(ui, tr(note), t.danger);
         link_rows(app, ui, &[(tr("Edit link"), &p.edit, tr("Edit link copied")), (tr("View link"), &p.view, tr("View link copied"))]);
         expiry_line(ui, &t, p.expires);
         if let Some(h) = &hosting {

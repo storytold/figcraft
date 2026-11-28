@@ -193,6 +193,109 @@ fn branch_commands_refuse_what_makes_no_sense() {
     assert!(s.execute("branch.merge", &json!({"id": "nope"})).is_err());
 }
 
+/// Node id `v` of a command's answer (`{"id": …}` or a bare id).
+fn idv(v: &Value) -> NodeId {
+    NodeId(v.get("id").unwrap_or(v).as_u64().unwrap())
+}
+
+/// The issue #2026 file, with a branch of it made and shown: a component `Card` (horizontal auto
+/// layout hugging its contents, padding 12, one 40×20 rectangle) and an instance of it in a
+/// vertical auto layout frame hugging its contents. Returns (session, branch id, card, instance,
+/// frame, rectangle).
+fn card_file() -> (Session, String, NodeId, NodeId, NodeId, NodeId) {
+    let mut s = Session::with_document(Document::new("Cards"));
+    let props = json!({"layout": "horizontal", "padding": 12, "sizingH": "hug", "sizingV": "hug"});
+    let frame = idv(&ok(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 100, "height": 50, "name": "Card", "props": props})));
+    let rect = idv(&ok(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 20, "parent": frame})));
+    let card = idv(&ok(&mut s, "component.create", json!({"ids": [frame]})));
+    let props = json!({"layout": "vertical", "padding": 0, "sizingH": "hug", "sizingV": "hug"});
+    let stack = idv(&ok(&mut s, "frame.create", json!({"x": 0, "y": 200, "width": 100, "height": 100, "name": "Stack", "props": props})));
+    let inst = idv(&ok(&mut s, "instance.create", json!({"component": card, "parent": stack})));
+    let b = ok(&mut s, "branch.create", json!({"name": "padding 8"}));
+    (s, b["id"].as_str().unwrap().to_string(), card, inst, stack, rect)
+}
+
+/// Size and place of every layer of `doc` (what auto layout works out).
+fn geometry(doc: &Document) -> Vec<(NodeId, [f64; 8])> {
+    doc.nodes()
+        .map(|n| {
+            let c = n.transform.as_coeffs();
+            (n.id, [n.width, n.height, c[0], c[1], c[2], c[3], c[4], c[5]])
+        })
+        .collect()
+}
+
+/// Issue #2026: one auto layout edit on each side is one conflict (the field changed both ways),
+/// not one for every size and place auto layout works out from it; the merged file lays out
+/// from the padding picked.
+#[test]
+fn one_conflicting_auto_layout_edit_is_one_conflict() {
+    for (pick, padding) in [("branch", 8.0), ("main", 16.0)] {
+        let (mut s, id, card, inst, _, _) = card_file();
+        ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 8}}));
+        ok(&mut s, "doc.switch", json!({"index": 0}));
+        ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 16}}));
+        // What main looks like with the picked padding set directly.
+        let mut direct = Session::with_document(s.doc().unwrap().clone());
+        ok(&mut direct, "node.set", json!({"id": card, "props": {"padding": padding}}));
+        let review = ok(&mut s, "branch.review", json!({"id": id}));
+        let conflicts = review["conflicts"].as_array().unwrap();
+        assert_eq!(conflicts.len(), 1, "{review}");
+        let key = format!("{card}/layout.padding");
+        assert_eq!(conflicts[0]["key"], key.as_str());
+        assert_eq!(
+            (&conflicts[0]["property"], &conflicts[0]["branch"], &conflicts[0]["main"]),
+            (&json!("auto layout padding"), &json!("8, 8, 8, 8"), &json!("16, 16, 16, 16"))
+        );
+        let err = s.execute("branch.merge", &json!({"id": id})).unwrap_err().to_string();
+        assert!(err.contains(&key) && !err.contains("width"), "{err}");
+        ok(&mut s, "branch.merge", json!({"id": id, "resolutions": {&key: pick}}));
+        let doc = s.doc().unwrap();
+        for n in [card, inst] {
+            assert_eq!(doc.node(n).unwrap().layout.as_ref().unwrap().padding, [padding; 4], "{pick} wins");
+        }
+        assert_eq!(geometry(doc), geometry(direct.doc().unwrap()), "{pick} wins: laid out from the padding picked");
+    }
+}
+
+/// Auto layout merges field by field: a gap changed only on the branch is kept whichever side's
+/// padding wins, both when merging and when updating the branch from main.
+#[test]
+fn auto_layout_fields_changed_one_way_survive_a_conflict() {
+    for (cmd, pick, padding) in [("branch.merge", "main", 16.0), ("branch.merge", "branch", 8.0), ("branch.updateFromMain", "main", 16.0)] {
+        let (mut s, id, card, _, _, _) = card_file();
+        ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 8, "gap": 30}}));
+        ok(&mut s, "doc.switch", json!({"index": 0}));
+        ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 16, "mainAlign": "center"}}));
+        let key = format!("{card}/layout.padding");
+        let review = ok(&mut s, "branch.review", json!({"id": id}));
+        assert_eq!(review["conflicts"].as_array().unwrap().iter().map(|c| c["key"].clone()).collect::<Vec<_>>(), vec![json!(key)], "{review}");
+        ok(&mut s, cmd, json!({"id": id, "resolutions": {&key: pick}}));
+        if cmd == "branch.updateFromMain" {
+            ok(&mut s, "doc.switch", json!({"index": 1}));
+        }
+        let layout = s.doc().unwrap().node(card).unwrap().layout.clone().unwrap();
+        assert_eq!((layout.padding, layout.gap, layout.main_align), ([padding; 4], 30.0, figcraft_doc::MainAlign::Center), "{cmd}, {pick} wins");
+    }
+}
+
+/// Auto layout on one side and a hugging frame's size on both: the sizes auto layout works out
+/// on each side are no conflict, and merging leaves no stale size behind.
+#[test]
+fn sizes_auto_layout_works_out_never_conflict() {
+    let (mut s, id, card, _, stack, rect) = card_file();
+    ok(&mut s, "node.set", json!({"id": rect, "props": {"width": 60}}));
+    ok(&mut s, "doc.switch", json!({"index": 0}));
+    ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 4}}));
+    let review = ok(&mut s, "branch.review", json!({"id": id}));
+    assert_eq!(review["conflicts"], json!([]), "{review}");
+    let mut direct = Session::with_document(s.doc().unwrap().clone());
+    ok(&mut direct, "node.set", json!({"id": rect, "props": {"width": 60}}));
+    ok(&mut s, "branch.merge", json!({"id": id}));
+    assert_eq!(s.doc().unwrap().node(stack).unwrap().width, 60.0 + 8.0);
+    assert_eq!(geometry(s.doc().unwrap()), geometry(direct.doc().unwrap()));
+}
+
 /// Every change a side made (that the other side didn't overwrite) shows in `doc`.
 fn shows(changes: &[Change], doc: &Document) -> Result<(), String> {
     let r = Replica::new(doc.clone());
@@ -282,16 +385,25 @@ fn random_edits_on_both_sides_merge() {
             let none = |_: &figcraft_collab::merge::Key| None;
             let (into_main, _) = p.merge(&m, Side::Branch, &none).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
             let (into_branch, _) = p.merge(&b, Side::Main, &none).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+            // Values both sides work out for themselves (sizes and places auto layout gives) stay
+            // as the file merged into has them.
+            let chosen = |changes: &[Change]| -> Vec<Change> {
+                changes
+                    .iter()
+                    .filter(|c| !matches!(c, Change::Set { id, prop, .. } if p.derived().contains(&Key::Node(*id, *prop))))
+                    .cloned()
+                    .collect()
+            };
             let mut both = Replica::new(start.clone());
             both.apply(&p.main, Mode::Strict).unwrap();
-            both.apply(&p.branch, Mode::Strict).unwrap();
+            both.apply(&chosen(&p.branch), Mode::Strict).unwrap();
             let mut want = both.document().clone();
             (want.name, want.current_page) = (m.name.clone(), m.current_page);
             assert_eq!(into_main, want, "seed {seed}");
             for doc in [&into_main, &into_branch] {
                 assert!(doc.validate().is_empty(), "seed {seed}: {:?}", doc.validate());
                 for side in [&p.branch, &p.main] {
-                    shows(side, doc).unwrap_or_else(|c| panic!("seed {seed}: lost {c}"));
+                    shows(&chosen(side), doc).unwrap_or_else(|c| panic!("seed {seed}: lost {c}"));
                 }
             }
         } else {

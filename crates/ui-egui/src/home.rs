@@ -15,6 +15,8 @@ use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::widgets;
+pub mod home_recents;
+pub mod online;
 
 /// The section the home screen shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -100,9 +102,6 @@ pub(crate) fn file_row(ui: &Ui, t: &Tokens, r: Rect, resp: &Response, row: &File
     if resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
     }
-    if let Some((icon, tint)) = row.mark {
-        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, tint);
-    }
     let (name_font, detail_font) = (regular(12.0), regular(row.detail_size));
     let width = |s: &str, font: &egui::FontId| ui.painter().layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x;
     let room = (r.width() - 40.0).max(0.0);
@@ -118,8 +117,19 @@ pub(crate) fn file_row(ui: &Ui, t: &Tokens, r: Rect, resp: &Response, row: &File
         widgets::elide_start_font(ui, row.detail, detail_room, detail_font.clone())
     };
     let cut = name != row.name || detail != row.detail;
-    ui.painter().text(pos2(r.min.x + 32.0, r.center().y), Align2::LEFT_CENTER, name, name_font, row.ink);
-    ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, detail, detail_font, row.detail_ink);
+    if crate::i18n::right_to_left() {
+        if let Some((icon, tint)) = row.mark {
+            icons::paint(ui.painter(), Rect::from_min_size(pos2(r.max.x - 24.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, tint);
+        }
+        ui.painter().text(pos2(r.max.x - 32.0, r.center().y), Align2::RIGHT_CENTER, name, name_font, row.ink);
+        ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, detail, detail_font, row.detail_ink);
+    } else {
+        if let Some((icon, tint)) = row.mark {
+            icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, tint);
+        }
+        ui.painter().text(pos2(r.min.x + 32.0, r.center().y), Align2::LEFT_CENTER, name, name_font, row.ink);
+        ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, detail, detail_font, row.detail_ink);
+    }
     cut
 }
 
@@ -142,30 +152,40 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     dropped(app, ui.ctx());
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
         let rect = ui.max_rect();
-        let left = Rect::from_min_size(rect.min, vec2(SIDEBAR, rect.height()));
-        ui.painter().line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.border));
-        sidebar(app, ui, &t, left);
+        let rtl = crate::i18n::right_to_left();
+        let side = if rtl {
+            Rect::from_min_size(pos2(rect.max.x - SIDEBAR, rect.min.y), vec2(SIDEBAR, rect.height()))
+        } else {
+            Rect::from_min_size(rect.min, vec2(SIDEBAR, rect.height()))
+        };
+        let border_x = if rtl { side.left() } else { side.right() };
+        ui.painter().line_segment([pos2(border_x, side.top()), pos2(border_x, side.bottom())], Stroke::new(1.0, t.border));
+        sidebar(app, ui, &t, side);
+        let main =
+            if rtl { Rect::from_min_max(rect.min, pos2(side.min.x, rect.max.y)) } else { Rect::from_min_max(pos2(side.max.x, rect.min.y), rect.max) };
         if app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == Section::Online {
             // Your online files lay themselves out in the area (and scroll their own list).
-            let area = Rect::from_min_max(pos2(left.max.x + 40.0, rect.min.y + 24.0), rect.max - vec2(40.0, 24.0));
+            let area = main.shrink2(vec2(40.0, 24.0));
             crate::online::section(app, ui, area, &t);
             opened_join(app);
             return;
         }
-        let main = Rect::from_min_max(pos2(left.max.x, rect.min.y), rect.max);
         ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
             egui::ScrollArea::vertical().id_salt("home").auto_shrink([false, false]).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 24)).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
-                    if app.ui.home_view.file_query.trim().is_empty() {
-                        match app.ui.home_view.section {
-                            Section::Templates => templates(app, ui, &t),
-                            _ => recents(app, ui, &t),
+                    let align = if rtl { egui::Align::Max } else { egui::Align::Min };
+                    ui.with_layout(egui::Layout::top_down(align), |ui| {
+                        ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
+                        if app.ui.home_view.file_query.trim().is_empty() {
+                            match app.ui.home_view.section {
+                                Section::Templates => templates(app, ui, &t),
+                                _ => recents(app, ui, &t),
+                            }
+                        } else {
+                            search_results(app, ui, &t);
+                            opened_join(app);
                         }
-                    } else {
-                        search_results(app, ui, &t);
-                        opened_join(app);
-                    }
+                    });
                 });
             });
         });
@@ -181,15 +201,15 @@ fn dropped(app: &mut FigApp, ctx: &egui::Context) {
     let files = ctx.input(|i| i.raw.dropped_files.clone());
     for f in files {
         if !crate::opens(f.path()) {
-            app.toast(tr("Drop a .figcraft, .fig, .sketch, .json, .svg or image file."));
+            app.toast(tr("Drop a .figcraft, .fig, .jam, .sketch, .json, .svg or image file."));
             continue;
         }
         crate::pending_open::open_dropped(app, &f);
     }
 }
 
-/// Draw the Home sidebar: app icon and wordmark, file/template search (Escape clears it)
-/// and section tabs; choosing a section clears the file query.
+/// Draw the Home sidebar: app icon and wordmark, file/template search (Escape clears it), section
+/// tabs (choosing one clears the file query) and Preferences at the bottom.
 fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
     let mut y = left.min.y + 20.0;
     crate::theme::paint_app_icon(ui, Rect::from_min_size(pos2(left.min.x + 12.0, y - 4.0), vec2(32.0, 32.0)));
@@ -219,13 +239,44 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
             ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
         }
         focus_ring(ui, t, r, &resp, 5);
-        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, t.icon);
-        ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr(label), regular(12.0), t.text);
+        if crate::i18n::right_to_left() {
+            icons::paint(ui.painter(), Rect::from_min_size(pos2(r.max.x - 26.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, t.icon);
+            ui.painter().text(pos2(r.max.x - 36.0, r.center().y), Align2::RIGHT_CENTER, tr(label), regular(12.0), t.text);
+        } else {
+            icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, t.icon);
+            ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr(label), regular(12.0), t.text);
+        }
         if resp.clicked() {
             app.ui.home_view.section = section;
             app.ui.home_view.file_query.clear();
         }
         y += 34.0;
+    }
+    let pref_y = (left.max.y - 44.0).max(y + 12.0);
+    if pref_y > y + 12.0 {
+        ui.painter().line_segment([pos2(left.min.x + 12.0, pref_y - 6.0), pos2(left.max.x - 12.0, pref_y - 6.0)], Stroke::new(1.0, t.border));
+    }
+    let r = Rect::from_min_size(pos2(left.min.x + 8.0, pref_y), vec2(SIDEBAR - 16.0, 32.0));
+    let mut resp = ui.interact(r, ui.scope_id().with("home_preferences"), Sense::click());
+    let current = app.ui.preferences;
+    a11y::button(&resp, tr("Preferences"));
+    if current || resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
+    }
+    focus_ring(ui, t, r, &resp, 5);
+    let key_label = figcraft_engine::keymap::display("Cmd+,", crate::shortcuts::platform());
+    if crate::i18n::right_to_left() {
+        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.max.x - 26.0, r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Adjust, t.icon);
+        ui.painter().text(pos2(r.max.x - 36.0, r.center().y), Align2::RIGHT_CENTER, tr("Preferences"), regular(12.0), t.text);
+        ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, &key_label, regular(11.0), t.text_secondary);
+    } else {
+        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Adjust, t.icon);
+        ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr("Preferences"), regular(12.0), t.text);
+        ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, &key_label, regular(11.0), t.text_secondary);
+    }
+    resp = resp.on_hover_text(format!("{} ({})", tr("Preferences"), key_label));
+    if resp.clicked() {
+        app.ui.preferences = !app.ui.preferences;
     }
 }
 
@@ -341,16 +392,11 @@ fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     if open {
         app.open_dialog();
     }
-    // Join a file someone shared: the join field, and what the join is doing.
+    // Join a file someone shared (the Join dialog shows what the join is doing).
     subheading(ui, t, tr("Join with a code"));
     ui.scope(|ui| {
         ui.set_max_width(540.0);
-        if let Some(session) = crate::live::join_row(app, ui, 260.0) {
-            app.ui.live.home_join = Some(session);
-        }
-        if let Some(session) = app.ui.live.home_join {
-            crate::live::join_status(app, ui, t, session);
-        }
+        crate::live::join_row(app, ui, 260.0);
     });
     opened_join(app);
     if !app.session.prefs.getting_started_dismissed {

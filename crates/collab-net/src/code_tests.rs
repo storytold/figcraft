@@ -1,9 +1,9 @@
-//! Join codes over the network: a file shared on the local network joined by its code (two
-//! engine sessions over loopback), what the browser's driver does with an online code, a server
+//! Join codes over the network: a file shared on the local network joined by its code, and by
+//! its view-only code to look without editing (engine sessions over loopback), what the browser's driver does with an online code, a server
 //! older than join codes, and the links that name a code. (A `figcraft-server` handing codes out
 //! and resolving them is tested in its own crate, with the same link.)
 
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,9 +17,10 @@ use tungstenite::{Bytes, Message};
 use crate::driver::{Driver, Socket};
 use crate::guest::GuestConfig;
 use crate::inbox::Inbox;
-use crate::invite::{Endpoint, Invite};
+use crate::invite::{Endpoint, Invite, Lookup};
+use crate::link::reachable;
 use crate::loopback_tests::{fast_limits, quick};
-use crate::{NetLink, manage};
+use crate::{NetLink, lan_ip, manage};
 
 fn session(name: &str) -> Session {
     let mut s = Session::new();
@@ -53,6 +54,7 @@ fn layers(s: &Session) -> usize {
     s.doc().map_or(0, |d| d.node_count())
 }
 
+/// A local network share's code joins its session from another app, and edits sync both ways.
 #[test]
 fn a_local_share_is_joined_by_its_code_and_edits_sync() {
     let (mut host, mut guest) = (session("Hana"), session("Ada"));
@@ -65,7 +67,13 @@ fn a_local_share_is_joined_by_its_code_and_edits_sync() {
     assert_eq!(local.ip, Ipv4Addr::LOCALHOST);
     assert_eq!(shared["address"], format!("127.0.0.1:{}", local.port));
     assert_eq!(shared["link"], local.link(), "the code and the invite link name the same session");
-    assert!(shared["share"]["viewCode"].is_null(), "everyone edits on the local network");
+    // A view-only code too, with its own secret, and no comment code.
+    let view = shared["share"]["viewCode"].as_str().unwrap();
+    let Code::Local(viewing) = code::parse(view).unwrap() else { panic!("not a local code") };
+    assert_eq!((viewing.ip, viewing.port), (local.ip, local.port), "the same session");
+    assert_ne!(viewing.secret, local.secret, "a secret of its own");
+    assert_eq!(shared["share"]["viewLink"], viewing.link());
+    assert!(shared["share"]["commentCode"].is_null());
     // Typed the way people type: lower case, spaces for the dashes.
     let typed = shown.to_lowercase().replace('-', " ");
     assert_eq!(guest.execute("collab.join", &json!({"code": typed})).unwrap()["status"], "connecting");
@@ -93,6 +101,8 @@ fn a_local_share_is_joined_by_its_code_and_edits_sync() {
     assert!(label.contains("Couldn't join") || label.contains("The host refused"), "{label}");
 }
 
+/// A well-formed code with the wrong secret is refused by the host, a mistyped one never connects,
+/// and there is no comment code on the local network.
 #[test]
 fn a_local_code_with_the_wrong_secret_or_a_typo_doesnt_join() {
     let (mut host, mut guest) = (session("Hana"), session("Ada"));
@@ -112,18 +122,132 @@ fn a_local_code_with_the_wrong_secret_or_a_typo_doesnt_join() {
     *last = if *last == 'A' { 'B' } else { 'A' };
     let e = guest.execute("collab.join", &json!({"code": typo.iter().collect::<String>()})).unwrap_err().to_string();
     assert!(e.contains("typing mistake"), "{e}");
-    // A view-only code doesn't exist here, and says where it does.
-    let e = host.execute("collab.share", &json!({"access": "view"})).unwrap_err().to_string();
+    // A comment code doesn't exist here, and says where it does.
+    let e = host.execute("collab.share", &json!({"access": "comment"})).unwrap_err().to_string();
     assert!(e.contains("share it online"), "{e}");
+}
+
+/// A local network share started for looking only shows its view code: whoever joins with it sees
+/// every change and can't make one, the edit code (picked later) still edits, and stopping ends
+/// both.
+#[test]
+fn a_local_view_code_lets_people_look_and_not_edit() {
+    let (mut host, mut viewer, mut editor) = (session("Hana"), session("Ada"), session("Bo"));
+    let shared = host.execute("collab.share", &json!({"via": "local", "bind": "local", "access": "view"})).unwrap();
+    assert_eq!(shared["share"]["access"], "view");
+    let (shown, edit) = (shared["code"].as_str().unwrap().to_string(), shared["share"]["editCode"].as_str().unwrap().to_string());
+    assert_eq!(shared["share"]["viewCode"], shown, "the code shown is the view code");
+    assert_ne!(shown, edit);
+    viewer.execute("collab.join", &json!({"code": shown})).unwrap();
+    pump(&mut [&mut host, &mut viewer], "the viewer's join", |s| live(s[1]) && s[0].live().peers.len() == 1);
+    let summary = viewer.live_summary();
+    assert_eq!((&summary["access"], &summary["readOnly"]), (&json!("view"), &json!(true)));
+    // The host's edit reaches the viewer; the viewer's is refused before it leaves.
+    let before = layers(&host);
+    host.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 40, "height": 30})).unwrap();
+    pump(&mut [&mut host, &mut viewer], "the host's edit", |s| layers(s[1]) == before + 1);
+    let e = viewer.execute("shape.ellipse", &json!({"x": 80, "y": 10, "width": 40, "height": 30})).unwrap_err().to_string();
+    assert!(e.contains("View only"), "{e}");
+    // The edit code, picked now, still edits, and the viewer sees it.
+    assert_eq!(host.execute("collab.share", &json!({"access": "edit"})).unwrap()["code"], edit);
+    editor.execute("collab.join", &json!({"code": edit})).unwrap();
+    pump(&mut [&mut host, &mut viewer, &mut editor], "the editor's join", |s| live(s[2]) && s[0].live().peers.len() == 2);
+    assert_eq!(editor.live_summary()["access"], "edit");
+    editor.execute("shape.ellipse", &json!({"x": 80, "y": 10, "width": 40, "height": 30})).unwrap();
+    pump(&mut [&mut host, &mut viewer, &mut editor], "the editor's edit", |s| layers(s[0]) == before + 2 && layers(s[1]) == before + 2);
+    assert_eq!(viewer.live_summary()["readOnly"], true, "picking the edit code changes nothing for who joined to look");
+    assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
+    pump(&mut [&mut host, &mut viewer, &mut editor], "the end", |s| !s[1].live().status.active() && !s[2].live().status.active());
+}
+
+/// A local network share's `link` and `url` are the ones that go with the code shown: started for
+/// looking only, whoever joins through either can't edit, and the session's line in `sessions`
+/// says the same.
+#[test]
+fn a_local_view_share_s_link_and_url_only_let_people_look() {
+    let mut host = session("Hana");
+    let shared = host.execute("collab.share", &json!({"via": "local", "bind": "local", "access": "view"})).unwrap();
+    for key in ["link", "url"] {
+        let way = shared[key].as_str().unwrap().to_string();
+        let mut viewer = session("Ada");
+        viewer.execute("collab.join", &json!({"link": way})).unwrap();
+        pump(&mut [&mut host, &mut viewer], "the join", |s| live(s[1]) && s[0].live().peers.len() == 1);
+        let summary = viewer.live_summary();
+        assert_eq!((&summary["access"], &summary["readOnly"]), (&json!("view"), &json!(true)), "joined with {key} {way}");
+        let before = layers(&host);
+        let e = viewer.execute("shape.ellipse", &json!({"x": 80, "y": 10, "width": 40, "height": 30})).unwrap_err().to_string();
+        assert!(e.contains("View only"), "{key}: {e}");
+        host.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 40, "height": 30})).unwrap();
+        pump(&mut [&mut host, &mut viewer], "the host's edit", |s| layers(s[1]) == before + 1);
+        assert_eq!(layers(&host), before + 1, "nothing of the viewer's reached the host ({key})");
+        viewer.execute("collab.leave", &json!({})).unwrap();
+        pump(&mut [&mut host, &mut viewer], "the leave", |s| s[0].live().peers.is_empty());
+    }
+    // The link, the URL and the code name the same way in, wherever the session is listed.
+    let Code::Local(local) = code::parse(shared["code"].as_str().unwrap()).unwrap() else { panic!("not a local code") };
+    assert_eq!((&shared["link"], &shared["share"]["viewLink"]), (&json!(local.link()), &json!(local.link())));
+    let url = shared["url"].as_str().unwrap();
+    assert!(url.starts_with("ws://") && url.ends_with(&format!("&token={}", local.token())), "{url}");
+    assert_eq!(shared["sessions"][0]["link"], shared["link"]);
+    // Picking the edit code makes them the edit ones too.
+    let edit = host.execute("collab.share", &json!({"access": "edit"})).unwrap();
+    assert_eq!((&edit["link"], &edit["sessions"][0]["link"]), (&edit["share"]["editLink"], &edit["share"]["editLink"]));
+    let edit_token = edit["link"].as_str().unwrap().rsplit("token=").next().unwrap();
+    assert!(edit["url"].as_str().unwrap().ends_with(&format!("&token={edit_token}")), "{}", edit["url"]);
+    assert_ne!((&edit["link"], &edit["url"]), (&shared["link"], &shared["url"]));
+    assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
+}
+
+/// A share listening on every interface (`bind` 0.0.0.0) names where others reach it, never
+/// 0.0.0.0: this machine's local network address (loopback without one) in its codes, links, URL
+/// and address, and its view code and edit link both join it.
+#[test]
+fn a_share_on_every_interface_names_an_address_others_reach() {
+    let (mut host, mut viewer, mut editor) = (session("Hana"), session("Ada"), session("Bo"));
+    let shared = host.execute("collab.share", &json!({"via": "local", "bind": "0.0.0.0", "access": "view"})).unwrap();
+    let Code::Local(viewing) = code::parse(shared["code"].as_str().unwrap()).unwrap() else { panic!("not a local code") };
+    let at = lan_ip().unwrap_or(Ipv4Addr::LOCALHOST.into());
+    assert_eq!(IpAddr::from(viewing.ip), at);
+    let address = format!("{at}:{}", viewing.port);
+    assert_eq!(shared["address"], address);
+    let Code::Local(editing) = code::parse(shared["share"]["editCode"].as_str().unwrap()).unwrap() else { panic!("not a local code") };
+    assert_eq!((editing.ip, editing.port), (viewing.ip, viewing.port));
+    for way in [&shared["link"], &shared["url"], &shared["share"]["viewLink"], &shared["share"]["editLink"], &shared["sessions"][0]["link"]] {
+        let way = way.as_str().unwrap_or_default();
+        assert!(way.contains(&address) && !way.contains("0.0.0.0"), "{way}");
+    }
+    viewer.execute("collab.join", &json!({"code": shared["code"]})).unwrap();
+    editor.execute("collab.join", &json!({"link": shared["share"]["editLink"]})).unwrap();
+    pump(&mut [&mut host, &mut viewer, &mut editor], "the joins", |s| live(s[1]) && live(s[2]) && s[0].live().peers.len() == 2);
+    assert_eq!((&viewer.live_summary()["access"], &editor.live_summary()["access"]), (&json!("view"), &json!("edit")));
+    assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
+}
+
+/// A listener on one address is reached at it; one on every interface at an address of its own
+/// family, on its port.
+#[test]
+fn a_listener_on_every_interface_is_reached_at_an_address_of_its_family() {
+    let one: SocketAddr = "192.168.1.20:47900".parse().unwrap();
+    assert_eq!(reachable(one), one);
+    for any in ["0.0.0.0:47900", "[::]:47901"] {
+        let any: SocketAddr = any.parse().unwrap();
+        let at = reachable(any);
+        assert!(!at.ip().is_unspecified() && at.is_ipv4() == any.is_ipv4() && at.port() == any.port(), "{any}: {at}");
+    }
+}
+
+/// An invite naming only `server` (what a join code is asked at).
+fn code_at(server: &Endpoint) -> Invite {
+    Invite { server: server.clone(), file: String::new(), token: String::new() }
 }
 
 #[test]
 fn links_can_name_a_join_code() {
     let (invite, found) = Invite::parse_join("figcraft://join?server=wss://share.example/&code=k7m-2qx-9td").unwrap();
     assert_eq!((invite.server.url(), invite.file.as_str(), invite.token.as_str()), ("wss://share.example:443/".to_string(), "", ""));
-    assert_eq!(found.as_deref(), Some("K7M2QX9TD"));
+    assert_eq!(found, Some(Lookup::Code("K7M2QX9TD".into())));
     let (invite, found) = Invite::parse_join(" figcraft://join?host=127.0.0.1:47900&code=K7M2QX9TD ").unwrap();
-    assert_eq!((invite.server, found.as_deref()), (Endpoint::plain("127.0.0.1:47900"), Some("K7M2QX9TD")));
+    assert_eq!((invite.server, found), (Endpoint::plain("127.0.0.1:47900"), Some(Lookup::Code("K7M2QX9TD".into()))));
     // A link with a file and a token is read as before.
     let link = "figcraft://join?host=127.0.0.1:47900&file=abc&token=AbCdEfGhIjKlMnOpQrStUv";
     assert_eq!(Invite::parse_join(link).unwrap(), (Invite::parse(link).unwrap(), None));
@@ -198,7 +322,7 @@ fn a_server_older_than_join_codes_says_so_and_the_links_still_work() {
     let (server, thread) = old_server();
     let limits = fast_limits();
     // Asking it about a code: the join fails with what to do instead.
-    let e = manage::resolve(&server, "K7M2QX9TD", &limits, Duration::from_secs(5)).unwrap_err();
+    let e = manage::resolve(&code_at(&server), &Lookup::Code("K7M2QX9TD".into()), &limits, Duration::from_secs(5)).unwrap_err();
     assert!(e.starts_with(manage::REFUSED) && e.contains("couldn't be read"), "{e}");
     let mut guest = session("Ada");
     guest.execute("pref.publishServer", &json!({"url": server.url()})).unwrap();
@@ -233,11 +357,11 @@ fn an_app_hosted_session_knows_no_online_codes() {
     let mut host = session("Hana");
     let shared = host.execute("collab.host", &json!({"port": 0})).unwrap();
     let server = Endpoint::plain(shared["address"].as_str().unwrap());
-    let e = manage::resolve(&server, "K7M2QX9TD", &fast_limits(), Duration::from_secs(5)).unwrap_err();
+    let e = manage::resolve(&code_at(&server), &Lookup::Code("K7M2QX9TD".into()), &fast_limits(), Duration::from_secs(5)).unwrap_err();
     assert!(e.contains("hosted by an app"), "{e}");
     // Junk in place of a code is refused the same way, and the session goes on.
     for junk in ["", "💥", &"Z".repeat(4000)] {
-        assert!(manage::resolve(&server, junk, &fast_limits(), Duration::from_secs(5)).is_err());
+        assert!(manage::resolve(&code_at(&server), &Lookup::Code(junk.into()), &fast_limits(), Duration::from_secs(5)).is_err());
     }
     assert_eq!(host.live_summary()["status"], "live");
 }
@@ -268,7 +392,7 @@ impl Socket for Script {
 fn driver(t0: web_time::Instant) -> (Driver<Script>, Inbox) {
     let (invite, found) = Invite::parse_join("figcraft://join?server=ws://127.0.0.1:47900/&code=K7M2QX9TD").unwrap();
     let inbox = Inbox::new(Arc::new(|| {}));
-    let cfg = GuestConfig { code: found, ..GuestConfig::new(invite, "Ada".into()) };
+    let cfg = GuestConfig { lookup: found, ..GuestConfig::new(invite, "Ada".into()) };
     (Driver::start(Script::default(), cfg, inbox.clone(), t0), inbox)
 }
 
@@ -323,4 +447,54 @@ fn the_browser_shows_why_a_code_didnt_join() {
     let (mut d, inbox) = driver(t0);
     d.leave(t0);
     assert!(d.done() && failure(&inbox).is_empty());
+}
+
+#[test]
+fn links_can_name_a_file_of_a_servers_team_list() {
+    let link = "figcraft://join?server=wss://figcraft.example/team/&file=0123456789abcdef&team=1";
+    let (invite, found) = Invite::parse_join(link).unwrap();
+    assert_eq!(
+        (invite.server.url(), invite.file.as_str(), invite.token.as_str(), found),
+        ("wss://figcraft.example:443/team/".to_string(), "0123456789abcdef", "", Some(Lookup::Team))
+    );
+    assert_eq!(Invite::parse_join(&invite.team_link()).unwrap(), (invite.clone(), Some(Lookup::Team)));
+    let plain = Invite::new("127.0.0.1:47900", "abc", "");
+    assert_eq!(plain.team_link(), "figcraft://join?host=127.0.0.1:47900&file=abc&team=1");
+    // It names no token, so it isn't a link to join with directly; it needs a file.
+    assert!(Invite::parse(link).is_err_and(|e| e.contains("team list")));
+    assert!(Invite::parse_join("figcraft://join?server=wss://figcraft.example/&team=1").is_err());
+    assert!(Invite::parse_join("figcraft://join?server=wss://figcraft.example/&file=../x&team=1").is_err());
+}
+
+/// The browser's driver joining a file of a server's team list.
+fn team_driver(t0: web_time::Instant) -> (Driver<Script>, Inbox) {
+    let (invite, found) = Invite::parse_join("figcraft://join?server=ws://127.0.0.1:47900/&file=0123456789abcdef&team=1").unwrap();
+    let inbox = Inbox::new(Arc::new(|| {}));
+    let cfg = GuestConfig { lookup: found, ..GuestConfig::new(invite, "Ada".into()) };
+    (Driver::start(Script::default(), cfg, inbox.clone(), t0), inbox)
+}
+
+#[test]
+fn the_browser_asks_the_team_list_for_the_link_then_joins_the_file() {
+    let t0 = web_time::Instant::now();
+    let (mut d, inbox) = team_driver(t0);
+    d.opened(t0);
+    let [ClientMsg::ResolveTeam(ask)] = d.sock.sent.as_slice() else { panic!("asked {:?}", d.sock.sent) };
+    assert_eq!((ask.protocol, ask.file.as_str()), (PROTOCOL, "0123456789abcdef"));
+    let answer = ServerMsg::Resolved { file: "0123456789abcdef".into(), token: "AbCdEfGhIjKlMnOpQrStUv".into() };
+    d.message(&message::encode(&answer).unwrap(), t0);
+    d.opened(t0);
+    let Some(ClientMsg::Hello(hello)) = d.sock.sent.last() else { panic!("sent {:?}", d.sock.sent) };
+    assert_eq!((hello.file.as_str(), hello.token.as_str()), ("0123456789abcdef", "AbCdEfGhIjKlMnOpQrStUv"));
+    assert!(failure(&inbox).is_empty());
+    // Another file in the answer than the one asked about isn't taken.
+    let (mut d, inbox) = team_driver(t0);
+    d.opened(t0);
+    d.message(&message::encode(&ServerMsg::Resolved { file: "fedcba9876543210".into(), token: "AbCdEfGhIjKlMnOpQrStUv".into() }).unwrap(), t0);
+    assert!(d.done() && failure(&inbox).contains("isn't a file"));
+    // A server from before team lists.
+    let (mut d, inbox) = team_driver(t0);
+    d.opened(t0);
+    d.message(&message::encode(&ServerMsg::Refused { reason: "that message couldn't be read".into() }).unwrap(), t0);
+    assert!(failure(&inbox).contains("has no team list"));
 }

@@ -117,8 +117,9 @@ pub(crate) fn master_fills(m: &Value) -> Option<Value> {
 /// What a master shows as a frame (its instances the same): clipping, and in Sketch 2025 and newer
 /// its style (fills, borders, effects) and corners.
 fn frame_look(cx: &mut Cx, m: &Value, w: f64, h: f64, node: &mut JsonMap<String, Value>) {
-    // `clippingBehavior` 2 doesn't clip.
-    node.insert("clipsContent".into(), json!(m.get("clippingBehavior").and_then(Value::as_i64) != Some(2)));
+    // A symbol clips only with `clippingBehavior` 1, whatever its `groupBehavior`; 0 (the
+    // default) and 2 don't.
+    node.insert("clipsContent".into(), json!(m.get("clippingBehavior").and_then(Value::as_i64) == Some(1)));
     if m.get("groupBehavior").is_some()
         && let Some(st) = m.get("style")
     {
@@ -190,10 +191,12 @@ pub(crate) fn instance(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, roo
     let mut node = base(l, "INSTANCE", parent, world, w, h, root);
     node.insert("componentId".into(), json!(str_field(&m, "do_objectID").unwrap_or(sid)));
     frame_look(cx, &m, w, h, &mut node);
-    // Instances show the master's background only when it says so.
-    if bool_field(&m, "includeBackgroundColorInInstance") == Some(true)
-        && let Some(f) = master_fills(&m)
-    {
+    // An instance shows its master's background (its fills, or an older file's background
+    // colour) only when the master includes it both in instances and in exports.
+    let shown = bool_field(&m, "includeBackgroundColorInInstance") == Some(true) && bool_field(&m, "includeBackgroundColorInExport") == Some(true);
+    if !shown {
+        node.remove("fills");
+    } else if let Some(f) = master_fills(&m) {
         node.insert("fills".into(), f);
     }
     // An instance's fill is a tint for its layers, not a paint of its own.
@@ -224,7 +227,7 @@ pub(crate) fn instance(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, roo
     let own = str_field(l, "do_objectID").map(|id| format!("{id}_fillColor"));
     let tint = own
         .and_then(|k| overrides.get(&k).filter(|c| c.is_object()).cloned())
-        .or_else(|| super::style::tint_of(l.get("style"), true))
+        .or_else(|| super::style::tint_of(l.get("style"), cx.tints))
         .or_else(|| super::style::tint_of(copy.get("style"), false));
     if let Some(t) = tint
         && let Some(layers) = copy.get_mut("layers").and_then(Value::as_array_mut)
@@ -449,6 +452,23 @@ fn apply(
             if let Some(m) = l.as_object_mut() {
                 m.insert("style".into(), style);
             }
+        }
+        // An image override on a shape: its top image fill's image (after a layer style override,
+        // which would replace the fills).
+        if str_field(l, "_class") != Some("bitmap")
+            && let Some(img) = get("image").filter(|v| v.get("_ref").is_some())
+            && let Some(f) = l
+                .get_mut("style")
+                .and_then(|s| s.get_mut("fills"))
+                .and_then(Value::as_array_mut)
+                .and_then(|f| {
+                    f.iter_mut()
+                        .rev()
+                        .find(|p| p.get("fillType").and_then(Value::as_i64) == Some(4) && p.get("isEnabled").and_then(Value::as_bool) != Some(false))
+                })
+                .and_then(Value::as_object_mut)
+        {
+            f.insert("image".into(), img.clone());
         }
         if let Some(kids) = l.get_mut("layers").and_then(Value::as_array_mut) {
             apply(kids, ov, nested, shared, symbols, depth + 1, budget);

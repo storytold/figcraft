@@ -80,7 +80,7 @@ fn export_rows_offer_a_size_for_images_only() {
     let size_menu = |u: &crate::layers_drag_tests::Ui| u.ctx.read_response(egui::Id::unique(("export_size", 0)).with("menu")).is_some();
     u.frame(vec![]);
     assert!(size_menu(&u), "PNG has sizes");
-    for format in ["svg", "pdf"] {
+    for format in ["svg", "pdf", "xml"] {
         u.app.run("export.update", json!({"ids": [r], "index": 0, "format": format}));
         u.frame(vec![]);
         u.frame(vec![]);
@@ -92,6 +92,64 @@ fn export_rows_offer_a_size_for_images_only() {
         u.frame(vec![]);
         assert!(size_menu(&u), "{format} has sizes again");
     }
+}
+
+/// The text painted this frame, with the centre of each piece.
+pub(crate) fn labelled(u: &mut crate::layers_drag_tests::Ui) -> Vec<(String, egui::Pos2)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+        match shape {
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos + t.galley.rect.center().to_vec2())),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    u.frame(vec![]);
+    let frame = u.frame_output(vec![]);
+    let mut out = Vec::new();
+    for c in &frame.shapes {
+        walk(&c.shape, &mut out);
+    }
+    out
+}
+
+pub(crate) fn click(u: &mut crate::layers_drag_tests::Ui, p: egui::Pos2) {
+    u.frame(vec![egui::Event::PointerMoved(p)]);
+    u.button(p, true);
+    u.button(p, false);
+    u.frame(vec![]);
+}
+
+/// Android Vector Drawable is in the format dropdown as "XML", and choosing it sets the format.
+#[test]
+fn the_format_dropdown_offers_android_vector_drawable() {
+    assert!(figcraft_doc::ExportFormat::ALL.contains(&figcraft_doc::ExportFormat::VectorDrawable));
+    let mut s = Session::new();
+    let r = crate::present_tests::id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 80})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    s.execute("export.add", &json!({"ids": [r]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    u.frame(vec![]);
+    let nodes = labelled(&mut u);
+    let field = nodes.iter().find(|(l, _)| l == "PNG").map(|n| n.1).unwrap_or_else(|| panic!("no PNG dropdown in {nodes:?}"));
+    click(&mut u, field);
+    let nodes = labelled(&mut u);
+    let xml = nodes.iter().find(|(l, _)| l == "XML").map(|n| n.1).unwrap_or_else(|| panic!("no XML row in {nodes:?}"));
+    click(&mut u, xml);
+    let doc = u.app.session.doc().unwrap();
+    assert_eq!(doc.node(r).unwrap().exports[0].format, figcraft_doc::ExportFormat::VectorDrawable);
+}
+
+/// The File > Export dialog has an XML preset.
+#[test]
+fn the_export_dialog_has_an_xml_preset() {
+    let mut s = Session::new();
+    let r = crate::present_tests::id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 80})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    u.frame(vec![]);
+    crate::menus::invoke(&mut u.app, "file.export");
+    let nodes = labelled(&mut u);
+    assert!(nodes.iter().any(|(l, _)| l == "XML"), "no XML preset in {nodes:?}");
 }
 
 /// The advanced options: Ignore overlapping layers (the `contentsOnly` setting), and Include
@@ -122,4 +180,36 @@ fn advanced_options_offer_the_bounding_box_for_text_layers() {
     let shown = options(&mut u, r);
     assert!(shown.iter().any(|s| s == "Include bounding box"), "a rectangle that has it on shows it: {shown:?}");
     assert!(u.app.session.doc().unwrap().node(r).unwrap().exports[0].include_bounding_box, "the setting is kept");
+}
+
+/// The advanced options of a PNG, JPG or WebP setting list its color profile: same as the file
+/// (naming the document's profile), sRGB or Display P3. SVG, PDF and XML settings list none.
+#[test]
+fn advanced_options_offer_a_color_profile_for_images() {
+    let mut s = Session::new();
+    let r = crate::present_tests::id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 80})).unwrap());
+    s.execute("export.add", &json!({"ids": [r]})).unwrap();
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = crate::layers_drag_tests::Ui::new(s);
+    let options = |u: &mut crate::layers_drag_tests::Ui| {
+        u.frame(vec![]);
+        egui::Popup::open_id(&u.ctx, egui::Id::unique(("export_more", 0)));
+        u.frame(vec![]);
+        crate::import_report_tests::shown_texts(u.frame_output(vec![]).shapes)
+    };
+    for f in ["png", "jpg", "webp"] {
+        u.app.run("export.update", json!({"ids": [r], "index": 0, "format": f}));
+        let shown = options(&mut u);
+        for label in ["Color profile", "Same as file (sRGB)", "sRGB", "Display P3"] {
+            assert!(shown.iter().any(|s| s == label), "{f}: no {label:?} in {shown:?}");
+        }
+    }
+    u.app.run("file.colorProfile", json!({"profile": "displayP3"}));
+    let shown = options(&mut u);
+    assert!(shown.iter().any(|s| s == "Same as file (Display P3)"), "{shown:?}");
+    for f in ["svg", "pdf", "xml"] {
+        u.app.run("export.update", json!({"ids": [r], "index": 0, "format": f}));
+        let shown = options(&mut u);
+        assert!(!shown.iter().any(|s| s == "Color profile" || s.starts_with("Same as file")), "{f}: {shown:?}");
+    }
 }

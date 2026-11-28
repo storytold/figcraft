@@ -28,7 +28,7 @@ pub const RESOURCE_NOT_FOUND: i64 = -32002;
 const MAX_LINE: usize = 32 * 1024 * 1024;
 
 /// The `instructions` string sent on initialize.
-pub const INSTRUCTIONS: &str = "FigCraft is an interface design tool (Figma-class): pages hold frames, \
+pub const INSTRUCTIONS: &str = "FigCraft is an interface design tool: pages hold frames, \
 groups, shapes, text, components and instances, with auto layout, styles, variables and prototyping. \
 Coordinates are page units (1 unit = 1 px at 100% zoom), x right and y DOWN. create_node and set_properties \
 take x/y RELATIVE TO THE PARENT (the page when there is no parent, so page coordinates); inspect_document \
@@ -36,10 +36,27 @@ reports both x/y relative to the parent frame (groups don't count) and absoluteB
 positioned by the layout (set layout, gap, padding, mainAlign, crossAlign, sizingH/sizingV instead). \
 Every menu item, panel action and shortcut is a command: find ids and params with list_commands (use a filter) \
 and run them with run_command, or several as one undo step with batch. Commands act on `ids` when given, else \
-on the selection; new layers become the selection. Colours are \"#RRGGBB\" or \"#RRGGBBAA\". Verify your work: \
+on the selection; new layers become the selection. Colours are \"#RRGGBB\" or \"#RRGGBBAA\". \
+Repeated UI (buttons, inputs, cards, list rows, tab bars, icons) is a component: build it once, make it one with \
+component.create (or create_node type component), then place every other copy with \
+instance.create {component, parent?, x?, y?} instead of duplicating layers, so every copy follows its main component. \
+States and sizes are variants of one set: name the mains Property=value (State=Default, State=Hover) and run \
+component.combineVariants on them; component.addVariant {id} adds one more. What changes from copy to copy is a \
+component property: component.addProperty {id, name, type: text|boolean|instanceSwap, layer} on the component (on the \
+set once its variants are combined, then component.bindProperty {layer, property} for each other variant's layer), and \
+instance.setProperties {ids, properties} sets it on each copy. get_node shows whether a layer is an instance and of \
+which main. Verify your work: \
 inspect_document / get_node return the layer tree as JSON (check sizes, fills, layout, overrides), and \
 screenshot returns a PNG of the page or of given layers to look at. undo/redo step through history. \
-Resources: figcraft://document, figcraft://node/{id}, figcraft://command/{id}. prompts/list has workflows.";
+Comments: comment.list returns threads (text, anchor node id, frame, page, x/y, replies); fix open ones, \
+reply with what changed, then resolve (a reply reopens a thread). To react to new feedback, call \
+wait_for_changes {after, timeoutMs} and pass the returned cursor back. \
+Design review: design.audit {scope} reports spacing, radii, type, colour, contrast, copy and naming findings \
+with severities; design.fix repairs the fixable ones as one undo step; design.rules lists the rules and \
+presets; design.configure {preset, grid, radii, brand, disabled} sets the file's design system, and \
+design.assert {failOn, minScore} is a read-only CI gate. \
+Resources: figcraft://document, figcraft://node/{id}, figcraft://command/{id}, figcraft://comments. \
+prompts/list has workflows, including fix_comments and design_review.";
 
 /// An MCP server bound to one backend.
 pub struct Server {
@@ -48,6 +65,46 @@ pub struct Server {
     /// The automation roots every request's file access is confined to (`--automation-read-root`,
     /// `--automation-write-root`), if any.
     roots: Option<Arc<Roots>>,
+    /// The client's name from `initialize` (`clientInfo.title`, else `.name`; empty until then):
+    /// every command runs as this AI agent, so its comments are signed with it, not the user's name.
+    agent: String,
+}
+
+/// The backend as the MCP client's AI agent: `engine.execute` carries its name (`agent`).
+struct AsAgent<'a> {
+    inner: &'a mut dyn Backend,
+    agent: &'a str,
+}
+
+impl Backend for AsAgent<'_> {
+    fn call(&mut self, method: &str, mut params: Value) -> Result<Value, String> {
+        if method == "engine.execute"
+            && let Some(p) = params.as_object_mut()
+        {
+            p.insert("agent".into(), json!(self.agent));
+        }
+        self.inner.call(method, params)
+    }
+
+    fn has_ui(&self) -> bool {
+        self.inner.has_ui()
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+
+    fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+        self.inner.render_png(ids, scale)
+    }
+
+    fn screenshot_png(&mut self) -> Result<Vec<u8>, String> {
+        self.inner.screenshot_png()
+    }
+
+    fn window_png(&mut self, window: u64) -> Result<Vec<u8>, String> {
+        self.inner.window_png(window)
+    }
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -58,13 +115,20 @@ fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}})
 }
 
+/// The name an `initialize` request gives its client (`clientInfo.title`, else `.name`; empty
+/// without one). The engine keeps 64 characters of it; this only bounds what each call carries.
+fn client_name(params: &Value) -> String {
+    let name = |k: &str| params.get("clientInfo").and_then(|i| i.get(k)).and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty());
+    name("title").or_else(|| name("name")).unwrap_or_default().chars().take(256).collect()
+}
+
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload.downcast_ref::<&str>().map(ToString::to_string).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into())
 }
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false, roots: None }
+        Self { backend, initialized: false, roots: None, agent: String::new() }
     }
 
     /// Confine the files every request reads and writes to `roots` (see
@@ -188,9 +252,15 @@ impl Server {
         }
     }
 
+    /// The backend, acting as the client's agent.
+    fn as_agent(&mut self) -> AsAgent<'_> {
+        AsAgent { inner: self.backend.as_mut(), agent: &self.agent }
+    }
+
     fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
+                self.agent = client_name(params);
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
                 let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
                 Ok(json!({
@@ -215,17 +285,17 @@ impl Server {
                 if !crate::tools::TOOL_NAMES.contains(&name) {
                     return Err((INVALID_PARAMS, format!("unknown tool `{name}`")));
                 }
-                Ok(call_tool(self.backend.as_mut(), name, &args).to_value())
+                Ok(call_tool(&mut self.as_agent(), name, &args).to_value())
             }
             "resources/list" => Ok(resources::list()),
             "resources/templates/list" => Ok(resources::templates()),
             "resources/read" => {
                 let uri = params.get("uri").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing `uri` (a string)".to_string()))?;
-                let v = resources::read(self.backend.as_mut(), uri).map_err(|e| match e {
+                let v = resources::read(&mut self.as_agent(), uri).map_err(|e| match e {
                     resources::ReadError::NotFound(uri) => (RESOURCE_NOT_FOUND, format!("resource not found: {uri}")),
                     resources::ReadError::Backend(why) => (INTERNAL_ERROR, why),
                 })?;
-                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}]}))
+                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": serde_json::to_string(&v).unwrap_or_default()}]}))
             }
             "prompts/list" => Ok(prompts::list()),
             "prompts/get" => {

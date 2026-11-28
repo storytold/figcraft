@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use figcraft_engine::live::{Event, Presence};
+use figcraft_engine::live::{Event, MAX_PEERS, Presence};
 
 /// Wakes the UI (the desktop app passes egui's `request_repaint`).
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
@@ -23,7 +23,10 @@ struct State {
     syncs: VecDeque<(u64, Event)>,
     /// Every other event, capped at [`MAX_EVENTS`].
     others: VecDeque<(u64, Event)>,
+    /// The latest presence of each peer, for at most [`MAX_PEERS`] peers.
     presence: BTreeMap<u32, Presence>,
+    /// A presence was left out since the last drain (warned once).
+    presence_full: bool,
 }
 
 /// One session's mailbox (a new session gets a new one, so a stopped session's threads can't
@@ -64,9 +67,17 @@ impl Inbox {
         });
     }
 
-    /// Peer `id`'s latest presence (replaces one not taken yet).
+    /// Peer `id`'s latest presence (replaces one not taken yet). Past [`MAX_PEERS`] peers waiting,
+    /// another peer's is left out.
     pub fn presence(&self, id: u32, p: Presence) {
         self.with(|s| {
+            if s.presence.len() >= MAX_PEERS && !s.presence.contains_key(&id) {
+                if !s.presence_full {
+                    log::warn!("live session: presence of more than {MAX_PEERS} people; leaving the rest out");
+                    s.presence_full = true;
+                }
+                return;
+            }
             s.presence.insert(id, p);
         });
     }
@@ -75,6 +86,7 @@ impl Inbox {
     /// peer.
     pub fn drain(&self) -> Vec<figcraft_engine::live::Event> {
         let mut s = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        s.presence_full = false;
         let mut syncs = std::mem::take(&mut s.syncs).into_iter().peekable();
         let mut others = std::mem::take(&mut s.others).into_iter().peekable();
         let mut out = Vec::with_capacity(syncs.len() + others.len() + s.presence.len());

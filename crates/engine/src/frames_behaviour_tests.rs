@@ -188,6 +188,7 @@ fn frame_selection_wraps_the_layers_where_the_topmost_was() {
     assert_eq!(doc.node(page).unwrap().children, vec![other, f, top], "where b (the topmost selected) was");
     assert_eq!((wb(&s, a), wb(&s, b)), ((10.0, 10.0, 20.0, 20.0), (50.0, 40.0, 30.0, 30.0)));
     assert_eq!(s.selection(), vec![f]);
+    assert!(doc.node(f).unwrap().fills.is_empty(), "no fill over what it frames: {:?}", doc.node(f).unwrap().fills);
     // Inside a frame, the new frame nests there.
     let outer = frame(&mut s, 500.0, 0.0, 200.0, 200.0, None);
     let c = rect(&mut s, 20.0, 20.0, 10.0, 10.0, Some(outer));

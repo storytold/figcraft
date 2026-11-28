@@ -74,3 +74,37 @@ fn auto_save_leaves_changes_made_on_disk_alone() {
     assert_eq!(page_on_disk(&path), "CLI VENCEU");
     let _ = std::fs::remove_file(&path);
 }
+
+/// The name of the page the active tab shows.
+fn page_in_tab(s: &Session) -> String {
+    let ds = s.ds().unwrap();
+    ds.doc.node(ds.page).unwrap().name.clone()
+}
+
+/// Opening a file that is already open says when it changed on disk since the tab read or saved
+/// it, and `reload` reads it again into the tab, unless the tab has unsaved changes (#997).
+#[test]
+fn opening_an_open_file_says_it_is_stale_and_reloads_on_request() {
+    let path = temp_file("reopen");
+    let mut setup = Session::new();
+    setup.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    setup.execute("file.save", &json!({"path": path})).unwrap();
+    let mut app = Session::new();
+    let index = app.execute("file.open", &json!({"path": path})).unwrap()["index"].clone();
+    let before = page_in_tab(&app);
+    assert_eq!(app.execute("file.open", &json!({"path": path})).unwrap(), json!({"index": index}), "unchanged: not stale");
+    let mut cli = Session::new();
+    cli.execute("file.open", &json!({"path": path})).unwrap();
+    cli.execute("page.rename", &json!({"name": "Renamed on disk by the CLI"})).unwrap();
+    cli.execute("file.save", &json!({})).unwrap();
+    assert_eq!(app.execute("file.open", &json!({"path": path})).unwrap(), json!({"index": index, "stale": true}));
+    assert_eq!(page_in_tab(&app), before, "without reload the tab keeps what it read");
+    assert_eq!(app.execute("file.open", &json!({"path": path, "reload": true})).unwrap(), json!({"index": index, "reloaded": true}));
+    assert_eq!(page_in_tab(&app), "Renamed on disk by the CLI");
+    assert_eq!(app.execute("file.open", &json!({"path": path})).unwrap(), json!({"index": index}), "read again: no longer stale");
+    app.execute("shape.rectangle", &json!({"x": 20, "y": 0, "width": 10, "height": 10})).unwrap();
+    let e = app.execute("file.open", &json!({"path": path, "reload": true})).unwrap_err().to_string();
+    assert!(e.contains("unsaved changes"), "{e}");
+    assert!(app.ds().unwrap().is_dirty(), "the unsaved edit is still there");
+    let _ = std::fs::remove_file(&path);
+}

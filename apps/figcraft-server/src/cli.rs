@@ -29,7 +29,7 @@ Usage:
   figcraft-server files [list] [--sort size|age|idle]  the files kept (biggest, oldest or longest unopened first)
   figcraft-server files remove FILE              remove a file and its links for good
   figcraft-server links list FILE                a file's share links
-  figcraft-server links create FILE --access edit|view [--label TEXT]
+  figcraft-server links create FILE --access edit|comment|view [--label TEXT]
   figcraft-server links revoke FILE LINK         revoke a link (whoever joined with it is disconnected)
   figcraft-server plugins [list]                 the plugin directory: every plugin and its versions
   figcraft-server plugins remove ID [--version V]  unpublish a plugin (every version, or one)
@@ -43,8 +43,9 @@ Options (also keys of the --config TOML file):
   --data DIR          the data directory (default ./figcraft-data)
   --public-url URL    how links name the server behind a reverse proxy (wss://host/path/)
   --config FILE       settings: listen, data, public_url, max_files, max_file_mb, max_links,
-                      max_connections, max_people, compact_after, compact_mb, max_plugins,
-                      max_plugin_mb, max_plugins_mb; for a public server: open_publish,
+                      max_connections, max_people, compact_after, compact_mb, max_log_mb,
+                      max_plugins, max_plugin_mb, max_plugins_mb, team_files, web_url;
+                      for a public server: open_publish,
                       operator_contact, terms_url, trusted_proxy, idle_days, max_total_mb,
                       max_files_per_ip, max_mb_per_ip, max_connections_per_ip,
                       connects_per_minute, publishes_per_hour, messages_per_second
@@ -124,7 +125,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--listen" => config.listen = value("--listen")?,
             "--data" => config.data = PathBuf::from(value("--data")?),
             "--public-url" => config.public_url = Some(value("--public-url")?),
-            "--access" => access = Some(Access::parse(&value("--access")?).ok_or("--access must be edit or view")?),
+            "--access" => access = Some(Access::parse(&value("--access")?).ok_or("--access must be edit, comment or view")?),
             "--label" => label = value("--label")?,
             "--rotate" => rotate = true,
             "--sort" => {
@@ -147,7 +148,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
         ["files", "remove", file] => Command::RemoveFile { file: file.to_string() },
         ["links", "list", file] => Command::Links { file: file.to_string() },
         ["links", "create", file] => {
-            Command::CreateLink { file: file.to_string(), access: access.ok_or("links create needs --access edit or --access view")?, label }
+            Command::CreateLink { file: file.to_string(), access: access.ok_or("links create needs --access edit, comment or view")?, label }
         }
         ["links", "revoke", file, link] => Command::Revoke { file: file.to_string(), link: link.to_string() },
         ["plugins"] | ["plugins", "list"] => Command::Plugins,
@@ -316,7 +317,8 @@ fn running(data: &Path) -> Result<SocketAddr, String> {
 /// Do one request: through the running server, or on the data directory.
 fn admin(cfg: &Config, req: Admin) -> Result<AdminReply, String> {
     match Store::try_open(&cfg.data, cfg.store())? {
-        Some(mut store) => Ok(store.admin(req, &|_| None).reply),
+        // On this machine, one request per command: never over the address's budget.
+        Some(mut store) => Ok(store.admin(std::net::Ipv4Addr::LOCALHOST.into(), req, &|_| None).reply),
         None => {
             let addr = running(&cfg.data)?;
             let key = std::fs::read_to_string(cfg.data.join(KEY)).map_err(|e| format!("can't read the server key: {e}"))?;
@@ -360,8 +362,7 @@ fn new_link(cfg: &Config, l: &NewLink) -> Result<String, String> {
     };
     let invite = Invite { server: public_endpoint(cfg, listen)?, file: l.link.file.clone(), token: l.token.clone() };
     let mut out = String::new();
-    let what = if l.link.access == Access::View { "view" } else { "edit" };
-    let _ = writeln!(out, "New {what} link {} for file {}:", l.link.id, l.link.file);
+    let _ = writeln!(out, "New {} link {} for file {}:", l.link.access.id(), l.link.id, l.link.file);
     let _ = writeln!(out, "  {}", invite.link());
     let _ = writeln!(out, "  {}", invite.url());
     let _ = writeln!(out, "This is the only time the link is shown (the server keeps only a hash of its token).");

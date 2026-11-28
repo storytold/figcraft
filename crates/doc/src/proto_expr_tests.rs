@@ -124,6 +124,13 @@ fn deep_and_hostile_expressions_are_bounded() {
     let joined = Expr::op(ExprOp::Add, vec![s(&long), s(&long)]);
     let Some(VariableValue::String(t)) = eval(&joined) else { panic!() };
     assert_eq!(t.chars().count(), 10_000, "capped");
+    // Past the cap a colour operand still fails the expression, and empty operands add nothing.
+    let color = Expr::Value(VariableValue::Color(Color::BLACK));
+    let mut ops = vec![s(&"x".repeat(10_000))];
+    ops.extend((0..50).map(|_| s("")));
+    assert!(matches!(eval(&Expr::op(ExprOp::Add, ops.clone())), Some(VariableValue::String(t)) if t.chars().count() == 10_000));
+    ops.push(color);
+    assert_eq!(eval(&Expr::op(ExprOp::Add, ops)), None, "a colour past the cap is still a type error");
 }
 
 fn nav(id: u64) -> Action {
@@ -198,4 +205,13 @@ fn serde_round_trip_and_old_files() {
     // Files written before expressions existed still read.
     let old: Action = serde_json::from_str(r#"{"type":"setVariable","variable":"n","value":2}"#).unwrap_or(Action::Back);
     assert_eq!(old, Action::SetVariable { variable: "n".into(), value: serde_json::json!(2), expr: None });
+}
+
+#[test]
+fn operands_holding_too_many_string_bytes_are_refused() {
+    let long = "x".repeat(300_000);
+    let few = Expr::op(ExprOp::Add, vec![s(&long), s(&long)]);
+    assert!(eval(&few).is_some());
+    let many = Expr::op(ExprOp::Add, (0..8).map(|_| s(&long)).collect());
+    assert_eq!(eval(&many), None);
 }

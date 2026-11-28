@@ -1,0 +1,330 @@
+use super::{BlendMode, Color32, CornerRadius, FIELD_H, FigApp, Id, NodeId, PAD, Rect, Sense, Tokens, Ui, a11y, json, pos2, regular, tr, vec2};
+
+/// The smallest width a popup menu is measured in (see [`menu_popup`]).
+const MENU_MIN_W: f32 = 48.0;
+
+/// A menu row's inset either side, and the gap between its label and its shortcut or art.
+const MENU_PAD: f32 = 8.0;
+
+const MENU_GAP: f32 = 24.0;
+
+/// The style of popup menus: egui's, with text kept on one line (a menu grows to its widest item).
+pub(crate) fn menu_style(s: &mut egui::Style) {
+    egui::containers::menu::menu_style(s);
+    s.wrap_mode = Some(egui::TextWrapMode::Extend);
+}
+
+/// The blend modes as menu items in groups (pass-through only for layers); the one picked. Each
+/// row `preview`s its mode on the canvas while hovered.
+pub fn blend_menu(ui: &mut Ui, with_pass_through: bool, mut preview: impl FnMut(BlendMode)) -> Option<BlendMode> {
+    let mut picked = None;
+    for b in BlendMode::ALL.into_iter().filter(|b| with_pass_through || *b != BlendMode::PassThrough) {
+        let resp = menu_row(ui, tr(b.label()), "", 0.0, |_, _, _| {});
+        if resp.hovered() {
+            preview(b);
+        }
+        if resp.clicked() {
+            picked = Some(b);
+            ui.close();
+        }
+        if matches!(b, BlendMode::Normal | BlendMode::ColorBurn | BlendMode::ColorDodge | BlendMode::HardLight | BlendMode::Exclusion) {
+            ui.separator();
+        }
+    }
+    picked
+}
+
+/// Show `blend` on `ids` on the canvas while its row in a blend mode menu is hovered.
+pub(crate) fn preview_blend(app: &mut FigApp, ctx: &egui::Context, ids: &[NodeId], blend: BlendMode) {
+    app.preview_text(ctx, "node.set", json!({"ids": ids, "props": {"blend": blend.label()}}));
+}
+
+/// The menu a dropdown or button opens: as wide as its widest row and at least as wide as
+/// `anchor`. egui measures a popup in a first, invisible pass as wide as the width it is given
+/// (else its 600 px default area width) and keeps the size measured; rows ([`menu_row`]) take the
+/// larger of that width and their content, so the menu fits its content. Chain `.width(w)` for a
+/// menu at least `w` wide.
+pub fn menu_popup(anchor: &egui::Response) -> Menu {
+    Menu(egui::Popup::menu(anchor).width(anchor.rect.width().max(MENU_MIN_W)).style(menu_style))
+}
+
+/// A context menu (secondary click on `resp`) sized like [`menu_popup`].
+pub fn context_popup(resp: &egui::Response) -> Menu {
+    Menu(egui::Popup::context_menu(resp).width(MENU_MIN_W).style(menu_style))
+}
+
+/// A context menu for a property row: a secondary click anywhere over `rect` opens it, even over
+/// the row's fields (which would otherwise take the click), like the incumbent's row menus.
+pub(super) fn row_context_menu(ui: &Ui, rect: Rect, id: Id) -> Menu {
+    let resp = ui.interact(rect, id, Sense::hover());
+    let open = ui.rect_contains_pointer(rect) && ui.input(|i| i.pointer.secondary_clicked());
+    let at_pointer = egui::Popup::menu(&resp).width(MENU_MIN_W).style(menu_style).at_pointer_fixed();
+    Menu(at_pointer.open_memory(open.then_some(egui::SetOpenCommand::Bool(true))))
+}
+
+/// The gap a menu taller than the window keeps from the window's top and bottom edges.
+const MENU_WINDOW_GAP: f32 = 8.0;
+
+/// A popup menu ([`menu_popup`], [`context_popup`]) whose rows scroll when it would be taller
+/// than the window. egui keeps a popup inside the window by moving it, but one taller than the
+/// window runs off its edge, and rows past it can't be reached.
+#[must_use]
+pub struct Menu(egui::Popup<'static>);
+
+impl Menu {
+    /// At least `width` wide.
+    pub fn width(self, width: f32) -> Self {
+        Self(self.0.width(width))
+    }
+
+    /// Open and closed under `id` instead of the anchor's.
+    pub fn id(self, id: Id) -> Self {
+        Self(self.0.id(id))
+    }
+
+    pub fn close_behavior(self, behavior: egui::PopupCloseBehavior) -> Self {
+        Self(self.0.close_behavior(behavior))
+    }
+
+    /// Where the menu may go when its first placement doesn't fit, in order.
+    pub fn align_alternatives(self, alternatives: &'static [egui::RectAlign]) -> Self {
+        Self(self.0.align_alternatives(alternatives))
+    }
+
+    /// Show the menu while it is open. Its rows `content` scroll with the wheel or the scroll bar
+    /// once they were taller than the window last frame, as the main menu's do (#2217); a menu
+    /// that fits is laid out as it is, so it still grows with its rows (a scroll area in a popup
+    /// would keep the popup's last height). A click on the scroll bar scrolls and leaves the menu
+    /// open. The rows have the same ids scrolling or not, so the row the keyboard is on keeps it
+    /// when the window's height changes which of the two the menu does.
+    pub fn show<R>(self, content: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
+        let rows = self.0.get_id().with("menu_rows");
+        let bar_key = rows.with("scroll_bar");
+        let ctx = self.0.ctx().clone();
+        let bar_clicked = ctx.data(|d| d.get_temp::<Id>(bar_key)).is_some_and(|bar| ctx.interaction_snapshot(|i| i.clicked == Some(bar)));
+        let popup = if bar_clicked { self.0.close_behavior(egui::PopupCloseBehavior::IgnoreClicks) } else { self.0 };
+        let rows_ui = egui::UiBuilder::new().scope_id(rows);
+        popup.show(|ui| {
+            let window = ui.ctx().content_rect().height();
+            let max_height = (window - ui.style().spacing.menu_margin.sum().y - 2.0 * MENU_WINDOW_GAP).max(0.0);
+            let rows_height = ui.scope_id().with("menu_rows_height");
+            let last = ui.data(|d| d.get_temp::<f32>(rows_height)).unwrap_or(0.0);
+            let (inner, height) = if last > max_height {
+                let out = egui::ScrollArea::vertical()
+                    .id_salt("menu_rows")
+                    .max_height(max_height)
+                    .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::SCROLL_BAR)
+                    .show(ui, |ui| ui.scope_builder(rows_ui, content).inner);
+                // egui's id for a scroll area's vertical bar (a test in `menu_scroll_tests` clicks it).
+                ui.data_mut(|d| d.insert_temp(bar_key, out.id.with(1_usize)));
+                (out.inner, out.content_size.y)
+            } else {
+                let inner = ui.scope_builder(rows_ui, content).inner;
+                let height = ui.min_rect().height();
+                if height > max_height {
+                    ui.ctx().request_repaint();
+                }
+                (inner, height)
+            };
+            ui.data_mut(|d| d.insert_temp(rows_height, height));
+            inner
+        })
+    }
+}
+
+pub fn menu_item(ui: &mut Ui, label: &str, shortcut: &str) -> bool {
+    menu_row(ui, label, shortcut, 0.0, |_, _, _| {}).clicked()
+}
+
+/// A menu row with art drawn into it after the label (`art(painter, row rect, text colour)`),
+/// taking `art_w` from the row's right edge.
+pub fn menu_item_with(ui: &mut Ui, label: &str, shortcut: &str, art_w: f32, art: impl FnOnce(&egui::Painter, Rect, Color32)) -> bool {
+    menu_row(ui, label, shortcut, art_w, art).clicked()
+}
+
+/// The width a menu row needs for a label `label_w` wide and, at its right end, a shortcut or
+/// art `trail` wide (0 for neither).
+pub(crate) fn menu_row_width(label_w: f32, trail: f32) -> f32 {
+    MENU_PAD + label_w + if trail > 0.0 { MENU_GAP + trail } else { MENU_PAD }
+}
+
+/// A menu row (see [`menu_item_with`]); its response tells hovering too. It spans the menu and
+/// is at least as wide as its label, shortcut and art.
+pub fn menu_row(ui: &mut Ui, label: &str, shortcut: &str, art_w: f32, art: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    lit_row(ui, label, shortcut, art_w, 0.0, art, false)
+}
+
+/// A plain menu row highlighted when `lit`, as if hovered: the row Up and Down are on in a menu
+/// whose search field keeps the keyboard.
+pub(crate) fn menu_row_lit(ui: &mut Ui, label: &str, lit: bool) -> egui::Response {
+    lit_row(ui, label, "", 0.0, 0.0, |_, _, _| {}, lit)
+}
+
+fn lit_row(
+    ui: &mut Ui,
+    label: &str,
+    shortcut: &str,
+    art_w: f32,
+    lead: f32,
+    art: impl FnOnce(&egui::Painter, Rect, Color32),
+    lit: bool,
+) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let text = ui.painter().layout_no_wrap(label.to_owned(), regular(11.5), Color32::PLACEHOLDER);
+    let keys =
+        (!shortcut.is_empty()).then(|| ui.painter().layout_no_wrap(crate::toolbar::pretty_shortcut(shortcut), regular(11.0), Color32::PLACEHOLDER));
+    let trail = keys.as_ref().map_or(0.0, |k| k.size().x + MENU_PAD).max(art_w);
+    let w = ui.available_width().max(menu_row_width(lead + text.size().x, trail).ceil());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 26.0), Sense::click());
+    a11y::menu_item(&resp, label, shortcut, None);
+    // The keyboard's item is highlighted like the hovered one.
+    a11y::own_focus(&resp);
+    let hovered = lit || resp.hovered() || resp.has_focus();
+    if hovered {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.menu_hover);
+    }
+    // These menus sit on the theme's popup fill (white in the light theme), not on the dark
+    // `t.menu` of the menu bar: the theme's text, white only on the green highlight (#972).
+    let col = if hovered { t.menu_text } else { t.text };
+    let rtl = crate::widgets::rtl(ui);
+    if rtl {
+        ui.painter().galley(pos2(r.max.x - MENU_PAD - lead - text.size().x, r.center().y - text.size().y / 2.0), text, col);
+        if let Some(k) = keys {
+            let at = pos2(r.min.x + MENU_PAD, r.center().y - k.size().y / 2.0);
+            ui.painter().galley(at, k, if hovered { t.menu_text } else { t.text_secondary });
+        }
+    } else {
+        ui.painter().galley(pos2(r.min.x + MENU_PAD + lead, r.center().y - text.size().y / 2.0), text, col);
+        if let Some(k) = keys {
+            let at = pos2(r.max.x - MENU_PAD - k.size().x, r.center().y - k.size().y / 2.0);
+            ui.painter().galley(at, k, if hovered { t.menu_text } else { t.text_secondary });
+        }
+    }
+    // In RTL, anchor right-aligned trailing artwork near the reading end (left) so it stays opposite the label.
+    let art_r = if rtl && art_w > 0.0 { Rect::from_min_max(r.min, pos2((r.min.x + art_w + MENU_PAD).min(r.max.x), r.max.y)) } else { r };
+    art(ui.painter(), art_r, col);
+    resp
+}
+
+/// A menu item with a check mark when `on` (the unchecked ones line up with it).
+pub fn menu_check(ui: &mut Ui, on: bool, label: &str, shortcut: &str) -> bool {
+    marked_row(ui, Some(on), label, shortcut)
+}
+
+/// A plain menu item lined up with the check items above or below it.
+pub fn menu_item_beside_checks(ui: &mut Ui, label: &str, shortcut: &str) -> bool {
+    marked_row(ui, None, label, shortcut)
+}
+
+fn marked_row(ui: &mut Ui, on: Option<bool>, label: &str, shortcut: &str) -> bool {
+    let resp = menu_row(ui, &format!("{}{label}", if on == Some(true) { "✓ " } else { "    " }), shortcut, 0.0, |_, _, _| {});
+    a11y::menu_item(&resp, label, shortcut, on);
+    resp.clicked()
+}
+
+pub(crate) fn row(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) {
+    row_rect(ui, h, add);
+}
+
+/// [`row`], returning the area the row takes.
+pub(crate) fn row_rect(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) -> Rect {
+    block(ui, h, (h - FIELD_H) / 2.0, add)
+}
+
+/// A panel row `h` tall whose content is inset `inset_y` from its top and bottom (for content
+/// taller than one field); returns the area the row takes.
+pub(crate) fn block(ui: &mut Ui, h: f32, inset_y: f32, add: impl FnOnce(&mut Ui)) -> Rect {
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    lay_out(ui, r, inset_y, add);
+    r
+}
+
+/// A [`row_rect`] that is a pointer target itself: a click on its background (beside and between
+/// its controls, which are on top of it) comes back in the response. It senses clicks without
+/// being focusable, so Tab and F6 still go from control to control. `fill` is drawn under the
+/// controls (a highlighted fill, stroke or effect row).
+pub(crate) fn row_target(ui: &mut Ui, h: f32, fill: Option<Color32>, add: impl FnOnce(&mut Ui)) -> egui::Response {
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(vec2(w, h), Sense::CLICK);
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, fill);
+    }
+    lay_out(ui, r, (h - FIELD_H) / 2.0, add);
+    resp
+}
+
+/// Add a row's controls in `r`, on the section's grid, inset `inset_y` from its top and bottom.
+fn lay_out(ui: &mut Ui, r: Rect, inset_y: f32, add: impl FnOnce(&mut Ui)) {
+    // The section's grid: 16 in from the start, 8 from the end (not 16 on both sides). Mirrored,
+    // the row starts on the right and its controls run from right to left.
+    let (start, end) = (PAD, crate::widgets::PAD_RIGHT);
+    let rtl = crate::widgets::rtl(ui);
+    let (left, right) = if rtl { (end, start) } else { (start, end) };
+    let inner = Rect::from_min_max(pos2(r.min.x + left, r.min.y + inset_y), pos2(r.max.x - right, r.max.y - inset_y));
+    let layout = if rtl { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(layout));
+    child.spacing_mut().item_spacing = vec2(crate::widgets::GUTTER, 0.0);
+    add(&mut child);
+}
+
+/// Width of the check column of [`menu_icon_item`] (the mark, or nothing, so labels line up).
+const CHECK_COL: f32 = 14.0;
+
+/// A menu item in a menu whose entries lead with a 16 px icon (in the row's text colour): the
+/// boolean operations in the Design panel. `icon` is `None` for an entry without one (Flatten):
+/// its slot stays empty, so every label starts at the same x. The check mark (`on` is
+/// `Some(true)`) is drawn in its own column ahead of the icon, so a checked entry's label does
+/// not move against the unchecked ones.
+pub fn menu_icon_item(ui: &mut Ui, icon: Option<crate::icons::Icon>, on: Option<bool>, label: &str, shortcut: &str) -> bool {
+    let rtl = crate::widgets::rtl(ui);
+    let paint = |p: &egui::Painter, r: Rect, col: Color32| {
+        if on == Some(true) {
+            let mark = p.layout_no_wrap("✓".to_owned(), regular(11.5), col);
+            let x = if rtl { r.max.x - MENU_PAD - mark.size().x } else { r.min.x + MENU_PAD };
+            p.galley(pos2(x, r.center().y - mark.size().y / 2.0), mark, col);
+        }
+        if let Some(icon) = icon {
+            let x = if rtl { r.max.x - MENU_PAD - CHECK_COL - 16.0 } else { r.min.x + MENU_PAD + CHECK_COL };
+            crate::icons::paint(p, Rect::from_min_size(pos2(x, r.center().y - 8.0), vec2(16.0, 16.0)), icon, col);
+        }
+    };
+    let resp = lit_row(ui, label, shortcut, 0.0, CHECK_COL + 22.0, paint, false);
+    a11y::menu_item(&resp, label, shortcut, on);
+    resp.clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtl_lit_row_places_art_opposite_label() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = true);
+        let mut art_rect = None;
+        ctx.run_ui(Default::default(), |ui| {
+            egui::Area::new(egui::Id::unique("menu-rtl-test")).fixed_pos(pos2(0.0, 0.0)).show(ui.ctx(), |ui| {
+                ui.set_width(220.0);
+                let _ = lit_row(
+                    ui,
+                    "קצוות עגולים",
+                    "",
+                    64.0,
+                    0.0,
+                    |_pt, r, _| {
+                        art_rect = Some(r);
+                    },
+                    false,
+                );
+            });
+        })
+        .textures_delta
+        .clear();
+        let art_r = art_rect.expect("art invoked");
+        // Artwork paints relative to art_r.max.x in [art_r.max.x - 64.0, art_r.max.x],
+        // so its right edge stays on the left side while the RTL label sits at r.max.x - MENU_PAD.
+        assert!((art_r.max.x - (art_r.min.x + 64.0 + MENU_PAD)).abs() < 0.01, "art_r={art_r:?}");
+        assert!(art_r.max.x < 100.0, "expected trailing left placement, got {art_r:?}");
+    }
+}

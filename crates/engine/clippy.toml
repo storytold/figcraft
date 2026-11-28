@@ -6,8 +6,8 @@ allow-expect-in-tests = true
 allow-panic-in-tests = true
 too-many-arguments-threshold = 10
 disallowed-methods = [
-    { path = "std::fs::read", reason = "use file_access::read (automation roots)" },
-    { path = "std::fs::read_to_string", reason = "use file_access::read (automation roots)" },
+    { path = "std::fs::read", reason = "use file_access::read_capped (automation roots, size caps)" },
+    { path = "std::fs::read_to_string", reason = "use file_access::read_capped (automation roots, size caps)" },
     { path = "std::fs::write", reason = "use file_access::write (automation roots)" },
     { path = "std::fs::metadata", reason = "use file_access::metadata (automation roots)" },
     { path = "std::fs::symlink_metadata", reason = "use file_access (automation roots)" },
@@ -35,5 +35,5 @@ disallowed-methods = [
     { path = "std::path::Path::canonicalize", reason = "use file_access (automation roots)" },
     { path = "figcraft_format::write_file_atomic", reason = "use file_access::write (automation roots)" },
     { path = "figcraft_format::save_file", reason = "use file_access::write (automation roots)" },
-    { path = "figcraft_format::load_file", reason = "use file_access::read (automation roots)" },
+    { path = "figcraft_format::load_file", reason = "use file_access::read_capped (automation roots, size caps)" },
 ]

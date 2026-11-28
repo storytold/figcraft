@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use figcraft_doc::{Document, EffectKind, NodeId, NodeKind};
 use figcraft_geom::Rect;
-use tiny_skia::{IntRect, Pixmap, PixmapPaint, Transform};
+use tiny_skia::Pixmap;
 
 use crate::{Options, View, draw, render_view};
 
@@ -127,6 +127,70 @@ impl Px {
     }
 }
 
+/// What [`Retained::prepare`] found.
+enum Prepared {
+    /// The previous render patched (or reused as is), now kept.
+    Patched(View, Work),
+    /// Only a full render will do: the snapped view, its top-left device pixel, the font
+    /// generation and what [`sensitive`] found when the previous render's document was checked.
+    Full { snapped: View, px: (i64, i64), fonts: u64, sensitive: Option<Arc<Sensitive>> },
+}
+
+/// What [`Retained::begin`] did.
+pub enum Begun<'a> {
+    /// The view drawn, its image and what it took.
+    Done(View, &'a Pixmap, Work),
+    /// A full render to draw band by band (boxed: it holds the image).
+    Steps(Box<Steps>),
+}
+
+/// A full render drawn a band at a time ([`Retained::begin`]): bands overlap by what background
+/// blurs read and keep only their own rows, as the desktop's parallel bands do.
+pub struct Steps {
+    doc: Arc<Document>,
+    page: NodeId,
+    view: View,
+    px: (i64, i64),
+    fonts: u64,
+    opts: Options,
+    sensitive: Option<Arc<Sensitive>>,
+    pix: Pixmap,
+    /// The first row not drawn yet.
+    next: u32,
+    band_h: u32,
+    overlap: u32,
+}
+
+impl Steps {
+    /// Draw the next band; `true` once every row is drawn.
+    pub fn step(&mut self) -> bool {
+        if self.done() {
+            return true;
+        }
+        let y0 = self.next;
+        if let Some(part) = crate::render_band(&self.doc, self.page, &self.view, &self.opts, y0, self.band_h, self.overlap) {
+            crate::put_band(&mut self.pix, y0, &part);
+        }
+        self.next = y0.saturating_add(self.band_h);
+        self.done()
+    }
+
+    /// Whether every row is drawn.
+    pub fn done(&self) -> bool {
+        self.next >= self.view.height
+    }
+
+    /// The view drawn (snapped to device pixels).
+    pub fn view(&self) -> &View {
+        &self.view
+    }
+
+    /// The page drawn.
+    pub fn page(&self) -> NodeId {
+        self.page
+    }
+}
+
 /// Keeps the last rendered view; see the module docs.
 #[derive(Default)]
 pub struct Retained {
@@ -142,13 +206,73 @@ impl Retained {
     /// Render `view` of `page`, reusing the previous render where nothing changed. Returns the
     /// view actually drawn (snapped to device pixels, see [`snap`]), the image and what it took.
     pub fn render(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options) -> Option<(View, &Pixmap, Work)> {
+        match self.prepare(doc, page, view, opts)? {
+            Prepared::Patched(snapped, work) => Some((snapped, &self.last.as_ref()?.pix, work)),
+            Prepared::Full { snapped, px, fonts, sensitive } => {
+                let pix = render_view(doc, page, &snapped, opts)?;
+                let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
+                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                Some((snapped, &frame.pix, Work::Full))
+            }
+        }
+    }
+
+    /// [`Self::render`], except that a full render comes back as [`Steps`] to draw `band_h` rows
+    /// at a time (the browser, whose renders block the page: input is handled between bands) and
+    /// keep with [`Self::finish`]. A render that is reused or patched is done at once.
+    pub fn begin(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options, band_h: u32) -> Option<Begun<'_>> {
+        match self.prepare(doc, page, view, opts)? {
+            Prepared::Patched(snapped, work) => Some(Begun::Done(snapped, &self.last.as_ref()?.pix, work)),
+            Prepared::Full { snapped, px, fonts, sensitive } => {
+                // Bands at least twice what they overlap (each draws its overlap again both ways),
+                // so a background blur reaching past `band_h` makes the bands taller.
+                let overlap = crate::band_overlap(doc, &snapped, u32::MAX).map(|o| o.min(snapped.height));
+                let band_h = band_h.max(1).max(overlap.unwrap_or(0).saturating_mul(2));
+                // A blur that can't be measured: one piece.
+                let Some(overlap) = overlap else {
+                    let pix = render_view(doc, page, &snapped, opts)?;
+                    let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
+                    let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                    return Some(Begun::Done(snapped, &frame.pix, Work::Full));
+                };
+                let pix = crate::new_pixmap(snapped.width, snapped.height)?;
+                // One render, as the desktop's parallel bands are: glass keeps the shapes a
+                // later render asks for again, and the bands of this one are not later renders.
+                crate::start_render();
+                Some(Begun::Steps(Box::new(Steps {
+                    doc: doc.clone(),
+                    page,
+                    view: snapped,
+                    px,
+                    fonts,
+                    opts: opts.clone(),
+                    sensitive,
+                    pix,
+                    next: 0,
+                    band_h,
+                    overlap,
+                })))
+            }
+        }
+    }
+
+    /// Keep the image `steps` drew (all its bands: see [`Steps::step`]) as a full render.
+    pub fn finish(&mut self, steps: Steps) -> (View, &Pixmap) {
+        let Steps { doc, page, view, px, fonts, opts, sensitive, pix, .. } = steps;
+        let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(&doc)));
+        let frame = self.keep(&doc, page, (&view, px, fonts), &opts, pix, s);
+        (view, &frame.pix)
+    }
+
+    /// The previous render patched where it could be (kept, see [`Self::keep`]), or what a full
+    /// render of `view` needs.
+    fn prepare(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options) -> Option<Prepared> {
         // A view that can't be put on a pixel grid (non-finite or absurd) draws nothing.
         let Some((snapped, px)) = snap(view) else {
             self.last = None;
             return None;
         };
         let fonts = figcraft_text::layout_generation();
-        let mut work = Work::Full;
         let mut sens = None;
         if let Some(last) = self.last.take()
             && last.page == page
@@ -173,16 +297,13 @@ impl Retained {
             let same_doc = Arc::ptr_eq(&last.doc, doc);
             let s = if same_doc { last.sensitive.clone() } else { Arc::new(sensitive(doc)) };
             if let Some((pix, pixels)) = patch(last, doc, page, &snapped, px, opts, &s) {
-                work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
-                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
-                return Some((snapped, &frame.pix, work));
+                let work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
+                self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                return Some(Prepared::Patched(snapped, work));
             }
             sens = Some(s);
         }
-        let pix = render_view(doc, page, &snapped, opts)?;
-        let s = sens.unwrap_or_else(|| Arc::new(sensitive(doc)));
-        let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
-        Some((snapped, &frame.pix, work))
+        Some(Prepared::Full { snapped, px, fonts, sensitive: sens })
     }
 
     /// Keep `pix`, the render of `at`: the snapped view, its top-left device pixel and the font
@@ -252,6 +373,11 @@ fn changed_areas(doc: &Document, page: NodeId, id: NodeId, out: &mut Vec<Rect>) 
         }
         out.push(draw::paint_bounds(doc, parent)?);
     }
+    ancestor_areas(doc, id, out)
+}
+
+/// The areas of the ancestors of `id` that a change to it affects, beyond its own.
+fn ancestor_areas(doc: &Document, id: NodeId, out: &mut Vec<Rect>) -> Option<()> {
     // Ancestors that paint from their children's pixels (booleans, effects, masks): all of them.
     for a in doc.ancestors(id) {
         let Some(an) = doc.node(a) else { break };
@@ -263,6 +389,138 @@ fn changed_areas(doc: &Document, page: NodeId, id: NodeId, out: &mut Vec<Rect>) 
         }
     }
     Some(())
+}
+
+/// Page areas in which `id` looks different in `after` than in `before` (where it was and where
+/// it is now, and what of its ancestors follows); `None` when only a full render will do.
+fn edited_areas(before: &Document, after: &Document, page: NodeId, id: NodeId, out: &mut Vec<Rect>) -> Option<()> {
+    // A vector whose points moved looks different only around them.
+    if let Some(area) = moved_points_area(before, after, page, id) {
+        out.push(area);
+        ancestor_areas(before, id, out)?;
+        return ancestor_areas(after, id, out);
+    }
+    changed_areas(before, page, id, out)?;
+    changed_areas(after, page, id, out)
+}
+
+/// Vectors with more points than this are drawn again whole when they change.
+const MAX_MOVED_POINTS: usize = 4096;
+
+/// Whether every visible paint of `paints` is one colour: it looks the same wherever the layer's
+/// box lies (a gradient or an image is laid out in the box).
+fn plain(paints: &[figcraft_color::Paint]) -> bool {
+    paints.iter().filter(|p| p.visible).all(|p| matches!(p.kind, figcraft_color::PaintKind::Solid { .. }))
+}
+
+/// The page area in which vector `id` looks different in `after` than in `before`, when all that
+/// changed is where its points and handles are (a point dragged in the vector editor): around the
+/// segments that moved and their neighbours (whose joins and rounded corners follow them), as far
+/// out as the stroke reaches. The rest of a large shape keeps its pixels, however much of the
+/// view it fills. `None` when anything else changed or the look depends on the whole outline
+/// (dashes, a width profile, a brush, gradients and images laid out in the box, effects, a mask):
+/// the layer is then drawn again whole.
+fn moved_points_area(before: &Document, after: &Document, page: NodeId, id: NodeId) -> Option<Rect> {
+    let (a, b) = (before.node(id)?, after.node(id)?);
+    let (NodeKind::Vector { network: na }, NodeKind::Vector { network: nb }) = (&a.kind, &b.kind) else { return None };
+    if after.page_of(id) != Some(page) || before.page_of(id) != Some(page) {
+        return None;
+    }
+    let simple = |n: &figcraft_doc::Node, net: &figcraft_doc::VectorNetwork| {
+        !n.is_mask
+            && n.visible
+            && !n.effects.iter().any(|e| e.visible)
+            && n.stroke.dashes.is_empty()
+            && n.stroke.width_profile.is_none()
+            && n.stroke.brush.is_none()
+            && plain(&n.fills)
+            && plain(&n.strokes)
+            && net.regions.iter().all(|r| r.fills.as_deref().is_none_or(plain))
+    };
+    let same_shape = na.vertices.len() == nb.vertices.len()
+        && na.vertices.len() <= MAX_MOVED_POINTS
+        && na.segments.len() == nb.segments.len()
+        && na.segments.iter().zip(&nb.segments).all(|(x, y)| (x.a, x.b) == (y.a, y.b))
+        && na.regions.len() == nb.regions.len()
+        && na.regions.iter().zip(&nb.regions).all(|(x, y)| x.loops == y.loops && x.winding == y.winding && x.fills == y.fills);
+    if !(simple(a, na) && simple(b, nb) && same_shape) {
+        return None;
+    }
+    // A fill closes an open path with a line between its ends that is no segment: it moves
+    // with either end, across the whole shape.
+    let mut ends = vec![0u8; na.vertices.len()];
+    for s in &na.segments {
+        for i in [s.a, s.b] {
+            let n = ends.get_mut(i)?;
+            *n = n.saturating_add(1);
+        }
+    }
+    let filled = a.fills.iter().any(|f| f.visible) || !na.regions.is_empty();
+    if filled && ends.contains(&1) {
+        return None;
+    }
+    // Nothing but the geometry differs: the box follows the points, and with it the transform.
+    let mut as_after = a.clone();
+    as_after.kind = b.kind.clone();
+    (as_after.transform, as_after.width, as_after.height) = (b.transform, b.width, b.height);
+    if as_after != *b {
+        return None;
+    }
+    let (wa, wb) = (before.world_transform(id), after.world_transform(id));
+    // The box following the points moves the layer; anything else a transform does (a scale, a
+    // turn) changes every stroke's width or direction on the page, whether its path moved or not.
+    let (ca, cb) = (wa.as_coeffs(), wb.as_coeffs());
+    if ca.iter().zip(&cb).take(4).any(|(x, y)| (x - y).abs() > 1e-12 * x.abs().max(1.0)) {
+        return None;
+    }
+    // A segment on the page: its ends and handles.
+    let hull = |w: figcraft_geom::Affine, net: &figcraft_doc::VectorNetwork, s: &figcraft_doc::Segment| {
+        let (pa, pb) = (net.vertices.get(s.a)?.point(), net.vertices.get(s.b)?.point());
+        let pts = [pa, pa + figcraft_geom::Vec2::new(s.ta.0, s.ta.1), pb + figcraft_geom::Vec2::new(s.tb.0, s.tb.1), pb].map(|p| w * p);
+        pts.iter().all(|p| p.x.is_finite() && p.y.is_finite()).then_some(pts)
+    };
+    let mut moved = vec![false; na.vertices.len()];
+    let mut hulls = Vec::with_capacity(na.segments.len());
+    for (sa, sb) in na.segments.iter().zip(&nb.segments) {
+        let (ha, hb) = (hull(wa, na, sa)?, hull(wb, nb, sb)?);
+        // Apart by more than float noise. When the box follows a moved point every local
+        // coordinate shifts and the transform shifts back: a point that stayed put comes out a
+        // few ulps from where it was. 64 of them is far above that and far under a pixel at any
+        // zoom, wherever on the page the vector lies (a tenth of a millionth of a unit at
+        // coordinates of ten million).
+        let near = |x: f64, y: f64| (x - y).abs() <= 64.0 * f64::EPSILON * x.abs().max(y.abs()).max(1.0);
+        let apart = ha.iter().zip(&hb).any(|(p, q)| !(near(p.x, q.x) && near(p.y, q.y)));
+        let styled =
+            |i: usize| na.vertices.get(i).zip(nb.vertices.get(i)).is_none_or(|(x, y)| (x.radius, x.cap, x.join) != (y.radius, y.cap, y.join));
+        if apart || styled(sa.a) || styled(sa.b) {
+            for i in [sa.a, sa.b] {
+                *moved.get_mut(i)? = true;
+            }
+        }
+        hulls.push((ha, hb));
+    }
+    // Every segment at a point of a segment that moved: its join or rounded corner there follows.
+    let mut area: Option<Rect> = None;
+    for (s, (ha, hb)) in na.segments.iter().zip(&hulls) {
+        if moved.get(s.a).copied().unwrap_or(true) || moved.get(s.b).copied().unwrap_or(true) {
+            for p in ha.iter().chain(hb) {
+                let r = Rect::from_points(*p, *p);
+                area = Some(area.map_or(r, |a| a.union(r)));
+            }
+        }
+    }
+    let area = area?;
+    // As far as the stroke reaches from the path, on the page.
+    // The most the transform stretches a length in any direction (its largest singular value):
+    // under a skew that is more than either axis is stretched.
+    let stretch = |w: figcraft_geom::Affine| {
+        let c = w.as_coeffs();
+        let sum = c[0] * c[0] + c[1] * c[1] + c[2] * c[2] + c[3] * c[3];
+        let det = c[0] * c[3] - c[1] * c[2];
+        ((sum + (sum * sum - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt()
+    };
+    let reach = (a.outline_reach() * stretch(wa)).max(b.outline_reach() * stretch(wb));
+    reach.is_finite().then(|| area.inflate(reach, reach))
 }
 
 /// The previous frame brought up to date for `doc` at `px`, rendering only what changed; `None`
@@ -292,6 +550,19 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
     } else if dy < 0 {
         damage.push(Px { x0: 0, y0: 0, x1: w, y1: reach - dy });
     }
+    // And at the edges that moved in: a backdrop there read what is now past the edge.
+    if reach > 0 {
+        if dx > 0 {
+            damage.push(Px { x0: 0, y0: 0, x1: reach, y1: h });
+        } else if dx < 0 {
+            damage.push(Px { x0: w - reach, y0: 0, x1: w, y1: h });
+        }
+        if dy > 0 {
+            damage.push(Px { x0: 0, y0: 0, x1: w, y1: reach });
+        } else if dy < 0 {
+            damage.push(Px { x0: 0, y0: h - reach, x1: w, y1: h });
+        }
+    }
     // Layers that changed, where they were and where they are now.
     if !Arc::ptr_eq(&last.doc, doc) {
         let mut areas = Vec::new();
@@ -300,8 +571,7 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
             if in_pattern_source(doc, s, id) || in_pattern_source(&last.doc, &last.sensitive, id) {
                 return None;
             }
-            changed_areas(&last.doc, page, id, &mut areas)?;
-            changed_areas(doc, page, id, &mut areas)?;
+            edited_areas(&last.doc, doc, page, id, &mut areas)?;
         }
         for r in areas {
             if let Some(p) = to_px(r, view.scale, px) {
@@ -344,7 +614,7 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
     let mut pix = last.pix;
     shift(&mut pix, dx, dy)?;
     for d in &damage {
-        render_into(doc, page, view, px, d, margin, opts, &mut pix)?;
+        render_into(FrameRender { doc, page, view, px, opts }, d, margin, &mut pix)?;
     }
     Some((pix, pixels))
 }
@@ -399,23 +669,38 @@ fn merge(mut rects: Vec<Px>) -> Vec<Px> {
     rects
 }
 
-/// Render the frame pixels `d` (with `margin` more around, discarded) into `pix`.
-#[allow(clippy::too_many_arguments)]
-fn render_into(doc: &Document, page: NodeId, view: &View, px: (i64, i64), d: &Px, margin: i64, opts: &Options, pix: &mut Pixmap) -> Option<()> {
+struct FrameRender<'a> {
+    doc: &'a Document,
+    page: NodeId,
+    view: &'a View,
+    px: (i64, i64),
+    opts: &'a Options,
+}
+
+/// Render the frame pixels `d` (with `margin` more around, discarded) into `pix`. The margin stops
+/// at the frame's edge: background blurs and glass read what is drawn under them, and a full
+/// render's backdrops end where the frame does.
+fn render_into(frame: FrameRender<'_>, d: &Px, margin: i64, pix: &mut Pixmap) -> Option<()> {
+    let FrameRender { doc, page, view, px, opts } = frame;
     let s = view.scale;
-    let (ox, oy) = (d.x0 - margin, d.y0 - margin);
-    let (rw, rh) = (u32::try_from(d.x1 - d.x0 + 2 * margin).ok()?, u32::try_from(d.y1 - d.y0 + 2 * margin).ok()?);
+    let (w, h) = (i64::from(pix.width()), i64::from(pix.height()));
+    let (ox, oy) = ((d.x0 - margin).max(0), (d.y0 - margin).max(0));
+    let (ex, ey) = ((d.x1 + margin).min(w), (d.y1 + margin).min(h));
+    let (rw, rh) = (u32::try_from(ex - ox).ok()?, u32::try_from(ey - oy).ok()?);
     // The same pixel grid as the frame: origin (px + offset) / scale.
     let sub = View { origin: ((px.0 + ox) as f64 / s, (px.1 + oy) as f64 / s), scale: s, width: rw, height: rh };
-    let part = render_view(doc, page, &sub, opts)?;
-    let inner = IntRect::from_xywh(
-        i32::try_from(margin).ok()?,
-        i32::try_from(margin).ok()?,
-        u32::try_from(d.x1 - d.x0).ok()?,
-        u32::try_from(d.y1 - d.y0).ok()?,
-    )?;
-    let inner = part.clone_rect(inner)?;
-    let copy = PixmapPaint { blend_mode: tiny_skia::BlendMode::Source, ..Default::default() };
-    pix.draw_pixmap(i32::try_from(d.x0).ok()?, i32::try_from(d.y0).ok()?, inner.as_ref(), &copy, Transform::identity(), None);
+    let part = crate::render_part(doc, page, &sub, opts)?;
+    // The rows of `d` in `part`, straight into their place (a copy of the part and a draw of the
+    // copy took longer than rendering a simple part).
+    let (skip_x, skip_y) = (usize::try_from(d.x0 - ox).ok()?, usize::try_from(d.y0 - oy).ok()?);
+    let (cols, rows) = (usize::try_from(d.x1 - d.x0).ok()?, usize::try_from(d.y1 - d.y0).ok()?);
+    let (at_x, at_y) = (usize::try_from(d.x0).ok()?, usize::try_from(d.y0).ok()?);
+    let (src_w, dst_w) = (part.width() as usize, pix.width() as usize);
+    let dst = pix.data_mut();
+    for (r, row) in part.data().chunks_exact(src_w.max(1) * 4).skip(skip_y).take(rows).enumerate() {
+        let from = row.get(skip_x * 4..(skip_x + cols) * 4)?;
+        let start = ((at_y + r) * dst_w + at_x) * 4;
+        dst.get_mut(start..start + cols * 4)?.copy_from_slice(from);
+    }
     Some(())
 }

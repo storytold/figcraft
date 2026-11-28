@@ -1,0 +1,446 @@
+//! Boards: files for thinking together, with sticky notes, shapes with text, connectors, ink and
+//! stamps. Board objects are ordinary layers with a [`BoardItem`] on them; [`settle_text`] and
+//! [`settle_routes`] keep what follows from it (a sticky's text size, a shape's text room,
+//! connectors' routes and their labels) up to date in the normalize pass, so local edits, undo and
+//! live-session edits from others all end in the same geometry.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use figcraft_color::{BlendMode, Color, Paint};
+use figcraft_doc::{
+    AutoLayout, BOARD_COLORS, BoardItem, BoardShape, Connector, Constraints, CrossAlign, DocError, Document, Effect, EffectKind, End, FileKind,
+    HConstraint, LayoutMode, MainAlign, Node, NodeId, NodeKind, Routing, STAMP_SIZE, Shadow, Side, Sizing, Stamp, StrokeAlign, StrokeCap, StrokeJoin,
+    TextAlignH, TextAutoResize, TextData, VConstraint, VectorNetwork, board_color,
+};
+use figcraft_geom::kurbo::PathEl;
+use figcraft_geom::{Affine, BezPath, Point, Rect, Shape};
+use serde_json::{Value, json};
+
+use crate::cmd::CommandSpec;
+use crate::params::{boolean, color_of, get, id, id_of, num, num_or, opt_id, req_num, req_string, req_targets, string};
+use crate::tools::{Gesture, PointerEvent, ToolId};
+use crate::{EngineError, Result, Session, bad, spec, textedit};
+
+mod code;
+mod connectors;
+mod derived;
+mod edit;
+mod items;
+mod mindmap;
+mod reshape;
+mod tools;
+
+pub use code::{is_code_text, is_one_code_block};
+pub(crate) use connectors::end_handle_at;
+pub use connectors::{END_HANDLE_PX, selected_connector_ends};
+use connectors::{connector_cmd, reattach};
+pub use derived::route;
+pub(crate) use derived::{settle_routes, settle_stamps, settle_text, stamp_target};
+
+/// The topmost sticky or shape at `p` on `page`, other than `except`, sections and frames looked
+/// into: what a "+" handle dragged onto it joins (#1919).
+pub fn sticky_or_shape_at(doc: &Document, page: NodeId, p: Point, except: Option<NodeId>) -> Option<NodeId> {
+    fn find(doc: &Document, id: NodeId, p: Point, except: Option<NodeId>, depth: usize) -> Option<NodeId> {
+        let n = doc.node(id)?;
+        for c in n.children.iter().rev() {
+            let Some(k) = doc.node(*c) else { continue };
+            if !k.visible {
+                continue;
+            }
+            match k.board {
+                Some(BoardItem::Sticky { .. } | BoardItem::Shape { .. }) => {
+                    if Some(*c) != except && doc.world_bounds(*c).is_some_and(|b| b.contains(p)) {
+                        return Some(*c);
+                    }
+                }
+                // Not a board object of its own (a section, a frame): what is inside it may be.
+                None if depth < 32 => {
+                    if let Some(hit) = find(doc, *c, p, except, depth + 1) {
+                        return Some(hit);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    find(doc, page, p, except, 0)
+}
+pub use edit::label_of;
+pub(crate) use edit::{copied_items, copy_map, rejoin};
+use edit::{label_cmd, set_color, set_style};
+pub(crate) use items::add_text;
+pub use items::{CONNECTED_GAP, connected_place};
+pub use items::{STICKY_TEXT_SIZE, edit_text, owner_of_text, text_of};
+use items::{add_connected, ink_cmd, next_sticky, shape_cmd, stamp_cmd, sticky_cmd};
+pub(crate) use mindmap::settle_mind_maps;
+pub use mindmap::{mind_node_target, mind_sibling};
+pub(crate) use reshape::path_handle_at;
+pub use reshape::selected_connector_handles;
+
+/// Why a board command refuses on a design file.
+pub const NEEDS_BOARD: &str = "this is for boards: make one with File ▸ New board";
+/// Why prototyping and Dev Mode refuse on a board.
+pub const NOT_ON_BOARDS: &str = "boards have no prototypes or Developer Mode: use a design file for those";
+
+/// A sticky note's side (it grows taller for long notes).
+pub const STICKY: f64 = 200.0;
+const STICKY_PAD: f64 = 16.0;
+/// The room between a sticky and the next one made beside it.
+const STICKY_GAP: f64 = 24.0;
+/// A new shape's size.
+const SHAPE: f64 = 160.0;
+/// Text on board objects, and the author line under a sticky's note.
+pub(crate) const INK: Color = Color::from_rgb8_const(0x1E, 0x1E, 0x1E);
+const AUTHOR_INK: Color = Color::from_rgb8_const(0x5C, 0x5A, 0x55);
+/// Connectors' default colour and weight.
+const LINE: Color = Color::from_rgb8_const(0x3A, 0x39, 0x36);
+const LINE_WEIGHT: f64 = 2.0;
+/// Marker and highlighter strokes: (weight, opacity).
+const MARKER: (f64, f32) = (4.0, 1.0);
+const HIGHLIGHTER: (f64, f32) = (20.0, 0.45);
+/// The ink colours the drawing tools offer (`tool.ink`): name and colour.
+pub const INK_COLORS: [(&str, Color); 8] = [
+    ("black", INK),
+    ("gray", Color::from_rgb8_const(0x8A, 0x88, 0x83)),
+    ("red", Color::from_rgb8_const(0xE0, 0x3E, 0x3E)),
+    ("orange", Color::from_rgb8_const(0xF2, 0x86, 0x1F)),
+    ("yellow", Color::from_rgb8_const(0xFF, 0xD2, 0x1F)),
+    ("green", Color::from_rgb8_const(0x2F, 0xA8, 0x4F)),
+    ("blue", Color::from_rgb8_const(0x2D, 0x7F, 0xF9)),
+    ("violet", Color::from_rgb8_const(0x8B, 0x5C, 0xF6)),
+];
+/// The stroke weights `tool.ink` takes.
+pub const INK_WEIGHTS: std::ops::RangeInclusive<f64> = 0.1..=100.0;
+/// How far the eraser reaches around the pointer (screen pixels).
+pub const ERASER_PX: f64 = 8.0;
+/// The text sizes the contextual bar offers.
+pub const TEXT_SIZES: [(&str, f64); 4] = [("S", 12.0), ("M", 16.0), ("L", 24.0), ("XL", 36.0)];
+/// The text sizes a sticky's menu offers (FigJam's, measured 2026-11-12): name and size.
+pub const STICKY_SIZES: [(&str, f64); 5] = [("Small", 16.0), ("Medium", 24.0), ("Large", 40.0), ("Extra large", 64.0), ("Huge", 96.0)];
+
+/// The board tools' choices: the colour new stickies get, the shape and stamp the tools place,
+/// how new connectors run and the marker's and highlighter's colours and weights.
+#[derive(Clone, Debug)]
+pub struct BoardTool {
+    pub sticky: Color,
+    /// The text size new stickies get (the last one chosen on a sticky).
+    pub sticky_size: f64,
+    pub shape: BoardShape,
+    pub stamp: Stamp,
+    pub routing: Routing,
+    pub marker: Color,
+    pub highlighter: Color,
+    pub marker_weight: f64,
+    pub highlighter_weight: f64,
+}
+
+impl Default for BoardTool {
+    fn default() -> Self {
+        let first = BOARD_COLORS.first().map_or(Color::WHITE, |c| c.1);
+        Self {
+            sticky: first,
+            sticky_size: STICKY_TEXT_SIZE,
+            shape: BoardShape::Rectangle,
+            stamp: Stamp::ThumbsUp,
+            routing: Routing::Elbow,
+            marker: INK,
+            highlighter: Color::from_rgb8_const(0xFF, 0xD2, 0x1F),
+            marker_weight: MARKER.0,
+            highlighter_weight: HIGHLIGHTER.0,
+        }
+    }
+}
+
+pub fn specs() -> Vec<CommandSpec> {
+    vec![
+        spec!(
+            "board.sticky",
+            "Sticky note",
+            "{x, y (its top-left, in the parent), text?, color? (yellow|orange|red|pink|violet|blue|green|gray or hex; default the sticky tool's), fontSize? (1 to 1000; default the sticky tool's, 16 at first), author? (a name, or false for none; default yours), parent?} → {id, text}",
+            true,
+            sticky_cmd
+        ),
+        spec!(
+            "board.nextSticky",
+            "Next sticky note",
+            "{id? (a sticky, shape, code block or mind map node; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector?}  a sticky of the same colour beside a sticky; after a shape, the next shape joined to it by a connector, as board.addConnected; after a code block, the next code block beside it (128 away), as wide and in the same language, not joined; after a mind map node, its next sibling, as board.mindMapAdd {relation: sibling}",
+            true,
+            next_sticky
+        ),
+        spec!(
+            "board.addConnected",
+            "Add connected shape",
+            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), at? ([x, y] on the page: the next one's centre, anywhere, instead of its place on that side; the connector then leaves by `side` and arrives by the side facing it), edit? (start typing in it; default false)} → {id, text, connector}  the next one of the same kind, size and colour on that side, joined by a connector",
+            true,
+            add_connected
+        ),
+        spec!(
+            "board.shape",
+            "Shape with text",
+            "{shape: rectangle|roundedRectangle|ellipse|diamond|triangle|triangleDown|parallelogramRight|parallelogramLeft|trapezoid|pentagon|hexagon|octagon|star|plus|arrowLeft|arrowRight|chevron|speechBubble|database|document|predefinedProcess|manualInput|internalStorage, x, y, width?, height? (default 160), text?, color?, parent?} → {id, text}",
+            true,
+            shape_cmd
+        ),
+        spec!(
+            "board.connector",
+            "Connector",
+            "{from, to (each a layer id or {x, y} on the page), fromSide?, toSide? (auto|top|right|bottom|left), fromAt?, toAt? ([x, y] on the layer, fractions of its box), style?: straight|elbow|curved, startCap?, endCap? (none|lineArrow|triangleArrow|circleFilled|diamondFilled…; default an arrow at the end), label?} → {id, label?}  a line that follows the layers it joins",
+            true,
+            connector_cmd
+        ),
+        spec!(
+            "board.reattach",
+            "Reattach connector",
+            "{id? (a connector; default the selection), end: from|to, target (a layer id, or {x, y} on the page to leave the end free), side? (auto|top|right|bottom|left), at? ([x, y] on the layer, fractions of its box)} → {id}  moves one end of a connector",
+            true,
+            reattach
+        ),
+        spec!(
+            "board.reshape",
+            "Reshape connector",
+            "{id? (a connector; default the selection), portion (0 is the first run of an elbow, or a curve's middle), x, y (where it moves to on the page; a first or last run gets an extra run to stay on its end)} → {id}",
+            true,
+            reshape::reshape
+        ),
+        spec!(
+            "board.mindMap",
+            "Mind map",
+            "{x?, y? (the first node's top-left in the parent; default the middle of the view), text? (default Topic), children? (their texts, at most 20; default Idea 1, Idea 2, Idea 3), parent?, edit? (start typing in the first node; default false)} → {id, text, children: [{id, text, connector}...]}  a first node with children on its right, joined by branches; the map lays itself out",
+            true,
+            mindmap::mind_map_cmd
+        ),
+        spec!(
+            "board.mindMapAdd",
+            "Add mind map node",
+            "{id? (a mind map node; default the selected or edited one), relation?: child|sibling (default child), text?, edit? (start typing in it; default false)} → {id, text, connector}  a child below the node's other children, or a sibling right after it; the map lays itself out again",
+            true,
+            mindmap::mind_map_add
+        ),
+        spec!(
+            "board.codeBlock",
+            "Code block",
+            "{x?, y? (its top-left in the parent; default a four-line block centred in the view), language? (bash|cpp|css|go|graphql|html|javascript|json|kotlin|plainText|python|ruby|rust|sql|swift|typescript; default typescript), text?, width? (210 to 100000; default 576), parent?, edit? (start typing in it; default false)} → {id, text, language}  a dark panel holding monospace text: as wide as it is made, as tall as its lines (four at least)",
+            true,
+            code::code_block_cmd
+        ),
+        spec!(
+            "board.setLanguage",
+            "Code language",
+            "{id? | ids? (code blocks; default the selected ones, or the one being typed in), language} → {ids}",
+            true,
+            code::set_language
+        ),
+        spec!("board.label", "Connector label", "{id (a connector; default the selection), text (empty removes it)} → {id, label}", true, label_cmd),
+        spec!(
+            "board.stamp",
+            "Stamp",
+            "{x, y (its centre on the page), stamp: thumbsUp|heart|plusOne|star|question|check} → {id}  a badge with your name on hover",
+            true,
+            stamp_cmd
+        ),
+        spec!(
+            "board.ink",
+            "Marker stroke",
+            "{path (SVG path data on the page) | points [[x,y],..], highlighter? (wide and see-through), color?, weight? (default the tool's, as tool.ink sets them), select? (default true)} → {id}",
+            true,
+            ink_cmd
+        ),
+        spec!(
+            "board.setColor",
+            "Board color",
+            "{ids?, color (a board colour name or hex)}  stickies and shapes take it as their fill, connectors and ink as their line, mind map nodes as their text colour",
+            true,
+            set_color
+        ),
+        spec!(
+            "board.setStyle",
+            "Board style",
+            "{ids?, shape? (shapes with text), fontSize? (the text of stickies, shapes, labels and mind nodes; stickies remember it for new ones), style?: straight|elbow|curved, startCap?, endCap? (connectors)}",
+            true,
+            set_style
+        ),
+        spec!("tool.sticky", "Sticky note", "{color?} (a click places a sticky and starts typing in it)", false, |s, p| {
+            if let Some(c) = color_param("tool.sticky", p)? {
+                s.tool.board.sticky = c;
+            }
+            board_tool(s, ToolId::Sticky)
+        }),
+        spec!(
+            "tool.mindMap",
+            "Mind map tool",
+            "{} (a click places a mind map, the first node's text starting at the click, and starts typing in it)",
+            false,
+            |s, _| board_tool(s, ToolId::MindMap)
+        ),
+        spec!("tool.codeBlock", "Code block tool", "{} (a click places a code block centred there and starts typing in it)", false, |s, _| {
+            board_tool(s, ToolId::CodeBlock)
+        }),
+        spec!("tool.shape", "Shapes", "{shape?} (a click places a shape with text)", false, |s, p| {
+            if let Some(v) = string(p, "shape") {
+                s.tool.board.shape = shape_of("tool.shape", &v)?;
+            }
+            board_tool(s, ToolId::BoardShape)
+        }),
+        spec!("tool.connector", "Connector", "{style?: straight|elbow|curved} (drag from one object to another)", false, |s, p| {
+            if let Some(v) = string(p, "style") {
+                s.tool.board.routing = routing_of("tool.connector", &v)?;
+            }
+            board_tool(s, ToolId::Connector)
+        }),
+        spec!("tool.marker", "Marker", "{color?}", false, |s, p| {
+            if let Some(c) = color_param("tool.marker", p)? {
+                s.tool.board.marker = c;
+            }
+            board_tool(s, ToolId::Marker)
+        }),
+        spec!("tool.highlighter", "Highlighter", "{color?}", false, |s, p| {
+            if let Some(c) = color_param("tool.highlighter", p)? {
+                s.tool.board.highlighter = c;
+            }
+            board_tool(s, ToolId::Highlighter)
+        }),
+        spec!(
+            "tool.ink",
+            "Ink",
+            "{tool? (pencil|marker|highlighter; default the current one), color? (black|gray|red|orange|yellow|green|blue|violet or any colour; the Pencil also takes auto: black, or white on a dark page or frame), weight? (0.1 to 100)} → {tool, color, weight}  the ink that tool's new strokes get (omit color and weight to read it)",
+            false,
+            tool_ink
+        ),
+        spec!("tool.eraser", "Eraser", "{} (drag over marker and highlighter strokes to remove them)", false, |s, _| board_tool(s, ToolId::Eraser)),
+        spec!("tool.stamp", "Stamp", "{stamp?} (a click places the stamp)", false, |s, p| {
+            if let Some(v) = string(p, "stamp") {
+                s.tool.board.stamp = stamp_of("tool.stamp", &v)?;
+            }
+            board_tool(s, ToolId::Stamp)
+        }),
+    ]
+}
+
+pub fn is_board(doc: &Document) -> bool {
+    doc.kind == FileKind::Board
+}
+
+/// Refuse `cmd` unless the active file is a board.
+pub(crate) fn require(s: &Session, cmd: &str) -> Result<()> {
+    if s.doc().is_ok_and(is_board) { Ok(()) } else { Err(EngineError::Disabled(cmd.into(), NEEDS_BOARD.into())) }
+}
+
+/// Prototyping and Dev Mode: not on boards.
+fn design_only(cmd: &str) -> bool {
+    cmd.starts_with("proto.") || cmd.starts_with("dev.") || matches!(cmd, "view.prototype" | "view.designPrototype" | "view.devMode")
+}
+
+/// Refuse `cmd` on a board when it is prototyping or Dev Mode.
+pub(crate) fn refuse_on_board(s: &Session, cmd: &str) -> Result<()> {
+    if design_only(cmd) && s.doc().is_ok_and(is_board) { Err(EngineError::Disabled(cmd.into(), NOT_ON_BOARDS.into())) } else { Ok(()) }
+}
+
+fn board_tool(s: &mut Session, t: ToolId) -> Result<Value> {
+    require(s, &format!("tool.{}", t.id()))?;
+    crate::cmd::view::tool(s, t)
+}
+
+/// `weight`: an ink stroke's weight, in [`INK_WEIGHTS`].
+fn weight_param(cmd: &str, p: &Value) -> Result<Option<f64>> {
+    match num(p, "weight") {
+        Some(w) if !INK_WEIGHTS.contains(&w) => Err(bad(cmd, "`weight` is 0.1 to 100")),
+        w => Ok(w),
+    }
+}
+
+/// `tool.ink`: set or read a drawing tool's ink.
+fn tool_ink(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "tool.ink";
+    let tool = match string(p, "tool") {
+        Some(t) => ToolId::from_id(&t)
+            .filter(|t| s.tool.ink(*t).is_some())
+            .ok_or_else(|| bad(cmd, format!("`tool` is pencil, marker or highlighter, not `{t}`")))?,
+        None if s.tool.ink(s.tool.tool).is_some() => s.tool.tool,
+        None => return Err(bad(cmd, "name a `tool` (pencil, marker or highlighter): the current tool draws no ink")),
+    };
+    let color = match get(p, "color") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(v)) if tool == ToolId::Pencil && v.eq_ignore_ascii_case("auto") => Some(None),
+        Some(v) => {
+            let named = v.as_str().and_then(|v| INK_COLORS.iter().find(|(n, _)| n.eq_ignore_ascii_case(v))).map(|c| c.1);
+            Some(Some(named.or_else(|| color_of(v)).ok_or_else(|| bad(cmd, "`color` is an ink colour (black, blue…) or a colour such as #2D7FF9"))?))
+        }
+    };
+    let weight = weight_param(cmd, p)?;
+    let b = &mut s.tool.board;
+    match tool {
+        ToolId::Marker => {
+            b.marker = color.flatten().unwrap_or(b.marker);
+            b.marker_weight = weight.unwrap_or(b.marker_weight);
+        }
+        ToolId::Highlighter => {
+            b.highlighter = color.flatten().unwrap_or(b.highlighter);
+            b.highlighter_weight = weight.unwrap_or(b.highlighter_weight);
+        }
+        _ => {
+            let ink = &mut s.tool.pencil_ink;
+            ink.color = color.unwrap_or(ink.color);
+            ink.weight = weight.unwrap_or(ink.weight);
+        }
+    }
+    let ink = s.tool.ink(tool).unwrap_or_default();
+    Ok(json!({"tool": tool.id(), "color": ink.color.map_or_else(|| "auto".to_string(), |c| c.to_css_hex()), "weight": ink.weight}))
+}
+
+fn shape_of(cmd: &str, v: &str) -> Result<BoardShape> {
+    BoardShape::from_id(v).ok_or_else(|| {
+        let known: Vec<&str> = BoardShape::ALL.iter().map(|b| b.id()).collect();
+        bad(cmd, format!("unknown shape `{v}` ({})", known.join("|")))
+    })
+}
+
+fn stamp_of(cmd: &str, v: &str) -> Result<Stamp> {
+    Stamp::from_id(v).ok_or_else(|| bad(cmd, format!("unknown stamp `{v}` (thumbsUp|heart|plusOne|star|question|check)")))
+}
+
+fn routing_of(cmd: &str, v: &str) -> Result<Routing> {
+    Routing::from_id(v).ok_or_else(|| bad(cmd, format!("`style` is straight, elbow or curved, not `{v}`")))
+}
+
+fn cap_of(cmd: &str, p: &Value, key: &str) -> Result<Option<StrokeCap>> {
+    match get(p, key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => crate::cmd::props::enum_of::<StrokeCap>(v).map(Some).ok_or_else(|| bad(cmd, format!("`{key}`: unknown cap"))),
+    }
+}
+
+/// `color`: a board colour's name, or any colour.
+fn color_param(cmd: &str, p: &Value) -> Result<Option<Color>> {
+    match get(p, "color") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if board_color(s).is_some() => Ok(board_color(s)),
+        Some(v) => color_of(v).map(Some).ok_or_else(|| bad(cmd, "`color` is a board colour (yellow, blue…) or a colour such as #FFE78A")),
+    }
+}
+
+/// The deeper shade of a board colour lines are drawn in (light tints are too faint as lines).
+fn line_shade(c: Color) -> Color {
+    let palette = BOARD_COLORS.iter().any(|(_, b)| *b == c);
+    if palette { Color::new(c.r * 0.55, c.g * 0.55, c.b * 0.55, c.a) } else { c }
+}
+
+/// Your name on what you make: the name from Preferences, else the one a live session gave you
+/// (none for the default name outside a session).
+pub(crate) fn author(s: &Session) -> String {
+    let name = crate::live::display_name(&s.prefs);
+    if name.is_empty() { s.live().info.as_ref().map(|i| i.name.clone()).unwrap_or_default() } else { name }
+}
+
+/// The parent a command places into, and that parent's page-to-local transform.
+fn parent_of(cmd: &str, s: &Session, p: &Value) -> Result<NodeId> {
+    let page = s.page()?;
+    let parent = opt_id(cmd, p, "parent")?.unwrap_or(page);
+    let doc = s.doc()?;
+    let n = doc.get(parent)?;
+    let takes = n.is_page() || matches!(n.kind, NodeKind::Section { .. }) || (n.kind.is_frame_like() && !n.is_board_atom());
+    if !takes {
+        return Err(bad(cmd, "`parent` is the page, a section or a frame"));
+    }
+    Ok(parent)
+}

@@ -1,6 +1,6 @@
-//! `#join=` and `?control` in the page's URL.
+//! `#join=` and `?control` in the page's URL, and the server the page names for itself.
 
-use crate::query::{control, join_link};
+use crate::query::{control, join_link, page_server};
 
 #[test]
 fn join_takes_the_rest_of_the_fragment() {
@@ -37,4 +37,48 @@ fn control_is_opt_in() {
     assert!(!control("?"));
     assert!(!control("?webgl"));
     assert!(!control("?nocontrol&controls"), "only the whole entry name");
+}
+
+#[test]
+fn a_page_names_its_own_server_without_a_key() {
+    assert_eq!(page_server(" wss://figcraft.example/ ").as_deref(), Some("wss://figcraft.example/"));
+    assert_eq!(page_server("ws://127.0.0.1:47900/").as_deref(), Some("ws://127.0.0.1:47900/"));
+    for bad in
+        ["", "https://figcraft.example/", "wss://figcraft.example/?key=secret", "wss://a b/", "wss://x/#y", &format!("wss://{}/", "a".repeat(600))]
+    {
+        assert_eq!(page_server(bad), None, "{bad:?} is ignored");
+    }
+}
+
+#[test]
+fn a_page_ignores_invalid_server_endpoints() {
+    for bad in [
+        "ws://",
+        "wss://",
+        "wss:///figcraft/",
+        "wss://:443/",
+        "wss://figcraft.example:0/",
+        "wss://figcraft.example:65536/",
+        "wss://figcraft.example:port/",
+        "wss://[::1/",
+        "wss://figcraft.example/a@b/",
+    ] {
+        assert_eq!(page_server(bad), None, "{bad:?} must not replace the default server");
+    }
+}
+
+#[test]
+fn a_page_preserves_valid_server_endpoint_spelling() {
+    for server in ["ws://localhost:47900/", "wss://figcraft.example/figcraft/", "wss://[::1]:47900/figcraft/"] {
+        assert_eq!(page_server(server).as_deref(), Some(server), "{server}");
+    }
+}
+
+#[test]
+fn a_page_rejects_server_delimiters_that_endpoint_parsing_would_strip() {
+    for suffix in ["'", "\"", "<", ">", "\"'>"] {
+        let server = format!("wss://figcraft.example/{suffix}");
+        assert!(figcraft_collab_net::Endpoint::parse(&server).is_ok(), "the parser cleans {server:?}");
+        assert_eq!(page_server(&server), None, "{server:?} must not replace the default server");
+    }
 }

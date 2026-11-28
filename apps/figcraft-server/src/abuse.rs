@@ -1,5 +1,6 @@
 //! What one address may do how often: new connections, publishing without the key and messages
-//! (only on a server open to the public), and reports and downloads (always). Each is a token
+//! (only on a server open to the public), and reports, downloads and requests that change the
+//! server's files (always, with the server key too). Each is a token
 //! bucket per block an address counts in ([`ip_blocks`]: an IPv4 address, or an IPv6 /64 and its
 //! /56 and /48 with 2 and 4 times the rate), so a tunnel's /48 doesn't get 65,536 /64s' worth. Publishing has a budget for
 //! everyone besides ([`PUBLISHES_ALL`] times one address's). The table keeps at most
@@ -26,13 +27,19 @@ pub const MAX_ADDRESSES: usize = 10_000;
 pub const REPORTS_PER_HOUR: f64 = 10.0;
 
 /// Bytes one address may download a second (team libraries, plugins), and at once: an IPv6 /48
-/// gets four times that, an eighth of everyone's budgets (32 MiB a second, 512 MiB at once).
+/// gets four times that, an eighth of everyone's budgets (32 MiB a second, 512 MiB at once). Larger
+/// than the burst, a library or plugin is served once the address's budget is full, which it then
+/// owes ([`Bucket::take_spread`]): it comes more slowly, never not at all.
 pub const DOWNLOAD_RATE: f64 = (1u64 << 20) as f64;
 pub const DOWNLOAD_BURST: f64 = (16u64 << 20) as f64;
 
 /// Everyone together may publish without the key this many times what one address may: eight
 /// times what the widest block (an IPv6 /48, four addresses' worth) may, so no block takes it all.
 pub const PUBLISHES_ALL: f64 = 32.0;
+
+/// Requests that change the server's files (join codes, links, renames, removals, blocks,
+/// publishing with the key) one address may make a minute, with the server key or an owner token.
+pub const ADMIN_PER_MINUTE: f64 = 60.0;
 
 /// Join codes one address may try a minute (right or wrong).
 pub const CODES_PER_MINUTE: f64 = 10.0;
@@ -66,6 +73,8 @@ pub enum Action {
     Download(usize),
     /// Trying a join code.
     Code,
+    /// A request that changes the server's files ([`ADMIN_PER_MINUTE`]).
+    Admin,
 }
 
 struct Address {
@@ -76,6 +85,7 @@ struct Address {
     reports: Bucket,
     downloads: Bucket,
     codes: Bucket,
+    admin: Bucket,
     /// Wrong join codes in a row, and when the last one was.
     wrong: u32,
     wrong_at: Instant,
@@ -157,7 +167,7 @@ impl Abuse {
         }
         for &(k, times) in &keys {
             let (b, n) = Self::pick(self.address(k, times, now), what);
-            b.take_n(now, n);
+            b.take_spread(now, n);
         }
         true
     }
@@ -177,6 +187,7 @@ impl Abuse {
             reports: bucket(REPORTS_PER_HOUR * times, 3600.0),
             downloads: Bucket::new(DOWNLOAD_RATE * times, DOWNLOAD_BURST * times),
             codes: bucket(CODES_PER_MINUTE * times, 60.0),
+            admin: bucket(ADMIN_PER_MINUTE * times, 60.0),
             wrong: 0,
             wrong_at: now,
             locked: None,
@@ -195,13 +206,14 @@ impl Abuse {
             Action::Report => (&mut a.reports, 1.0),
             Action::Download(n) => (&mut a.downloads, n as f64),
             Action::Code => (&mut a.codes, 1.0),
+            Action::Admin => (&mut a.admin, 1.0),
         }
     }
 
     /// The block has `what`'s tokens now (nothing is spent).
     fn room(&mut self, ip: Block, times: f64, what: Action, now: Instant) -> bool {
         let (b, n) = Self::pick(self.address(ip, times, now), what);
-        if b.take_n(now, n) {
+        if b.take_spread(now, n) {
             b.give(n);
             return true;
         }

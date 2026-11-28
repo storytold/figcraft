@@ -73,7 +73,7 @@ fn file_json() -> Value {
         {"trigger": {"type": "AFTER_TIMEOUT", "timeout": 800}, "actions": [node_action("1:30", "OVERLAY", json!({"type": "MOVE_IN", "direction": "RIGHT",
             "duration": 250, "matchLayers": false, "easing": {"type": "CUSTOM_SPRING", "easingFunctionSpring": {"mass": 1, "stiffness": 200, "damping": 20}}}))]},
         {"trigger": {"type": "ON_KEY_DOWN", "device": "KEYBOARD", "keyCodes": [16, 65]}, "actions": [{"type": "BACK"}]},
-        {"trigger": {"type": "MOUSE_ENTER", "delay": 0}, "actions": [{"type": "URL", "url": "https://example.com"}]},
+        {"trigger": {"type": "MOUSE_ENTER", "delay": 0}, "actions": [{"type": "URL", "url": "https://example.com"}, {"type": "URL", "url": "https://example.org", "openInNewTab": false}]},
         {"trigger": {"type": "ON_HOVER"}, "actions": [{"type": "SET_VARIABLE", "variableId": FLAG, "variableValue": {"type": "BOOLEAN", "value": false}}]},
         {"trigger": {"type": "ON_PRESS"}, "actions": [{"type": "CONDITIONAL", "conditionalBlocks": [{"actions": [{"type": "CLOSE"}]}]}]},
         {"trigger": {"type": "ON_DRAG"}, "actions": [{"type": "SET_VARIABLE_MODE", "variableCollectionId": THEME, "variableModeId": "1:0"}]},
@@ -188,6 +188,111 @@ fn bound_variables_and_explicit_modes() {
     assert!(has(&warnings, "pass the local variables JSON"), "{warnings:?}");
 }
 
+/// #2441: a variable bound to one or more stroke sides (`individualStrokeWeights`) binds that
+/// side's weight. The live API names the sides `BORDER_TOP_WEIGHT` …, the published spec `top` …;
+/// both are read, and neither is reported as skipped.
+#[test]
+fn variables_bound_to_stroke_sides_bind_each_sides_weight() {
+    const TOP: &str = "VariableID:9:1";
+    const RIGHT: &str = "VariableID:9:2";
+    const BOTTOM: &str = "VariableID:9:3";
+    const LEFT: &str = "VariableID:9:4";
+    let rect = |id: &str, name: &str, sides: Value| {
+        json!({"id": id, "name": name, "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 40, "y": 20},
+               "strokes": [{"type": "SOLID", "color": rgba(0.0, 0.0, 0.0)}], "strokeWeight": 1,
+               "individualStrokeWeights": {"top": 1, "right": 1, "bottom": 1, "left": 1},
+               "boundVariables": {"individualStrokeWeights": sides}})
+    };
+    let file = json!({"name": "Sides", "document": {"id": "0:0", "type": "DOCUMENT", "children": [
+        {"id": "0:1", "name": "Page", "type": "CANVAS", "children": [
+            rect("1:1", "Row", json!({"BORDER_BOTTOM_WEIGHT": alias(SPACE)})),
+            rect("1:2", "Card", json!({"BORDER_TOP_WEIGHT": alias(TOP), "BORDER_RIGHT_WEIGHT": alias(RIGHT),
+                                       "BORDER_BOTTOM_WEIGHT": alias(BOTTOM), "BORDER_LEFT_WEIGHT": alias(LEFT)})),
+            rect("1:3", "Spec", json!({"top": alias(TOP), "right": alias(RIGHT), "bottom": alias(BOTTOM), "left": alias(LEFT)})),
+            rect("1:4", "Colour", json!({"BORDER_LEFT_WEIGHT": alias(BRAND)}))
+        ]}
+    ]}});
+    // A variable of its own for each of Card's sides, so a side read into another's field fails.
+    let mut vars = variables_json();
+    for id in [TOP, RIGHT, BOTTOM, LEFT] {
+        vars["meta"]["variables"][id] = json!({"id": id, "name": id, "variableCollectionId": THEME, "resolvedType": "FLOAT",
+                                               "valuesByMode": {"1:0": 1}, "scopes": ["ALL_SCOPES"]});
+    }
+    let (doc, warnings) = import_with(&file, Some(&vars), &no_images).unwrap();
+    let sides = |name: &str| -> Vec<(String, String)> {
+        let n = named(&doc, name);
+        ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"]
+            .iter()
+            .filter_map(|f| n.bound.get(*f).map(|v| (f.to_string(), v.clone())))
+            .collect()
+    };
+    let b = |f: &str| (f.to_string(), SPACE.to_string());
+    let on = |f: &str, v: &str| (f.to_string(), v.to_string());
+    assert_eq!(sides("Row"), [b("strokeBottomWeight")], "one side bound");
+    assert_eq!(
+        sides("Card"),
+        [on("strokeTopWeight", TOP), on("strokeRightWeight", RIGHT), on("strokeBottomWeight", BOTTOM), on("strokeLeftWeight", LEFT)]
+    );
+    assert_eq!(
+        sides("Spec"),
+        [on("strokeTopWeight", TOP), on("strokeRightWeight", RIGHT), on("strokeBottomWeight", BOTTOM), on("strokeLeftWeight", LEFT)],
+        "the spec's names"
+    );
+    assert_eq!(sides("Colour"), [], "a colour variable can't be a weight");
+    assert!(!has(&warnings, "`individualStrokeWeights`"), "{warnings:?}");
+    assert!(has(&warnings, "type doesn't fit"), "{warnings:?}");
+    assert!(doc.validate().is_empty(), "{:?}", doc.validate());
+}
+
+/// #2441: node-level `fills`, `effects` and `textRangeFills` lists repeat what each gradient stop,
+/// effect and paint binds itself. When those are read, nothing is lost and nothing is reported; a
+/// list naming a variable they don't bind still is.
+#[test]
+fn node_level_lists_the_paints_and_effects_bind_are_not_reported() {
+    const ACCENT: &str = "VariableID:1:4";
+    let gradient = |stop_var: Option<&str>| {
+        let first = match stop_var {
+            Some(v) => json!({"position": 0, "color": rgba(1.0, 0.0, 0.0), "boundVariables": {"color": alias(v)}}),
+            None => json!({"position": 0, "color": rgba(1.0, 0.0, 0.0)}),
+        };
+        json!([{"type": "GRADIENT_LINEAR", "gradientHandlePositions": [{"x": 0, "y": 0.5}, {"x": 1, "y": 0.5}, {"x": 0, "y": 1}],
+                "gradientStops": [first, {"position": 1, "color": rgba(0.0, 0.0, 1.0)}]}])
+    };
+    let shadow = json!([{"type": "DROP_SHADOW", "color": rgba(0.0, 0.0, 0.0), "offset": {"x": 0, "y": 2}, "radius": 4, "visible": true,
+                         "blendMode": "NORMAL", "boundVariables": {"color": alias(BRAND)}}]);
+    let page = |children: Value| {
+        json!({"name": "Lists", "document": {"id": "0:0", "type": "DOCUMENT", "children": [
+            {"id": "0:1", "name": "Page", "type": "CANVAS", "children": children}]}})
+    };
+    let rect = |id: &str, name: &str, extra: Value| {
+        let mut r = json!({"id": id, "name": name, "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 40, "y": 20}});
+        if let (Some(r), Some(e)) = (r.as_object_mut(), extra.as_object()) {
+            r.extend(e.clone());
+        }
+        r
+    };
+    let kept = page(json!([
+        rect("1:1", "Gradient", json!({"fills": gradient(Some(BRAND)), "boundVariables": {"fills": [alias(BRAND)]}})),
+        rect("1:2", "Shadow", json!({"effects": shadow, "boundVariables": {"effects": [alias(BRAND)]}})),
+        {"id": "1:3", "name": "Label", "type": "TEXT", "relativeTransform": at(0.0, 0.0), "size": {"x": 40, "y": 20}, "characters": "Hi",
+         "style": {"fontFamily": "Inter", "fontSize": 8},
+         "fills": [{"type": "SOLID", "color": rgba(1.0, 0.0, 0.0), "boundVariables": {"color": alias(BRAND)}}],
+         "boundVariables": {"textRangeFills": [alias(BRAND)]}}
+    ]));
+    let (doc, warnings) = import_with(&kept, Some(&variables_json()), &no_images).unwrap();
+    for k in ["`fills`", "`effects`", "`textRangeFills`"] {
+        assert!(!has(&warnings, k), "{k}: {warnings:?}");
+    }
+    assert_eq!(named(&doc, "Gradient").bound.get("fills/0/stops/0/color").map(String::as_str), Some(BRAND));
+    assert_eq!(named(&doc, "Shadow").bound.get("effects/0/color").map(String::as_str), Some(BRAND));
+    assert_eq!(named(&doc, "Label").bound.get("fill").map(String::as_str), Some(BRAND));
+
+    // A list naming a variable no stop binds is still reported.
+    let lost = page(json!([rect("1:1", "Gradient", json!({"fills": gradient(None), "boundVariables": {"fills": [alias(ACCENT)]}}))]));
+    let (_, warnings) = import_with(&lost, Some(&variables_json()), &no_images).unwrap();
+    assert!(has(&warnings, "`fills`"), "{warnings:?}");
+}
+
 #[test]
 fn embedded_variables_match_separate_ones() {
     let mut embedded = file_json();
@@ -209,8 +314,14 @@ fn embedded_variables_match_separate_ones() {
 #[test]
 fn interactions_triggers_actions_and_transitions() {
     let (doc, warnings) = import_with(&file_json(), Some(&variables_json()), &no_images).unwrap();
-    let id = |n: &str| named(&doc, n).id;
-    let button = named(&doc, "Button");
+    assert_interactions(&doc, &warnings);
+    assert_legacy_transition(&doc);
+    assert_interactions_without_variables();
+}
+
+fn assert_interactions(doc: &Document, warnings: &[String]) {
+    let id = |n: &str| named(doc, n).id;
+    let button = named(doc, "Button");
     let its = &button.interactions;
     assert_eq!(its.len(), 8, "{its:#?}");
 
@@ -229,7 +340,13 @@ fn interactions_triggers_actions_and_transitions() {
     assert_eq!(its[2].trigger, Trigger::KeyPress { key: "Shift+A".into() }, "modifier keys make a combination");
     assert_eq!(its[2].actions, [Action::Back]);
     assert_eq!(its[3].trigger, Trigger::MouseEnter);
-    assert_eq!(its[3].actions, [Action::OpenUrl { url: "https://example.com".into() }]);
+    let in_place = Action::OpenUrl { url: "https://example.org".into(), new_tab: false };
+    assert_eq!(its[3].actions, [Action::OpenUrl { url: "https://example.com".into(), new_tab: true }, in_place.clone()]);
+    // Saved only when off, so files from before the option open with links in a new tab.
+    assert_eq!(serde_json::to_value(&its[3].actions[0]).unwrap(), json!({"type": "openUrl", "url": "https://example.com"}));
+    let saved = serde_json::to_value(&in_place).unwrap();
+    assert_eq!(saved["new_tab"], json!(false));
+    assert_eq!(serde_json::from_value::<Action>(saved).unwrap(), in_place);
     assert_eq!(its[4].trigger, Trigger::OnHover);
     assert_eq!(its[4].actions, [Action::SetVariable { variable: FLAG.into(), value: json!(false), expr: None }]);
     assert_eq!((its[4].transition, its[4].duration_ms), (Transition::Instant, 300));
@@ -239,18 +356,22 @@ fn interactions_triggers_actions_and_transitions() {
     assert_eq!(its[7].trigger, Trigger::MouseUp);
     assert_eq!(its[7].actions, [Action::ScrollTo { dest: id("Home"), offset: [0.0, 0.0] }], "unresolved destinations are dropped");
 
-    // The legacy single transition.
-    let details = named(&doc, "Details");
+    assert!(!has(warnings, "modifier keys"), "{warnings:?}");
+    for w in ["video triggers", "without a destination"] {
+        assert!(has(warnings, w), "{w}: {warnings:?}");
+    }
+}
+
+fn assert_legacy_transition(doc: &Document) {
+    let id = |n: &str| named(doc, n).id;
+    let details = named(doc, "Details");
     assert_eq!(details.interactions.len(), 1);
     let legacy = &details.interactions[0];
     assert_eq!((&legacy.trigger, &legacy.actions[..]), (&Trigger::OnClick, &[Action::Navigate { dest: id("Home"), preserve_scroll: false }][..]));
     assert_eq!((legacy.transition, legacy.duration_ms, legacy.easing), (Transition::Dissolve, 200, Easing::EaseIn));
+}
 
-    assert!(!has(&warnings, "modifier keys"), "{warnings:?}");
-    for w in ["video triggers", "without a destination"] {
-        assert!(has(&warnings, w), "{w}: {warnings:?}");
-    }
-    // Without variables, set-variable actions have nothing to set.
+fn assert_interactions_without_variables() {
     let (doc, warnings) = import(&file_json(), &no_images).unwrap();
     assert_eq!(named(&doc, "Button").interactions.len(), 6);
     assert!(has(&warnings, "set-variable actions") && has(&warnings, "set-variable-mode actions"), "{warnings:?}");

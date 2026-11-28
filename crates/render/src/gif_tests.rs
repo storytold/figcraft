@@ -79,6 +79,20 @@ fn decoding_is_capped() {
 }
 
 #[test]
+fn a_large_partial_frame_plays_when_two_whole_frames_fit() {
+    // Canvas 4000 x 3000 (48 MB a frame, two fit the cap) with a 3500 x 2800 second frame: the
+    // decoder's canvas, composited output and partial frame together need more than the cap.
+    let mut out = Vec::new();
+    {
+        let mut enc = GifEncoder::new(&mut out);
+        enc.set_repeat(Repeat::Infinite).unwrap();
+        let frame = |w, h, c| Frame::from_parts(RgbaImage::from_pixel(w, h, image::Rgba(c)), 0, 0, Delay::from_numer_denom_ms(100, 1));
+        enc.encode_frames([frame(4000, 3000, RED), frame(3500, 2800, GREEN)]).unwrap();
+    }
+    assert_eq!(images::decode_frames(&out).map(|f| f.len()), Some(2));
+}
+
+#[test]
 fn the_first_frame_draws_unless_time_moves_on() {
     let mut d = Document::new("t");
     let page = d.add_page("Page 1");
@@ -97,4 +111,50 @@ fn the_first_frame_draws_unless_time_moves_on() {
     assert!(frame != images::animation_clock(&d, page, 0.05).unwrap().0 && (next - 0.05).abs() < 1e-9);
     d.get_mut(id).unwrap().visible = false;
     assert!(images::animation_clock(&d, page, 0.15).is_none(), "hidden layers don't keep the presenter awake");
+}
+
+#[test]
+fn a_frame_descriptor_bigger_than_the_canvas_is_refused_before_it_is_allocated() {
+    // A 4 × 4 canvas whose first frame descriptor claims 16,383 × 16,383 (a gigabyte of RGBA):
+    // the decoder's limits refuse the frame buffer instead of allocating it.
+    let mut bytes = gif(&[(RED, 100), (GREEN, 100)], 4, 4);
+    let at = bytes.windows(9).position(|w| w == [0x2c, 0, 0, 0, 0, 4, 0, 4, 0]).expect("an image descriptor for a 4 × 4 frame");
+    let (w, h) = ((16_383u16).to_le_bytes(), (16_383u16).to_le_bytes());
+    bytes[at + 5..at + 9].copy_from_slice(&[w[0], w[1], h[0], h[1]]);
+    let start = std::time::Instant::now();
+    assert!(images::decode_frames(&bytes).is_none());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+}
+
+#[test]
+fn animated_gif_preserves_alpha_and_converts_to_display_p3() {
+    let bytes = gif(&[([0, 0, 0, 0], 100), (RED, 100)], 4, 4);
+    let frames = images::decode_frames(&bytes).unwrap();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0].0.pixel(2, 2).unwrap().alpha(), 0);
+    assert_eq!(frames[1].0.pixel(2, 2).unwrap().alpha(), 255);
+
+    let anim = images::animation("gif-alpha-p3", Some(&data(bytes)), &ImageFilters::default(), ColorProfile::DisplayP3).unwrap();
+    assert_eq!(anim.len(), 2);
+    let mut d = Document::new("t");
+    d.color_profile = ColorProfile::DisplayP3;
+    let page = d.add_page("Page 1");
+    let id = d.create(page, NodeKind::Rectangle, "GIF", 0.0, 0.0, 4.0, 4.0).unwrap();
+    let p3_bytes = gif(&[([0, 0, 0, 0], 100), (RED, 100)], 4, 4);
+    d.images.insert("gif-alpha-p3-doc".to_string(), data(p3_bytes));
+    d.get_mut(id).unwrap().fills = vec![Paint::image("gif-alpha-p3-doc", ImageScaleMode::Fill)];
+    let f0 = crate::render_node(&d, id, 1.0).unwrap();
+    assert_eq!(f0.pixel(2, 2).unwrap().alpha(), 0);
+    let f1 = crate::render_node_at(&d, id, 1.0, 0.15).unwrap();
+    let px = f1.pixel(2, 2).unwrap();
+    assert!(px.red() < 250 && px.green() > 30 && px.alpha() == 255, "converted to P3: {px:?}");
+}
+
+#[test]
+fn zero_size_gif_is_refused() {
+    let mut bytes = gif(&[(RED, 100), (GREEN, 100)], 4, 4);
+    bytes[6..10].copy_from_slice(&[0, 0, 0, 0]);
+    assert!(images::dimensions(&bytes).is_none());
+    assert!(images::decode(&bytes).is_none());
+    assert!(images::decode_frames(&bytes).is_none());
 }

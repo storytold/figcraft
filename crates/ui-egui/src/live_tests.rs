@@ -69,7 +69,7 @@ impl Harness {
         s.execute("select.set", &json!({"ids": []})).unwrap();
         let events = Arc::new(Mutex::new(Vec::new()));
         s.live.install(Box::new(Mock(events.clone(), 0)));
-        let h = Harness { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0, events };
+        let h = Harness { ctx: crate::framework::headless_context(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0, events };
         (h, rect)
     }
 
@@ -79,6 +79,7 @@ impl Harness {
         let input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
         let delay = out.viewport_output.get(&ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay);
@@ -114,6 +115,11 @@ impl Harness {
     /// Joined as Ada, with Hana (the host) already here.
     pub(crate) fn joined(&mut self) {
         self.app.session.execute("collab.join", &json!({"link": "figcraft://join?host=127.0.0.1:47900&file=f&token=t"})).unwrap();
+        self.welcome();
+    }
+
+    /// The host's welcome for the join started last: you are Ada, with Hana (the host) here.
+    pub(crate) fn welcome(&mut self) {
         let info = SessionInfo {
             role: Role::Guest,
             me: 2,
@@ -121,11 +127,12 @@ impl Harness {
             color: "#14AE5C".into(),
             file_name: "Shared".into(),
             pages: vec![],
-            link: String::new(),
+            link: "figcraft://join?host=127.0.0.1:47900&file=f&token=t".into(),
             url: String::new(),
             address: "127.0.0.1:47900".into(),
             network: false,
             access: figcraft_engine::live::Access::Edit,
+            view: None,
         };
         self.send(vec![LiveEvent::Welcome { info, peers: vec![Peer { client_id: 1, name: "Hana".into(), color: "#9747FF".into() }] }]);
     }

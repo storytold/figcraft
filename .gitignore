@@ -3,8 +3,20 @@ plan/
 plans/
 /target/
 /target-*/
+/plugins/target/
 /dist/
 /corpus/
 /log/
 .DS_Store
 *.profraw
+.cache/
+.vscode/
+# Checked out by the shared nightly workflows into the workspace (nightly-common.sh runs from a
+# clean tree, so they must not show up as untracked files).
+# Python caches from the packaging suites.
+__pycache__/
+
+/.nightly-tools
+/.nightly-input
+/craft-i18n
+/craft-fonts

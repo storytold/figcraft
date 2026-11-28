@@ -1,6 +1,6 @@
 //! Adding and removing fill, effect and layout grid rows in the Design panel, driven through egui headless:
-//! adding a paint opens its colour picker; an open colour picker and open settings stay with their items,
-//! and go when their item goes.
+//! adding a paint opens its colour picker beside the sidebar; outside presses dismiss it, while
+//! open effect and grid settings stay with their items and go when their item goes.
 
 use egui::{Event, Id, Pos2};
 use figcraft_doc::NodeId;
@@ -70,10 +70,9 @@ fn flag(u: &Ui, salt: &'static str, i: usize) -> bool {
     u.ctx.data(|d| d.get_temp::<bool>(Id::unique((salt, i)))).unwrap_or(false)
 }
 
-/// Asserts removing a fill keeps the open picker on the surviving paint (with its index
-/// shifted), and removing the paint being edited closes the picker.
+/// Removing a fill acts on the paint and dismisses the picker on the outside press.
 #[test]
-fn removing_a_fill_keeps_the_picker_on_its_paint() {
+fn removing_a_fill_dismisses_the_picker() {
     let mut s = Session::new();
     let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap());
     s.execute("fill.set", &json!({"ids": [r], "color": "#FF0000"})).unwrap();
@@ -82,7 +81,7 @@ fn removing_a_fill_keeps_the_picker_on_its_paint() {
     s.execute("select.set", &json!({"ids": [r]})).unwrap();
     let mut u = Ui::new(s);
     u.ctx.enable_accesskit();
-    // Green's swatch, then red's Remove: the picker follows green to index 0.
+    // Green's swatch, then red's Remove: the outside press dismisses the picker.
     let sw = u.ctx.read_response(Id::unique(("swatch", true, 1usize))).unwrap().rect.center();
     click(&mut u, sw);
     assert_eq!(u.app.ui.picker, Some(PickerTarget::Paint { fills: true, index: 1, ids: vec![r] }));
@@ -90,15 +89,15 @@ fn removing_a_fill_keeps_the_picker_on_its_paint() {
     click(&mut u, rm);
     let fills: Vec<String> = u.app.session.doc().unwrap().node(r).unwrap().fills.iter().filter_map(|p| p.solid_color()).map(|c| c.to_hex()).collect();
     assert_eq!(fills, ["00FF00", "0000FF"]);
-    assert_eq!(u.app.ui.picker, Some(PickerTarget::Paint { fills: true, index: 0, ids: vec![r] }));
-    // Removing the paint being edited closes the picker.
+    assert_eq!(u.app.ui.picker, None);
+    // Removing the surviving paint works with the picker dismissed.
     let rm = remove_button(&mut u, "fills", 0);
     click(&mut u, rm);
     assert_eq!(u.app.ui.picker, None);
 }
 
-/// Asserts removing effects or grids moves open settings and an open colour picker to the
-/// surviving row, or closes them when their own row is removed.
+/// Removing effects or grids moves open settings to the surviving row; the outside press
+/// dismisses the colour picker. Removing the open item closes its settings.
 #[test]
 fn removing_effects_and_grids_keeps_open_settings_with_their_rows() {
     let mut s = Session::new();
@@ -118,7 +117,7 @@ fn removing_effects_and_grids_keeps_open_settings_with_their_rows() {
     click(&mut u, rm);
     assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().effects.len(), 2);
     assert!(flag(&u, "fx_open", 1) && !flag(&u, "fx_open", 2));
-    assert_eq!(u.app.ui.picker, Some(PickerTarget::Effect { ids: vec![f], index: 1, secondary: false }));
+    assert_eq!(u.app.ui.picker, None);
     // Removing the open effect closes its settings and the picker.
     let rm = remove_button(&mut u, "effects", 1);
     click(&mut u, rm);
@@ -191,4 +190,85 @@ fn adding_a_fill_to_mixed_fills_opens_no_picker() {
     let doc = u.app.session.doc().unwrap();
     assert_eq!((doc.node(a).unwrap().fills.len(), doc.node(b).unwrap().fills.len()), (2, 3));
     assert_eq!(u.app.ui.picker, None);
+}
+
+/// The shared popover's closing reaches the colour picker: a press on the canvas closes it.
+#[test]
+fn a_press_on_the_canvas_closes_the_colour_picker() {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("fill.add", &json!({"ids": [r], "color": "#FF0000"})).unwrap();
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    let sw = u.ctx.read_response(Id::unique(("swatch", true, 0usize))).unwrap().rect.center();
+    click(&mut u, sw);
+    assert!(u.app.ui.picker.is_some(), "the swatch opens the picker");
+    click(&mut u, Pos2::new(320.0, 300.0));
+    assert_eq!(u.app.ui.picker, None, "a press on the canvas closes the picker");
+}
+
+/// Pressing the swatch that opened the picker again closes it: its press is held out of the
+/// popover's outside-press closing, so the swatch's own toggle gets the click.
+#[test]
+fn the_swatch_that_opened_the_colour_picker_closes_it_again() {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("fill.add", &json!({"ids": [r], "color": "#FF0000"})).unwrap();
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    let sw = u.ctx.read_response(Id::unique(("swatch", true, 0usize))).unwrap().rect.center();
+    click(&mut u, sw);
+    assert!(u.app.ui.picker.is_some(), "the swatch opens the picker");
+    click(&mut u, sw);
+    assert_eq!(u.app.ui.picker, None, "the same swatch closes it again");
+}
+
+/// Blank space in the sidebar is outside the picker too, including after adding a paint.
+#[test]
+fn added_paints_open_beside_the_sidebar_and_close_on_a_sidebar_press() {
+    for (label, fills) in [("Add fill", true), ("Add stroke", false)] {
+        let mut s = Session::new();
+        let r = id(s.execute("shape.rectangle", &json!({"width": 50, "height": 50})).unwrap());
+        s.execute("select.set", &json!({"ids": [r]})).unwrap();
+        let mut u = Ui::new(s);
+        u.ctx.enable_accesskit();
+        let add = button(&mut u, label);
+        click(&mut u, add);
+        for _ in 0..3 {
+            u.frame(vec![]);
+        }
+        assert!(matches!(u.app.ui.picker, Some(PickerTarget::Paint { fills: f, .. }) if f == fills));
+        let pop = u.app.ui.picker_popover.as_ref().unwrap();
+        let sidebar_left = u.app.ui.right_panel_rect.unwrap().min.x;
+        assert!((pop.rect.max.x - (sidebar_left - 8.0)).abs() < 1.0, "{:?}", pop.rect);
+        assert!(pop.rect.min.y <= add.y, "the picker aligns with its opener or lifts to fit");
+        assert!(pop.rect.max.y <= 900.0 - 8.0);
+        u.button(Pos2::new(1420.0, 850.0), true);
+        assert!(u.app.ui.picker.is_none(), "a sidebar press dismisses the picker before release");
+    }
+}
+
+#[test]
+fn page_colour_picker_closes_on_an_outside_press_and_reopens_at_its_control() {
+    let mut u = Ui::new(Session::new());
+    let button = egui::Rect::from_min_size(Pos2::new(1230.0, 220.0), egui::vec2(16.0, 16.0));
+    u.app.toggle_picker(PickerTarget::PageBackground, Some(button));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let old = u.app.ui.picker_popover.take().unwrap().at(Pos2::new(300.0, 100.0));
+    u.app.ui.picker_popover = Some(old);
+    u.frame(vec![]);
+    u.button(Pos2::new(1420.0, 850.0), true);
+    assert!(u.app.ui.picker.is_none());
+    u.button(Pos2::new(1420.0, 850.0), false);
+    u.app.toggle_picker(PickerTarget::PageBackground, Some(button));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let rect = u.app.ui.picker_popover.as_ref().unwrap().rect;
+    assert!((rect.max.x - (u.app.ui.right_panel_rect.unwrap().min.x - 8.0)).abs() < 1.0);
+    assert!((rect.min.y - u.app.ui.picker_button.unwrap().min.y).abs() < 1.0);
 }

@@ -158,6 +158,49 @@ fn small_caps_native_or_synthesised() {
 }
 
 #[test]
+fn superscript_native_or_synthesised_and_never_mixed() {
+    // "Figma tries to use any superscript/subscript glyphs provided by the font. If it isn't
+    // provided, Figma draws a synthesized version by using the font's standard version of the
+    // character, shrinking it, and positioning it accordingly." and a layer mixing both "will all
+    // update to the synthesized form for consistency" (Explore text properties).
+    let Some(face) = inter() else { return };
+    let mut t = TextData::new("x2");
+    t.style.font_size = 20.0;
+    let plain = layout(&t, None, None);
+    t.features.insert("sups".into(), true);
+    let sup = layout(&t, None, None);
+    let at = |l: &TextLayout, i: usize| l.glyphs.iter().find(|g| g.char_start == i).cloned().unwrap();
+    let native = |i: usize| at(&sup, i).gid != at(&plain, i).gid && (at(&sup, i).size - 20.0).abs() < 1e-9;
+    let synthesised = |i: usize| at(&sup, i).gid == at(&plain, i).gid && at(&sup, i).size < 20.0 && at(&sup, i).y < at(&plain, i).y;
+    assert!((native(0) && native(1)) || (synthesised(0) && synthesised(1)), "both glyphs the same way: {:?} {:?}", at(&sup, 0), at(&sup, 1));
+    if !face.has_feature(b"sups") {
+        assert!(synthesised(0) && synthesised(1), "no sups in the face: synthesised");
+    }
+    t.features.insert("sups".into(), false);
+    t.features.insert("subs".into(), true);
+    let sub = layout(&t, None, None);
+    let g = at(&sub, 1);
+    let p = at(&plain, 1);
+    assert!((g.gid != p.gid && (g.size - 20.0).abs() < 1e-9) || (g.size < 20.0 && g.y > p.y), "subscript: native, or shrunk and lowered: {g:?}");
+    // Capitalised, the same holds: the check against the face's own glyphs sees the characters
+    // shaping saw (an X, not an x), so a face with a superscript 2 and no superscript X
+    // synthesises both rather than mixing them.
+    t.features.clear();
+    t.style.case = figcraft_doc::TextCase::Upper;
+    let plain_up = layout(&t, None, None);
+    t.features.insert("sups".into(), true);
+    let up = layout(&t, None, None);
+    let native_up = |i: usize| at(&up, i).gid != at(&plain_up, i).gid && (at(&up, i).size - 20.0).abs() < 1e-9;
+    let synth_up = |i: usize| at(&up, i).gid == at(&plain_up, i).gid && at(&up, i).size < 20.0 && at(&up, i).y < at(&plain_up, i).y;
+    assert!(
+        (native_up(0) && native_up(1)) || (synth_up(0) && synth_up(1)),
+        "upper case: both glyphs the same way: {:?} {:?}",
+        at(&up, 0),
+        at(&up, 1)
+    );
+}
+
+#[test]
 fn title_case_across_runs() {
     let Some(face) = inter() else { return };
     let mut t = TextData::new("hello world");
@@ -363,12 +406,40 @@ fn bidi_visual_order_follows_levels() {
     assert_eq!(crate::layout::visual_order(&[0, 0, 0]), vec![0, 1, 2]);
     assert!(crate::layout::visual_order(&[]).is_empty());
     // Plain left-to-right text skips the analysis.
-    assert!(crate::layout::Bidi::of("Hello, world 123").is_none());
-    let b = crate::layout::Bidi::of("abc \u{5D0}\u{5D1}\u{5D2}\n\u{5D3} x").unwrap();
+    assert!(crate::layout::Bidi::of("Hello, world 123", &[]).is_none());
+    assert!(crate::layout::Bidi::of("Hello, world 123", &[None, None]).is_none());
+    let b = crate::layout::Bidi::of("abc \u{5D0}\u{5D1}\u{5D2}\n\u{5D3} x", &[]).unwrap();
     assert_eq!(b.levels.get(..4), Some(&[0, 0, 0, 0][..]));
     assert!(b.levels.get(4..7).unwrap().iter().all(|l| l % 2 == 1));
     // Paragraph direction comes from each paragraph's first strong char.
     assert!(!b.rtl_para[0] && b.rtl_para[8]);
+}
+
+/// A paragraph's forced base direction (Text ▸ Text direction, #1830): the base level is given,
+/// the letters' own levels still follow the rules, and the other paragraphs keep theirs.
+#[test]
+fn forced_direction_sets_a_paragraphs_base_level() {
+    use crate::layout::Bidi;
+    // Latin letters forced right to left: an embedded left-to-right run (level 2) in a
+    // right-to-left paragraph; the next paragraph, unforced, stays left to right.
+    let b = Bidi::of("ab\ncd", &[Some(true), None]).unwrap();
+    assert_eq!(b.rtl_para, [true, true, true, false, false, false], "and the position after the last char");
+    assert_eq!((b.levels.get(..2), b.levels.get(3..)), (Some(&[2, 2][..]), Some(&[0, 0][..])));
+    // Hebrew forced left to right: a right-to-left run (level 1) in a left-to-right paragraph.
+    let b = Bidi::of("\u{5D0}\u{5D1}", &[Some(false)]).unwrap();
+    assert_eq!(b.rtl_para, [false, false, false]);
+    assert_eq!(b.levels, [1, 1]);
+    // Forcing what the letters already say changes nothing; a paragraph past the forced list is
+    // detected.
+    let b = Bidi::of("\u{5D0}\n\u{5D1}", &[Some(true)]).unwrap();
+    assert_eq!(b.rtl_para, [true, true, true, true]);
+    assert_eq!((b.levels.first(), b.levels.last()), (Some(&1), Some(&1)));
+    // The empty paragraph after a final newline has its own direction: forced, else left to right.
+    let b = Bidi::of("ab\n", &[None, Some(true)]).unwrap();
+    assert_eq!(b.rtl_para, [false, false, false, true]);
+    let b = Bidi::of("\u{5D0}\n", &[]).unwrap();
+    assert_eq!(b.rtl_para, [true, true, false]);
+    assert_eq!(Bidi::of("", &[Some(true)]).map(|b| b.rtl_para), Some(vec![true]));
 }
 
 /// The x of the glyph for char `i`.
@@ -545,6 +616,61 @@ fn lower_case_writes_final_sigma() {
     other.font_size += 4.0;
     t.runs.push(figcraft_doc::StyleRun { start: 3, end: 4, style: other });
     assert_eq!(gids(&t).iter().map(|g| g.0).collect::<Vec<_>>(), want.iter().map(|g| g.0).collect::<Vec<_>>(), "split runs");
+}
+
+/// Chinese is written without spaces: justified, the room goes between its characters (each a word
+/// of its own, as for line breaking), so the last one reaches the right edge too, and none opens
+/// where a line couldn't break (before a closing mark, after an opening one). "Justify aligns the
+/// first word in each line of text to the left-most edge, and the last to the right-most edge."
+#[test]
+fn justified_ideographs_spread_the_room_between_characters() {
+    if !have_fonts() {
+        return;
+    }
+    let lay_out = |s: &str, align, w| {
+        let mut t = TextData::new(s);
+        t.style.font_size = 20.0;
+        t.align_h = align;
+        t.auto_resize = figcraft_doc::TextAutoResize::Height;
+        layout(&t, w, None)
+    };
+    // Box width cut inside char `fit`, so the first line is chars 0..fit; how many gaps lie before
+    // each of its chars.
+    let rows: [(&str, usize, &[i32], &str); 6] = [
+        ("一二三四五六七八九十", 6, &[0, 1, 2, 3, 4, 5], "one gap between each pair of ideographs"),
+        ("一二三。四五六七八九", 6, &[0, 1, 2, 2, 3, 4], "none before the full stop, which never starts a line"),
+        ("一二三「四五六七八九", 6, &[0, 1, 2, 3, 3, 4], "none after the opening bracket, which never ends a line"),
+        ("一二三\u{20DD}四五六七八九", 6, &[0, 1, 2, 2, 3, 4], "none inside a grapheme cluster: a combining mark stays on its base"),
+        ("漢אב字一二三", 4, &[0, 1, 1, 2], "beside a right-to-left word (laid out ב then א), not inside it"),
+        (
+            "漢\u{202B}אב字一גד\u{202C}文一二三",
+            10,
+            &[0, 1, 4, 4, 2, 3, 1, 1, 1, 5],
+            "beside a Chinese word embedded in a Hebrew phrase embedded in Chinese (laid out 漢 ד ג 字 一 ב א 文, the embedding marks of no width), and beside the phrase",
+        ),
+    ];
+    for (s, fit, gaps_before, why) in rows {
+        let natural = lay_out(s, TextAlignH::Left, None);
+        let (fits, next) = (natural.caret(fit).0, natural.caret(fit + 1).0);
+        assert!(next > fits, "{why}: chars need advances");
+        let w = fits + (next - fits) / 4.0;
+        let left = lay_out(s, TextAlignH::Left, Some(w));
+        let just = lay_out(s, TextAlignH::Justified, Some(w));
+        assert!(just.lines.len() >= 2 && just.lines[0].char_end == fit, "{why}: {:?}", just.lines);
+        let extra = (w - left.lines[0].width) / f64::from(gaps_before[fit - 1]);
+        assert_eq!(left.lines[0].char_end, fit, "{why}: {:?}", left.lines);
+        assert!(extra > 0.0, "{why}");
+        assert_eq!(left.glyphs.len(), just.glyphs.len());
+        for (l, j) in left.glyphs.iter().zip(&just.glyphs).filter(|(g, _)| g.char_end <= fit) {
+            let want = f64::from(gaps_before[l.char_start]) * extra;
+            assert!((j.x - l.x - want).abs() < 1e-6, "{why}: char {} moved {} (want {want})", l.char_start, j.x - l.x);
+        }
+        let last = just.glyphs.iter().rfind(|g| g.char_end <= fit).unwrap();
+        assert!((last.x + last.advance - w).abs() < 1e-6, "{why}: the last char ends at the right edge, not {}", last.x + last.advance);
+        // The last line is left-aligned, as always.
+        let (l2, j2) = (left.glyphs.iter().find(|g| g.char_start == fit).unwrap(), just.glyphs.iter().find(|g| g.char_start == fit).unwrap());
+        assert!((j2.x - l2.x).abs() < 1e-6, "{why}: the last line is not justified");
+    }
 }
 
 /// Thai is written without spaces between words; U+200B ZERO WIDTH SPACE marks where a line may

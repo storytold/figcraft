@@ -46,7 +46,7 @@ fn opening_a_file_lists_its_missing_fonts_and_not_the_installed_ones() {
     u.app.run_user("file.open", json!({"path": path}));
     std::fs::remove_file(&path).unwrap();
     u.frame(vec![]);
-    assert_eq!(listed(&u), json!({"families": [{"family": "FigCraft Missing UI", "layers": 2}], "indexing": false}));
+    assert_eq!(listed(&u), json!({"families": [{"family": "FigCraft Missing UI", "layers": 2, "source": null}], "indexing": false, "consent": null}));
     u.frame(vec![]);
     let shown = u.frame_output(vec![]).shapes;
     assert!(crate::import_report_tests::shown_texts(shown).iter().any(|t| t == "2 text layers"));
@@ -102,7 +102,7 @@ fn text_menu_shows_the_window_for_the_file_in_front_even_with_nothing_missing() 
     assert!(fonts_indexed());
     let mut u = Ui::new(Session::new());
     assert!(u.app.run("text.missingFonts", json!({})).is_some());
-    assert_eq!(listed(&u), json!({"families": [], "indexing": false}));
+    assert_eq!(listed(&u), json!({"families": [], "indexing": false, "consent": null}));
     u.frame(vec![]);
     let shown = u.frame_output(vec![]).shapes;
     assert!(crate::import_report_tests::shown_texts(shown).iter().any(|t| t == "All the fonts this file uses are installed"));
@@ -121,9 +121,12 @@ fn asked_for_before_the_fonts_are_indexed_it_lists_them_once_they_are() {
     std::fs::remove_file(&path).unwrap();
     // As Text ▸ Missing fonts leaves it while the startup scan is still running.
     let uid = u.app.session.ds().unwrap().uid;
-    u.app.ui.missing_fonts = Some(crate::missing_fonts::Shown { uid, families: Vec::new(), indexing: true });
+    u.app.ui.missing_fonts = Some(crate::missing_fonts::Shown::new(uid, Vec::new(), true));
     u.frame(vec![]);
-    assert_eq!(listed(&u), json!({"families": [{"family": "FigCraft Missing Indexing", "layers": 2}], "indexing": false}));
+    assert_eq!(
+        listed(&u),
+        json!({"families": [{"family": "FigCraft Missing Indexing", "layers": 2, "source": null}], "indexing": false, "consent": null})
+    );
 }
 
 #[test]
@@ -146,4 +149,49 @@ fn placing_images_or_clearing_recents_does_not_bring_it_back() {
     u.frame(vec![]);
     assert!(u.app.ui.font_checks.is_empty());
     assert_eq!(listed(&u), Value::Null);
+}
+
+/// The middle of the button labelled `label` in the window, from the AccessKit tree.
+fn click_button(u: &mut Ui, label: &str) {
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let update = u.frame_output(vec![]).platform_output.accesskit_update.expect("an AccessKit update");
+    let node = update.nodes.iter().map(|(_, n)| n).find(|n| n.label() == Some(label)).unwrap_or_else(|| panic!("no {label:?} button"));
+    let b = node.bounds().unwrap();
+    let at = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+    u.button(at, true);
+    u.button(at, false);
+    u.frame(vec![]);
+}
+
+#[test]
+fn a_family_the_font_store_has_offers_download_and_asks_before_any_download() {
+    // A store folder of the tests' own, where downloading was never turned on.
+    figcraft_engine::fonts::download::use_store_dir(std::env::temp_dir().join(format!("figcraft-ui-font-store-{}", std::process::id())));
+    assert!(fonts_indexed());
+    let Some(store) = ["Lato", "Merriweather"].into_iter().find(|f| !figcraft_text::has_family(f)) else {
+        eprintln!("skipped: these fonts are installed");
+        return;
+    };
+    let path = saved("download", &["FigCraft Missing Download", store]);
+    let mut u = Ui::new(Session::new());
+    u.app.run_user("file.open", json!({"path": path}));
+    std::fs::remove_file(&path).unwrap();
+    u.frame(vec![]);
+    assert_eq!(
+        listed(&u)["families"],
+        json!([{"family": "FigCraft Missing Download", "layers": 2, "source": null}, {"family": store, "layers": 1, "source": "Google Fonts"}])
+    );
+    let shown = crate::import_report_tests::shown_texts(u.frame_output(vec![]).shapes);
+    assert_eq!(shown.iter().filter(|t| *t == "Download").count(), 1, "only the family the store has: {shown:?}");
+
+    click_button(&mut u, "Download");
+    assert_eq!(listed(&u)["consent"], store, "downloading is off: the user is asked first");
+    let shown = crate::import_report_tests::shown_texts(u.frame_output(vec![]).shapes);
+    assert!(shown.iter().any(|t| t == "Allow downloading fonts?"), "{shown:?}");
+    assert!(figcraft_engine::fonts::downloads().is_empty(), "nothing downloads before the user allows it");
+
+    click_button(&mut u, "Not now");
+    assert_eq!(listed(&u)["consent"], Value::Null);
+    assert!(!figcraft_engine::fonts::downloads_allowed() && figcraft_engine::fonts::downloads().is_empty());
 }

@@ -18,7 +18,7 @@ pub struct PromptDef {
     pub defaults: &'static [(&'static str, &'static str)],
 }
 
-const VERIFY: &str = "\n\nVerify as you go: after each major step call inspect_document (or get_node on the frame) and check sizes, fills, layout and text; call screenshot at the end and look at it. Fix anything that is off before finishing, then report the ids of the frames you made.";
+const VERIFY: &str = "\n\nVerify as you go: after each major step call inspect_document (or get_node on the frame) and check sizes, fills, layout and text. Before finishing, run design.audit on the target you were asked to change — the requested selection or page, or the frames you created — not the rest of the document, and fix every high finding you are permitted to repair, running it again until none are left (run_command design.rules lists the checks). Call screenshot at the end and look at it. Fix anything that is off, then report the ids of the frames you made or changed.";
 
 pub const PROMPTS: &[PromptDef] = &[
     PromptDef {
@@ -30,7 +30,7 @@ pub const PROMPTS: &[PromptDef] = &[
             PromptArg { name: "device", description: "Frame preset (default \"iPhone 16\"; see run_command frame.presets)", required: false },
             PromptArg { name: "brand_color", description: "Primary colour (default #3B5BDB)", required: false },
         ],
-        template: "Design a {screen} screen for a mobile app in FigCraft.\n\n1. run_command frame.create {\"preset\": \"{device}\", \"x\": 0, \"y\": 0, \"name\": \"{screen}\"} and give it a white fill.\n2. set_properties on the frame: {\"layout\": \"vertical\", \"padding\": [64, 24, 32, 24], \"gap\": 16, \"sizingV\": \"fixed\"}.\n3. Add content with create_node using parent = the frame id: a title (text, fontSize 28, fontStyle Bold), supporting text (fontSize 16, colour #555555), inputs or list rows (frames with layout horizontal, padding 16, cornerRadius 12, stroke #E0E0E0, sizingH fill) and a primary button (frame, layout horizontal, mainAlign center, padding [14,24,14,24], cornerRadius 12, fill {brand_color}, sizingH fill, white Bold text inside).\n4. Keep spacing on an 8-point grid and text left-aligned.{verify}",
+        template: "Design a {screen} screen for a mobile app in FigCraft.\n\n1. run_command frame.create {\"preset\": \"{device}\", \"x\": 0, \"y\": 0, \"name\": \"{screen}\"} and give it a white fill.\n2. set_properties on the frame: {\"layout\": \"vertical\", \"padding\": [64, 24, 32, 24], \"gap\": 16, \"sizingV\": \"fixed\"}.\n3. Add content with create_node using parent = the frame id: a title (text, fontSize 28, fontStyle Semi Bold), supporting text (fontSize 16, colour #555555), inputs or list rows (frames with layout horizontal, padding 16, cornerRadius 12, stroke #E0E0E0, sizingH fill) and a primary button (frame, layout horizontal, mainAlign center, padding [16,24,16,24], cornerRadius 12, fill {brand_color}, sizingH fill, white Semi Bold text inside). Name every layer by what it is.\n4. Keep spacing on an 8-point grid, text left-aligned, and no emoji in the interface.{verify}",
         defaults: &[("device", "iPhone 16"), ("brand_color", "#3B5BDB")],
     },
     PromptDef {
@@ -41,7 +41,7 @@ pub const PROMPTS: &[PromptDef] = &[
             PromptArg { name: "name", description: "Design system name (default \"Core\")", required: false },
             PromptArg { name: "primary", description: "Primary colour (default #3B5BDB)", required: false },
         ],
-        template: "Set up the \"{name}\" design system in FigCraft.\n\n1. Variables: run_command variable.createCollection {\"name\": \"{name} colours\", \"modes\": [\"Light\", \"Dark\"]}, then variable.create for color/bg, color/fg and color/primary with values per mode ({\"values\": {\"Light\": …, \"Dark\": …}}); primary is {primary} in Light.\n2. Paint styles: create a swatch rectangle per colour and run style.create {\"type\": \"paint\", \"name\": \"{name}/Primary\", \"from\": <id>}; text styles likewise from text layers (Heading 32 Bold, Body 16 Regular, Caption 12).\n3. Button component: a frame with auto layout (horizontal, padding [12,20,12,20], cornerRadius 8, mainAlign center) containing a text \"Button\"; style.apply the primary paint style; component.create on it. Make a secondary variant (duplicate, outline style), then component.combineVariants on both.\n4. Bind the button fill to color/primary with variable.bind {\"ids\": [..], \"field\": \"fill\", \"variable\": <id>} and check both modes by variable.setMode on a frame.\n5. list_commands with filter \"style\" or \"variable\" shows the exact params.{verify}",
+        template: "Set up the \"{name}\" design system in FigCraft.\n\n1. Variables: run_command variable.createCollection {\"name\": \"{name} colours\", \"modes\": [\"Light\", \"Dark\"]}, then variable.create for color/bg, color/fg and color/primary with values per mode ({\"values\": {\"Light\": …, \"Dark\": …}}); primary is {primary} in Light.\n2. Paint styles: create a swatch rectangle per colour and run style.create {\"type\": \"paint\", \"name\": \"{name}/Primary\", \"from\": <id>}; text styles likewise from text layers (Heading 32 Semi Bold, Body 16 Regular, Caption 12).\n3. Button component: a frame with auto layout (horizontal, padding [12,20,12,20], cornerRadius 8, mainAlign center) containing a text \"Button\"; style.apply the primary paint style; component.create on it. Make a secondary variant (duplicate, outline style), then component.combineVariants on both.\n4. Bind the button fill to color/primary with variable.bind {\"ids\": [..], \"field\": \"fill\", \"variable\": <id>} and check both modes by variable.setMode on a frame.\n5. list_commands with filter \"style\" or \"variable\" shows the exact params.{verify}",
         defaults: &[("name", "Core"), ("primary", "#3B5BDB")],
     },
     PromptDef {
@@ -51,10 +51,18 @@ pub const PROMPTS: &[PromptDef] = &[
         args: &[
             PromptArg { name: "product", description: "What the page sells", required: true },
             PromptArg { name: "width", description: "Page width (default 1440)", required: false },
-            PromptArg { name: "accent", description: "Accent colour (default #7048E8)", required: false },
+            PromptArg { name: "accent", description: "Accent colour (default #2563EB)", required: false },
         ],
-        template: "Design a landing page for {product} in FigCraft.\n\n1. create_node a frame {\"type\": \"frame\", \"x\": 0, \"y\": 0, \"width\": {width}, \"height\": 2400, \"name\": \"Landing\", \"props\": {\"fill\": \"#FFFFFF\", \"layout\": \"vertical\", \"gap\": 0}}.\n2. Sections are child frames with sizingH fill and their own auto layout: Nav (horizontal, spaceBetween, padding [20,80,20,80]); Hero (vertical, center, padding 120, gap 24: a 64px Bold headline, an 20px subhead, a CTA button filled {accent}); Features (horizontal, gap 32, padding 80: three cards with cornerRadius 16, padding 32, a soft dropShadow effect, title + body text, each sizingH fill); CTA band filled {accent} with white text; Footer (padding 40, small grey text).\n3. Use batch to apply repeated styling to several ids in one undo step.\n4. Finish with sizingV hug on the page frame so it fits its content.{verify}",
-        defaults: &[("width", "1440"), ("accent", "#7048E8")],
+        template: "Design a landing page for {product} in FigCraft.\n\n1. create_node a frame {\"type\": \"frame\", \"x\": 0, \"y\": 0, \"width\": {width}, \"height\": 2400, \"name\": \"Landing\", \"props\": {\"fill\": \"#FFFFFF\", \"layout\": \"vertical\", \"gap\": 0}}.\n2. Sections are child frames with sizingH fill and their own auto layout: Nav (horizontal, spaceBetween, padding [20,80,20,80]); Hero (vertical, center, padding 120, gap 24: a 64px Semi Bold headline, a 20px subhead, a CTA button filled {accent}); Features (horizontal, gap 32, padding 80: three cards with cornerRadius 16, padding 32, a soft neutral dropShadow, title + body text, each sizingH fill); CTA band filled {accent} with white text; Footer (padding 40, small grey text, no lower than #6B7280).\n3. Name every layer by what it is. Use one accent, one neutral ramp and at most three text colours; no emoji, gradient text or glows.\n4. Use batch to apply repeated styling to several ids in one undo step.\n5. Finish with sizingV hug on the page frame so it fits its content.{verify}",
+        defaults: &[("width", "1440"), ("accent", "#2563EB")],
+    },
+    PromptDef {
+        name: "design_review",
+        title: "Review a design",
+        description: "Audit the selection, page or document for the usual AI-generated UI tells, fix the mechanical ones, then use judgment for copy, naming, gradients and overflow; re-audit and report what a person still has to decide.",
+        args: &[PromptArg { name: "target", description: "selection, page or document (default page)", required: false }],
+        template: "Review and finish the design in this FigCraft document.\n\n1. Read the screen first with inspect_document and note the product and audience from its text. Write a five-line direction before editing: product (one plain sentence), character (two or three concrete words, never clean/modern/minimal), world (the material or place it belongs to), moments (one or two places for colour, material and detail), signature (one small recurring detail). Do not change what the product is, its features or its section order, and keep every claim true.\n2. Run run_command {\"command\": \"design.audit\", \"params\": {\"scope\": \"{target}\"}}. `design.rules` lists the checks.\n3. Repair what arithmetic can: run run_command {\"command\": \"design.fix\", \"params\": {\"scope\": \"{target}\"}} (one undo step), then audit again. A finding marked `fixable: false`, or one whose message says it is bound to a style or variable, belongs to the design system: leave it and name it in the report.\n4. Handle what the audit cannot, worst first, with the smallest edit and one batch per area: rewrite exclamation, hype and greeting copy into specific product copy; name default layers by what they are; replace hue gradients and gradient text with a solid from the direction unless the brand owns them; resize or reflow a box whose text overflows. If the whole screen is generic, change spacing, type and one moment of colour or material — not the structure. Do not invent features, data or claims.\n5. Run design.audit again until no high findings are left that steps 3 and 4 can repair. Stop when no permitted repair remains. Report the score and counts before and after, the direction, what you fixed mechanically, what you fixed by judgment, and every finding you left with its reason.{verify}",
+        defaults: &[("target", "page")],
     },
     PromptDef {
         name: "prototype_flow",
@@ -75,6 +83,40 @@ pub const PROMPTS: &[PromptDef] = &[
         template: "Build a clickable prototype in FigCraft with these screens, in order: {screens}.\n\n1. If the frames don't exist, create one phone frame per screen (run_command frame.create {\"preset\": \"iPhone 16\", …}) side by side 100 units apart, each with a title and a \"Next\" button (a frame with text inside).\n2. For each screen except the last, add an interaction on its button: run_command proto.interaction.add {\"id\": <button>, \"trigger\": {\"type\": \"onClick\"}, \"action\": {\"type\": \"navigate\", \"dest\": <next frame>}, \"transition\": {\"type\": \"{transition}\"}, \"durationMs\": 300}. Add a back button on later screens with {\"action\": {\"type\": \"back\"}}.\n3. run_command proto.flow.add {\"start\": <first frame>, \"name\": \"Main flow\"}.\n4. Check get_node on each button shows `interactions`, and inspect_document shows the page's `flows`.{verify}",
         defaults: &[("screens", "Home, Details, Checkout"), ("transition", "smartAnimate")],
     },
+    PromptDef {
+        name: "fix_comments",
+        title: "Fix comments",
+        description: "Read the open comment threads and fix each one, replying and resolving it after verifying.",
+        args: &[
+            PromptArg { name: "page", description: "Page to read: \"all\" or a page id (default \"all\")", required: false },
+            PromptArg { name: "auto_resolve", description: "yes/no: resolve threads after verifying (default yes)", required: false },
+            PromptArg { name: "author", description: "Name replies are signed with (default \"AI\")", required: false },
+        ],
+        template: r#"Fix the open comment threads in this FigCraft document.
+
+1. Read them: run_command {"command": "comment.list", "params": {"page": "{page}", "filter": "open"}}. Each thread has an id, text, pageName, frameName, anchor (a node id; null if the comment is only pinned to a page point), x/y, author, mentions (the names a message @mentions: {name, known, you}), replies and link.
+2. For each thread, in list order:
+   a. Inspect the anchor with get_node {"id": <anchor>, "depth": 2} (or get_node on frame if anchor is null), and look at the frame: screenshot {"ids": [<frame>]}.
+   b. Make the smallest change that answers the comment with set_properties, create_node or run_command. Put the edits for one thread in one batch so the user can undo them in one step. Do not edit layers the comment does not mention.
+   c. Reply before resolving: run_command {"command": "comment.reply", "params": {"id": <id>, "text": "what you changed", "author": "{author}"}}. A reply reopens the thread, so resolving before replying leaves it open again.
+   d. Verify the result with get_node/inspect_document and a screenshot. Only if the comment is actually fixed, resolve it: run_command {"command": "comment.resolve", "params": {"id": <id>}}. Auto-resolve is "{auto_resolve}": if that is "no", leave every thread open for the user and only reply.
+   e. If the comment is ambiguous or the fix is not possible, reply with the question or the reason and leave the thread open. Never resolve it.
+3. Finish with a screenshot of the changed area and a short report: fixed thread ids, still-open ids and why. Do not touch layers that have no comment."#,
+        defaults: &[("page", "all"), ("auto_resolve", "yes"), ("author", "AI")],
+    },
+    PromptDef {
+        name: "watch_comments",
+        title: "Watch comments",
+        description: "Watch the open comments and fix new feedback as it arrives.",
+        args: &[PromptArg { name: "minutes", description: "How long to watch (default 5)", required: false }],
+        template: r#"Watch for new feedback in this FigCraft document for {minutes} minutes.
+
+1. Start the watcher: wait_for_changes {"after": 0, "timeoutMs": 0, "topics": ["comments"]}. Keep its `cursor` and note `reset`; if the returned cursor is 0, remember that the initial cursor was zero.
+2. Handle what is already open: run_command {"command": "comment.list", "params": {"page": "all", "filter": "open"}}. For each thread: inspect the anchor and frame, make the smallest change (one batch per thread), comment.reply with what changed (it is signed with your own agent name), verify, then comment.resolve. Leave ambiguous threads open with a question.
+3. Then loop until the budget ends: wait_for_changes {"after": <cursor>, "timeoutMs": 20000, "topics": ["comments"]}. Set cursor to the result's cursor. For each comment.added or comment.replied event, read the thread with comment.list. If its latest message is your own reply, skip it (comment.reply emits comment.replied too); otherwise fix it the same way. If reset is true, dropped is greater than 0, or the cursor was 0 before this poll and the returned cursor is greater than 0, re-read every open thread and continue with the returned cursor.
+4. Stop after {minutes} minutes; summarize the threads you fixed and the ones still open (and why)."#,
+        defaults: &[("minutes", "5")],
+    },
 ];
 
 pub fn list() -> Value {
@@ -94,7 +136,7 @@ pub fn get(name: &str, args: &Value) -> Result<Value, String> {
     if !(args.is_object() || args.is_null()) {
         return Err("`arguments` must be an object of strings".into());
     }
-    let mut text = p.template.replace("{verify}", VERIFY);
+    let mut values: Vec<(&str, String)> = vec![("verify", VERIFY.to_string())];
     for a in p.args {
         let v = match args.get(a.name) {
             Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
@@ -108,7 +150,75 @@ pub fn get(name: &str, args: &Value) -> Result<Value, String> {
             Some(Value::String(_)) => p.defaults.iter().find(|(k, _)| *k == a.name).map(|(_, d)| (*d).to_string()).unwrap_or_default(),
             Some(_) => return Err(format!("argument `{}` must be a string", a.name)),
         };
-        text = text.replace(&format!("{{{}}}", a.name), &v);
+        values.push((a.name, v));
     }
+    // One pass over the template, so an argument's text is never read as `{…}` syntax itself (a
+    // value holding placeholders used to be expanded again by every later replacement).
+    let mut text = String::with_capacity(p.template.len());
+    let mut rest = p.template;
+    while let Some(open) = rest.find('{') {
+        text.push_str(rest.get(..open).unwrap_or_default());
+        let after = rest.get(open..).unwrap_or_default();
+        let found = after.find('}').and_then(|close| {
+            let key = after.get(1..close)?;
+            values.iter().find(|(k, _)| *k == key).map(|(_, v)| (close, v.as_str()))
+        });
+        match found {
+            Some((close, v)) => {
+                text.push_str(v);
+                rest = after.get(close + 1..).unwrap_or_default();
+            }
+            None => {
+                text.push('{');
+                rest = after.get(1..).unwrap_or_default();
+            }
+        }
+    }
+    text.push_str(rest);
     Ok(json!({"description": p.description, "messages": [{"role": "user", "content": {"type": "text", "text": text}}]}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arguments_are_text_not_template_syntax() {
+        let text = |args: Value| get("mobile_screen", &args).unwrap()["messages"][0]["content"]["text"].as_str().unwrap().to_string();
+        let plain = text(json!({"screen": "login"}));
+        assert!(plain.contains("Design a login screen") && plain.contains("iPhone 16") && plain.ends_with(VERIFY), "{plain}");
+        assert!(!plain.contains("{screen}") && !plain.contains("{verify}"), "{plain}");
+        // A value made of placeholders stays as typed, however many there are: it is never
+        // expanded again by the replacements after it (that multiplied the output without bound).
+        let bomb = "{device}{brand_color}{verify}".repeat(1000);
+        let out = text(json!({"screen": bomb.clone()}));
+        assert!(out.contains(&bomb));
+        assert!(out.len() < 3 * bomb.len(), "{}", out.len());
+    }
+
+    /// Every command the server's instructions and the prompts name exists: an agent told to run a
+    /// renamed or misspelt one gets an error instead of the workflow.
+    #[test]
+    fn the_commands_the_instructions_and_prompts_name_exist() {
+        let ids: Vec<&str> = figcraft_engine::all_commands().iter().map(|c| c.id).collect();
+        let namespaces: Vec<&str> = ids.iter().filter_map(|id| id.split('.').next()).collect();
+        let texts = std::iter::once(crate::INSTRUCTIONS).chain(PROMPTS.iter().map(|p| p.template));
+        let mut named = 0;
+        for text in texts {
+            for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.')).map(|w| w.trim_end_matches('.')) {
+                let Some((ns, rest)) = word.split_once('.') else { continue };
+                // wait_for_changes events, which the prompts name too.
+                let event = matches!(word, "comment.added" | "comment.replied");
+                if event || rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_lowercase()) || !namespaces.contains(&ns) {
+                    continue;
+                }
+                named += 1;
+                assert!(ids.contains(&word), "`{word}` is not a command");
+            }
+        }
+        assert!(named > 10, "the check found the command ids ({named})");
+        for id in ["component.create", "instance.create", "component.addProperty", "instance.setProperties", "component.combineVariants"] {
+            assert!(crate::INSTRUCTIONS.contains(id), "the instructions name {id}");
+        }
+    }
 }

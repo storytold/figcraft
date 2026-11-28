@@ -27,7 +27,7 @@ fn board() -> Ui {
 /// The templates button: left of the Design panel's button at the board toolbar's right end.
 fn templates_button(u: &Ui) -> Pos2 {
     let p = crate::toolbar::pill_rect(u.app.canvas.rect, crate::toolbar::bar_width(&u.app));
-    pos2(p.max.x - 8.0 - 32.0 - 4.0 - 16.0, p.center().y)
+    pos2(p.max.x - 8.0 - 32.0 - 8.0 - 16.0, p.center().y)
 }
 
 fn count(u: &Ui, f: impl Fn(&BoardItem) -> bool) -> usize {

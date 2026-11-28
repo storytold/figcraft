@@ -167,6 +167,20 @@ fn a_centred_stroke_on_a_sharp_star_makes_three_regions() {
 }
 
 #[test]
+fn merging_every_region_of_one_stroked_shape_is_a_no_op() {
+    let mut s = Session::new();
+    let r = id(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 100, "height": 100, "props": {"fill": "#ff0000"}})));
+    ex(&mut s, "node.set", json!({"id": r, "props": {"strokes": ["#000000"], "strokeWeight": 10, "strokeAlign": "center"}}));
+    s.set_selection(vec![r]);
+    let count = ex(&mut s, "shapeBuilder.regions", json!({}))["regions"].as_array().unwrap().len();
+    assert!(count > 1, "fill and stroke make several regions");
+    let before = s.doc().unwrap().clone();
+    let out = ex(&mut s, "shapeBuilder.merge", json!({"regions": (0..count).collect::<Vec<_>>()}));
+    assert!(out["id"].is_null(), "{out}");
+    assert_eq!(*s.doc().unwrap(), before);
+}
+
+#[test]
 fn stroke_regions_survive_junk() {
     for j in [
         json!({"points": [[f64::MAX, 0]]}),

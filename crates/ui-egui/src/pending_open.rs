@@ -160,7 +160,7 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
     }
     app.ui.pending_open_frames = app.ui.pending_open_frames.saturating_add(1);
     let title = match app.ui.pending_opens.first().map(|p| p.command) {
-        Some("file.import") => {
+        Some("file.import" | "image.replace") => {
             let name = app
                 .ui
                 .pending_opens

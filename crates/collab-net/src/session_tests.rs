@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::NetLink;
 use crate::loopback_tests::quick;
 
-fn session(name: &str) -> Session {
+pub(crate) fn session(name: &str) -> Session {
     let mut s = Session::new();
     s.live.install(Box::new(NetLink::new(Arc::new(|| {})).with_guest_config(quick)));
     s.execute("pref.userName", &json!({"name": name})).unwrap();
@@ -20,7 +20,7 @@ fn session(name: &str) -> Session {
 }
 
 /// Pump both sessions (as their UIs would every frame) until `f` holds.
-fn pump(a: &mut Session, b: &mut Session, what: &str, f: impl Fn(&Session, &Session) -> bool) {
+pub(crate) fn pump(a: &mut Session, b: &mut Session, what: &str, f: impl Fn(&Session, &Session) -> bool) {
     let start = Instant::now();
     loop {
         a.live_poll();
@@ -35,7 +35,7 @@ fn pump(a: &mut Session, b: &mut Session, what: &str, f: impl Fn(&Session, &Sess
     }
 }
 
-fn host_and_join() -> (Session, Session, u32, u32) {
+pub(crate) fn host_and_join() -> (Session, Session, u32, u32) {
     let mut host = session("Hana");
     let mut guest = session("Ada");
     let r = host.execute("collab.host", &json!({"port": 0})).unwrap();
@@ -124,8 +124,9 @@ fn following_a_viewport_until_you_move() {
 fn the_host_stopping_ends_the_session_for_guests() {
     let (mut host, mut guest, _, _) = host_and_join();
     host.execute("collab.stop", &json!({})).unwrap();
-    pump(&mut host, &mut guest, "the end", |_, g| g.live().status == Status::Off);
-    assert!(guest.live().peers.is_empty());
+    pump(&mut host, &mut guest, "the end", |_, g| g.live().rejoinable());
+    assert!(guest.live().peers.is_empty() && !guest.live().syncing());
+    assert!(guest.live().disconnected(), "the tab says so");
     assert_eq!(guest.message.as_deref(), Some(crate::host::ENDED));
 }
 

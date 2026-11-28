@@ -27,6 +27,8 @@ pub const META: &str = "meta.json";
 pub const LINKS: &str = "links.json";
 pub const LIBRARY: &str = "library.bin";
 pub const USAGE: &str = "usage.json";
+pub const ACTIONS: &str = "actions.json";
+pub const ASSET_ACTIONS: &str = "asset-actions.json";
 
 const SNAP_MAGIC: &[u8; 4] = b"FCSN";
 const LOG_MAGIC: &[u8; 4] = b"FCLG";
@@ -78,6 +80,7 @@ fn write_atomic_as(path: &Path, bytes: &[u8], private: bool) -> io::Result<()> {
         #[cfg(not(unix))]
         let _ = private;
         let mut f = o.open(&tmp)?;
+        counted(true);
         f.write_all(bytes)?;
         f.sync_all()?;
     }
@@ -101,6 +104,7 @@ pub fn sync_dir(dir: Option<&Path>) {
 /// Read a file of at most `max` bytes (a longer one is refused without being read).
 pub fn read_capped(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     let f = File::open(path).map_err(|e| format!("can't open {}: {e}", name(path)))?;
+    counted(false);
     let len = f.metadata().map_err(|e| e.to_string())?.len();
     if len > max {
         return Err(format!("{} is {} bytes, over the {max}-byte cap", name(path), len));
@@ -108,6 +112,29 @@ pub fn read_capped(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
     f.take(max).read_to_end(&mut bytes).map_err(|e| format!("can't read {}: {e}", name(path)))?;
     Ok(bytes)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Files read and written on this thread (tests: what an action costs, #1074).
+    static IO: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Count a file read or write (a log append counts as a write).
+pub(crate) fn counted(write: bool) {
+    #[cfg(test)]
+    IO.with(|io| {
+        let (r, w) = io.get();
+        io.set(if write { (r, w + 1) } else { (r + 1, w) });
+    });
+    #[cfg(not(test))]
+    let _ = write;
+}
+
+/// The files read and written on this thread since the last call: `(reads, writes)`.
+#[cfg(test)]
+pub(crate) fn take_io() -> (u32, u32) {
+    IO.with(|io| io.replace((0, 0)))
 }
 
 fn name(path: &Path) -> String {
@@ -124,6 +151,20 @@ fn u32_at(b: &[u8], at: usize) -> Option<u32> {
 
 fn u64_at(b: &[u8], at: usize) -> Option<u64> {
     b.get(at..at + 8).and_then(|s| s.try_into().ok()).map(u64::from_le_bytes)
+}
+
+/// Snapshot state before shared branches (fallback decoder for existing snapshots on disk).
+#[derive(serde::Deserialize)]
+struct SessionStateV1 {
+    session: u64,
+    snapshot: Vec<figcraft_collab::Change>,
+    seq: u64,
+    next_client: u32,
+    issued: std::collections::BTreeMap<u32, figcraft_collab::Processed>,
+    deleted: std::collections::BTreeSet<figcraft_collab::NodeId>,
+    #[serde(default)]
+    removed: std::collections::BTreeSet<figcraft_collab::Entry>,
+    log: Vec<figcraft_collab::Accepted>,
 }
 
 /// A snapshot file's bytes.
@@ -164,7 +205,23 @@ pub fn check_snapshot(bytes: &[u8]) -> Result<u64, String> {
 /// A snapshot's generation and session state.
 pub fn decode_snapshot(bytes: &[u8]) -> Result<(u64, SessionState), String> {
     let (generation, body) = snapshot_body(bytes)?;
-    let state = message::decode::<SessionState>(body, body.len()).map_err(|e| format!("the snapshot can't be read: {e}"))?;
+    let state = match message::decode::<SessionState>(body, body.len()) {
+        Ok(state) => state,
+        Err(err) => match message::decode::<SessionStateV1>(body, body.len()) {
+            Ok(v1) => SessionState {
+                session: v1.session,
+                snapshot: v1.snapshot,
+                seq: v1.seq,
+                next_client: v1.next_client,
+                issued: v1.issued,
+                deleted: v1.deleted,
+                removed: v1.removed,
+                log: v1.log,
+                branches: Vec::new(),
+            },
+            Err(_) => return Err(format!("the snapshot can't be read: {err}")),
+        },
+    };
     Ok((generation, state))
 }
 
@@ -234,4 +291,53 @@ pub fn read_log(bytes: &[u8]) -> Result<LogRead, String> {
         at = start + body.len();
     }
     Ok(LogRead { generation, entries, damaged })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use figcraft_collab::message;
+
+    use super::*;
+
+    #[derive(serde::Serialize)]
+    struct LegacySessionStateV1 {
+        session: u64,
+        snapshot: Vec<figcraft_collab::Change>,
+        seq: u64,
+        next_client: u32,
+        issued: BTreeMap<u32, figcraft_collab::Processed>,
+        deleted: BTreeSet<figcraft_collab::NodeId>,
+        removed: BTreeSet<figcraft_collab::Entry>,
+        log: Vec<figcraft_collab::Accepted>,
+    }
+
+    #[test]
+    fn decode_snapshot_reads_pre_branch_v1_snapshots() {
+        let v1 = LegacySessionStateV1 {
+            session: 42,
+            snapshot: Vec::new(),
+            seq: 7,
+            next_client: 3,
+            issued: BTreeMap::new(),
+            deleted: BTreeSet::new(),
+            removed: BTreeSet::new(),
+            log: Vec::new(),
+        };
+        let mut out = Vec::with_capacity(SNAP_HEADER);
+        out.extend_from_slice(SNAP_MAGIC);
+        out.push(FORMAT);
+        out.extend_from_slice(&9u64.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        let mut out = message::encode_into(&v1, out).unwrap();
+        let sum = crc(&out[SNAP_HEADER..]);
+        out[SNAP_HEADER - 4..SNAP_HEADER].copy_from_slice(&sum.to_le_bytes());
+        let (generation, state) = decode_snapshot(&out).unwrap();
+        assert_eq!(generation, 9);
+        assert_eq!(state.session, 42);
+        assert_eq!(state.seq, 7);
+        assert_eq!(state.next_client, 3);
+        assert!(state.branches.is_empty());
+    }
 }

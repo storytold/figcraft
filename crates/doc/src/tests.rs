@@ -126,6 +126,34 @@ fn hit_test_respects_z_and_clip() {
 }
 
 #[test]
+fn region_paints_participate_in_colors_images_and_pattern_remapping() {
+    let mut d = Document::new("region resources");
+    let p = page(&d);
+    let group = d.create(p, NodeKind::Group, "Group", 0.0, 0.0, 40.0, 20.0).unwrap();
+    let source = d.create(group, NodeKind::Rectangle, "Source", 0.0, 0.0, 4.0, 4.0).unwrap();
+    let mut network = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(20.0, 0.0), Point::new(20.0, 20.0), Point::new(0.0, 20.0)], true);
+    network.regions[0].fills = Some(vec![
+        figcraft_color::Paint::solid(figcraft_color::Color::from_hex("FF0000").unwrap()),
+        figcraft_color::Paint::image("region-image", figcraft_color::ImageScaleMode::Fill),
+        figcraft_color::Paint::pattern(source.0),
+    ]);
+    let vector = d.create(group, NodeKind::Vector { network }, "Vector", 0.0, 0.0, 20.0, 20.0).unwrap();
+    assert!(used_images(&d).contains("region-image"));
+    let dup = d.duplicate_into(group, p, None).unwrap();
+    let copied_children = d.node(dup).unwrap().children.clone();
+    let copied_source = copied_children[0];
+    let copied_vector = d.node(copied_children[1]).unwrap();
+    let NodeKind::Vector { network } = &copied_vector.kind else { panic!() };
+    let figcraft_color::PaintKind::Pattern(pattern) = &network.regions[0].fills.as_ref().unwrap()[2].kind else { panic!() };
+    assert_eq!(pattern.source, copied_source.0);
+
+    let red = figcraft_color::Color::from_hex("FF0000").unwrap();
+    d.map_colors(|c| if c == red { figcraft_color::Color::BLACK } else { c });
+    let NodeKind::Vector { network } = &d.node(vector).unwrap().kind else { panic!() };
+    assert_eq!(network.regions[0].fills.as_ref().unwrap()[0].solid_color(), Some(figcraft_color::Color::BLACK));
+}
+
+#[test]
 fn click_target_rules() {
     let mut d = Document::new("x");
     let p = page(&d);
@@ -195,6 +223,7 @@ fn text_case() {
     assert_eq!(style_weight("Semi Bold Italic"), 600);
     assert_eq!(style_weight("Black"), 900);
     assert_eq!(style_weight("Regular"), 400);
+    assert_eq!(style_weight("Hairline"), 100);
 }
 
 #[test]
@@ -212,7 +241,7 @@ fn vector_network_paths() {
     let mut bad = VectorNetwork {
         vertices: vec![Vertex::new(0.0, 0.0)],
         segments: vec![Segment::line(0, 5)],
-        regions: vec![Region { loops: vec![vec![0, 9]], winding: WindingRule::EvenOdd }],
+        regions: vec![Region { loops: vec![vec![0, 9]], winding: WindingRule::EvenOdd, fills: None, ..Default::default() }],
     };
     bad.sanitize();
     assert!(bad.segments.is_empty());
@@ -221,65 +250,59 @@ fn vector_network_paths() {
 
 #[test]
 fn variables_resolve_modes_and_aliases() {
-    let mut v = Variables::default();
-    v.collections.push(Collection {
-        id: "c1".into(),
-        name: "Theme".into(),
-        modes: vec![Mode { id: "light".into(), name: "Light".into() }, Mode { id: "dark".into(), name: "Dark".into() }],
-        extends: None,
-    });
-    let mut vals = std::collections::BTreeMap::new();
-    vals.insert("light".to_string(), VariableValue::Color(Color::WHITE));
-    vals.insert("dark".to_string(), VariableValue::Color(Color::BLACK));
-    v.variables.push(Variable {
-        id: "bg".into(),
-        name: "bg".into(),
-        collection: "c1".into(),
-        kind: VariableType::Color,
-        values: vals,
-        description: String::new(),
-        scopes: None,
-        hidden_from_publishing: false,
-        extends: None,
-        overrides: Default::default(),
-        code_syntax: Default::default(),
-    });
-    let mut alias = std::collections::BTreeMap::new();
-    alias.insert("light".to_string(), VariableValue::Alias("bg".into()));
-    v.variables.push(Variable {
-        id: "surface".into(),
-        name: "surface".into(),
-        collection: "c1".into(),
-        kind: VariableType::Color,
-        values: alias,
-        description: String::new(),
-        scopes: None,
-        hidden_from_publishing: false,
-        extends: None,
-        overrides: Default::default(),
-        code_syntax: Default::default(),
-    });
+    let mut v = vars_with_colours(&[("bg", VariableValue::Color(Color::WHITE), VariableValue::Color(Color::BLACK))]);
+    add(&mut v, "surface", VariableValue::Alias("bg".into()));
     let mut modes = std::collections::BTreeMap::new();
     assert_eq!(v.resolve("surface", &modes), Some(VariableValue::Color(Color::WHITE)));
     modes.insert("c1".to_string(), "dark".to_string());
     assert_eq!(v.resolve("bg", &modes), Some(VariableValue::Color(Color::BLACK)));
     // Cycle.
-    let mut cyc = std::collections::BTreeMap::new();
-    cyc.insert("light".to_string(), VariableValue::Alias("loop".into()));
-    v.variables.push(Variable {
-        id: "loop".into(),
-        name: "loop".into(),
-        collection: "c1".into(),
-        kind: VariableType::Color,
-        values: cyc,
-        description: String::new(),
-        scopes: None,
-        hidden_from_publishing: false,
-        extends: None,
-        overrides: Default::default(),
-        code_syntax: Default::default(),
-    });
+    add(&mut v, "loop", VariableValue::Alias("loop".into()));
     assert_eq!(v.resolve("loop", &std::collections::BTreeMap::new()), None);
+}
+
+#[test]
+fn variables_resolve_stored_ids_never_by_name() {
+    let mut v = Variables::default();
+    v.collections.push(Collection {
+        id: "c1".into(),
+        name: "Theme".into(),
+        modes: vec![Mode { id: "m".into(), name: "Mode 1".into() }],
+        extends: None,
+    });
+    let var = |id: &str, name: &str, value: VariableValue| colour_var(id, name, &[("m", value)]);
+    let red = Color::from_hex("#FF0000").unwrap();
+    let blue = Color::from_hex("#0D99FF").unwrap();
+    // Named like the next variable's id, and like an id that no longer exists.
+    v.variables.push(var("VariableID:1", "VariableID:2", VariableValue::Color(red)));
+    v.variables.push(var("VariableID:2", "surface", VariableValue::Color(blue)));
+    v.variables.push(var("VariableID:3", "VariableID:9", VariableValue::Color(red)));
+    v.variables.push(var("VariableID:4", "alias", VariableValue::Alias("VariableID:9".into())));
+    let modes = std::collections::BTreeMap::new();
+    assert_eq!(v.resolve("VariableID:2", &modes), Some(VariableValue::Color(blue)));
+    // A deleted id stays unresolved instead of picking up the variable named like it.
+    assert_eq!(v.resolve("VariableID:9", &modes), None);
+    assert_eq!(v.resolve("VariableID:4", &modes), None);
+    // What a person types: an id wins over a name, and a name still finds its variable (#1613).
+    assert_eq!(v.get("VariableID:2").map(|x| x.name.as_str()), Some("surface"));
+    assert_eq!(v.get("surface").map(|x| x.id.as_str()), Some("VariableID:2"));
+    assert!(v.get_by_id("surface").is_none());
+}
+
+#[test]
+fn collections_and_modes_resolve_stored_ids_never_by_name() {
+    let mut v = Variables::default();
+    let coll = |id: &str, name: &str, modes: Vec<Mode>| Collection { id: id.into(), name: name.into(), modes, extends: None };
+    let mode = |id: &str, name: &str| Mode { id: id.into(), name: name.into() };
+    v.collections.push(coll("c1", "c2", vec![mode("m1", "m2")]));
+    v.collections.push(coll("c2", "Theme", vec![mode("m2", "Dark"), mode("m3", "m9")]));
+    assert_eq!(v.collection("c2").map(|c| c.name.as_str()), Some("Theme"), "an id wins over a name");
+    assert_eq!(v.collection("Theme").map(|c| c.id.as_str()), Some("c2"));
+    assert!(v.collection_by_id("Theme").is_none() && v.collection_by_id("c9").is_none());
+    let theme = v.collection_by_id("c2").unwrap();
+    assert_eq!(theme.mode_by_id("m2").map(|m| m.name.as_str()), Some("Dark"));
+    assert!(theme.mode_by_id("m9").is_none(), "a deleted mode id isn't the mode named like it");
+    assert_eq!(theme.find_mode("Dark").map(|m| m.id.as_str()), Some("m2"));
 }
 
 #[test]
@@ -324,6 +347,20 @@ fn repair_drops_cycles_and_repeated_children() {
     assert!(bad.node(f).is_none() && bad.node(g).is_none());
     assert_eq!(bad.node(p).unwrap().children, vec![r]);
     assert_eq!(bad.subtree(p), vec![p, r]);
+}
+
+#[test]
+fn repair_lists_a_page_once_however_often_the_file_lists_it() {
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let q = d.add_page("Two");
+    let mut v = serde_json::to_value(&d).unwrap();
+    v["pages"] = serde_json::json!([p, q, p, q, p]);
+    let mut bad: Document = serde_json::from_value(v).unwrap();
+    assert!(bad.validate().iter().any(|i| i.contains("listed twice")), "{:?}", bad.validate());
+    bad.repair();
+    assert!(bad.validate().is_empty(), "{:?}", bad.validate());
+    assert_eq!(bad.pages, vec![p, q]);
 }
 
 #[test]
@@ -534,7 +571,7 @@ fn hit_test_even_odd_vector_hole_misses() {
         VectorNetwork {
             vertices: v1.into_iter().chain(v2).collect(),
             segments: s1.into_iter().chain(s2).collect(),
-            regions: vec![Region { loops: vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]], winding: rule }],
+            regions: vec![Region { loops: vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]], winding: rule, ..Default::default() }],
         }
     };
     let mut d = Document::new("x");
@@ -558,6 +595,22 @@ fn is_ancestor_holds_for_very_deep_chains() {
     }
     assert!(d.is_ancestor(root, leaf));
     assert!(matches!(d.reparent(root, leaf, None), Err(DocError::Cycle(..))));
+}
+
+#[test]
+fn render_bounds_of_a_doubled_child_list_end_at_once() {
+    // A file can list a child twice at every level: 2^40 visits if each is walked.
+    let mut d = Document::new("x");
+    let mut parent = page(&d);
+    let mut groups = Vec::new();
+    for _ in 0..40 {
+        parent = d.create(parent, NodeKind::Group, "G", 0.0, 0.0, 10.0, 10.0).unwrap();
+        groups.push(parent);
+    }
+    for w in groups.windows(2) {
+        d.node_mut(w[0]).unwrap().children.push(w[1]);
+    }
+    assert!(d.world_render_bounds(groups[0]).is_some());
 }
 
 #[test]
@@ -637,10 +690,461 @@ fn two_segment_closed_loop_rounded_corners() {
     let net = VectorNetwork {
         vertices: vec![v0, v1],
         segments: vec![Segment { a: 0, b: 1, ta: (0.0, 0.0), tb: (0.0, 0.0) }, Segment { a: 1, b: 0, ta: (0.0, 5.0), tb: (0.0, -5.0) }],
-        regions: vec![Region { loops: vec![vec![0, 1]], winding: WindingRule::NonZero }],
+        regions: vec![Region { loops: vec![vec![0, 1]], winding: WindingRule::NonZero, ..Default::default() }],
     };
     let r = net.rounded().unwrap();
     assert_eq!(r.regions[0].loops[0].len(), 4, "both arcs are in the loop");
     let path = net.fill_path();
     assert!(!path.elements().is_empty());
+    // Both points sit next to the curved segment, so smoothing keeps their plain arcs.
+    assert_eq!(net.rounded_smoothed(0.6), net.rounded(), "a corner next to a curve keeps the plain arc");
+}
+
+/// A closed 100 × 100 square whose corners (top left, top right, bottom right, bottom left) have
+/// radii `radii`.
+fn rounded_square(radii: [f64; 4]) -> VectorNetwork {
+    let pts = [Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 100.0), Point::new(0.0, 100.0)];
+    let mut net = VectorNetwork::from_points(&pts, true);
+    for (v, r) in net.vertices.iter_mut().zip(radii) {
+        v.radius = r;
+    }
+    net
+}
+
+/// The area a closed path encloses, whichever way it runs.
+fn area_of(p: &figcraft_geom::BezPath) -> f64 {
+    use figcraft_geom::Shape;
+    p.area().abs()
+}
+
+#[test]
+fn closed_vectors_smooth_each_rounded_point_with_its_own_radius() {
+    use figcraft_geom::Shape;
+    use figcraft_geom::kurbo::{ParamCurve, ParamCurveArclen, ParamCurveNearest};
+    // (point radii, smoothing, derivation): a closed square draws the smoothed rectangle's corners,
+    // each point keeping its own radius and a point without one staying sharp.
+    let rows: Vec<([f64; 4], f64, &str)> = vec![
+        ([20.0; 4], 0.6, "one radius on every point"),
+        ([30.0, 0.0, 10.0, 0.0], 0.6, "each point keeps its own radius; points without one stay sharp"),
+        ([12.0; 4], 1.0, "full smoothing"),
+        ([40.0; 4], 0.6, "a corner too large for its edges loses smoothing first"),
+    ];
+    for (radii, s, why) in rows {
+        let net = rounded_square(radii);
+        let smoothed = net.rounded_smoothed(s).unwrap().fill_path();
+        // The rectangle's corners take [top left, top right, bottom right, bottom left] radii.
+        let want = area_of(&figcraft_geom::rounded_rect(100.0, 100.0, radii, s));
+        let got = area_of(&smoothed);
+        assert!((got - want).abs() < 0.1, "{why}: {got} vs the smoothed rectangle's {want}");
+        assert!((got - area_of(&net.fill_path())).abs() > 1.0, "{why}: smoothing changes the outline");
+        let b = smoothed.bounding_box();
+        assert!(b.x0 >= -1e-6 && b.y0 >= -1e-6 && b.x1 <= 100.0 + 1e-6 && b.y1 <= 100.0 + 1e-6, "{why}: {b:?}");
+    }
+    // The sharp points stay on the outline, and the outline has no kinks at the rounded points.
+    let smoothed = rounded_square([30.0, 0.0, 10.0, 0.0]).rounded_smoothed(0.6).unwrap();
+    let path = smoothed.fill_path();
+    for p in [Point::new(100.0, 0.0), Point::new(0.0, 100.0)] {
+        let d = path.segments().map(|seg| seg.nearest(p, 1e-9).distance_sq).fold(f64::INFINITY, f64::min);
+        assert!(d < 1e-12, "the sharp point {p:?} stays a corner");
+    }
+    let segs: Vec<_> = path.segments().filter(|seg| seg.arclen(1e-6) > 1e-6).collect();
+    let mut kinks = 0;
+    for (i, seg) in segs.iter().enumerate() {
+        let next = segs[(i + 1) % segs.len()];
+        let out = (seg.eval(1.0) - seg.eval(1.0 - 1e-6)).normalize();
+        let into = (next.eval(1e-6) - next.eval(0.0)).normalize();
+        if out.dot(into) < 0.999 {
+            kinks += 1;
+        }
+    }
+    assert_eq!(kinks, 2, "only the two sharp points turn without a curve");
+    assert_eq!(smoothed.regions[0].loops[0].len(), smoothed.segments.len(), "the loop walks every curve once");
+}
+
+#[test]
+fn corner_smoothing_leaves_open_paths_and_zero_alone() {
+    let square = rounded_square([20.0; 4]);
+    assert_eq!(square.rounded_smoothed(0.0), square.rounded(), "no smoothing draws the plain rounded points");
+    assert_eq!(square.rounded_smoothed(f64::NAN), square.rounded(), "an unusable smoothing draws no smoothing");
+    // An open path (no closed region) keeps its plain arcs.
+    let pts = [Point::new(200.0, 0.0), Point::new(250.0, 0.0), Point::new(250.0, 50.0)];
+    let mut open = VectorNetwork::from_points(&pts, false);
+    for v in &mut open.vertices {
+        v.radius = 20.0;
+    }
+    assert!(open.regions.is_empty());
+    assert_eq!(open.rounded_smoothed(0.6), open.rounded(), "an open path takes no smoothing");
+    // In a network with a closed square and a separate open branch, only the square smooths.
+    let mut mixed = square.clone();
+    let base = mixed.vertices.len();
+    mixed.vertices.extend(open.vertices.iter().copied());
+    mixed.segments.extend(open.segments.iter().map(|s| Segment { a: s.a + base, b: s.b + base, ..*s }));
+    let runs = mixed.rounded_smoothed(0.6).unwrap().stroke_runs();
+    let open_run = runs.iter().find(|r| !r.closed).expect("the open branch");
+    assert_eq!(open_run.path, open.rounded().unwrap().stroke_runs()[0].path, "the open branch keeps its plain arc");
+    let closed_run = runs.iter().find(|r| r.closed).expect("the square");
+    assert_eq!(closed_run.path, square.rounded_smoothed(0.6).unwrap().stroke_runs()[0].path, "the square smooths");
+    assert_ne!(closed_run.path, square.rounded().unwrap().stroke_runs()[0].path, "the square's smoothed corners differ from its arcs");
+}
+
+#[test]
+fn smoothed_vector_corners_stay_finite_on_awkward_networks() {
+    use figcraft_geom::Shape;
+    // A concave L, a square with a square hole, points with unusable radii and a loop that names a
+    // missing segment.
+    let l = [(0.0, 0.0), (100.0, 0.0), (100.0, 40.0), (40.0, 40.0), (40.0, 100.0), (0.0, 100.0)];
+    let mut concave = VectorNetwork::from_points(&l.map(|(x, y)| Point::new(x, y)), true);
+    for v in &mut concave.vertices {
+        v.radius = 1000.0;
+    }
+    let mut holed = rounded_square([10.0; 4]);
+    let hole = rounded_square([5.0; 4]);
+    let (base, seg_base) = (holed.vertices.len(), holed.segments.len());
+    holed.vertices.extend(hole.vertices.iter().map(|v| Vertex { x: 25.0 + v.x / 2.0, y: 25.0 + v.y / 2.0, ..*v }));
+    holed.segments.extend(hole.segments.iter().map(|s| Segment { a: s.a + base, b: s.b + base, ..*s }));
+    holed.regions[0].loops.push((seg_base..seg_base + hole.segments.len()).collect());
+    holed.regions[0].winding = WindingRule::EvenOdd;
+    let mut odd = rounded_square([f64::INFINITY, 10.0, f64::NAN, 10.0]);
+    odd.regions[0].loops[0].push(99);
+    for (net, s, why) in [(&concave, 1.0, "concave"), (&holed, 0.6, "holed"), (&odd, 0.6, "odd radii")] {
+        let drawn = net.rounded_smoothed(s).unwrap();
+        let b = drawn.fill_path().bounding_box();
+        assert!([b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()), "{why}: {b:?}");
+        assert!(b.x0 >= -1e-6 && b.y0 >= -1e-6 && b.x1 <= 100.0 + 1e-6 && b.y1 <= 100.0 + 1e-6, "{why}: {b:?}");
+        assert!(!drawn.stroke_path().elements().is_empty(), "{why}");
+    }
+    let concave_path = concave.rounded_smoothed(1.0).unwrap().fill_path();
+    assert_ne!(concave_path, concave.fill_path(), "the concave L smooths");
+    assert!(concave_path.winding(Point::new(20.0, 60.0)) != 0, "the L stays filled");
+    let holed_net = holed.rounded_smoothed(0.6).unwrap();
+    assert!(!holed_net.fill_contains(Point::new(50.0, 50.0)) && holed_net.fill_contains(Point::new(12.0, 50.0)), "the hole stays a hole");
+}
+
+#[test]
+fn clicks_on_a_smoothed_vector_corner_follow_the_drawn_fill() {
+    // A closed square with rounded points and smoothing: a click between the plain arc and the
+    // smoothed corner selects the layer only where the smoothed fill is drawn.
+    let pts = [Point::new(0.0, 0.0), Point::new(1000.0, 0.0), Point::new(1000.0, 1000.0), Point::new(0.0, 1000.0)];
+    let mut net = VectorNetwork::from_points(&pts, true);
+    for v in &mut net.vertices {
+        v.radius = 200.0;
+    }
+    let smoothed = net.rounded_smoothed(1.0).unwrap();
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let v = d.create(p, NodeKind::Vector { network: net.clone() }, "V", 0.0, 0.0, 1000.0, 1000.0).unwrap();
+    let n = d.node_mut(v).unwrap();
+    n.corners.smoothing = 1.0;
+    n.strokes.clear();
+    // Walk the row 20 units below the top edge inward to where each outline starts covering it.
+    let first_inside = |inside: &dyn Fn(Point) -> bool| (0..5_000).map(|i| f64::from(i) * 0.1).find(|&x| inside(Point::new(x, 20.0)));
+    let plain = first_inside(&|pt| net.fill_contains(pt)).unwrap();
+    let drawn = first_inside(&|pt| smoothed.fill_contains(pt)).unwrap();
+    assert!((plain - drawn).abs() > 5.0, "smoothing moves the corner: plain {plain}, smoothed {drawn}");
+    let pt = Point::new((plain + drawn) / 2.0, 20.0);
+    assert_ne!(net.fill_contains(pt), smoothed.fill_contains(pt));
+    assert_eq!(d.hit_test(p, pt, 0.0, None).is_some(), smoothed.fill_contains(pt), "the click follows the smoothed corner at {pt:?}");
+    assert_eq!(d.hit_test(p, Point::new(500.0, 500.0), 0.0, None), Some(v));
+}
+
+/// A rectangle whose top-right corner was cut off in the vector editor (a diagonal between a point
+/// on the top edge and one on the right edge), then rounded: the fill, which the fill and the
+/// selection outline draw, is cut by an arc at every point just as the stroke is, however the loop
+/// lists its segments and whichever way each one runs (#1951, #1506).
+#[test]
+fn a_chamfered_rectangles_rounded_fill_is_cut_at_every_point() {
+    use figcraft_geom::BezPath;
+    use figcraft_geom::kurbo::{ParamCurveArclen, ParamCurveNearest};
+    let corners = [Point::new(0.0, 0.0), Point::new(50.0, 0.0), Point::new(100.0, 50.0), Point::new(100.0, 100.0), Point::new(0.0, 100.0)];
+    let keeps_off = |path: &BezPath, p: Point| path.segments().map(|s| s.nearest(p, 1e-9).distance_sq.sqrt()).fold(f64::INFINITY, f64::min);
+    let length = |path: &BezPath| path.segments().map(|s| s.arclen(1e-9)).sum::<f64>();
+    for first in 0..corners.len() {
+        for backwards in [false, true] {
+            for flipped in 0..(1u32 << corners.len()) {
+                let mut net = VectorNetwork::from_points(&corners, true);
+                for v in &mut net.vertices {
+                    v.radius = 43.0;
+                }
+                for (i, s) in net.segments.iter_mut().enumerate() {
+                    if flipped & (1 << i) != 0 {
+                        std::mem::swap(&mut s.a, &mut s.b);
+                        std::mem::swap(&mut s.ta, &mut s.tb);
+                    }
+                }
+                let lp = &mut net.regions[0].loops[0];
+                lp.rotate_left(first);
+                if backwards {
+                    lp.reverse();
+                }
+                let why = format!("loop from segment {first}{}, segments flipped {flipped:05b}", if backwards { " backwards" } else { "" });
+                let stroke = net.stroke_path();
+                let fill = net.fill_path();
+                let region = net.rounded().unwrap().region_path(0).unwrap();
+                for (i, p) in corners.iter().enumerate() {
+                    assert!(keeps_off(&stroke, *p) > 2.0, "{why}: the stroke is cut at point {i} ({:.2} from it)", keeps_off(&stroke, *p));
+                    assert!(keeps_off(&fill, *p) > 2.0, "{why}: the fill runs into point {i} ({:.2} from it)", keeps_off(&fill, *p));
+                    assert!(keeps_off(&region, *p) > 2.0, "{why}: the region runs into point {i} ({:.2} from it)", keeps_off(&region, *p));
+                }
+                assert!(
+                    (length(&fill) - length(&stroke)).abs() < 1e-6,
+                    "{why}: fill {} and stroke {} trace the same outline",
+                    length(&fill),
+                    length(&stroke)
+                );
+                assert!(
+                    (length(&region) - length(&stroke)).abs() < 1e-6,
+                    "{why}: region {} and stroke {} trace the same outline",
+                    length(&region),
+                    length(&stroke)
+                );
+            }
+        }
+    }
+}
+
+/// The reporter's network (#1951): a corner cut off by a segment drawn before the corner point was
+/// deleted, so the region's loop is the open chain of the other four segments and the cutting
+/// segment, joining the chain's two ends, is in no loop. Rounded, the fill and the region trace
+/// the stroke's outline, cut by an arc at the chain's ends as at every other point.
+#[test]
+fn a_rounded_loop_left_open_where_a_segment_joins_its_ends_follows_that_segment() {
+    open_loop_follows_the_segment_joining_its_ends([(0, 3), (1, 2), (2, 0), (4, 1), (3, 4)], vec![3, 1, 2, 0]);
+}
+
+/// The same network with the joining segment listed first, and with the loop walked the other way.
+#[test]
+fn an_open_loop_follows_the_segment_joining_its_ends_listed_first_or_walked_backwards() {
+    open_loop_follows_the_segment_joining_its_ends([(3, 4), (0, 3), (1, 2), (2, 0), (4, 1)], vec![4, 2, 3, 1]);
+    open_loop_follows_the_segment_joining_its_ends([(0, 3), (1, 2), (2, 0), (4, 1), (3, 4)], vec![0, 2, 1, 3]);
+}
+
+fn open_loop_follows_the_segment_joining_its_ends(segments: [(usize, usize); 5], open_loop: Vec<usize>) {
+    use figcraft_geom::BezPath;
+    use figcraft_geom::kurbo::{ParamCurveArclen, ParamCurveNearest};
+    let corners = [Point::new(0.0, 0.0), Point::new(525.0, 525.0), Point::new(0.0, 525.0), Point::new(333.0, 0.0), Point::new(525.0, 183.0)];
+    let mut net = VectorNetwork::from_points(&corners, false);
+    net.segments = segments.iter().map(|&(a, b)| Segment::line(a, b)).collect();
+    net.regions.push(Region { loops: vec![open_loop], winding: WindingRule::NonZero, fills: None, paint_space: None });
+    for v in &mut net.vertices {
+        v.radius = 125.0;
+    }
+    let keeps_off = |path: &BezPath, p: Point| path.segments().map(|s| s.nearest(p, 1e-9).distance_sq.sqrt()).fold(f64::INFINITY, f64::min);
+    let length = |path: &BezPath| path.segments().map(|s| s.arclen(1e-9)).sum::<f64>();
+    let stroke = net.stroke_path();
+    let fill = net.fill_path();
+    let region = net.rounded().unwrap().region_path(0).unwrap();
+    for (i, p) in corners.iter().enumerate() {
+        assert!(keeps_off(&stroke, *p) > 2.0, "the stroke is cut at point {i}");
+        assert!(keeps_off(&fill, *p) > 2.0, "the fill runs into point {i} ({:.2} from it)", keeps_off(&fill, *p));
+        assert!(keeps_off(&region, *p) > 2.0, "the region runs into point {i} ({:.2} from it)", keeps_off(&region, *p));
+    }
+    assert!((length(&fill) - length(&stroke)).abs() < 1e-6, "fill {} and stroke {} trace the same outline", length(&fill), length(&stroke));
+    assert!((length(&region) - length(&stroke)).abs() < 1e-6, "region {} and stroke {} trace the same outline", length(&region), length(&stroke));
+}
+
+#[test]
+fn stored_variable_ids_resolve_only_their_exact_collection() {
+    let mut vars = crate::proto_expr_tests::vars();
+    // The wrong collection's modes force the old resolver's first-value fallback (dark).
+    let mut shadow = vars.collections[0].clone();
+    shadow.id = "shadow".into();
+    shadow.name = "c".into();
+    shadow.modes = vec![Mode { id: "other".into(), name: "Other".into() }];
+    vars.collections.insert(0, shadow);
+    assert_eq!(vars.resolve("n", &Default::default()), Some(VariableValue::Number(3.0)));
+    vars.collections.retain(|c| c.id != "c");
+    assert_eq!(vars.resolve("n", &Default::default()), None);
+}
+
+// ——— colour calculations ———
+
+/// A colour variable of collection `c1` with `values` by mode id.
+fn colour_var(id: &str, name: &str, values: &[(&str, VariableValue)]) -> Variable {
+    Variable {
+        id: id.into(),
+        name: name.into(),
+        collection: "c1".into(),
+        kind: VariableType::Color,
+        values: values.iter().map(|(m, v)| (m.to_string(), v.clone())).collect(),
+        description: String::new(),
+        scopes: None,
+        hidden_from_publishing: false,
+        extends: None,
+        overrides: Default::default(),
+        code_syntax: Default::default(),
+    }
+}
+
+/// `c1` with Light/Dark (Light is the default mode) and colour variables `("id", light, dark)`.
+fn vars_with_colours(cols: &[(&str, VariableValue, VariableValue)]) -> Variables {
+    let mut v = Variables::default();
+    v.collections.push(Collection {
+        id: "c1".into(),
+        name: "C".into(),
+        modes: vec![Mode { id: "light".into(), name: "Light".into() }, Mode { id: "dark".into(), name: "Dark".into() }],
+        extends: None,
+    });
+    for (id, light, dark) in cols {
+        v.variables.push(colour_var(id, id, &[("light", light.clone()), ("dark", dark.clone())]));
+    }
+    v
+}
+
+/// Adds `id` with a value in the Light mode only.
+fn add(v: &mut Variables, id: &str, light: VariableValue) {
+    v.variables.push(colour_var(id, id, &[("light", light)]));
+}
+
+fn fade(source: &str, opacity: f32) -> VariableValue {
+    VariableValue::ColorAlpha { variable: source.into(), opacity }
+}
+fn mix(from: ColorOperand, to: ColorOperand, t: f32) -> VariableValue {
+    VariableValue::ColorMix { from, to, t }
+}
+fn lit(hex: &str) -> ColorOperand {
+    ColorOperand::Literal { literal: Color::from_hex_or_name(hex).unwrap() }
+}
+fn src(id: &str) -> ColorOperand {
+    ColorOperand::Variable { variable: id.into() }
+}
+fn red() -> VariableValue {
+    VariableValue::Color(Color::from_rgb8_const(255, 0, 0))
+}
+fn resolved(v: &Variables, id: &str, mode: Option<&str>) -> Color {
+    let modes: std::collections::BTreeMap<String, String> =
+        mode.map(|m| std::collections::BTreeMap::from([("c1".to_string(), m.to_string())])).unwrap_or_default();
+    match v.resolve(id, &modes) {
+        Some(VariableValue::Color(c)) => c,
+        other => panic!("{id} did not resolve to a colour: {other:?}"),
+    }
+}
+
+#[test]
+fn an_alpha_calculation_replaces_alpha_and_follows_its_source() {
+    let mut v = vars_with_colours(&[("base", red(), VariableValue::Color(Color::from_rgb8_const(0, 0, 255)))]);
+    add(&mut v, "fade", fade("base", 0.5));
+    assert_eq!(resolved(&v, "fade", None).to_rgba8(), [255, 0, 0, 128], "default mode: red at half alpha (replace)");
+    assert_eq!(resolved(&v, "fade", Some("dark")).to_rgba8(), [0, 0, 255, 128], "the source's value in the chosen mode is what fades");
+}
+
+#[test]
+fn an_alpha_calculation_replaces_even_a_faded_sources_alpha() {
+    // Replace (not scale): a fade of a source that already has alpha lands on exactly the requested
+    // opacity, so re-editing the source's alpha cannot compound with the fade's.
+    let quarter = VariableValue::Color(Color::new(1.0, 0.0, 0.0, 0.25));
+    let mut v = vars_with_colours(&[("base", quarter.clone(), quarter)]);
+    add(&mut v, "fade", fade("base", 0.5));
+    assert_eq!(resolved(&v, "fade", None).a, 0.5, "not 0.25 * 0.5");
+}
+
+#[test]
+fn an_alpha_calculation_reads_through_an_alias() {
+    let mut v = vars_with_colours(&[("base", red(), red())]);
+    add(&mut v, "mirror", VariableValue::Alias("base".into()));
+    add(&mut v, "faded", fade("mirror", 0.5));
+    assert_eq!(resolved(&v, "faded", None).to_rgba8(), [255, 0, 0, 128]);
+}
+
+#[test]
+fn a_mix_blends_stored_components_with_exact_edges() {
+    let mut v = vars_with_colours(&[("base", red(), VariableValue::Color(Color::from_rgb8_const(0, 0, 255)))]);
+    add(&mut v, "t0", mix(src("base"), lit("#FFFFFF"), 0.0));
+    add(&mut v, "t1", mix(src("base"), lit("#FFFFFF"), 1.0));
+    add(&mut v, "grey", mix(lit("#000000"), lit("#FFFFFF"), 0.4));
+    add(&mut v, "afade", mix(lit("#FF0000"), lit("#FF000000"), 0.25));
+    assert_eq!(resolved(&v, "t0", None).to_rgba8(), [255, 0, 0, 255], "t=0 is exactly the first operand");
+    assert_eq!(resolved(&v, "t1", None).to_rgba8(), [255, 255, 255, 255], "t=1 is exactly the second");
+    assert_eq!(resolved(&v, "grey", None).to_rgba8(), [102, 102, 102, 255], "0.4 of white rounds to 102 (0x66)");
+    assert_eq!(resolved(&v, "afade", None).to_rgba8(), [255, 0, 0, 191], "alpha blends like the channels (0.75 -> 0xBF)");
+    assert_eq!(resolved(&v, "t0", Some("dark")).to_rgba8(), [0, 0, 255, 255], "the variable operand follows the mode");
+    // Exact in the stored components too, not only after 8-bit rounding.
+    let faint = ColorOperand::Literal { literal: Color::new(1e-8, 0.0, 0.0, 1.0) };
+    add(&mut v, "to_faint", mix(lit("#FF0000"), faint.clone(), 1.0));
+    add(&mut v, "from_faint", mix(faint, lit("#FF0000"), 0.0));
+    assert_eq!(resolved(&v, "to_faint", None).r, 1e-8, "t=1 is the second operand to the last bit");
+    assert_eq!(resolved(&v, "from_faint", None).r, 1e-8, "t=0 is the first operand to the last bit");
+}
+
+#[test]
+fn calculations_compose_and_a_crafted_cycle_terminates() {
+    let mut v = vars_with_colours(&[("base", red(), red())]);
+    add(&mut v, "fade", fade("base", 0.5));
+    add(&mut v, "toast", mix(src("fade"), lit("#FFFFFF"), 0.0));
+    assert_eq!(resolved(&v, "toast", None).to_rgba8(), [255, 0, 0, 128], "a calculation may read a calculation");
+    // A hand-crafted cycle (commands refuse these) must unwind, never spin.
+    add(&mut v, "loop", mix(src("loop2"), lit("#FFFFFF"), 0.5));
+    add(&mut v, "loop2", fade("loop", 0.5));
+    assert_eq!(v.resolve("loop", &std::collections::BTreeMap::new()), None);
+}
+
+#[test]
+fn calculation_resolution_is_memoised_and_bounded() {
+    // A doubling tree: each level reads the one below twice. Memoised per resolve, that is
+    // one pass over the levels; unmemoised it is 2^23 walks (the time bound catches a regression).
+    let mut v = vars_with_colours(&[("leaf", red(), red())]);
+    let mut prev = "leaf".to_string();
+    for i in 0..23 {
+        let id = format!("f{i}");
+        add(&mut v, &id, mix(src(&prev), src(&prev), 0.5));
+        prev = id;
+    }
+    let started = std::time::Instant::now();
+    assert_eq!(resolved(&v, &prev, None).to_rgba8(), [255, 0, 0, 255], "the tree reads the leaf");
+    assert!(started.elapsed().as_millis() < 200, "memoised: {:?}", started.elapsed());
+    // A diamond: two fades of one base under one mix (shared subtrees each resolved once).
+    let quarter = VariableValue::Color(Color::new(1.0, 0.0, 0.0, 0.25));
+    let mut d = vars_with_colours(&[("base", quarter.clone(), quarter)]);
+    add(&mut d, "fa", fade("base", 0.25));
+    add(&mut d, "fb", fade("base", 0.75));
+    add(&mut d, "dia", mix(src("fa"), src("fb"), 0.5));
+    assert_eq!(resolved(&d, "dia", None).a, 0.5, "0.25 + (0.75 - 0.25) * 0.5");
+    // One resolve reads at most 32 variables, however they are chained.
+    let mut long = vars_with_colours(&[("v0", red(), red())]);
+    for i in 1..=40 {
+        add(&mut long, &format!("v{i}"), fade(&format!("v{}", i - 1), 0.99));
+    }
+    assert_eq!(resolved(&long, "v31", None).to_rgba8(), [255, 0, 0, 252], "32 variables still resolve");
+    assert_eq!(long.resolve("v32", &std::collections::BTreeMap::new()), None, "a 33rd reads nothing");
+}
+
+#[test]
+fn the_colour_walker_visits_calculation_literals() {
+    // Document::map_colors (profile conversion) must reach the colours stored inside a mix:
+    // leaving them behind would blend converted operands with unconverted ones.
+    let mut v = vars_with_colours(&[("base", red(), red())]);
+    add(&mut v, "mx", mix(lit("#804020"), src("base"), 0.5));
+    let mut doc = Document::new("x");
+    doc.variables = v;
+    doc.map_colors(|c| c.with_alpha(0.5));
+    let mx = doc.variables.variables.iter().find(|x| x.id == "mx").unwrap();
+    let VariableValue::ColorMix { from, .. } = &mx.values["light"] else { panic!("still the mix") };
+    let ColorOperand::Literal { literal } = from else { panic!("literal operand") };
+    assert_eq!(literal.a, 0.5, "the mix's stored literal was converted like every other colour");
+}
+
+#[test]
+fn frame_relative_ends_on_a_looping_parent_chain() {
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let f = d.create(p, NodeKind::Group, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let g = d.create(f, NodeKind::Group, "G", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let mut v = serde_json::to_value(&d).unwrap();
+    // F's parent is its own child G (as a restored snapshot can leave things).
+    v["nodes"][f.to_string()]["parent"] = serde_json::json!(g);
+    let bad: Document = serde_json::from_value(v).unwrap();
+    let _ = bad.frame_relative(g);
+}
+
+#[test]
+fn remove_children_removes_every_subtree_and_keeps_the_parent() {
+    let mut doc = Document::new("T");
+    let page = doc.first_page().unwrap();
+    let frame = doc.create(page, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let inner = doc.create(frame, NodeKind::Frame, "Inner", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let leaf = doc.create(inner, NodeKind::Rectangle, "Leaf", 0.0, 0.0, 5.0, 5.0).unwrap();
+    let other = doc.create(page, NodeKind::Rectangle, "Other", 0.0, 0.0, 5.0, 5.0).unwrap();
+    doc.remove_children(frame).unwrap();
+    assert!(doc.contains(frame) && doc.contains(other));
+    assert!(!doc.contains(inner) && !doc.contains(leaf));
+    assert!(doc.get(frame).unwrap().children.is_empty());
 }

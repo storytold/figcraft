@@ -74,6 +74,20 @@ fn non_ascii_layer_names_transliterate_into_readable_classes() {
 }
 
 #[test]
+fn many_layers_with_one_name_get_numbered_in_linear_time() {
+    // Each name used to retry every suffix from 2 against a list: cubic in their number.
+    let mut used = crate::codegen::Names::default();
+    let start = std::time::Instant::now();
+    let names: Vec<String> = (0..20_000).map(|_| crate::codegen::class_name("Card / Title", "frame", &mut used)).collect();
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+    assert_eq!(names[0], "card-title");
+    assert_eq!(names[1], "card-title-2");
+    assert_eq!(names[19_999], "card-title-20000");
+    let distinct: std::collections::BTreeSet<&String> = names.iter().collect();
+    assert_eq!(distinct.len(), names.len());
+}
+
+#[test]
 fn other_scripts_and_symbol_names_transliterate_or_fall_back_to_the_kind() {
     let mut s = Session::new();
     let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "按钮"})).unwrap());
@@ -162,4 +176,17 @@ fn rem_preserves_text_property_default() {
             assert!(code.contains("width: 6.25rem;"), "rem still converts lengths: {code}");
         }
     }
+}
+
+#[test]
+fn the_stylesheet_never_contains_a_closing_style_tag_from_document_text() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());
+    let t = id(s.execute("text.create", &json!({"text": "x", "x": 0, "y": 0})).unwrap());
+    s.execute("node.set", &json!({"id": t, "props": {"fontFamily": "a</style><script>alert(1)</script>"}})).unwrap();
+    s.execute("node.reparent", &json!({"ids": [t], "parent": f})).unwrap();
+    let code = code_for(s.doc().unwrap(), f, CodeLang::Html);
+    let (_, css) = code.split_once("<style>").unwrap();
+    assert_eq!(css.matches("</style>").count(), 1, "{code}");
+    assert!(!code.contains("<script>"), "{code}");
 }

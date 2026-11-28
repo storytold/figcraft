@@ -252,3 +252,54 @@ fn publishing_sends_a_checked_folder() {
     assert_eq!(r["id"], ID);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[cfg(unix)]
+#[test]
+fn publishing_refuses_a_linked_asset_instead_of_bundling_what_it_points_at() {
+    let (mut s, d) = session();
+    let dir = temp("publish-link");
+    std::fs::create_dir_all(dir.join("build")).unwrap();
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("build").join("tiny.wasm"), wasm()).unwrap();
+    std::fs::write(dir.join("figcraft-plugin.json"), json!({"id": ID, "name": "Tiny", "version": "1.0.0", "main": "build/tiny.wasm"}).to_string())
+        .unwrap();
+    // A private file outside the plugin folder, reached through a link in its assets.
+    let secret = temp("publish-link-secret").join("token.txt");
+    std::fs::write(&secret, b"per-user-secret").unwrap();
+    std::os::unix::fs::symlink(&secret, dir.join("assets").join("notes.txt")).unwrap();
+    let e = s.execute("plugin.directory.publish", &json!({"path": dir.to_string_lossy(), "server": "ws://h:1/"})).unwrap_err().to_string();
+    assert!(e.contains("link"), "{e}");
+    assert!(d.lock().unwrap().plugins.is_empty(), "nothing was sent");
+    // The whole assets folder as a link is refused the same way.
+    std::fs::remove_file(dir.join("assets").join("notes.txt")).unwrap();
+    std::fs::remove_dir(dir.join("assets")).unwrap();
+    std::os::unix::fs::symlink(secret.parent().unwrap(), dir.join("assets")).unwrap();
+    let e = s.execute("plugin.directory.publish", &json!({"path": dir.to_string_lossy(), "server": "ws://h:1/"})).unwrap_err().to_string();
+    assert!(e.contains("link"), "{e}");
+}
+
+#[test]
+fn a_bundle_asking_for_more_than_the_directory_showed_is_not_installed() {
+    let (mut s, d) = session();
+    // Shown as read-only with one command; the bundle's manifest asks to write, any command.
+    let text =
+        json!({"id": ID, "name": "Tiny", "version": "1.0.0", "author": "Ada", "main": "tiny.wasm", "permissions": {"access": "write"}}).to_string();
+    let b = Bundle { manifest: text, wasm: wasm(), assets: vec![] }.encode();
+    let mut e = entry(ID, "1.0.0", &b);
+    e.commands = vec!["node.get".into()];
+    d.lock().unwrap().plugins.push((e, b));
+    s.execute("plugin.directory.list", &json!({"server": "ws://127.0.0.1:9/"})).unwrap();
+    let err = s.execute("plugin.directory.install", &json!({"id": ID, "confirm": true})).unwrap_err().to_string();
+    assert!(err.contains("write"), "{err}");
+    assert!(s.prefs.plugins.is_empty(), "nothing was installed");
+    // Read-only as shown, but more commands than shown.
+    let text = json!({"id": ID, "name": "Tiny", "version": "1.0.1", "author": "Ada", "main": "tiny.wasm", "permissions": {"access": "read", "commands": ["node.get", "node.set"]}}).to_string();
+    let b = Bundle { manifest: text, wasm: wasm(), assets: vec![] }.encode();
+    let mut e = entry(ID, "1.0.1", &b);
+    e.commands = vec!["node.get".into()];
+    d.lock().unwrap().plugins.clear();
+    d.lock().unwrap().plugins.push((e, b));
+    s.execute("plugin.directory.list", &json!({"server": "ws://127.0.0.1:9/"})).unwrap();
+    let err = s.execute("plugin.directory.install", &json!({"id": ID, "confirm": true})).unwrap_err().to_string();
+    assert!(err.contains("commands"), "{err}");
+}

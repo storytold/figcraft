@@ -364,3 +364,138 @@ fn linear_gradients_are_square_in_pixels() {
     let (wx, wy) = ((g.width.0 - g.from.0) * 200.0, (g.width.1 - g.from.1) * 100.0);
     assert!((wx * 200.0 + wy * 100.0).abs() < 1e-6, "{g:?}");
 }
+
+// Rules below were read off Sketch's own renders (sketchtool) of files built for each case.
+
+/// Sketch's blur radius is the blur's standard deviation (Gaussian, background and motion blurs);
+/// FigCraft's radius is twice it. A zoom blur stays a plain blur of half its radius.
+#[test]
+fn blur_radii_are_deviations() {
+    let blur = |ty: i64| json!({"_class": "blur", "isEnabled": true, "radius": 6, "type": ty});
+    let (doc, _) = open(vec![
+        styled(r("Gaussian"), "blur", blur(0)),
+        styled(r("Motion"), "blur", blur(1)),
+        styled(r("Zoom"), "blur", blur(2)),
+        styled(r("Background"), "blur", blur(3)),
+    ]);
+    let radius = |name: &str| match &node(&doc, name).effects[0].kind {
+        EffectKind::LayerBlur(b) | EffectKind::BackgroundBlur(b) => b.radius,
+        other => panic!("{name}: {other:?}"),
+    };
+    assert_eq!(radius("Gaussian"), 12.0);
+    assert_eq!(radius("Motion"), 12.0);
+    assert_eq!(radius("Zoom"), 3.0);
+    assert_eq!(radius("Background"), 12.0);
+}
+
+/// Sketch's colour controls scale by the contrast about mid-grey, then add the brightness; the
+/// filters give the same tone curve.
+#[test]
+fn bitmap_brightness_adds_after_contrast() {
+    let png = {
+        let mut out = Vec::new();
+        image::RgbaImage::new(2, 2).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    };
+    for (brightness, contrast) in [(-0.24, 1.0), (0.2, 1.0), (-0.2, 1.3), (0.1, 0.7), (-0.75, 1.0), (0.45, 1.0)] {
+        let mut bitmap = r("Photo");
+        bitmap["_class"] = json!("bitmap");
+        bitmap["image"] = json!({"_class": "MSJSONFileReference", "_ref": "images/a.png"});
+        bitmap["style"]["colorControls"] =
+            json!({"_class": "colorControls", "isEnabled": true, "brightness": brightness, "contrast": contrast, "hue": 0, "saturation": 1});
+        let (doc, _) = open_doc(document(&["P"]), vec![bitmap], &[("images/a.png", &png)]);
+        let PaintKind::Image(img) = &node(&doc, "Photo").fills[0].kind else { panic!("no image") };
+        let (e, c) = (2f64.powf(f64::from(img.filters.exposure) * 2.0), 1.0 + f64::from(img.filters.contrast));
+        // Past FigCraft's ranges the slope stays exact and only the offset gives.
+        assert!((e * c - contrast).abs() < 1e-4, "{brightness} {contrast}: slope {}", e * c);
+        if !(-0.5..=0.375).contains(&brightness) {
+            continue;
+        }
+        for v in [0.1, 0.4, 0.6, 0.9] {
+            let figcraft = (v * e - 0.5) * c + 0.5;
+            let sketch = (v - 0.5) * contrast + 0.5 + brightness;
+            assert!((figcraft - sketch).abs() < 1e-4, "{brightness} {contrast} at {v}: {figcraft} vs {sketch}");
+        }
+    }
+}
+
+/// A bitmap's own image lies under its style's fills: a disabled fill leaves it showing, an
+/// enabled one covers it.
+#[test]
+fn bitmap_image_under_its_fills() {
+    let png = {
+        let mut out = Vec::new();
+        image::RgbaImage::new(2, 2).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    };
+    let bitmap = |name: &str, enabled: bool| {
+        let mut b = r(name);
+        b["_class"] = json!("bitmap");
+        b["image"] = json!({"_class": "MSJSONFileReference", "_ref": "images/a.png"});
+        let mut f = solid_fill(1.0, 0.0, 0.0, 1.0);
+        f["isEnabled"] = json!(enabled);
+        styled(b, "fills", json!([f]))
+    };
+    let (doc, _) = open_doc(document(&["P"]), vec![bitmap("Off", false), bitmap("On", true)], &[("images/a.png", &png)]);
+    for (name, solid_visible) in [("Off", false), ("On", true)] {
+        let fills = &node(&doc, name).fills;
+        assert_eq!(fills.len(), 2, "{name}");
+        assert!(matches!(fills[0].kind, PaintKind::Image(_)) && fills[0].visible, "{name}");
+        assert!(matches!(fills[1].kind, PaintKind::Solid { .. }), "{name}");
+        assert_eq!(fills[1].visible, solid_visible, "{name}");
+    }
+}
+
+/// An outline mask's opacity fades the mask (its drawn copy) and what it clips together; an alpha
+/// mask's opacity is its alpha already, so nothing more fades.
+#[test]
+fn faded_masks_fade_what_they_clip() {
+    let fill = json!([solid_fill(0.8, 0.8, 0.8, 1.0)]);
+    let faded = |name: &str, mode: i64| {
+        let mut m = styled(with(with(r(name), "hasClippingMask", json!(true)), "clippingMaskMode", json!(mode)), "fills", fill.clone());
+        m["style"]["contextSettings"] = json!({"_class": "graphicsContextSettings", "blendMode": 0, "opacity": 0.5});
+        m
+    };
+    let (doc, _) = open(vec![
+        group("G1", 0.0, 0.0, 100.0, 50.0, vec![faded("Outline", 0), r("Clipped")]),
+        group("G2", 0.0, 100.0, 100.0, 50.0, vec![faded("Alpha", 1), r("Faded")]),
+    ]);
+    let holder = doc.node(node(&doc, "Outline").parent.unwrap()).unwrap();
+    assert!((holder.opacity - 0.5).abs() < 1e-6, "{}", holder.opacity);
+    let kids: Vec<&str> = holder.children.iter().map(|c| doc.node(*c).unwrap().name.as_str()).collect();
+    assert_eq!(kids, ["Outline (drawn)", "Outline", "Clipped"]);
+    assert!((node(&doc, "Outline (drawn)").opacity - 1.0).abs() < 1e-6);
+    assert!((node(&doc, "Clipped").opacity - 1.0).abs() < 1e-6);
+    let alpha_parent = doc.node(node(&doc, "Alpha").parent.unwrap()).unwrap();
+    assert!((alpha_parent.opacity - 1.0).abs() < 1e-6, "{}", alpha_parent.opacity);
+}
+
+/// `colorInterpolation` 1 mixes a gradient in OKLab, 2 in OKLCH; FigCraft gets sRGB stops along
+/// the same colours (values from Sketch's render of this gradient), and a note.
+#[test]
+fn oklab_gradients_become_srgb_stops() {
+    let stops = json!([{"_class": "gradientStop", "position": 0, "color": color(0.357, 0.294, 1.0, 1.0)},
+                       {"_class": "gradientStop", "position": 1, "color": color(1.0, 0.478, 0.349, 1.0)}]);
+    let grad = |mode: i64| {
+        json!({"_class": "fill", "isEnabled": true, "fillType": 1, "color": color(0.0, 0.0, 0.0, 1.0),
+        "gradient": {"_class": "gradient", "gradientType": 0, "colorInterpolation": mode, "from": "{0, 0.5}", "to": "{1, 0.5}", "stops": stops.clone()}})
+    };
+    let (doc, warnings) = open(vec![
+        styled(r("Srgb"), "fills", json!([grad(0)])),
+        styled(r("Oklab"), "fills", json!([grad(1)])),
+        styled(r("Oklch"), "fills", json!([grad(2)])),
+    ]);
+    let middle = |name: &str| {
+        let PaintKind::Gradient(g) = &node(&doc, name).fills[0].kind else { panic!("{name}: no gradient") };
+        let mid = g.stops.iter().find(|s| (s.position - 0.5).abs() < 1e-6).map(|s| [s.color.r, s.color.g, s.color.b]);
+        (g.stops.len(), mid)
+    };
+    assert_eq!(middle("Srgb"), (2, None));
+    let near = |got: Option<[f32; 3]>, want: [f32; 3]| got.is_some_and(|g| g.iter().zip(want).all(|(a, b)| (a * 255.0 - b).abs() <= 2.0));
+    let (n, mid) = middle("Oklab");
+    assert_eq!(n, 17);
+    assert!(near(mid, [170.0, 116.0, 184.0]), "{mid:?}");
+    let (_, mid) = middle("Oklch");
+    assert!(near(mid, [214.0, 75.0, 186.0]), "{mid:?}");
+    assert!(warnings.iter().any(|w| w.contains("OKLab")), "{warnings:?}");
+}

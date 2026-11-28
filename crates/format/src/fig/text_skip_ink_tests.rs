@@ -113,7 +113,7 @@ fn local_skip_ink_override_preserves_shared_style_and_omitted_value_inherits() {
         let node = doc.nodes().find(|n| n.name == "Label").unwrap();
         assert_eq!(node.kind.text().unwrap().style.look().skip_ink, expected);
         let linked = doc.style(node.styles.text.as_deref().unwrap()).unwrap();
-        let StyleKind::Text { style } = &linked.kind else { panic!("linked definition must remain text") };
+        let StyleKind::Text { style, .. } = &linked.kind else { panic!("linked definition must remain text") };
         assert!(style.look().skip_ink, "local value must not alter definition");
     }
 }
@@ -223,7 +223,7 @@ fn export_writes_one_actual_node_value_and_complete_run_values_without_skip_only
         id: "body".into(),
         name: "Body".into(),
         description: String::new(),
-        kind: StyleKind::Text { style: shared },
+        kind: StyleKind::Text { style: shared, paragraph: Default::default() },
         bound: Default::default(),
     });
     let id = linked_doc
@@ -237,7 +237,7 @@ fn export_writes_one_actual_node_value_and_complete_run_values_without_skip_only
     let node = back.nodes().find(|n| n.name == "Label").unwrap();
     assert!(!node.kind.text().unwrap().style.look().skip_ink);
     let linked = back.style(node.styles.text.as_deref().unwrap()).unwrap();
-    let StyleKind::Text { style } = &linked.kind else { panic!("shared style link must remain text") };
+    let StyleKind::Text { style, .. } = &linked.kind else { panic!("shared style link must remain text") };
     assert!(style.look().skip_ink, "local false must not alter the shared definition");
 }
 

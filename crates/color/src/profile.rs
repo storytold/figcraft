@@ -172,13 +172,13 @@ fn outside(l: f64) -> bool {
 const ENCODE_STEPS: usize = 4096;
 
 /// The sRGB transfer function, encoded value → linear light.
-fn decode(v: f32) -> f64 {
+pub(crate) fn decode(v: f32) -> f64 {
     let v = f64::from(if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
     if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
 }
 
 /// The sRGB transfer function, linear light → encoded value (clipped to 0..=1).
-fn encode(l: f64) -> f32 {
+pub(crate) fn encode(l: f64) -> f32 {
     let l = if l.is_finite() { l.clamp(0.0, 1.0) } else { 0.0 };
     (if l <= 0.003_130_8 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 }) as f32
 }

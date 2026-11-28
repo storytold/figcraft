@@ -1,7 +1,7 @@
 //! Text: real, selectable text in embedded (subset) fonts, positioned glyph by glyph from the
 //! `figcraft_text` layout the renderer uses, with outline fallbacks.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use krilla::text::{Font, GlyphId, KrillaGlyph};
 
 use figcraft_color::{GradientKind, Paint, PaintKind};
 
-use crate::draw::{Exporter, above, affine_ok, blend, stroke_rule, to_xf, vector_paint};
+use crate::draw::{Exporter, PaintFrame, PaintSize, above, affine_ok, blend, stroke_rule, to_xf, vector_paint};
 use crate::raster::Raster;
 
 /// Glyphs of one face and size on one line, written as one text run.
@@ -33,6 +33,12 @@ struct Run {
     last_chars: Option<(usize, usize)>,
 }
 
+struct GlyphSelection<'a> {
+    layout: &'a TextLayout,
+    style: usize,
+    chars: &'a [char],
+}
+
 /// Draw a text node; `xf` maps its local space to the page.
 pub(crate) fn draw_text(ex: &mut Exporter, s: &mut Surface, n: &Node, xf: Affine, inner: &[Raster]) {
     let NodeKind::Text(t) = &n.kind else { return };
@@ -45,18 +51,29 @@ pub(crate) fn draw_text(ex: &mut Exporter, s: &mut Surface, n: &Node, xf: Affine
         record_links(ex, &layout, gxf);
     }
     let (w, h) = (n.width, n.height);
+    let frame = PaintFrame { size: PaintSize { width: w, height: h }, transform: gxf };
     let chars: Vec<char> = t.characters.chars().collect();
     let styles: BTreeSet<usize> = layout.glyphs.iter().map(|g| g.style).chain(layout.decorations.iter().map(|d| d.style)).collect();
     // Every run's fills, then the inner shadows over them, then the strokes on top.
     let mut stroked = Vec::new();
+    // Glyphs and decorations are grouped by style in one pass; each style's paths are built (and
+    // dropped) inside its own iteration, so only one style's paths are held at a time.
+    let mut decoration_of: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, d) in layout.decorations.iter().enumerate() {
+        decoration_of.entry(d.style).or_default().push(i);
+    }
+    let mut glyph_of: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, g) in layout.glyphs.iter().enumerate() {
+        glyph_of.entry(g.style).or_default().push(i);
+    }
     for k in styles {
         let fills = layout.styles.get(k).and_then(|st| st.fills.as_ref()).unwrap_or(&n.fills);
         let mut decorations = BezPath::new();
-        for d in layout.decorations.iter().filter(|d| d.style == k) {
+        for d in decoration_of.remove(&k).unwrap_or_default().into_iter().filter_map(|i| layout.decorations.get(i)) {
             decorations.extend(d.path());
         }
         let mut outlines = BezPath::new();
-        for g in layout.glyphs.iter().filter(|g| g.style == k) {
+        for g in glyph_of.remove(&k).unwrap_or_default().into_iter().filter_map(|i| layout.glyphs.get(i)) {
             outlines.extend(g.path());
         }
         outlines.extend(decorations.iter());
@@ -72,11 +89,11 @@ pub(crate) fn draw_text(ex: &mut Exporter, s: &mut Surface, n: &Node, xf: Affine
             if embeddable && !real_text_written && !ex.opts.outline_text && layout.on_path.is_none() {
                 // The first fill writes the text itself; the rest paint its outlines on top.
                 real_text_written = true;
-                let mut rest = glyph_runs(ex, s, &layout, k, &chars, p, w, h, gxf);
+                let mut rest = glyph_runs(ex, s, GlyphSelection { layout: &layout, style: k, chars: &chars }, p, frame);
                 rest.extend(decorations.iter());
-                ex.fill(s, &rest, FillRule::NonZero, p, w, h, gxf);
+                ex.fill(s, &rest, FillRule::NonZero, p, frame);
             } else {
-                ex.fill(s, &outlines, FillRule::NonZero, p, w, h, gxf);
+                ex.fill(s, &outlines, FillRule::NonZero, p, frame);
             }
         }
         if n.has_visible_stroke() {
@@ -88,7 +105,7 @@ pub(crate) fn draw_text(ex: &mut Exporter, s: &mut Surface, n: &Node, xf: Affine
     for outlines in &stroked {
         let area = figcraft_render::draw::stroke_area(n, outlines, true);
         for p in &n.strokes {
-            ex.fill(s, &area, stroke_rule(n, true), p, w, h, gxf);
+            ex.fill(s, &area, stroke_rule(n, true), p, frame);
         }
     }
 }
@@ -104,7 +121,9 @@ fn record_links(ex: &mut Exporter, layout: &TextLayout, gxf: Affine) {
         let glyphs = layout.glyphs.get(line.glyph_start..line.glyph_end).unwrap_or(&[]);
         for g in glyphs.iter().map(Some).chain([None]) {
             let link = g.and_then(|g| {
-                let url = layout.styles.get(g.style)?.link.as_deref().filter(|u| !u.trim().is_empty())?;
+                // Checked here, not when the annotation is written: every linked line copies
+                // the destination, so one oversized link must not be copied at all.
+                let url = layout.styles.get(g.style)?.link.as_deref().map(str::trim).filter(|u| !u.is_empty() && u.len() <= crate::MAX_URL)?;
                 let (a, b) = (g.x, g.x + g.advance);
                 (a.is_finite() && b.is_finite()).then(|| (url, a.min(b), a.max(b)))
             });
@@ -147,18 +166,8 @@ impl Exporter<'_> {
 
 /// Write the glyphs of style `style` as real text filled with `p` (layout space, mapped to the
 /// page by `gxf`). Returns the outlines of glyphs that can't be written as text.
-#[allow(clippy::too_many_arguments)]
-fn glyph_runs(
-    ex: &mut Exporter,
-    s: &mut Surface,
-    layout: &TextLayout,
-    style: usize,
-    chars: &[char],
-    p: &Paint,
-    w: f64,
-    h: f64,
-    gxf: Affine,
-) -> BezPath {
+fn glyph_runs(ex: &mut Exporter, s: &mut Surface, selection: GlyphSelection<'_>, p: &Paint, frame: PaintFrame) -> BezPath {
+    let GlyphSelection { layout, style, chars } = selection;
     let mut rest = BezPath::new();
     for line in &layout.lines {
         let mut run: Option<Run> = None;
@@ -175,7 +184,7 @@ fn glyph_runs(
             let continues = run.as_ref().is_some_and(|r| r.face == g.face.id && (r.size - g.size).abs() < 1e-9);
             if !continues {
                 if let Some(r) = run.take() {
-                    write_run(s, r, p, w, h, gxf, ex.ink());
+                    write_run(s, r, p, frame, ex.ink());
                 }
                 run = Some(Run { face: g.face.id, font, size: g.size, x0: g.x, y0: g.y, glyphs: Vec::new(), text: String::new(), last_chars: None });
             }
@@ -184,7 +193,7 @@ fn glyph_runs(
             }
         }
         if let Some(r) = run.take() {
-            write_run(s, r, p, w, h, gxf, ex.ink());
+            write_run(s, r, p, frame, ex.ink());
         }
     }
     rest
@@ -205,12 +214,11 @@ fn push_glyph(r: &mut Run, g: &Glyph, chars: &[char]) {
     r.glyphs.push((g.gid, g.x, g.y, g.advance, range));
 }
 
-#[allow(clippy::too_many_arguments)]
-fn write_run(s: &mut Surface, r: Run, p: &Paint, w: f64, h: f64, gxf: Affine, ink: crate::print::Ink) {
+fn write_run(s: &mut Surface, r: Run, p: &Paint, frame: PaintFrame, ink: crate::print::Ink) {
     if r.glyphs.is_empty() {
         return;
     }
-    let Some((paint, opacity)) = vector_paint(p, w, h, ink) else { return };
+    let Some((paint, opacity)) = vector_paint(p, frame.size.width, frame.size.height, ink) else { return };
     let size = r.size;
     let glyphs: Vec<KrillaGlyph> = r
         .glyphs
@@ -226,7 +234,7 @@ fn write_run(s: &mut Surface, r: Run, p: &Paint, w: f64, h: f64, gxf: Affine, in
     if let Some(b) = pb {
         s.push_blend_mode(b);
     }
-    s.push_transform(&to_xf(gxf));
+    s.push_transform(&to_xf(frame.transform));
     s.set_stroke(None);
     s.set_fill(Some(Fill { paint, opacity, rule: FillRule::NonZero }));
     s.draw_glyphs(Point::from_xy(r.x0 as f32, r.y0 as f32), &glyphs, r.font, &r.text, size as f32, false);

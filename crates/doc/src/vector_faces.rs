@@ -30,7 +30,12 @@ impl Face {
 
     /// The fill region for this face.
     pub fn region(&self) -> Region {
-        Region { loops: self.loops.clone(), winding: if self.loops.len() > 1 { WindingRule::EvenOdd } else { WindingRule::NonZero } }
+        Region {
+            loops: self.loops.clone(),
+            winding: if self.loops.len() > 1 { WindingRule::EvenOdd } else { WindingRule::NonZero },
+            fills: None,
+            paint_space: None,
+        }
     }
 
     /// Some point strictly inside the face (not in a hole).
@@ -115,7 +120,13 @@ impl VectorNetwork {
     /// Like [`Self::paint`], but with `want` the face ends up filled (`Some(true)`) or unfilled
     /// (`Some(false)`) whatever it was: a paint bucket drag keeps doing what its first click did.
     pub fn paint_to(&mut self, p: Point, want: Option<bool>) -> Option<bool> {
+        self.paint_to_with(p, want, None)
+    }
+
+    /// Like [`Self::paint_to`], with the layer fill stack used for inherited regions.
+    pub fn paint_to_with(&mut self, p: Point, want: Option<bool>, inherited: Option<&[figcraft_color::Paint]>) -> Option<bool> {
         let face = self.face_at(p)?;
+        let legacy = self.regions.iter().all(|region| region.fills.is_none() && region.paint_space.is_none());
         let key = |loops: &[Vec<usize>]| -> Vec<Vec<usize>> {
             let mut k: Vec<Vec<usize>> = loops
                 .iter()
@@ -131,18 +142,52 @@ impl VectorNetwork {
         let faces = self.faces();
         let face_keys: Vec<Vec<Vec<usize>>> = faces.iter().map(|f| key(&f.loops)).collect();
         if !self.regions.iter().all(|r| face_keys.contains(&key(&r.loops))) {
-            let filled: Vec<Region> = faces.iter().filter(|f| f.interior_point().is_some_and(|q| self.fill_contains(q))).map(Face::region).collect();
-            self.regions = filled;
+            if legacy {
+                // Legacy vectors use one combined fill rule across all regions.
+                self.regions =
+                    faces.iter().filter(|face| face.interior_point().is_some_and(|point| self.fill_contains(point))).map(Face::region).collect();
+            } else {
+                // Split each styled source region independently to retain its stack and frame.
+                let source_regions = self.regions.clone();
+                let mut filled = Vec::new();
+                for (source_index, source) in source_regions.into_iter().enumerate() {
+                    let source_path = self.region_path(source_index);
+                    for face in &faces {
+                        if face.interior_point().is_some_and(|q| {
+                            source_path.as_ref().is_some_and(|path| match source.winding {
+                                WindingRule::NonZero => path.winding(q) != 0,
+                                WindingRule::EvenOdd => path.winding(q) % 2 != 0,
+                            })
+                        }) {
+                            let mut region = face.region();
+                            region.fills = source.fills.clone();
+                            region.paint_space = source.paint_space;
+                            filled.push(region);
+                        }
+                    }
+                }
+                self.regions = filled;
+            }
         }
         let k = key(&face.loops);
-        match (self.regions.iter().position(|r| key(&r.loops) == k), want) {
-            (Some(_), None | Some(false)) => {
+        let filled = if legacy {
+            self.fill_contains(p) && inherited.is_none_or(|fills| fills.iter().any(|paint| paint.visible))
+        } else {
+            self.regions.iter().filter(|r| key(&r.loops) == k).any(|region| match &region.fills {
+                Some(fills) => fills.iter().any(|paint| paint.visible),
+                None => inherited.is_none_or(|fills| fills.iter().any(|paint| paint.visible)),
+            })
+        };
+        let want = want.unwrap_or(!filled);
+        match (filled, want) {
+            (true, false) => {
                 self.regions.retain(|r| key(&r.loops) != k);
                 Some(false)
             }
-            (Some(_), Some(true)) => Some(true),
-            (None, Some(false)) => Some(false),
-            (None, _) => {
+            (true, true) => Some(true),
+            (false, false) => Some(false),
+            (false, true) => {
+                self.regions.retain(|r| key(&r.loops) != k);
                 self.regions.push(face.region());
                 Some(true)
             }

@@ -6,10 +6,8 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
-use figcraft_collab::Replica;
 use figcraft_collab::message::{self, Admin, AdminReply, ClientMsg, OpenHosting, PROTOCOL, ServerMsg};
 use figcraft_collab_net::{Endpoint, Invite, NetLimits, manage};
-use figcraft_doc::{Document, NodeKind};
 use serde_json::{Value, json};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::{Bytes, Message};
@@ -18,22 +16,10 @@ use crate::abuse::{Abuse, AbuseConfig, Action, MAX_ADDRESSES};
 use crate::cli::{self, Cli, Command, Sort};
 use crate::config::Config;
 use crate::store::{KEY_ONLY, Store};
-use crate::test_util::{Raw, TempDir, config, join, key, live, pump, session};
+use crate::test_util::{Raw, TempDir, config, ip, join, key, live, pump, session, snapshot};
 
 fn open(dir: &std::path::Path) -> Config {
     Config { open_publish: true, operator_contact: "abuse@example.com".into(), terms_url: "https://example.com/terms".into(), ..config(dir) }
-}
-
-fn snapshot(name: &str) -> Vec<figcraft_collab::Change> {
-    let mut d = Document::new(name);
-    let page = d.first_page().unwrap();
-    d.create(page, NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 60.0).unwrap();
-    d.repair();
-    Replica::new(d).snapshot().unwrap()
-}
-
-fn ip(s: &str) -> IpAddr {
-    s.parse().unwrap()
 }
 
 fn ex(s: &mut figcraft_engine::Session, cmd: &str, p: Value) -> Value {
@@ -495,6 +481,13 @@ fn open_mode_has_safe_defaults_and_warns_the_operator() {
     assert_eq!(set.file_mb(), 8);
     assert!(Config { trusted_proxy: Some("localhost".into()), ..set.clone() }.check().is_err());
     assert!(Config { terms_url: "javascript:alert(1)".into(), ..set.clone() }.check().is_err());
+    // Clients keep track of at most `MAX_PEERS` others (#1121).
+    let people = figcraft_collab::message::MAX_PEERS;
+    let many = Config { max_people: people + 1, ..set.clone() };
+    assert!(many.check().is_ok(), "a server configured for more still starts");
+    assert_eq!(many.people(), people, "with that many");
+    assert!(many.warnings().iter().any(|w| w.contains("max_people is 4097") && w.contains("4096 are let in")), "{:?}", many.warnings());
+    assert_eq!(Config { max_people: people, ..set.clone() }.people(), people);
     assert!(Config { idle_days: f64::NAN, ..set }.check().is_err());
 }
 
@@ -582,6 +575,19 @@ fn files_above_64_mib_fit_every_limit() {
     }
     // A client takes such a file too, but caps what any server may make it buffer at 1 GiB.
     assert_eq!(NetLimits::default().max_server_message, 1 << 30);
+}
+
+#[test]
+fn the_batches_kept_for_reconnecting_apps_follow_max_log_mb() {
+    let log = |cfg: Config| cfg.store().core.max_log_bytes;
+    assert_eq!(log(Config::default()), 64 << 20, "a private server's log is bounded too");
+    assert_eq!(log(Config { max_log_mb: 8, ..Config::default() }), 8 << 20);
+    // Open to the public: also at most a quarter of a file (16 MiB unless set).
+    assert_eq!(log(Config { open_publish: true, ..Config::default() }), 4 << 20);
+    assert_eq!(log(Config { open_publish: true, max_log_mb: 1, ..Config::default() }), 1 << 20);
+    for mb in [0, 4097] {
+        assert!(Config { max_log_mb: mb, ..Config::default() }.check().is_err(), "max_log_mb = {mb}");
+    }
 }
 
 #[test]

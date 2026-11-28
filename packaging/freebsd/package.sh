@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Build and package FigCraft for FreeBSD:
 #
-#   $DIST/figcraft-<version>-freebsd-x86_64.tar.gz   a /usr/local-style tree:
-#       figcraft-<version>-freebsd-x86_64/{bin, share/applications, share/icons, share/mime,
+#   $DIST/figcraft-<version>-freebsd-<arch>.tar.gz   (arch: x86_64 or aarch64) a /usr/local-style tree:
+#       figcraft-<version>-freebsd-<arch>/{bin, share/applications, share/icons, share/mime,
 #       share/metainfo, share/doc/figcraft}
 #   bin/ holds figcraft, plus figcraft-cli once apps/figcraft-cli exists.
 #
 # Install by copying the tree's contents into /usr/local:
-#   tar -xzf figcraft-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
+#   tar -xzf figcraft-<version>-freebsd-<arch>.tar.gz --strip-components 1 -C /usr/local
 #
 # Usage: packaging/freebsd/package.sh [--skip-build] [--dry-run]
 #   --dry-run   stage the tree from stub binaries and list it, without building (works on any OS)
@@ -42,6 +42,10 @@ release_arch() {
 }
 # The release workflow cross-compiles aarch64 in an x86_64 VM with CARGO_BUILD_TARGET set to
 # aarch64-unknown-freebsd (craft-common-actions#39): name the archive after the target.
+# host-tuple means the build host; resolve it so the target dir path is a real triple.
+if [[ "${CARGO_BUILD_TARGET:-}" == host-tuple ]]; then
+  CARGO_BUILD_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+fi
 case "${CARGO_BUILD_TARGET:-}" in
   "") ARCH="$(release_arch "$(uname -m)")" ;;
   aarch64-unknown-freebsd | x86_64-unknown-freebsd) ARCH="$(release_arch "${CARGO_BUILD_TARGET%%-*}")" ;;
@@ -63,8 +67,15 @@ echo "==> FigCraft $VERSION for FreeBSD $ARCH"
 
 # The release VM has 12 GB; full parallelism on the biggest crates runs it out of memory.
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
+# The man-and-completions example writes figcraft-cli's man pages and shell completions below. It
+# is built in its own cargo run: built with the binaries, its dev-dependencies' features would be
+# unified into them. It runs here, so a cross build builds it for the host.
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  (cd "$ROOT" && cargo build --release --locked "${CARGO_PKGS[@]}")
+  (cd "$ROOT" && cargo build --release --locked ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"} "${CARGO_PKGS[@]}")
+  if [[ "$HAS_CLI" = 1 ]]; then
+    (cd "$ROOT" && cargo build --release --locked --target "$HOST_TRIPLE" -p figcraft-cli --example man-and-completions)
+  fi
 fi
 WORK="$CARGO_TARGET_DIR/freebsd-package"
 STAGE="$WORK/$BASENAME"
@@ -83,6 +94,16 @@ if [[ "$DRY_RUN" = 1 ]]; then
     printf '#!/bin/sh\necho "%s %s (dry-run stub)"\n' "$b" "$VERSION" >"$BIN/$b"
     chmod 755 "$BIN/$b"
   done
+  # A stub of the example: it writes the files the real one does.
+  mkdir -p "$BIN/examples"
+  cat >"$BIN/examples/man-and-completions" <<'STUB'
+#!/bin/sh
+mkdir -p "$1"
+for f in figcraft-cli.bash _figcraft-cli figcraft-cli.fish figcraft-cli.elv _figcraft-cli.ps1 figcraft-cli.1 figcraft-cli-info.1; do
+  echo "dry-run stub" >"$1/$f"
+done
+STUB
+  chmod 755 "$BIN/examples/man-and-completions"
 fi
 
 # ---- stage a /usr/local-style tree --------------------------------------------------------------
@@ -104,10 +125,31 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$FIGCRAFT_BUILD_DATE/g" \
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/share/icons/"
 copy_docs "$STAGE/share/doc/figcraft"
 if [[ -f "$ROOT/ATTRIBUTION.md" ]]; then install -m 644 "$ROOT/ATTRIBUTION.md" "$STAGE/share/doc/figcraft/"; fi
+# figcraft-cli's man pages and shell completions, from its clap definition, written by the example
+# built above (a --skip-build run needs it built too). Under /usr/local, man pages go in man/ and
+# the completions in the directories bash, zsh and fish read there.
+CLI_FILES=()
+if [[ "$HAS_CLI" = 1 ]]; then
+  CLI_DOCS="$CARGO_TARGET_DIR/$HOST_TRIPLE/release/examples/man-and-completions"
+  [[ "$DRY_RUN" = 0 ]] || CLI_DOCS="$BIN/examples/man-and-completions"
+  if [[ ! -x "$CLI_DOCS" ]]; then
+    echo "error: $CLI_DOCS is not built (cargo build --release --target $HOST_TRIPLE -p figcraft-cli --example man-and-completions)" >&2
+    exit 1
+  fi
+  "$CLI_DOCS" "$WORK/cli-docs"
+  mkdir -p "$STAGE/man/man1" "$STAGE/share/bash-completion/completions" \
+    "$STAGE/share/zsh/site-functions" "$STAGE/share/fish/vendor_completions.d"
+  install -m 644 "$WORK"/cli-docs/*.1 "$STAGE/man/man1/"
+  install -m 644 "$WORK/cli-docs/figcraft-cli.bash" "$STAGE/share/bash-completion/completions/figcraft-cli"
+  install -m 644 "$WORK/cli-docs/_figcraft-cli" "$STAGE/share/zsh/site-functions/_figcraft-cli"
+  install -m 644 "$WORK/cli-docs/figcraft-cli.fish" "$STAGE/share/fish/vendor_completions.d/figcraft-cli.fish"
+  CLI_FILES=(man/man1/figcraft-cli.1 share/bash-completion/completions/figcraft-cli share/zsh/site-functions/_figcraft-cli
+    share/fish/vendor_completions.d/figcraft-cli.fish)
+fi
 
 for f in "${BINS[@]/#/bin/}" "share/applications/$APP_ID.desktop" \
   "share/icons/hicolor/256x256/apps/$APP_ID.png" \
-  share/doc/figcraft/LICENSE-MIT share/doc/figcraft/LICENSE-APACHE; do
+  share/doc/figcraft/LICENSE-MIT share/doc/figcraft/LICENSE-APACHE "${CLI_FILES[@]}"; do
   if [[ ! -e "$STAGE/$f" ]]; then echo "error: $f is missing from the package" >&2; exit 1; fi
 done
 
@@ -116,19 +158,21 @@ mkdir -p "$OUT_DIR"
 tar -C "$WORK" -czf "$OUT_DIR/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $OUT_DIR/$BASENAME.tar.gz"
 
-if [[ "$DRY_RUN" = 1 ]] || [[ "$ARCH" = "$HOST_ARCH" ]]; then
-  "$STAGE/bin/$(smoke_bin)" --version
-else
+if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
   # They cannot run here, so check what they are instead: executables, not libraries or objects.
   # An older file(1) calls a PIE a shared object; its interpreter still marks it as a program.
-  want="$ARCH"; [[ "$ARCH" != x86_64 ]] || want=x86-64
-  for b in "$STAGE"/bin/*; do
-    case "$(file -b "$b")" in
-      ELF*" executable, "*"$want"*FreeBSD* | ELF*"$want"*FreeBSD*interpreter*) ;;
-      *) echo "error: $b is not a FreeBSD $ARCH executable: $(file -b "$b")" >&2; exit 1 ;;
-    esac
-  done
-  echo "skipping --version: an $ARCH binary does not run on this $HOST_ARCH machine"
+  if [[ "$DRY_RUN" = 0 ]]; then
+    want="$ARCH"; [[ "$ARCH" != x86_64 ]] || want=x86-64
+    for b in "$STAGE"/bin/*; do
+      case "$(file -b "$b")" in
+        ELF*" executable, "*"$want"*FreeBSD* | ELF*"$want"*FreeBSD*interpreter*) ;;
+        *) echo "error: $b is not a FreeBSD $ARCH executable: $(file -b "$b")" >&2; exit 1 ;;
+      esac
+    done
+  fi
+  echo "skipping --version: $CARGO_BUILD_TARGET binaries do not run on this $HOST_ARCH machine"
+elif [[ "$DRY_RUN" = 1 ]] || [[ "$ARCH" = "$HOST_ARCH" ]]; then
+  "$STAGE/bin/$(smoke_bin)" --version
 fi
 if [[ "$DRY_RUN" = 1 ]]; then
   echo "==> dry run: tarball contents"

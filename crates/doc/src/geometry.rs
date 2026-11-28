@@ -28,8 +28,9 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
             p
         }
         NodeKind::Vector { network } => {
-            let f = network.fill_path();
-            if f.elements().is_empty() { network.stroke_path() } else { f }
+            let net = drawn_network(network, c.smoothing);
+            let f = net.fill_path();
+            if f.elements().is_empty() { net.stroke_path() } else { f }
         }
         NodeKind::Text(_) => figcraft_geom::rounded_rect(w, h, [0.0; 4], 0.0),
         NodeKind::Page { .. } | NodeKind::Group | NodeKind::BooleanOp { .. } => return None,
@@ -39,8 +40,18 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
 /// The open/closed path strokes follow (vector networks stroke every segment, filled or not).
 pub fn stroke_geometry(n: &Node) -> Option<BezPath> {
     match &n.kind {
-        NodeKind::Vector { network } => Some(network.stroke_path()),
+        NodeKind::Vector { network } => Some(drawn_network(network, n.corners.smoothing).stroke_path()),
         _ => shape_path(n),
+    }
+}
+
+/// A vector's `network` as the layer draws it: rounded points drawn in with the layer's corner
+/// `smoothing` (see [`VectorNetwork::rounded_smoothed`](crate::VectorNetwork::rounded_smoothed)),
+/// or the network itself when no point is rounded.
+pub fn drawn_network(network: &crate::VectorNetwork, smoothing: f64) -> std::borrow::Cow<'_, crate::VectorNetwork> {
+    match network.rounded_smoothed(smoothing) {
+        Some(r) => std::borrow::Cow::Owned(r),
+        None => std::borrow::Cow::Borrowed(network),
     }
 }
 
@@ -74,15 +85,33 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
         NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Section { .. } => {
             n.local_rect().inflate(tol_l, tol_l).contains(lp)
         }
+        NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) => {
+            let drawn = drawn_network(network, n.corners.smoothing);
+            let net = drawn.as_ref();
+            if !outline {
+                for (i, region) in net.regions.iter().enumerate().rev() {
+                    let paints = region.fills.as_deref().unwrap_or(&n.fills);
+                    if paints.iter().any(|p| p.visible) && net.region_contains(i, lp) {
+                        return true;
+                    }
+                }
+            }
+            let path = net.stroke_path();
+            let has_fill = net.regions.iter().any(|region| region.fills.as_deref().unwrap_or(&n.fills).iter().any(|paint| paint.visible));
+            let stroke_only = n.has_visible_stroke() && !has_fill;
+            let reach = (n.stroke.max_weight() / 2.0).max(if stroke_only { tol_l * STROKE_REACH } else { tol_l });
+            path.bounding_box().inflate(reach, reach).contains(lp) && near_path(&path, lp, reach)
+        }
         _ => shape_path(n).is_some_and(|path| hits_path(n, &path, lp, tol_l, !outline && is_closed(n) && fills_point(n, &path, lp))),
     }
 }
 
 /// Whether the fill of `n`, drawn as `path`, covers `lp` (vectors follow the rule of
-/// [`VectorNetwork::fill_contains`](crate::VectorNetwork::fill_contains): even-odd when any region asks for it).
+/// [`VectorNetwork::fill_contains`](crate::VectorNetwork::fill_contains) on the network as drawn: even-odd when any
+/// region asks for it).
 fn fills_point(n: &Node, path: &BezPath, lp: Point) -> bool {
     match &n.kind {
-        NodeKind::Vector { network } => network.fill_contains(lp),
+        NodeKind::Vector { network } => drawn_network(network, n.corners.smoothing).fill_contains(lp),
         _ => path.winding(lp) != 0,
     }
 }
@@ -122,8 +151,13 @@ fn near_path(path: &BezPath, p: Point, dist: f64) -> bool {
 /// The innermost visible, unlocked node under `pt` (page coordinates), honouring clip content;
 /// boolean groups are hit where their `result` is.
 pub fn hit_leaf(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult) -> Option<NodeId> {
+    hit_leaf_opts(doc, page, pt, tol, result, HitOpts::default())
+}
+
+/// [`hit_leaf`] with `opts` (a deep pick reaches through unfilled nested frames, see [`HitOpts::deep`]).
+pub fn hit_leaf_opts(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult, opts: HitOpts) -> Option<NodeId> {
     let p = doc.node(page)?;
-    p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, None).filter(|_| !masked_out(doc, p, *c, pt)))
+    p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, None, opts).filter(|_| !masked_out(doc, p, *c, pt)))
 }
 
 /// Whether child `c` of `parent` is masked at `pt`: a visible mask below it (the nearest mask
@@ -146,7 +180,12 @@ fn covers(doc: &Document, id: NodeId, n: &Node, pt: Point, depth: usize) -> bool
 
 /// Like [`hit_leaf`], but only within layer `root` (it included).
 pub fn hit_in(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolResult) -> Option<NodeId> {
-    hit_rec(doc, root, pt, tol, 0, result, None)
+    hit_in_opts(doc, root, pt, tol, result, HitOpts::default())
+}
+
+/// [`hit_in`] with `opts` (see [`hit_leaf_opts`]).
+pub fn hit_in_opts(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolResult, opts: HitOpts) -> Option<NodeId> {
+    hit_rec(doc, root, pt, tol, 0, result, None, opts)
 }
 
 /// [`hit_leaf`] (or [`hit_in`] for a `root` that isn't a page) in outline mode: shapes are hit
@@ -156,8 +195,8 @@ pub fn hit_in(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolRes
 /// when it shows them, and every layer on the edge of its box when it shows object bounds.
 pub fn hit_outlines(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolResult, also: OutlineHits) -> Option<NodeId> {
     match doc.node(root) {
-        Some(p) if p.is_page() => p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, Some(also))),
-        _ => hit_rec(doc, root, pt, tol, 0, result, Some(also)),
+        Some(p) if p.is_page() => p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, Some(also), HitOpts::default())),
+        _ => hit_rec(doc, root, pt, tol, 0, result, Some(also), HitOpts::default()),
     }
 }
 
@@ -175,13 +214,54 @@ fn on_box_edge(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64) -> boo
     r.inflate(tol, tol).contains(lp) && !(r.width() > 2.0 * tol && r.height() > 2.0 * tol && r.inflate(-tol, -tol).contains(lp))
 }
 
-fn hit_rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, also: Option<OutlineHits>) -> Option<NodeId> {
+/// Options for the hit tests that the plain pick never sets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HitOpts {
+    /// Reach locked layers (and what a locked frame holds) too. A click, hover or marquee never
+    /// does; the Select layer list does.
+    pub locked: bool,
+    /// A deep pick (Cmd/Ctrl held): a frame, component or instance nested in another layer is hit
+    /// only where it has a visible fill, not across its whole box (its stroke doesn't count), so
+    /// the pick reaches the layers under an unfilled overlay such as a device chrome instance.
+    /// Boards (top-level frames and frames directly in a section) keep their box, as on a plain
+    /// pick. Observed in the reference app with synthetic files.
+    pub deep: bool,
+}
+
+/// Whether `pt` hits `n` itself for a pick with `opts` ([`hits_node_itself`], but see
+/// [`HitOpts::deep`]).
+fn hits_self(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, outline: bool, opts: HitOpts) -> bool {
+    let see_through = opts.deep
+        && !outline
+        && n.kind.is_frame_like()
+        && !n.is_board_atom()
+        && !is_board(doc, n)
+        && !n.fills.iter().any(|f| f.visible && f.opacity > 0.0);
+    !see_through && hits_node_itself(doc, id, n, pt, tol, outline)
+}
+
+/// Whether `n` sits on the page or directly in a section: a top-level frame, which a pick
+/// treats like an artboard.
+fn is_board(doc: &Document, n: &Node) -> bool {
+    n.parent.and_then(|p| doc.node(p)).is_none_or(|p| p.is_page() || matches!(p.kind, NodeKind::Section { .. }))
+}
+
+fn hit_rec(
+    doc: &Document,
+    id: NodeId,
+    pt: Point,
+    tol: f64,
+    depth: usize,
+    result: BoolResult,
+    also: Option<OutlineHits>,
+    opts: HitOpts,
+) -> Option<NodeId> {
     if depth > 512 {
         return None;
     }
     let n = doc.node(id)?;
     let outline = also.is_some();
-    if (!n.visible && !also.is_some_and(|a| a.hidden)) || n.locked {
+    if (!n.visible && !also.is_some_and(|a| a.hidden)) || n.locked && !opts.locked {
         return None;
     }
     if let NodeKind::Section { contents_hidden: true } = n.kind {
@@ -199,25 +279,31 @@ fn hit_rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result
         return None;
     }
     for c in n.paint_order().rev() {
-        if let Some(h) = hit_rec(doc, c, pt, tol, depth + 1, result, also).filter(|_| !masked_out(doc, n, c, pt)) {
+        if let Some(h) = hit_rec(doc, c, pt, tol, depth + 1, result, also, opts).filter(|_| !masked_out(doc, n, c, pt)) {
             return Some(h);
         }
     }
-    if in_result == Some(true) || hits_node_itself(doc, id, n, pt, tol, outline) || also.is_some_and(|a| a.bounds) && on_box_edge(doc, id, n, pt, tol)
+    if in_result == Some(true) || hits_self(doc, id, n, pt, tol, outline, opts) || also.is_some_and(|a| a.bounds) && on_box_edge(doc, id, n, pt, tol)
     {
         return Some(id);
     }
     None
 }
 
-/// Every visible, unlocked layer under `pt` (page coordinates) with its depth below the page, in
-/// layer-tree order (each layer before what it contains, the front-most first): what
-/// "Select layer" in the context menu lists. Clip content is honoured; boolean groups (hit where
-/// their `result` is) and sections with hidden contents count as one layer.
+/// Every visible, unlocked layer under `pt`: [`layers_at_opts`] with the default options.
 pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult) -> Vec<(NodeId, usize)> {
-    fn rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, out: &mut Vec<(NodeId, usize)>) {
+    layers_at_opts(doc, page, pt, tol, result, HitOpts::default())
+}
+
+/// Every visible layer under `pt` (page coordinates) with its depth below the page, in
+/// layer-tree order (each layer before what it contains, the front-most first): what
+/// "Select layer" in the context menu lists. Locked layers are left out unless `opts.locked`.
+/// Clip content is honoured; boolean groups (hit where their `result` is) and sections with
+/// hidden contents count as one layer.
+pub fn layers_at_opts(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult, opts: HitOpts) -> Vec<(NodeId, usize)> {
+    fn rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, opts: HitOpts, out: &mut Vec<(NodeId, usize)>) {
         let Some(n) = doc.node(id) else { return };
-        if !n.visible || n.locked || depth > 512 {
+        if !n.visible || n.locked && !opts.locked || depth > 512 {
             return;
         }
         let clips = n.clip && n.kind.is_frame_like();
@@ -227,14 +313,14 @@ pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: Bool
         let at = out.len();
         let whole = matches!(n.kind, NodeKind::BooleanOp { .. } | NodeKind::Section { contents_hidden: true });
         if whole {
-            if hit_rec(doc, id, pt, tol, depth, result, None).is_some() {
+            if hit_rec(doc, id, pt, tol, depth, result, None, opts).is_some() {
                 out.push((id, depth));
             }
             return;
         }
         for c in n.paint_order().rev() {
             let before = out.len();
-            rec(doc, c, pt, tol, depth + 1, result, out);
+            rec(doc, c, pt, tol, depth + 1, result, opts, out);
             if out.len() > before && masked_out(doc, n, c, pt) {
                 out.truncate(before);
             }
@@ -247,7 +333,7 @@ pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: Bool
     if let Some(p) = doc.node(page) {
         for c in p.children.iter().rev() {
             let before = out.len();
-            rec(doc, *c, pt, tol, 0, result, &mut out);
+            rec(doc, *c, pt, tol, 0, result, opts, &mut out);
             if out.len() > before && masked_out(doc, p, *c, pt) {
                 out.truncate(before);
             }
@@ -326,14 +412,15 @@ pub fn enter_target(doc: &Document, leaf: NodeId, selection: &[NodeId]) -> NodeI
     inner.unwrap_or_else(|| select_target(doc, leaf, selection, false))
 }
 
-/// Nodes on `page` whose world bounds intersect `rect` (marquee): top-level children, or the
-/// children of top-level frames when the marquee starts inside a frame (`within`).
+/// Nodes a marquee over `rect` touches, one level only: the children of `within` (a focus view's
+/// frame), or the top-level layers of `page`. Frames are not opened or enclosed here; see
+/// [`marquee_select`] for a plain marquee.
 pub fn marquee(doc: &Document, page: NodeId, rect: Rect, within: Option<NodeId>) -> Vec<NodeId> {
     let parent = within.unwrap_or(page);
     doc.node(parent).map(|p| marquee_children(doc, p, rect)).unwrap_or_default()
 }
 
-/// Nodes on `page` a Cmd/Ctrl marquee selects: the innermost layers whose bounds touch `rect`
+/// Nodes on `page` a Cmd/Ctrl marquee selects: the innermost layers the marquee touches
 /// (frames, groups and instances are looked into; a container none of whose children are touched
 /// counts itself; boolean groups count as one shape).
 pub fn marquee_deep(doc: &Document, page: NodeId, rect: Rect) -> Vec<NodeId> {
@@ -355,25 +442,133 @@ pub fn marquee_deep(doc: &Document, page: NodeId, rect: Rect) -> Vec<NodeId> {
     out
 }
 
-/// The visible, unlocked children of `p` whose world bounds touch `rect` (on both axes: lines and
-/// other flat layers too).
+/// The visible, unlocked children of `p` the marquee touches (see [`marquee_touches`]).
 fn marquee_children(doc: &Document, p: &Node, rect: Rect) -> Vec<NodeId> {
-    p.children
-        .iter()
-        .copied()
-        .filter(|c| doc.node(*c).is_some_and(|n| n.visible && !n.locked))
-        .filter(|c| doc.world_bounds(*c).is_some_and(|b| b.x0 <= rect.x1 && b.x1 >= rect.x0 && b.y0 <= rect.y1 && b.y1 >= rect.y0))
-        .collect()
+    p.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|n| n.visible && !n.locked && marquee_touches(doc, *c, n, rect))).collect()
 }
 
-/// Figma marquee rule: a marquee that fully contains a top-level frame selects the frame; one
-/// starting on empty canvas selects top-level objects it touches.
-pub fn marquee_select(doc: &Document, page: NodeId, rect: Rect, start_inside: Option<NodeId>) -> Vec<NodeId> {
-    if let Some(frame) = start_inside {
-        let inside = marquee(doc, page, rect, Some(frame));
-        return inside;
+/// The outline a rotated shape is touched by. One line: return the turned box instead
+/// (`figcraft_geom::rounded_rect(n.width, n.height, [0.0; 4], 0.0)`) if Figma proves to test that.
+fn marquee_outline(n: &Node) -> Option<BezPath> {
+    shape_path(n)
+}
+
+/// Whether the marquee touches layer `id`: its world box overlaps `rect` (inclusive, so lines and
+/// zero-size marquees count) and, for a rotated shape, its outline in page space does too.
+fn marquee_touches(doc: &Document, id: NodeId, n: &Node, rect: Rect) -> bool {
+    let box_hit = doc.world_bounds(id).is_some_and(|b| b.x0 <= rect.x1 && b.x1 >= rect.x0 && b.y0 <= rect.y1 && b.y1 >= rect.y0);
+    if !box_hit
+        || !matches!(
+            n.kind,
+            NodeKind::Rectangle
+                | NodeKind::Ellipse { .. }
+                | NodeKind::Polygon { .. }
+                | NodeKind::Star { .. }
+                | NodeKind::Line
+                | NodeKind::Vector { .. }
+        )
+    {
+        return box_hit;
     }
-    marquee(doc, page, rect, None)
+    let xf = doc.world_transform(id);
+    let [a, b, c, d, e, f] = xf.as_coeffs();
+    const EPS: f64 = 1e-9;
+    let rotated = !((b.abs() < EPS && c.abs() < EPS) || (a.abs() < EPS && d.abs() < EPS));
+    if !rotated {
+        return true;
+    }
+    let det = a * d - b * c;
+    if ![a, b, c, d, e, f, det].iter().all(|v| v.is_finite()) || det.abs() < EPS {
+        return true;
+    }
+    marquee_outline(n).is_none_or(|path| path_touches_rect(n, &path, xf, rect))
+}
+
+/// Whether the marquee and the shape drawn as local `path` under `xf` share a point: a path end
+/// inside the marquee, a path segment crossing a marquee edge, or the marquee inside the filled shape.
+fn path_touches_rect(n: &Node, path: &BezPath, xf: figcraft_geom::Affine, rect: Rect) -> bool {
+    use figcraft_geom::kurbo::{Line, ParamCurve, PathSeg};
+    let inside = |p: Point| p.x >= rect.x0 && p.x <= rect.x1 && p.y >= rect.y0 && p.y <= rect.y1;
+    let mut world = path.clone();
+    world.apply_affine(xf);
+    if world.segments().any(|s| inside(s.start()) || inside(s.end())) {
+        return true;
+    }
+    let (tl, tr, br, bl) = (Point::new(rect.x0, rect.y0), Point::new(rect.x1, rect.y0), Point::new(rect.x1, rect.y1), Point::new(rect.x0, rect.y1));
+    let edges = [(tl, tr), (tr, br), (br, bl), (bl, tl)];
+    for (p, q) in edges {
+        if (q - p).hypot() < 1e-9 {
+            continue;
+        }
+        let line = Line::new(p, q);
+        if world.segments().any(|s: PathSeg| s.intersect_line(line).iter().any(|h| (0.0..=1.0).contains(&h.line_t))) {
+            return true;
+        }
+    }
+    is_closed(n) && fills_point(n, path, xf.inverse() * tl)
+}
+
+/// Whether a marquee takes a touched top-level layer whole, opens it for the layers in it, or skips it.
+enum Touch {
+    Whole,
+    /// The frame the drag started in: the layers in it the marquee touches, or the frame itself
+    /// (whole) once the marquee is at the top level.
+    Open,
+    /// A partly covered frame or section: the layers in it, or the frame itself once the marquee is at the top level.
+    Partial,
+    Skip,
+}
+
+/// Figma's marquee rule (measured in the web app, 2026-11-11): each top-level layer the marquee
+/// touches is selected whole, except a frame with children or a section with its contents shown:
+/// enclosed by the marquee it is selected itself, otherwise the marquee takes the layers in it that
+/// it touches. The frame the drag started in (`start_inside`) is selected only when the marquee also
+/// takes another top-level frame (then whole); otherwise only the layers in it the marquee touches.
+/// Selecting a frame or section whole keeps the marquee at the top level: no frame opens then, and a
+/// partly covered one is selected whole. Components, instances, board items and sections with hidden
+/// contents are selected only when enclosed.
+pub fn marquee_select(doc: &Document, page: NodeId, rect: Rect, start_inside: Option<NodeId>) -> Vec<NodeId> {
+    let Some(page_node) = doc.node(page) else { return Vec::new() };
+    let touched = marquee_children(doc, page_node, rect);
+    let classified: Vec<(NodeId, Touch, bool)> = touched
+        .iter()
+        .filter_map(|t| {
+            let n = doc.node(*t)?;
+            let enclosed = doc.world_bounds(*t).is_some_and(|b| rect.contains(b.origin()) && rect.contains(Point::new(b.x1, b.y1)));
+            let container = n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. });
+            let opens = match &n.kind {
+                NodeKind::Frame | NodeKind::Section { .. } => !n.is_board_atom() && !n.hides_contents() && !n.children.is_empty(),
+                _ => false,
+            };
+            let plain_empty_frame = matches!(n.kind, NodeKind::Frame) && n.children.is_empty() && !n.is_board_atom();
+            let act = if start_inside == Some(*t) {
+                Touch::Open
+            } else if opens {
+                if enclosed { Touch::Whole } else { Touch::Partial }
+            } else if plain_empty_frame || !(container || n.is_board_atom()) || enclosed {
+                Touch::Whole
+            } else {
+                Touch::Skip
+            };
+            let whole_container = container && matches!(act, Touch::Whole);
+            Some((*t, act, whole_container))
+        })
+        .collect();
+    let top_level_mode = classified.iter().any(|(_, _, whole_container)| *whole_container);
+    let mut out = Vec::new();
+    for (t, act, _) in &classified {
+        match act {
+            Touch::Whole => out.push(*t),
+            Touch::Open | Touch::Partial if top_level_mode => out.push(*t),
+            Touch::Open | Touch::Partial => {
+                if let Some(n) = doc.node(*t) {
+                    out.extend(marquee_children(doc, n, rect));
+                }
+            }
+            Touch::Skip => {}
+        }
+    }
+    out
 }
 
 /// Bounds of a node's outline in page coordinates for snapping (the box corners and centre).

@@ -30,7 +30,7 @@ pub struct NetLimits {
     /// answer, so this is longer than `idle_timeout` (a large project on a slow connection can
     /// easily need several minutes).
     pub request_reply_timeout: Duration,
-    /// A quiet client pings this often (keeps it under `idle_timeout`).
+    /// A client pings this often, whatever else it sends (keeps it under `idle_timeout`).
     pub keepalive: Duration,
     /// Messages queued for one client before it counts as stuck and is disconnected.
     pub queue: usize,

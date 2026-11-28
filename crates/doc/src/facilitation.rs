@@ -90,6 +90,25 @@ pub struct Vote {
 /// Every voter's ballot: the objects they put their votes on (once per vote).
 pub type Ballots = BTreeMap<String, Vec<NodeId>>;
 
+/// The most ended votes a board keeps the results of (the oldest goes first).
+pub const VOTE_HISTORY_MAX: usize = 20;
+
+/// An ended vote's results, kept in the file: the vote, everyone's ballots and the names the
+/// voters went by when it ended (a live session's client ids mean nothing once it's over).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoteRecord {
+    pub vote: Vote,
+    #[serde(default)]
+    pub ballots: Ballots,
+    /// Voter key → name, for the keys that aren't names themselves.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub names: BTreeMap<String, String>,
+    /// When it ended (milliseconds since the Unix epoch).
+    #[serde(default)]
+    pub ended: u64,
+}
+
 impl Vote {
     /// The votes of `ballot` that count: on objects that are still there, up to the cap.
     pub fn counted<'a>(&self, doc: &'a Document, ballot: &'a [NodeId]) -> impl Iterator<Item = NodeId> + 'a {

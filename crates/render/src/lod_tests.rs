@@ -5,7 +5,7 @@
 use std::sync::{Arc, Once};
 
 use figcraft_color::{Color, ImageScaleMode, Paint};
-use figcraft_doc::{Document, ImageData, NodeId, NodeKind, TextData};
+use figcraft_doc::{Document, ImageData, NodeId, NodeKind, Region, TextData, VectorNetwork};
 use figcraft_geom::{Affine, Rect};
 
 use crate::retained_tests::assert_same;
@@ -111,6 +111,19 @@ fn lod_is_off_unless_asked_for() {
 }
 
 #[test]
+fn region_paints_disable_vector_and_ancestor_splatting() {
+    let mut d = Document::new("region LOD");
+    let page = d.first_page().unwrap();
+    let parent = d.create(page, NodeKind::Frame, "Parent", 0.0, 0.0, 4.0, 4.0).unwrap();
+    let mut network = VectorNetwork::default();
+    network.regions.push(Region { loops: Vec::new(), winding: Default::default(), fills: Some(Vec::new()), ..Default::default() });
+    let vector = d.create(parent, NodeKind::Vector { network }, "Styled", 0.0, 0.0, 2.0, 2.0).unwrap();
+    let node = d.node(vector).unwrap();
+    assert!(!lod::splattable(&d, node, 0));
+    assert!(!lod::splattable(&d, d.node(parent).unwrap(), 0));
+}
+
+#[test]
 fn zoomed_out_previews_are_close_to_exact() {
     let (d, p) = cards();
     for scale in [0.02, 0.05, 0.12, 0.25] {
@@ -163,6 +176,7 @@ fn exports_never_use_lod() {
         outlined: &[],
         skip: &[],
         lod: true,
+        preview: false,
         magnified_image_pixels: false,
         under: None,
         time: 0.0,

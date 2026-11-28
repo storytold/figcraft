@@ -188,7 +188,7 @@ fn threads_replies_and_resolving() {
             |c| c.replies.iter().map(|m| m.text.as_str()).eq(["Sure", "Done"]),
             "replies stay in the order they were written",
         ),
-        ("comment.resolve", json!({"id": c, "author": "Sam"}), |c| c.resolved, "anyone in the file can resolve a thread, not just its author"),
+        ("comment.resolve", json!({"id": c}), |c| c.resolved, "anyone in the file can resolve a thread, not just its author (it takes no author)"),
         ("comment.resolve", json!({"id": c, "resolved": false}), |c| !c.resolved, "a resolved thread can be reopened"),
         ("comment.resolve", json!({"id": c}), |c| c.resolved, "resolving again marks it resolved"),
         (

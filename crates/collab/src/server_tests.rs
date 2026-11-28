@@ -2,8 +2,8 @@
 
 use figcraft_doc::{Document, Node, NodeId, NodeKind};
 
-use crate::change::{Change, Json, Prop};
-use crate::message::{ClientMsg, Hello, PROTOCOL, Presence, ServerMsg};
+use crate::change::{Change, DocProp, Entry, Json, Prop};
+use crate::message::{CatchUp, ClientMsg, Hello, PROTOCOL, Presence, ServerMsg, client_version, reads_design_review};
 use crate::replica::Mode;
 use crate::{Client, Limits, NoRecompute, Outgoing, Server};
 
@@ -36,6 +36,22 @@ fn for_client(out: &[Outgoing], to: u32) -> Vec<ServerMsg> {
             Outgoing::Others(not, m) if *not != to => Some(m.clone()),
             _ => None,
         })
+        .collect()
+}
+
+/// A hello whose `client_version` says exactly `version` (what an older or newer build announces).
+fn hello_of(version: &str) -> Hello {
+    Hello { client_version: version.to_string(), ..hello("tok") }
+}
+
+/// The changes an `Accepted` relay or catch-up carries, or none.
+fn accepted_changes(msgs: &[ServerMsg]) -> Vec<&Change> {
+    msgs.iter()
+        .filter_map(|m| match m {
+            ServerMsg::Changes(a) => Some(a.changes.iter().collect::<Vec<_>>()),
+            _ => None,
+        })
+        .flatten()
         .collect()
 }
 
@@ -183,6 +199,26 @@ fn deleted_nodes_can_come_back_but_ids_are_never_handed_out_twice() {
 }
 
 #[test]
+fn a_viewers_refused_deletion_gets_no_repair() {
+    let (d, _, frame) = doc();
+    let mut s = Server::new(d, "tok", Limits::default());
+    let (id, out) = s.join_as(hello("tok"), crate::message::Access::View).unwrap();
+    let Some(Outgoing::To(_, welcome)) = out.into_iter().next() else { panic!() };
+    let mut v = Client::join(welcome).unwrap();
+    let del = edit(&mut v, |d| d.remove(frame).unwrap());
+    let (reason, fixes) = rejected(
+        &mut s,
+        id,
+        match del {
+            ClientMsg::Changes { changes, .. } => changes,
+            _ => panic!(),
+        },
+    );
+    assert_eq!(reason, crate::VIEW_ONLY);
+    assert!(fixes.is_empty(), "{fixes:?}");
+}
+
+#[test]
 fn fixes_roll_a_rejected_client_back_to_the_server_state() {
     let (d, _, frame) = doc();
     let mut s = Server::new(d, "tok", Limits::default());
@@ -215,6 +251,43 @@ fn fixes_roll_a_rejected_client_back_to_the_server_state() {
     assert_eq!(a.pending(), 0);
     assert_eq!(a.view(), s.replica());
     assert_eq!(b.view(), s.replica());
+}
+
+#[test]
+fn a_refused_deep_delete_restores_each_node_once_in_linear_time() {
+    const DEPTH: usize = 20_000;
+    let (mut d, _, frame) = doc();
+    let mut chain = vec![frame];
+    while chain.len() < DEPTH {
+        let parent = *chain.last().unwrap();
+        chain.push(d.create(parent, NodeKind::Frame, "F", 0.0, 0.0, 1.0, 1.0).unwrap());
+    }
+    let mut s = Server::new(d, "tok", Limits::default());
+    let a = join(&mut s);
+    // Every node of the chain deleted, plus a rename of a node nobody has: refused whole.
+    let missing = NodeId(u64::MAX >> 1);
+    let mut changes: Vec<Change> = chain.iter().map(|&id| Change::Delete { id }).collect();
+    changes.push(Change::Set { id: missing, prop: Prop::Name, value: Json("x".into()) });
+    // As many comment threads put, each twice: they go back to not existing, once each.
+    let put = |c: u64| Change::Put { entry: Entry::Comment(c), value: Json(serde_json::json!({})) };
+    changes.extend((1..=DEPTH as u64).chain(1..=DEPTH as u64).map(put));
+    let started = std::time::Instant::now();
+    let (_, fixes) = rejected(&mut s, a.id(), changes);
+    let took = started.elapsed();
+    assert_eq!(fixes.first(), Some(&Change::Delete { id: missing }));
+    let restored: Vec<NodeId> = fixes[1..=DEPTH]
+        .iter()
+        .map(|c| match c {
+            Change::Create { id, .. } => *id,
+            other => panic!("not a creation: {other:?}"),
+        })
+        .collect();
+    assert_eq!(restored, chain, "each deleted node comes back once, parents first");
+    let removed: Vec<Change> = (1..=DEPTH as u64).map(|c| Change::Remove { entry: Entry::Comment(c) }).collect();
+    assert_eq!(fixes[DEPTH + 1..], removed[..], "each entry once, in batch order");
+    // Walking every deleted node's subtree again and comparing each fix with all the earlier
+    // ones took 27 s in a debug build; once each takes 0.1 s.
+    assert!(took < std::time::Duration::from_secs(10), "{took:?}");
 }
 
 #[test]
@@ -306,4 +379,178 @@ fn junk_batches_never_panic_and_never_corrupt_the_document() {
         let _ = s.receive(a.id(), ClientMsg::Changes { base_seq: s.seq(), batch_id: round + 1, changes });
         assert!(s.document().validate().is_empty(), "{:?}", s.document().validate());
     }
+}
+
+#[test]
+fn the_client_version_announces_the_design_review() {
+    assert!(reads_design_review(&client_version()));
+    assert!(!reads_design_review("0.18.0 signals hosting comments packed"));
+}
+
+/// A capable editor, a peer built before the review existed, and a mixed batch: the old peer
+/// hears the same batch without the review-setting edit, the new peer hears it whole.
+#[test]
+fn a_review_edit_reaches_only_the_peers_that_read_it() {
+    let (d, _, _) = doc();
+    let mut s = Server::new(d, "tok", Limits::default());
+    let capable = join(&mut s);
+    let (old_id, out) = s.join(hello_of("0.18.0 signals hosting comments packed")).unwrap();
+    let old = {
+        let Some(Outgoing::To(_, welcome)) = out.into_iter().next() else { panic!("no welcome") };
+        Client::join(welcome).unwrap()
+    };
+    assert_eq!(old.id(), old_id);
+
+    // One batch: rename the document (everyone) and set the review grid (capable peers only).
+    let batch = vec![
+        Change::SetDoc { prop: DocProp::Name, value: Json::of("Renamed").unwrap() },
+        Change::SetDoc { prop: DocProp::DesignReview, value: Json(serde_json::json!({"preset": "strict", "grid": 8.0})) },
+    ];
+    let out = s.receive(capable.id(), ClientMsg::Changes { base_seq: s.seq(), batch_id: 1, changes: batch });
+    let for_old = for_client(&out, old.id());
+    assert!(accepted_changes(&for_old).iter().all(|c| !c.is_design_review()), "the old peer's copy carries no review edit: {:?}", for_old);
+    assert!(
+        accepted_changes(&for_old).iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::Name, .. })),
+        "the old peer still hears the rename: {:?}",
+        for_old
+    );
+    let for_new = for_client(&out, capable.id());
+    assert_eq!(accepted_changes(&for_new).len(), 2, "the capable peer hears both: {for_new:?}");
+
+    // A capable newcomer's catch-up (a fresh join, so a snapshot) carries the settings.
+    let (_, out) = s.join(hello("tok")).unwrap();
+    let Some(Outgoing::To(_, ServerMsg::Welcome { catch_up, .. })) =
+        out.into_iter().find(|o| matches!(o, Outgoing::To(_, ServerMsg::Welcome { .. })))
+    else {
+        panic!("no welcome");
+    };
+    let crate::message::CatchUp::Snapshot(changes) = catch_up else { panic!("not a snapshot") };
+    assert!(changes.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::DesignReview, .. })), "{changes:?}");
+
+    // An old newcomer's catch-up carries none, and still has the rename.
+    let (_, out) = s.join(hello_of("0.18.0 signals hosting comments packed")).unwrap();
+    let Some(Outgoing::To(_, ServerMsg::Welcome { catch_up, .. })) =
+        out.into_iter().find(|o| matches!(o, Outgoing::To(_, ServerMsg::Welcome { .. })))
+    else {
+        panic!("no welcome");
+    };
+    let crate::message::CatchUp::Snapshot(changes) = catch_up else { panic!("not a snapshot") };
+    assert!(changes.iter().all(|c| !c.is_design_review()), "{changes:?}");
+    assert!(changes.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::Name, .. })), "{changes:?}");
+}
+
+/// A review-only batch advances the server sequence for every peer. An older peer must still be
+/// sent the accepted batch, empty as it is, or it falls a sequence behind and refuses what
+/// follows.
+#[test]
+fn a_review_only_batch_keeps_an_older_peer_in_step() {
+    let (d, _, frame) = doc();
+    let mut s = Server::new(d, "tok", Limits::default());
+    let mut capable = join(&mut s);
+    let (old_id, out) = s.join(hello_of("0.18.0 signals hosting comments packed")).unwrap();
+    let mut old = {
+        let Some(Outgoing::To(_, welcome)) = out.into_iter().next() else { panic!("no welcome") };
+        Client::join(welcome).unwrap()
+    };
+    assert_eq!(old.id(), old_id);
+
+    // Only the review settings change, so this batch has nothing for the older peer.
+    let msg = edit(&mut capable, |d| d.design_review.grid = 8.0);
+    let ClientMsg::Changes { changes, .. } = &msg else { panic!("not a batch") };
+    assert!(!changes.is_empty() && changes.iter().all(Change::is_design_review), "review only: {changes:?}");
+    let out = s.receive(capable.id(), msg);
+    assert_eq!(s.seq(), 1);
+    let to_old = for_client(&out, old.id());
+    let empty = to_old.iter().any(|m| matches!(m, ServerMsg::Changes(a) if a.changes.is_empty()));
+    assert!(empty, "the older peer is told the batch happened: {to_old:?}");
+    for m in for_client(&out, capable.id()) {
+        capable.receive(m, &NoRecompute).unwrap();
+    }
+    for m in to_old {
+        old.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(old.seq(), s.seq());
+
+    // The next ordinary edit still lands for it.
+    let msg = edit(&mut capable, |d| {
+        d.create(frame, NodeKind::Rectangle, "After", 0.0, 0.0, 10.0, 10.0).unwrap();
+    });
+    let out = s.receive(capable.id(), msg);
+    for m in for_client(&out, capable.id()) {
+        capable.receive(m, &NoRecompute).unwrap();
+    }
+    for m in for_client(&out, old.id()) {
+        old.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(old.seq(), s.seq());
+    assert_eq!(old.document().node(frame).map(|n| n.children.len()), Some(1), "the new node is there");
+}
+
+/// The same batch through the other catch-up path: a peer that was away comes back with a delta,
+/// and the review-only batch is there as an accepted batch with nothing in it for it, so its
+/// sequence carries on and the edits after it apply.
+#[test]
+fn a_review_only_batch_is_an_empty_delta_for_a_peer_that_was_away() {
+    let (d, _, frame) = doc();
+    let mut s = Server::new(d, "tok", Limits::default());
+    let mut capable = join(&mut s);
+    let (old_id, out) = s.join(hello_of("0.18.0 signals hosting comments packed")).unwrap();
+    let mut old = {
+        let Some(Outgoing::To(_, welcome)) = out.into_iter().next() else { panic!("no welcome") };
+        Client::join(welcome).unwrap()
+    };
+    assert_eq!(old.id(), old_id);
+
+    // One ordinary edit, so the peer's resume point sits before the review-only batch.
+    let msg = edit(&mut capable, |d| {
+        d.create(frame, NodeKind::Rectangle, "Before", 0.0, 0.0, 10.0, 10.0).unwrap();
+    });
+    let out = s.receive(capable.id(), msg);
+    for m in for_client(&out, capable.id()) {
+        capable.receive(m, &NoRecompute).unwrap();
+    }
+    for m in for_client(&out, old.id()) {
+        old.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(old.seq(), 1);
+
+    // It drops; only the review settings change while it is away.
+    old.disconnect();
+    let msg = edit(&mut capable, |d| d.design_review.grid = 8.0);
+    let out = s.receive(capable.id(), msg);
+    for m in for_client(&out, capable.id()) {
+        capable.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(s.seq(), 2);
+
+    // It comes back: the delta holds the batch, empty, and its sequence carries on.
+    let ClientMsg::Hello(h) = old.reconnect(hello_of("0.18.0 signals hosting comments packed")) else {
+        panic!("not a hello");
+    };
+    let (id, out) = s.join(h).unwrap();
+    assert_eq!(id, old.id());
+    let welcome = out
+        .into_iter()
+        .find_map(|o| match o {
+            Outgoing::To(to, w @ ServerMsg::Welcome { .. }) if to == id => Some(w),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no welcome"));
+    assert!(
+        matches!(&welcome, ServerMsg::Welcome { catch_up: CatchUp::Delta(list), .. } if list.len() == 1 && list[0].changes.is_empty()),
+        "{welcome:?}"
+    );
+    old.receive(welcome, &NoRecompute).unwrap();
+    assert_eq!(old.seq(), s.seq());
+
+    // And the next ordinary edit still applies.
+    let msg = edit(&mut capable, |d| {
+        d.create(frame, NodeKind::Rectangle, "After", 0.0, 20.0, 10.0, 10.0).unwrap();
+    });
+    let out = s.receive(capable.id(), msg);
+    for m in for_client(&out, old.id()) {
+        old.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(old.seq(), s.seq());
+    assert_eq!(old.document().node(frame).map(|n| n.children.len()), Some(2), "both nodes are there");
 }

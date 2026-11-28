@@ -88,16 +88,16 @@ impl Expr {
             return Err("The expression is nested too deeply".into());
         }
         let (op, args) = match self {
-            Expr::Value(VariableValue::Alias(id)) => return vars.get(id).map(|v| v.kind).ok_or_else(|| format!("No variable `{id}`")),
+            Expr::Value(VariableValue::Alias(id)) => return vars.get_by_id(id).map(|v| v.kind).ok_or_else(|| format!("No variable `{id}`")),
             Expr::Value(VariableValue::Number(n)) if !n.is_finite() => return Err("Numbers must be finite".into()),
             Expr::Value(v) => return v.type_of().ok_or_else(|| "Not a value".to_string()),
             Expr::Mode { collection } => {
-                return vars.collection(collection).map(|_| T::String).ok_or_else(|| format!("No variable collection `{collection}`"));
+                return vars.collection_by_id(collection).map(|_| T::String).ok_or_else(|| format!("No variable collection `{collection}`"));
             }
             Expr::InMode { variable, mode } => {
-                let v = vars.get(variable).ok_or_else(|| format!("No variable `{variable}`"))?;
-                let c = vars.collection(&v.collection).ok_or_else(|| format!("No variable collection `{}`", v.collection))?;
-                return c.find_mode(mode).map(|_| v.kind).ok_or_else(|| format!("{} has no mode `{mode}`", c.name));
+                let v = vars.get_by_id(variable).ok_or_else(|| format!("No variable `{variable}`"))?;
+                let c = vars.collection_by_id(&v.collection).ok_or_else(|| format!("No variable collection `{}`", v.collection))?;
+                return c.mode_by_id(mode).map(|_| v.kind).ok_or_else(|| format!("{} has no mode `{mode}`", c.name));
             }
             Expr::Op { op, args } => (*op, args),
         };
@@ -501,7 +501,7 @@ impl Parser<'_> {
         self.i += 1;
         let start = self.i;
         let name = self.argument(']', "mode")?;
-        let coll = self.vars.get(&var).and_then(|v| self.vars.collection(&v.collection));
+        let coll = self.vars.get_by_id(&var).and_then(|v| self.vars.collection_by_id(&v.collection));
         match coll.and_then(|c| c.find_mode(&name)) {
             Some(m) => Ok(Expr::InMode { variable: var, mode: m.id.clone() }),
             None => {

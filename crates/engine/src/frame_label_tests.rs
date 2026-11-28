@@ -63,6 +63,21 @@ fn pressing_a_rotated_frames_label_selects_and_drags_the_frame() {
 }
 
 #[test]
+fn a_click_on_a_selected_frames_label_selects_only_it() {
+    let (mut s, f, q) = setup();
+    let other = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 500, "y": 500, "width": 40, "height": 40}))["id"]).unwrap();
+    ex(&mut s, "select.set", json!({"ids": [f, other]}));
+    // A point on the label's left edge, clear of the selection box's resize handles, lies outside
+    // the selection's bounds (the strip starts left of the frame's left edge there).
+    let p = q[0] + (q[3] - q[0]) * 0.2 + (q[1] - q[0]) * 0.02;
+    assert!(s.doc().unwrap().bounds_of(&[f, other]).is_some_and(|b| !b.contains(p)), "the label point is outside the selection bounds");
+    assert_eq!(label_at(s.doc().unwrap(), s.page().unwrap(), &s.tool.labels, p), Some(f), "the point is on the label");
+    s.pointer(&ev(PointerKind::Down, p)).unwrap();
+    s.pointer(&ev(PointerKind::Up, p)).unwrap();
+    assert_eq!(s.selection(), vec![f], "the label outside the bounds still narrows the selection to its frame");
+}
+
+#[test]
 fn labels_of_frames_that_cant_be_picked_do_nothing() {
     let (mut s, f, q) = setup();
     let c = center(&q);

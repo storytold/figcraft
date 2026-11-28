@@ -1,10 +1,10 @@
 {
   "id": "org.figcraft.examples.counter",
   "name": "Counter",
-  "version": "1.1.0",
-  "description": "A widget that counts on the canvas: click its + and − buttons, double-click its label to edit it, and use its menu to reset it, count in tens or colour it. Everything is kept in the document.",
+  "version": "1.2.0",
+  "description": "A widget that counts on the canvas: click its + and − buttons, double-click its label to edit it, and use its menu to reset it, set it in a panel, count in tens or colour it. Everything is kept in the document.",
   "main": "counter.wasm",
-  "api": 4,
+  "api": 6,
   "widget": true,
   "permissions": { "access": "read" }
 }
