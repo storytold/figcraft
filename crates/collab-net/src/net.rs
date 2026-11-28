@@ -239,13 +239,17 @@ pub fn shutdown(s: &TcpStream) {
     let _ = s.shutdown(Shutdown::Both);
 }
 
-/// Connect to `server` (through TLS for `wss://`): the reader's and the writer's handles, and the
+/// Connect to `server` (through TLS for `wss://`, to exactly its pinned certificate when it has one): the reader's and the writer's handles, and the
 /// socket to shut it down with.
 pub fn open(server: &Endpoint, timeout: Duration, limits: &NetLimits) -> Result<(Duplex, Duplex, TcpStream), String> {
     // A plain `ws://localhost` is trusted as this machine (a key may go over it), so only loopback
     // addresses are connected to: a resolver mapping the name elsewhere must not carry it off-machine.
     let stream = dial(&server.host, !server.secure && server.loopback(), timeout, limits)?;
-    let tls = if server.secure { Some(tls::handshake(&stream, &server.host)?) } else { None };
+    let tls = match (server.secure, &server.cert) {
+        (true, Some(pin)) => Some(tls::handshake_pinned(&stream, &server.host, pin)?),
+        (true, None) => Some(tls::handshake(&stream, &server.host)?),
+        (false, _) => None,
+    };
     Duplex::split(stream, tls).map_err(|e| e.to_string())
 }
 

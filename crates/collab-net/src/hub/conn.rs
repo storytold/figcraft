@@ -90,6 +90,8 @@ pub(super) struct Shared {
     /// Bytes being read into messages, all connections together, and who is reading them.
     pub(super) reading: Arc<AtomicUsize>,
     pub(super) readers: Readers,
+    /// The TLS every connection must speak (an app hosting on the network), if any.
+    pub(super) tls: Option<Arc<rustls::ServerConfig>>,
 }
 
 pub(super) fn accept(listener: &TcpListener, hub: &Sender<HubIn>, stop: &AtomicBool, open: &Arc<AtomicUsize>, limits: NetLimits, shared: Shared) {
@@ -209,12 +211,23 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     if stream.set_read_timeout(Some(limits.hello_timeout)).is_err() || stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
         return;
     }
-    if health_check(&mut stream, Instant::now() + limits.hello_timeout) {
-        return;
-    }
+    // Over TLS everything is inside it (an uptime check too, which then isn't answered in the
+    // clear): the handshake comes first, by the hello's deadline.
+    let tls = match &shared.tls {
+        Some(cfg) => match crate::tls::accept(&stream, cfg.clone(), hello_deadline) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                log::debug!("live session: TLS handshake failed: {e}");
+                shutdown(&stream);
+                return;
+            }
+        },
+        None if health_check(&mut stream, Instant::now() + limits.hello_timeout) => return,
+        None => None,
+    };
     let Ok(peer) = stream.peer_addr().map(|a| a.ip().to_canonical()) else { return };
     let proxied = limits.trusted_proxy.is_some_and(|p| p.to_canonical() == peer);
-    let Ok((mut rd, wr, sock)) = Duplex::split(stream, None) else { return };
+    let Ok((mut rd, wr, sock)) = Duplex::split(stream, tls) else { return };
     // The handshake and the hello must be in by the deadline, however slowly they trickle in.
     rd.read_until(Some(hello_deadline));
     let cfg = config(limits.max_client_message);

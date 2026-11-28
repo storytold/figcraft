@@ -551,6 +551,15 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   `ws://<ip:port>/` and sends the token only inside its `Hello`. Links are pasted into the Join
   dialog (its field has the keyboard when it opens; Escape closes it), or opened from anywhere:
   see *Opening invite links* below.
+- TLS off this machine: a host others reach (any address but loopback) without a join code
+  serves TLS with an Ed25519 certificate made for the session (gone when it stops), and its links
+  pin it: `figcraft://join?server=wss://<ip:port>/&cert=<sha256>&file=…&token=…` or
+  `wss://<ip:port>/?cert=<sha256>&file=…&token=…` (`<sha256>`: the certificate's SHA-256 in
+  URL-safe base64 without padding). A guest trusts no authority for it: it accepts only exactly
+  that certificate, with the handshake signed by its key, and refuses any other before its
+  `Hello` (someone in between gets nothing). A plain `ws://` client gets no session from such a
+  host. A local network share with a join code stays plain `ws://`: a 20-symbol code has no room
+  for the pin.
 - Reconnect: a connection that drops after it was live reconnects until you leave, with growing
   pauses (0.5 s, doubling up to 10 s, 12 attempts), then a minute's pause and as many again. A
   server turning a live session away is taken as passing (busy, a limit, a file it couldn't read
@@ -769,7 +778,8 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   engine's link (which must be `Send`) holds only the session's number and its inbox.
 - Hosting stays desktop-only (a page can't listen on a socket); the Share popover in the browser
   says so and offers only joining, and `collab.peers` reports `canHost: false`.
-- **Mixed content.** A desktop-hosted session is plain `ws://`. Browsers block `ws://` from a page
+- **Mixed content.** A desktop-hosted session is plain `ws://`, or pinned `wss://`, which a browser
+  can't check (it refuses such a link and says to join from the desktop app). Browsers block `ws://` from a page
   loaded over `https://`, except to this machine (`127.0.0.1`, `[::1]`, `localhost`), so an https
   page refuses other hosts up front with a message instead of failing obscurely. To join from
   other machines, serve the web build over `http://` on a trusted network (locally:
@@ -1028,9 +1038,11 @@ chooses to share on the network; the default is the invite link with a random to
   constant time (the hub's backend). It is in the invite link by design, so whoever holds the link
   can join until the session stops: share it like a password. It never travels in the WebSocket
   request (the path is `/`), so proxies don't log it; FigCraft never logs it (logs name addresses
-  and ports only), and errors about links never echo the link. Traffic is not encrypted (`ws://`):
-  on a shared network, others on the path could read presence and the token. Use a trusted LAN
-  or a VPN; TLS (`wss://`) comes from a reverse proxy in front of a `figcraft-server`.
+  and ports only), and errors about links never echo the link. A host reachable from other
+  machines serves pinned TLS (above). A share with a join code, and a host on this machine only,
+  are not encrypted (`ws://`): on a shared network, others on the path could read a code share's
+  presence and token, so use a trusted LAN or a VPN for those; TLS for a `figcraft-server` comes
+  from a reverse proxy in front of it.
 - **Limits.** At most 64 open sockets (joined or not) and the core's 256 people; a connection must
   finish the WebSocket handshake and say hello within 10 s, and one silent for 45 s is dropped
   (clients ping every 15 s); client messages are at most 16 MiB (what the host sends keeps the

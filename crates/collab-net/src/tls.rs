@@ -8,15 +8,27 @@
 //! sender takes the socket's write lock first (so records go out in the order they were made),
 //! encrypts under the session's lock, then writes with only the socket's. Neither waits on the
 //! network while holding the session, so a send stuck behind a full socket never stops the reader
-//! from draining what arrives.
+//! from draining what arrives. The session is a client's or, for an app hosting on the network
+//! with its own certificate ([`crate::cert`]), a server's ([`accept`]).
+//!
+//! A `wss://` address with a `cert=` pin ([`handshake_pinned`]) trusts no authority: the server
+//! must present exactly the certificate whose SHA-256 the invite names, and prove it holds its key.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::Instant;
 
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms};
 use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, ServerName};
-use rustls::{CertificateError, ClientConfig, ClientConnection, RootCertStore};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{
+    CertificateError, ClientConfig, ClientConnection, Connection, DigitallySignedStruct, RootCertStore, ServerConfig, ServerConnection,
+    SignatureScheme,
+};
+
+use crate::cert::{Fingerprint, fingerprint};
 
 /// The variable naming a PEM file of extra certificate authorities to trust.
 pub const CA_FILE: &str = "FIGCRAFT_CA_FILE";
@@ -24,24 +36,65 @@ pub const CA_FILE: &str = "FIGCRAFT_CA_FILE";
 /// The variable that, set, leaves the operating system's certificate store out.
 pub const NO_SYSTEM_ROOTS: &str = "FIGCRAFT_NO_SYSTEM_ROOTS";
 
-/// One connection's TLS session, shared by its reader and writer.
-pub type Tls = Arc<Mutex<ClientConnection>>;
+/// One connection's TLS session (a client's or a server's), shared by its reader and writer.
+pub type Tls = Arc<Mutex<Connection>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The certificate name in `host` (`name:port`, `[v6]:port`).
+fn server_name(host: &str) -> Result<ServerName<'static>, String> {
+    let name = host.rsplit_once(':').map_or(host, |(n, _)| n).trim_start_matches('[').trim_end_matches(']');
+    ServerName::try_from(name.to_string()).map_err(|_| format!("{name} isn't a name a certificate can be for"))
+}
+
 /// Set up TLS on `stream`, connected to `host` (`name:port`), verifying its certificate.
 pub fn handshake(stream: &TcpStream, host: &str) -> Result<Tls, String> {
-    let name = host.rsplit_once(':').map_or(host, |(n, _)| n).trim_start_matches('[').trim_end_matches(']');
-    let name = ServerName::try_from(name.to_string()).map_err(|_| format!("{name} isn't a name a certificate can be for"))?;
-    let mut conn = ClientConnection::new(config()?, name).map_err(|e| e.to_string())?;
+    let conn = ClientConnection::new(config()?, server_name(host)?).map_err(|e| e.to_string())?;
+    client_handshake(stream, conn).map_err(|e| explain(host, &e))
+}
+
+/// Set up TLS on `stream`, connected to `host`, accepting only the certificate whose SHA-256 is
+/// `expected` (an invite's `cert=`): no authority is asked, and any other certificate (someone in
+/// between) is refused before anything is sent.
+pub fn handshake_pinned(stream: &TcpStream, host: &str, expected: &Fingerprint) -> Result<Tls, String> {
+    let conn = ClientConnection::new(pinned_config(expected)?, server_name(host)?).map_err(|e| e.to_string())?;
+    client_handshake(stream, conn).map_err(|e| match rustls_error(&e) {
+        Some(rustls::Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure)) => format!(
+            "the certificate of {host} isn't the one the invite names: someone may be in between, or the session restarted (ask for a new invite link)"
+        ),
+        _ => explain(host, &e),
+    })
+}
+
+fn client_handshake(stream: &TcpStream, mut conn: ClientConnection) -> io::Result<Tls> {
     // Writes are flushed to the socket at once, so the queue never grows.
     conn.set_buffer_limit(None);
     while conn.is_handshaking() {
-        conn.complete_io(&mut &*stream).map_err(|e| explain(host, &e))?;
+        conn.complete_io(&mut &*stream)?;
     }
-    Ok(Arc::new(Mutex::new(conn)))
+    Ok(Arc::new(Mutex::new(Connection::Client(conn))))
+}
+
+/// Answer a client's TLS handshake on `stream` with `config`, by `deadline` however slowly its
+/// bytes come.
+pub fn accept(stream: &TcpStream, config: Arc<ServerConfig>, deadline: Instant) -> io::Result<Tls> {
+    let mut conn = ServerConnection::new(config).map_err(io::Error::other)?;
+    conn.set_buffer_limit(None);
+    while conn.is_handshaking() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        stream.set_read_timeout(Some(left))?;
+        conn.complete_io(&mut &*stream)?;
+    }
+    Ok(Arc::new(Mutex::new(Connection::Server(conn))))
+}
+
+fn rustls_error(e: &io::Error) -> Option<&rustls::Error> {
+    e.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>())
 }
 
 /// Why the TLS handshake with `host` failed, in words.
@@ -56,7 +109,7 @@ fn explain(host: &str, e: &io::Error) -> String {
         CertificateError::Revoked => "has been revoked".into(),
         other => format!("isn't valid ({other:?})"),
     };
-    match e.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>()) {
+    match rustls_error(e) {
         Some(rustls::Error::InvalidCertificate(c)) => format!("the certificate of {host} {}", why(c)),
         Some(other) => format!("no secure connection to {host} ({other}); is a TLS server answering there?"),
         None => format!("no secure connection to {host} ({e})"),
@@ -91,7 +144,7 @@ fn make_config() -> Result<Arc<ClientConfig>, String> {
     }
     #[cfg(test)]
     roots.add(CertificateDer::from(&include_bytes!("testdata/test-ca.der")[..])).map_err(|e| e.to_string())?;
-    let config = ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+    let config = ClientConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()
         .map_err(|e| e.to_string())?
         .with_root_certificates(roots)
@@ -99,10 +152,79 @@ fn make_config() -> Result<Arc<ClientConfig>, String> {
     Ok(Arc::new(config))
 }
 
+/// The ring provider every connection uses.
+fn provider() -> Arc<CryptoProvider> {
+    Arc::new(rustls::crypto::ring::default_provider())
+}
+
+/// Client settings trusting only the certificate `expected` is the SHA-256 of.
+fn pinned_config(expected: &Fingerprint) -> Result<Arc<ClientConfig>, String> {
+    let provider = provider();
+    let verifier = Pinned { expected: *expected, algorithms: provider.signature_verification_algorithms };
+    let config = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth();
+    Ok(Arc::new(config))
+}
+
+/// Accepts the one certificate an invite pins, and only a handshake signed with its key.
+#[derive(Debug)]
+struct Pinned {
+    expected: Fingerprint,
+    algorithms: WebPkiSupportedAlgorithms,
+}
+
+/// `a == b`, in a time that doesn't depend on where they differ.
+fn same(a: &Fingerprint, b: &Fingerprint) -> bool {
+    a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+impl ServerCertVerifier for Pinned {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        if same(&fingerprint(end_entity.as_ref()), &self.expected) {
+            Ok(ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
+    }
+}
+
 /// Read plaintext into `buf`: what the session has, else wait for bytes on `sock` (outside the
 /// session's lock), take them in and try again. Anything the session must answer (alerts, key
 /// updates) goes out through `out`.
-pub fn read(tls: &Mutex<ClientConnection>, sock: &mut TcpStream, out: &Mutex<TcpStream>, buf: &mut [u8]) -> io::Result<usize> {
+pub fn read(tls: &Mutex<Connection>, sock: &mut TcpStream, out: &Mutex<TcpStream>, buf: &mut [u8]) -> io::Result<usize> {
     loop {
         match lock(tls).reader().read(buf) {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
@@ -126,14 +248,14 @@ pub fn read(tls: &Mutex<ClientConnection>, sock: &mut TcpStream, out: &Mutex<Tcp
 }
 
 /// Encrypt and send all of `buf`.
-pub fn write(tls: &Mutex<ClientConnection>, out: &Mutex<TcpStream>, buf: &[u8]) -> io::Result<usize> {
+pub fn write(tls: &Mutex<Connection>, out: &Mutex<TcpStream>, buf: &[u8]) -> io::Result<usize> {
     send(tls, out, buf)?;
     Ok(buf.len())
 }
 
 /// Encrypt `plain` and send it after whatever the session has waiting (see the module's docs for
 /// the locking).
-fn send(tls: &Mutex<ClientConnection>, out: &Mutex<TcpStream>, plain: &[u8]) -> io::Result<()> {
+fn send(tls: &Mutex<Connection>, out: &Mutex<TcpStream>, plain: &[u8]) -> io::Result<()> {
     let mut w = lock(out);
     let mut records = Vec::new();
     {

@@ -1,19 +1,22 @@
 //! Joining over `wss://`: a guest and a managing connection reach a host through a TLS terminator
 //! (like the reverse proxy in front of a server) whose certificate comes from a test authority
-//! only test builds trust; a certificate for another name is refused with a clear reason.
+//! only test builds trust; a certificate for another name is refused with a clear reason. An app
+//! hosting with its own certificate is joined through the pin in its invite, and only through it:
+//! a plain client, or a host presenting another certificate (someone in between), gets nothing.
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use figcraft_collab::Limits;
 use figcraft_engine::live::{Event, Status};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
 use crate::guest::{Guest, GuestConfig};
 use crate::invite::{Endpoint, Invite};
-use crate::loopback_tests::{Probe, fast_limits, quick, start};
+use crate::loopback_tests::{Probe, fast_limits, host_on_loopback, quick, start};
 use crate::manage;
 
 /// Serve `localhost`'s test certificate on a port of `localhost` and relay each connection to
@@ -67,7 +70,7 @@ fn relay(s: TcpStream, upstream: SocketAddr, cfg: Arc<ServerConfig>) {
 }
 
 fn secure(host: String, invite: &Invite) -> Invite {
-    Invite { server: Endpoint { host, path: "/".into(), secure: true }, ..invite.clone() }
+    Invite { server: Endpoint { host, path: "/".into(), secure: true, cert: None }, ..invite.clone() }
 }
 
 #[test]
@@ -111,7 +114,7 @@ fn reader_and_writer_share_one_session_without_blocking_each_other() {
         let _ = io::copy(&mut s.try_clone().unwrap(), &mut s);
     });
     let front = terminator(upstream);
-    let server = Endpoint { host: format!("localhost:{}", front.port()), path: "/".into(), secure: true };
+    let server = Endpoint { host: format!("localhost:{}", front.port()), path: "/".into(), secure: true, cert: None };
     let (mut rd, mut wr, _sock) = crate::net::open(&server, Duration::from_secs(5), &fast_limits()).unwrap();
     rd.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     let sent: Vec<u8> = (0..8 << 20).map(|i: u32| (i % 251) as u8).collect();
@@ -121,4 +124,97 @@ fn reader_and_writer_share_one_session_without_blocking_each_other() {
     rd.read_exact(&mut got).unwrap();
     writer.join().unwrap();
     assert!(got == expect);
+}
+
+/// The loopback hosts' token.
+const TOKEN_OF_TESTS: &str = "AbCdEfGhIjKlMnOpQrStUv";
+
+fn tls_host() -> (crate::host::Host, Probe, Invite) {
+    host_on_loopback(fast_limits(), Limits::default(), true)
+}
+
+fn failed(e: &[Event]) -> Option<&str> {
+    e.iter().find_map(|e| match e {
+        Event::Status(Status::Failed { reason }) => Some(reason.as_str()),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_host_with_its_own_certificate_is_joined_through_the_pin() {
+    let (mut host, mut hp, invite) = tls_host();
+    let pin = host.cert_sha256().unwrap();
+    assert_eq!((invite.server.secure, invite.server.cert), (true, Some(pin)));
+    assert!(invite.link().contains("cert=") && invite.url().starts_with("wss://"), "{}", invite.link());
+    // Joined from the link, as someone pasting it would; the document comes over TLS.
+    let mut probe = Probe::new();
+    let mut g = Guest::start(quick(GuestConfig::new(Invite::parse(&invite.link()).unwrap(), "Ada".into())), probe.inbox.clone()).unwrap();
+    probe.wait("the welcome over pinned TLS", |e| e.iter().any(|e| matches!(e, Event::Welcome { .. })));
+    hp.wait("the guest in the host's session", |e| e.iter().any(|e| matches!(e, Event::PeerJoined(_))));
+    g.leave();
+    host.stop();
+}
+
+/// Someone in between (here: another host with the same file and token, and a certificate of its
+/// own) is refused before the guest says anything: the token never reaches it.
+#[test]
+fn a_host_presenting_another_certificate_is_refused_before_the_hello() {
+    let (mut real, _rp, invite) = tls_host();
+    let (mut mitm, mut mp, posing) = tls_host();
+    assert_ne!(real.cert_sha256(), mitm.cert_sha256());
+    let pinned_to_real = Invite { server: Endpoint { host: posing.server.host.clone(), ..invite.server.clone() }, ..invite };
+    let mut probe = Probe::new();
+    let _g = Guest::start(quick(GuestConfig::new(pinned_to_real, "Ada".into())), probe.inbox.clone()).unwrap();
+    probe.wait("the refusal", |e| failed(e).is_some());
+    let reason = failed(&probe.events).unwrap();
+    assert!(reason.contains("isn't the one the invite names"), "{reason}");
+    assert!(!reason.contains(TOKEN_OF_TESTS) && !reason.contains("cert="), "{reason}");
+    std::thread::sleep(Duration::from_millis(200));
+    mp.events.extend(mp.inbox.drain());
+    assert!(mp.joined().is_empty(), "the impostor admitted the guest: {:#?}", mp.events);
+    assert!(!probe.events.iter().any(|e| matches!(e, Event::Welcome { .. })));
+    mitm.stop();
+    real.stop();
+}
+
+/// A plain `ws://` client gets no session from a TLS host, and soon knows it.
+#[test]
+fn a_plain_client_cant_join_a_tls_host() {
+    let (mut host, mut hp, invite) = tls_host();
+    let plain = Invite::new(invite.server.host.clone(), invite.file.clone(), invite.token.clone());
+    let mut probe = Probe::new();
+    let started = Instant::now();
+    let _g = Guest::start(quick(GuestConfig::new(plain, "Ada".into())), probe.inbox.clone()).unwrap();
+    probe.wait("the failure", |e| failed(e).is_some());
+    assert!(started.elapsed() < fast_limits().hello_timeout, "{:?}", started.elapsed());
+    hp.events.extend(hp.inbox.drain());
+    assert!(hp.joined().is_empty());
+    host.stop();
+}
+
+/// The WebSocket request to a pinned host names neither the token nor the pin.
+#[test]
+fn the_request_to_a_pinned_host_carries_no_secret() {
+    let cert = crate::cert::generate().unwrap();
+    let cfg = crate::cert::server_config(&cert).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (s, _) = listener.accept().unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut tls = StreamOwned::new(ServerConnection::new(cfg).unwrap(), s);
+        let mut req = Vec::new();
+        let mut b = [0u8; 1];
+        while !req.ends_with(b"\r\n\r\n") && tls.read_exact(&mut b).is_ok() {
+            req.push(b[0]);
+        }
+        let _ = tx.send(String::from_utf8_lossy(&req).into_owned());
+    });
+    let invite = Invite { server: Endpoint::pinned(addr.to_string(), cert.sha256), file: "0123456789abcdef".into(), token: TOKEN_OF_TESTS.into() };
+    let _g = Guest::start(quick(GuestConfig::new(invite, "Ada".into())), Probe::new().inbox.clone()).unwrap();
+    let req = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let line = req.lines().next().unwrap_or_default();
+    assert!(line.starts_with("GET / "), "{req}");
+    assert!(!req.contains(TOKEN_OF_TESTS) && !req.contains("cert"), "{req}");
 }

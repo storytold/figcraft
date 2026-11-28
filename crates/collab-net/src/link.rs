@@ -188,12 +188,19 @@ impl LiveLink for NetLink {
             name: o.name,
             limits: self.limits,
             core: figcraft_collab::Limits::default(),
+            // Reachable from other machines: the token mustn't cross the network in the clear, so
+            // the session serves TLS to its own certificate, which its links pin. A session with a
+            // join code stays plain: a code has no room for the pin, and the code's joiners would
+            // fail against TLS (and share the token with the link's).
+            tls: !ip.is_loopback() && !o.short,
         };
         let host = Host::start(cfg, inbox.clone()).map_err(|e| format!("can't listen on {ip}: {e}"))?;
         // Listening on every interface (`0.0.0.0`, `::`), the links name an address others reach.
         let at = reachable(host.addr()).to_string();
-        let view = view_token.map(|v| Invite::new(at.clone(), file.clone(), v)).map(|v| WayIn { link: v.link(), url: v.url() });
-        let invite = Invite::new(at.clone(), file, token);
+        let server = host.endpoint(at.clone());
+        let view =
+            view_token.map(|v| Invite { server: server.clone(), file: file.clone(), token: v }).map(|v| WayIn { link: v.link(), url: v.url() });
+        let invite = Invite { server, file, token };
         let info = SessionInfo {
             role: Role::Host,
             me: host.me().client_id,

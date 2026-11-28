@@ -636,6 +636,7 @@ fn joins_a_real_host_and_edits_with_it() {
             name: "Hana".into(),
             limits: fast_limits(),
             core: Limits::default(),
+            tls: false,
         },
         host_probe.clone(),
     )

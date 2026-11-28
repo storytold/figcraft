@@ -41,7 +41,7 @@ fn hosts_can_be_v6_or_names() {
 #[test]
 fn server_links_carry_tls_and_a_path() {
     // A server behind a TLS reverse proxy, under a path: the server= form.
-    let i = Invite { server: Endpoint { host: "figcraft.example.com:443".into(), path: "/live/".into(), secure: true }, ..invite() };
+    let i = Invite { server: Endpoint { host: "figcraft.example.com:443".into(), path: "/live/".into(), secure: true, cert: None }, ..invite() };
     assert_eq!(i.link(), format!("figcraft://join?server=wss://figcraft.example.com:443/live/&file=0123456789abcdef&token={TOKEN}"));
     assert_eq!(i.url(), format!("wss://figcraft.example.com:443/live/?file=0123456789abcdef&token={TOKEN}"));
     assert_eq!(i.endpoint(), "wss://figcraft.example.com:443/live/");
@@ -88,7 +88,7 @@ fn server_addresses_with_a_key() {
     assert_eq!(e, Endpoint::plain("127.0.0.1:47900"));
     assert_eq!(q, vec![("key".to_string(), "KeyKeyKeyKeyKeyKeyKey0".to_string())]);
     let (e, q) = Endpoint::parse(" wss://example.org ").unwrap();
-    assert_eq!(e, Endpoint { host: "example.org:443".into(), path: "/".into(), secure: true });
+    assert_eq!(e, Endpoint { host: "example.org:443".into(), path: "/".into(), secure: true, cert: None });
     assert!(q.is_empty());
     let secret = "SuperSecretToken123456";
     for bad in [
@@ -142,9 +142,17 @@ proptest! {
 
     #[test]
     fn valid_invites_round_trip(a in 1u8..255, port in 1u16.., file in "[a-f0-9]{1,64}", token in "[A-Za-z0-9_-]{16,128}", path in "(/[a-z0-9]{1,8}){0,3}", secure: bool) {
-        let i = Invite { server: Endpoint { host: format!("10.0.0.{a}:{port}"), path: format!("{path}/"), secure }, file, token };
+        let i = Invite { server: Endpoint { host: format!("10.0.0.{a}:{port}"), path: format!("{path}/"), secure, cert: None }, file, token };
         prop_assert_eq!(Invite::parse(&i.link()), Ok(i.clone()));
         prop_assert_eq!(Invite::parse(&i.url()), Ok(i));
+    }
+
+    #[test]
+    fn pinned_invites_round_trip(a in 1u8..255, port in 1u16.., pin: [u8; 32], file in "[a-f0-9]{1,64}", token in "[A-Za-z0-9_-]{16,128}") {
+        let i = Invite { server: Endpoint::pinned(format!("10.0.0.{a}:{port}"), pin), file, token };
+        prop_assert_eq!(Invite::parse(&i.link()), Ok(i.clone()));
+        prop_assert_eq!(Invite::parse(&i.url()), Ok(i.clone()));
+        prop_assert_eq!(Invite::parse(&i.team_link().replace("&team=1", &format!("&token={}", i.token))), Ok(i));
     }
 }
 
@@ -162,4 +170,58 @@ fn port_must_be_all_digits() {
     for bad in ["ws://localhost:+80/", "ws://localhost:-80/", "ws://localhost:/"] {
         assert!(Endpoint::parse(bad).is_err(), "accepted {bad}");
     }
+}
+
+/// The SHA-256 of an app's own certificate, as a link writes it.
+const PIN: [u8; 32] = [7; 32];
+const PIN_B64: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+
+#[test]
+fn a_pinned_invite_names_its_certificate_in_both_forms_and_never_in_the_request() {
+    let i = Invite { server: Endpoint::pinned("192.168.1.20:47900", PIN), ..invite() };
+    assert_eq!(i.link(), format!("figcraft://join?server=wss://192.168.1.20:47900/&cert={PIN_B64}&file=0123456789abcdef&token={TOKEN}"));
+    assert_eq!(i.url(), format!("wss://192.168.1.20:47900/?cert={PIN_B64}&file=0123456789abcdef&token={TOKEN}"));
+    for way in [i.link(), i.url()] {
+        let back = Invite::parse(&way).unwrap();
+        assert_eq!((back.server.cert, back.server.secure), (Some(PIN), true), "{way}");
+    }
+    // What the client connects to carries neither the token nor the pin.
+    assert_eq!(i.endpoint(), "wss://192.168.1.20:47900/");
+    // A server address can carry one too (the query's other pairs stay).
+    let (e, query) = Endpoint::parse(&format!("wss://192.168.1.20:47900/?cert={PIN_B64}&key=k")).unwrap();
+    assert_eq!((e.cert, query), (Some(PIN), vec![("key".to_string(), "k".to_string())]));
+}
+
+#[test]
+fn malformed_or_misplaced_certificates_are_refused_without_echoing_the_link() {
+    let other = "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg";
+    let rest = format!("file=0123456789abcdef&token={TOKEN}");
+    for bad in [
+        // Not 32 bytes, not URL-safe base64, padded, or with stray bits.
+        format!("wss://10.0.0.1:47900/?cert=BwcH&{rest}"),
+        format!("wss://10.0.0.1:47900/?cert={PIN_B64}A&{rest}"),
+        format!("wss://10.0.0.1:47900/?cert={PIN_B64}=&{rest}"),
+        format!("wss://10.0.0.1:47900/?cert=+wcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc&{rest}"),
+        format!("wss://10.0.0.1:47900/?cert=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwd&{rest}"),
+        format!("wss://10.0.0.1:47900/?cert=&{rest}"),
+        format!("figcraft://join?server=wss://10.0.0.1:47900/&cert=%ZZ&{rest}"),
+        // On a plain address: never dropped (that would join without it).
+        format!("ws://10.0.0.1:47900/?cert={PIN_B64}&{rest}"),
+        format!("figcraft://join?host=10.0.0.1:47900&cert={PIN_B64}&{rest}"),
+        // Two that disagree.
+        format!("wss://10.0.0.1:47900/?cert={PIN_B64}&cert={other}&{rest}"),
+        format!("figcraft://join?server=wss://10.0.0.1:47900/%3Fcert%3D{PIN_B64}&cert={other}&{rest}"),
+    ] {
+        let e = Invite::parse(&bad).expect_err(&bad);
+        assert!(!e.contains(TOKEN) && !e.contains("10.0.0.1") && !e.contains("BwcH"), "{bad}: {e}");
+    }
+}
+
+#[test]
+fn an_allowed_server_allows_only_its_own_certificate() {
+    let allowed = Endpoint::pinned("10.0.0.1:47900", PIN);
+    assert!(Endpoint::pinned("10.0.0.1:47900", PIN).is_within(&allowed));
+    assert!(!Endpoint::pinned("10.0.0.1:47900", [8; 32]).is_within(&allowed));
+    let by_authority = Endpoint { cert: None, ..allowed.clone() };
+    assert!(!allowed.is_within(&by_authority), "a pin bypasses the authorities the allowed server is checked with");
 }

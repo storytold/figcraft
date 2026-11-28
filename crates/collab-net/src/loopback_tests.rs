@@ -61,7 +61,7 @@ impl Probe {
         })
     }
 
-    fn joined(&self) -> Vec<u32> {
+    pub(crate) fn joined(&self) -> Vec<u32> {
         self.events.iter().filter_map(|e| if let Event::PeerJoined(p) = e { Some(p.client_id) } else { None }).collect()
     }
 
@@ -80,6 +80,12 @@ pub(crate) fn fast_limits() -> NetLimits {
 
 /// A host on a free loopback port with these limits, a probe of what it is told, and its invite.
 fn start_with(limits: NetLimits, core: Limits) -> (Host, Probe, Invite) {
+    host_on_loopback(limits, core, false)
+}
+
+/// A host on a free loopback port, serving TLS with its own certificate when `tls` (its invite
+/// then pins it), a probe of what it is told, and its invite.
+pub(crate) fn host_on_loopback(limits: NetLimits, core: Limits, tls: bool) -> (Host, Probe, Invite) {
     let probe = Probe::new();
     let mut doc = Document::new("Shared file");
     doc.repair();
@@ -93,9 +99,10 @@ fn start_with(limits: NetLimits, core: Limits) -> (Host, Probe, Invite) {
         name: "Hana".into(),
         limits,
         core,
+        tls,
     };
     let host = Host::start(cfg, probe.inbox.clone()).unwrap();
-    let invite = Invite::new(host.addr().to_string(), FILE, TOKEN);
+    let invite = Invite { server: host.endpoint(host.addr().to_string()), file: FILE.into(), token: TOKEN.into() };
     (host, probe, invite)
 }
 
@@ -278,6 +285,7 @@ fn a_view_token_lets_people_look_and_not_edit() {
             name: "Hana".into(),
             limits: fast_limits(),
             core: Limits::default(),
+            tls: false,
         }
     };
     let same = Host::start(cfg(TOKEN), probe.inbox.clone()).err().expect("a view token equal to the edit token is refused");
@@ -318,6 +326,7 @@ fn a_file_with_review_settings_past_the_limits_is_not_shared() {
         name: "Hana".into(),
         limits: fast_limits(),
         core: Limits::default(),
+        tls: false,
     };
     let e = Host::start(cfg, probe.inbox.clone()).err().expect("settings past the limits are refused");
     let text = e.to_string();
@@ -793,6 +802,7 @@ fn a_welcome_over_the_size_limit_says_the_file_is_too_large() {
         name: "Hana".into(),
         limits: fast_limits(),
         core: Limits::default(),
+        tls: false,
     };
     let mut host = Host::start(cfg, probe.inbox.clone()).unwrap();
     let invite = Invite::new(host.addr().to_string(), FILE, TOKEN);
