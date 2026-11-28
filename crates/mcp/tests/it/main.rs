@@ -12,6 +12,7 @@ mod automation_roots;
 mod code_connect;
 #[allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod common;
+mod compare_design;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod create_warnings;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
