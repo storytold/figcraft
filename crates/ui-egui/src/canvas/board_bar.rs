@@ -3,7 +3,7 @@
 //! board tools' flyouts share.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, NodeId, NodeKind, Routing, Stamp, StrokeCap};
+use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, CodeLanguage, NodeId, NodeKind, Routing, Stamp, StrokeCap};
 use figcraft_engine::ToolId;
 use figcraft_engine::board::{BoardTool, STICKY_SIZES, TEXT_SIZES};
 use figcraft_engine::board_grid::GridStyle;
@@ -122,6 +122,8 @@ struct Has {
     /// Every selected board object is a connector: the colour part offers any colour too.
     only_lines: bool,
     table: bool,
+    /// The first selected code block's language: the bar ends in the language menu.
+    code: Option<CodeLanguage>,
 }
 
 /// The selected connectors' line as the bar shows it (the first one's), and their ids.
@@ -181,11 +183,14 @@ fn has(app: &FigApp) -> Option<Has> {
             }
             Some(BoardItem::Label { .. }) => h.text = true,
             Some(BoardItem::Table) => h.table = true,
-            Some(BoardItem::Stamp { .. } | BoardItem::CodeBlock { .. }) | None => {}
+            Some(BoardItem::CodeBlock { language }) => {
+                h.code.get_or_insert(*language);
+            }
+            Some(BoardItem::Stamp { .. }) | None => {}
         }
     }
     h.only_lines = h.connector.is_some() && !others;
-    (h.color || h.text || h.connector.is_some() || h.table).then_some(h)
+    (h.color || h.text || h.connector.is_some() || h.table || h.code.is_some()).then_some(h)
 }
 
 const CELL: f32 = 28.0;
@@ -195,6 +200,8 @@ pub(crate) const GAP: f32 = 4.0;
 const PART_END: f32 = 8.0;
 /// The sticky size menu's width: its name ("Extra large") and the chevron.
 const STICKY_W: f32 = 96.0;
+/// The language menu's width: its name ("JavaScript") and the chevron.
+const LANGUAGE_W: f32 = 104.0;
 
 impl Has {
     /// The bar's width for these parts.
@@ -220,6 +227,9 @@ impl Has {
         }
         if self.table {
             w += crate::board_picker::TABLE_PART_W;
+        }
+        if self.code.is_some() {
+            w += LANGUAGE_W + PART_END;
         }
         w
     }
@@ -270,6 +280,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         }
         if h.table {
             x = crate::board_picker::table_part(app, ui, x, cy, &t);
+        }
+        if let Some(language) = h.code {
+            x = language_part(app, ui, language, pos2(x, cy), &t);
         }
         if let Some(line) = &h.connector {
             line_part(app, ui, line, pos2(x, cy), &t);
@@ -424,6 +437,29 @@ fn sticky_size_part(app: &mut FigApp, ui: &mut Ui, size: f64, at: Pos2, t: &Toke
         }
     });
     divider(ui, t, at.x + STICKY_W, at.y)
+}
+
+/// The code language menu at `at` (its left edge and middle), showing `language`:
+/// `board.setLanguage` on the selected blocks; where the next part starts.
+fn language_part(app: &mut FigApp, ui: &mut Ui, language: CodeLanguage, at: Pos2, t: &Tokens) -> f32 {
+    let r = Rect::from_min_size(pos2(at.x, at.y - CELL / 2.0), vec2(LANGUAGE_W, CELL));
+    let tip = tr("Language");
+    let resp = ui.interact(r, ui.scope_id().with("bb_language"), Sense::click()).on_hover_text(tip);
+    a11y::menu_button(&resp, &format!("{tip} {}", tr(language.label())), a11y::menu_open(&resp));
+    if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+    }
+    ui.painter().text(pos2(r.min.x + 8.0, at.y), egui::Align2::LEFT_CENTER, tr(language.label()), semibold(11.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 9.0, at.y), vec2(12.0, 12.0)), Icon::Chevron, t.icon_secondary);
+    crate::right::menu_popup(&resp).show(|ui| {
+        for l in CodeLanguage::ALL {
+            if crate::right::menu_check(ui, l == language, tr(l.label()), "") {
+                app.run("board.setLanguage", json!({"language": l.id()}));
+                ui.close();
+            }
+        }
+    });
+    divider(ui, t, at.x + LANGUAGE_W, at.y)
 }
 
 /// A start or end point menu's width: the end's picture and the menu's chevron.

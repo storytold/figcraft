@@ -483,6 +483,7 @@ fn board_commands_survive_junk() {
                     "tool.ink",
                     "tool.stamp",
                     "tool.mindMap",
+                    "tool.codeBlock",
                     "file.newBoard",
                 ]
                 .contains(i)
