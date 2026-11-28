@@ -103,6 +103,7 @@ fn registry() -> &'static Registry {
         list.extend(crate::design_context::specs());
         list.extend(crate::asset_handoff::specs());
         list.extend(crate::responsive::specs());
+        list.extend(crate::visual_compare::specs());
         list.extend(crate::component_codegen::specs());
         list.extend(crate::playground::specs());
         list.extend(crate::code_connect::specs());
