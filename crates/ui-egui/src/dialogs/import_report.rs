@@ -222,15 +222,16 @@ pub(crate) fn show_retry(app: &mut FigApp, ctx: &egui::Context) {
         ui.set_width((ui.ctx().content_rect().width() - 32.0).clamp(0.0, 420.0));
         ui.heading(tr("Retry with higher import limits?"));
         ui.label(&retry.pending.label);
-        ui.label(tr(if retry.partial {
-            "Some layers were left out. Retrying opens a new tab and keeps the partial copy."
+        ui.label(if retry.partial {
+            tr("Some layers were left out. Retrying opens a new tab and keeps the partial copy.")
         } else {
-            "This file reached the import limit before it could open."
-        }));
+            tr("This file reached the import limit before it could open.")
+        });
         ui.label(tr("Retrying may use significantly more memory and take longer. Save any open work first."));
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            let cancel = crate::widgets::button(ui, tr(if retry.partial { "Keep partial import" } else { "Cancel" }), false, true);
+            let keep_or_cancel = if retry.partial { tr("Keep partial import") } else { tr("Cancel") };
+            let cancel = crate::widgets::button(ui, keep_or_cancel, false, true);
             if first_frame && ui.is_visible() {
                 retry.previous_focus = Some(previous_focus);
                 cancel.request_focus();
