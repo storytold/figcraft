@@ -237,7 +237,11 @@ Or in a project's `.mcp.json`:
     and a parent set to `hug` turns the children that filled it `fixed`. Across the flow the parent keeps
     hugging and the child takes the line's cross size (the largest sibling that doesn't fill, its min
     counted, padding outside); the parent turns `fixed` ("Height set to Fixed for <name>") only when no
-    such sibling is left, and `fill` across a wrapping row that hugs that axis is refused. A
+    such sibling is left, and `fill` across a wrapping row that hugs that axis is refused. `node.set`
+    lists each layer it turned `fixed` this way in `warnings` (such as `2 “Root” (frame): sizingV Hug → Fixed,
+    because a layer in it now fills it`), and names a variant it leaves reaching past its
+    component set when the set clips and has no auto layout (the set keeps its size, so the part
+    outside is hidden; `layout.add` on the set makes it grow with its variants). A
     layer moved out of auto layout (or whose frame loses it) keeps its size as `fixed`. Fill
     children share the space like CSS flexbox, within their min/max.
   - `minWidth` / `maxWidth` / `minHeight` / `maxHeight` (px, `null` removes) bound Hug, Fill and

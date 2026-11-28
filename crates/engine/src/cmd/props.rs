@@ -1548,7 +1548,7 @@ fn set_sizing(cmd: &str, doc: &mut Document, id: NodeId, s: Sizing, horizontal: 
 }
 
 /// The hugging parents that `props` setting Fill on `ids` may turn Fixed, as (parent, horizontal):
-/// taken before the edit, for [`fixed_notice`].
+/// taken before the edit, for [`turned_fixed`].
 pub(crate) fn hugging_parents(doc: &Document, ids: &[NodeId], props: &Map<String, Value>) -> Vec<(NodeId, bool)> {
     let mut out = Vec::new();
     for (horizontal, keys) in [(true, ["sizingH", "layoutSizingHorizontal"]), (false, ["sizingV", "layoutSizingVertical"])] {
@@ -1568,7 +1568,7 @@ pub(crate) fn hugging_parents(doc: &Document, ids: &[NodeId], props: &Map<String
 }
 
 /// The children, as (child, horizontal), that fill an axis of a frame in `ids` which `props` sets
-/// to Hug: taken before the edit, for [`fixed_notice`] (the coherence pass turns them Fixed).
+/// to Hug: taken before the edit, for [`turned_fixed`] (the coherence pass turns them Fixed).
 pub(crate) fn filling_children(doc: &Document, ids: &[NodeId], props: &Map<String, Value>) -> Vec<(NodeId, bool)> {
     let mut out = Vec::new();
     for (horizontal, keys) in [(true, ["sizingH", "layoutSizingHorizontal"]), (false, ["sizingV", "layoutSizingVertical"])] {
@@ -1587,17 +1587,24 @@ pub(crate) fn filling_children(doc: &Document, ids: &[NodeId], props: &Map<Strin
     out
 }
 
-/// The notice for the layers of [`hugging_parents`] or [`filling_children`] that the edit turned
-/// Fixed ("Height set to Fixed for Frame 1"), `None` when every one kept its sizing.
-pub(crate) fn fixed_notice(doc: &Document, before: &[(NodeId, bool)]) -> Option<String> {
-    let notes: Vec<String> = before
+/// The layers of [`hugging_parents`] or [`filling_children`] that the edit turned Fixed, as
+/// (layer, horizontal).
+pub(crate) fn turned_fixed<'a>(doc: &'a Document, before: &[(NodeId, bool)]) -> Vec<(&'a Node, bool)> {
+    before
         .iter()
-        .filter_map(|(p, horizontal)| {
-            let p = doc.node(*p)?;
-            let now = if *horizontal { p.child_layout.sizing_h } else { p.child_layout.sizing_v };
-            (now == Sizing::Fixed).then(|| format!("{} set to Fixed for {}", if *horizontal { "Width" } else { "Height" }, p.name))
+        .filter_map(|(id, horizontal)| {
+            let n = doc.node(*id)?;
+            let now = if *horizontal { n.child_layout.sizing_h } else { n.child_layout.sizing_v };
+            (now == Sizing::Fixed).then_some((n, *horizontal))
         })
-        .collect();
+        .collect()
+}
+
+/// The notice for the layers the edit turned Fixed ([`turned_fixed`]): "Height set to Fixed for
+/// Frame 1", `None` when every one kept its sizing.
+pub(crate) fn fixed_notice(fixed: &[(&Node, bool)]) -> Option<String> {
+    let notes: Vec<String> =
+        fixed.iter().map(|(n, horizontal)| format!("{} set to Fixed for {}", if *horizontal { "Width" } else { "Height" }, n.name)).collect();
     (!notes.is_empty()).then(|| notes.join("; "))
 }
 
