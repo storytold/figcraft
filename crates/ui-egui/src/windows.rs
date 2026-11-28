@@ -135,6 +135,15 @@ pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
         let msg = e.downcast_ref::<&str>().map(ToString::to_string).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
         log::error!("UI panic: {msg}");
         app.toast(format!("Internal error (please report): {msg}"));
+        // A pass that panicked never reached `end_input_frame`: its batch's replies say so, and
+        // neither the control queue nor the clipboard fence waits for it.
+        if app.applied_frame.take().is_some() {
+            for ack in app.applied_acks.drain(..) {
+                let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err(format!("the frame applying the input failed: {msg}")) });
+            }
+            app.applied_input = None;
+            app.control_synthetic = false;
+        }
         ctx.request_repaint();
         app.services.emergency_save(&app.session);
     }
