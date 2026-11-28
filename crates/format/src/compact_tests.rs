@@ -260,13 +260,25 @@ fn invalid_vector_refs_and_amplification_bombs_are_rejected() {
     }}"#;
     assert!(matches!(from_json(both_net_and_ref), Err(FormatError::Corrupt(_))));
 
-    // Amplification bomb: 1 heavy vector source mirrored 1,000 times against a small budget.
+    // Amplification bomb: 1 heavy vector source mirrored 50 times.
+    // Pick a budget large enough for `NodesMapVisitor` (~256 KiB for initial records)
+    // but smaller than the expanded mirrors (~1.2 MiB), and verify a generous budget succeeds.
     let doc = build_component_instances_doc(50, 4, 256);
     let mut json_bytes = Vec::new();
     write_json(&doc, &mut json_bytes).unwrap();
     let text = std::str::from_utf8(&json_bytes).unwrap();
     assert!(compact::materialized_budget(text.len()) > 0);
-    assert!(matches!(compact::parse_compact_document_with_budget(text, 64 * 1024), Err(FormatError::Corrupt(_))));
+    assert!(matches!(compact::parse_compact_document_with_budget(text, 512 * 1024), Err(FormatError::Corrupt(_))));
+    let (loaded, _) = compact::parse_compact_document_with_budget(text, compact::materialized_budget(text.len())).unwrap();
+    assert_eq!(loaded.node_count(), doc.node_count());
+
+    // Unicode-escaped `"vector\u0052ef"` is still routed through the compact parser.
+    let escaped = r#"{"format":"figcraft","version":1,"imageIndex":[],"name":"Esc","pages":[1],"next_id":3,"vectors":[{"vertices":[{"x":0.0,"y":0.0}],"segments":[],"regions":[]}],"nodes":{
+        "1":{"id":1,"name":"Page","type":"page","width":0.0,"height":0.0,"children":[2]},
+        "2":{"id":2,"name":"V","type":"vector","vector\u0052ef":0,"parent":1,"width":10.0,"height":10.0}
+    }}"#;
+    let (esc_doc, _) = from_json(escaped).unwrap();
+    assert!(matches!(esc_doc.node(figcraft_doc::NodeId(2)).unwrap().kind, NodeKind::Vector { ref network } if network.vertices.len() == 1));
 }
 
 #[test]
@@ -360,7 +372,10 @@ fn bench_compact_format() {
 
         let t1 = Instant::now();
         let legacy_text = std::str::from_utf8(&legacy_json).unwrap();
-        let (_legacy_back, _) = craft_figcraft_format::read_document_json::<Document>(legacy_text).unwrap();
+        let (mut legacy_back, _) = craft_figcraft_format::read_document_json::<Document>(legacy_text).unwrap();
+        if !legacy_back.validate().is_empty() {
+            legacy_back.repair();
+        }
         let legacy_read = t1.elapsed();
 
         let t2 = Instant::now();

@@ -208,13 +208,26 @@ fn every_node_field_visited(n: &Node) {
     } = n;
 }
 
-/// Canonical JSON key for deduplicating finite `VectorNetwork`s without losing `-0.0` or
-/// `Paint::color_alpha`.
-pub(super) fn canonical_vector_key(net: &VectorNetwork) -> Option<Vec<u8>> {
+use sha2::Digest;
+
+/// Streaming SHA-256 fingerprint of a finite non-empty `VectorNetwork` without buffering its JSON.
+pub(super) fn vector_fingerprint(net: &VectorNetwork) -> Option<[u8; 32]> {
+    struct HashWriter(sha2::Sha256);
+    impl std::io::Write for HashWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.update(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
     if net.vertices.is_empty() || !is_finite_network(net) {
         return None;
     }
-    serde_json::to_vec(net).ok()
+    let mut w = HashWriter(sha2::Sha256::new());
+    serde_json::to_writer(&mut w, net).ok()?;
+    Some(w.0.finalize().into())
 }
 
 /// Whether every float in `net` is finite (non-finite networks stay inline so `FiniteValue`
@@ -243,15 +256,30 @@ fn is_finite_paint(p: &Paint) -> bool {
     }
 }
 
+fn est_paint_bytes(p: &Paint) -> usize {
+    let extra = match &p.kind {
+        PaintKind::Gradient(g) => g.stops.len().saturating_mul(32),
+        PaintKind::Image(img) => img.image.len(),
+        PaintKind::Solid { .. } | PaintKind::Pattern(_) => 0,
+    };
+    std::mem::size_of::<Paint>().saturating_add(extra)
+}
+
+fn est_paint_slice_bytes(paints: &[Paint]) -> usize {
+    paints.iter().fold(0usize, |acc, p| acc.saturating_add(est_paint_bytes(p)))
+}
+
 /// Conservative heap byte estimate for one `VectorNetwork`.
 pub(super) fn est_vector_bytes(net: &VectorNetwork) -> usize {
     let loops: usize = net.regions.iter().map(|r| r.loops.iter().map(|l| l.len().saturating_mul(8)).sum::<usize>()).sum();
+    let region_fills: usize = net.regions.iter().filter_map(|r| r.fills.as_deref()).map(est_paint_slice_bytes).fold(0usize, usize::saturating_add);
     net.vertices
         .len()
         .saturating_mul(std::mem::size_of::<Vertex>())
         .saturating_add(net.segments.len().saturating_mul(std::mem::size_of::<Segment>()))
         .saturating_add(net.regions.len().saturating_mul(std::mem::size_of::<Region>()))
         .saturating_add(loops)
+        .saturating_add(region_fills)
 }
 
 /// Conservative heap byte estimate for one materialized `Node`.
@@ -273,17 +301,42 @@ pub(super) fn est_node_bytes(node: &Node) -> usize {
     let var_modes_bytes: usize = node.var_modes.iter().map(|(k, v)| k.len().saturating_add(v.len()).saturating_add(64)).sum();
     let plugin_bytes: usize = node.plugin_data.iter().map(|(k, v)| k.len().saturating_add(v.len()).saturating_add(48)).sum();
     let prop_refs_bytes: usize = node.prop_refs.iter().map(|(k, v)| k.len().saturating_add(v.len()).saturating_add(48)).sum();
+    let ann_bytes: usize = node
+        .annotations
+        .iter()
+        .map(|a| a.label.len().saturating_add(a.properties.iter().map(String::len).sum::<usize>()).saturating_add(std::mem::size_of::<Annotation>()))
+        .sum();
+    let links_bytes: usize = node
+        .code_links
+        .iter()
+        .map(|c| {
+            c.language
+                .len()
+                .saturating_add(c.import_path.len())
+                .saturating_add(c.name.len())
+                .saturating_add(c.template.len())
+                .saturating_add(c.source.len())
+                .saturating_add(c.notes.len())
+                .saturating_add(std::mem::size_of::<CodeLink>())
+        })
+        .sum();
+    let resources_bytes: usize =
+        node.dev_resources.iter().map(|r| r.url.len().saturating_add(r.name.len()).saturating_add(std::mem::size_of::<DevResource>())).sum();
     std::mem::size_of::<Node>()
         .saturating_add(node.name.len())
+        .saturating_add(node.dev_note.len())
         .saturating_add(node.children.len().saturating_mul(8))
-        .saturating_add(node.fills.len().saturating_mul(std::mem::size_of::<Paint>()))
-        .saturating_add(node.strokes.len().saturating_mul(std::mem::size_of::<Paint>()))
+        .saturating_add(est_paint_slice_bytes(&node.fills))
+        .saturating_add(est_paint_slice_bytes(&node.strokes))
         .saturating_add(node.effects.len().saturating_mul(std::mem::size_of::<Effect>()))
-        .saturating_add(node.overrides.len().saturating_mul(32))
+        .saturating_add(node.overrides.iter().map(|s| s.len().saturating_add(32)).sum::<usize>())
         .saturating_add(bound_bytes)
         .saturating_add(var_modes_bytes)
         .saturating_add(plugin_bytes)
         .saturating_add(prop_refs_bytes)
+        .saturating_add(ann_bytes)
+        .saturating_add(links_bytes)
+        .saturating_add(resources_bytes)
         .saturating_add(kind_extra)
 }
 

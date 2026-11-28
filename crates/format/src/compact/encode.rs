@@ -12,7 +12,7 @@ use serde::ser::{SerializeMap, SerializeStruct};
 use serde::{Serialize, Serializer};
 
 use super::decode::materialized_budget;
-use super::fields::{canonical_vector_key, est_node_bytes, est_vector_bytes, exact_kind_eq, serialize_mirror_diff_fields};
+use super::fields::{est_node_bytes, est_vector_bytes, exact_kind_eq, exact_vector_network_eq, serialize_mirror_diff_fields, vector_fingerprint};
 
 /// Conservative lower bound on encoded bytes for a compact mirror record.
 const MIN_MIRROR_JSON_BYTES: usize = 36;
@@ -81,10 +81,11 @@ fn find_acyclic_mirrors(doc: &Document) -> BTreeSet<NodeId> {
 }
 
 /// Collects finite non-empty `VectorNetwork`s that would actually be serialized at least twice,
+/// using fixed-size streaming SHA-256 fingerprints confirmed by exact structural equality and
 /// assigning deterministic indices in `NodeId` order.
 fn build_vector_table<'a>(doc: &'a Document, mirrors: &BTreeSet<NodeId>) -> (Vec<&'a VectorNetwork>, BTreeMap<NodeId, u32>) {
-    let mut keys: Vec<(NodeId, Vec<u8>, &'a VectorNetwork)> = Vec::new();
-    let mut counts: HashMap<Vec<u8>, usize> = HashMap::new();
+    let mut candidates: Vec<(NodeId, [u8; 32], &'a VectorNetwork)> = Vec::new();
+    let mut fp_counts: HashMap<[u8; 32], usize> = HashMap::new();
     for node in doc.nodes() {
         let NodeKind::Vector { network } = &node.kind else { continue };
         if mirrors.contains(&node.id)
@@ -94,24 +95,41 @@ fn build_vector_table<'a>(doc: &'a Document, mirrors: &BTreeSet<NodeId>) -> (Vec
             // Kind is inherited from source; no vector data is emitted for this mirror.
             continue;
         }
-        let Some(key) = canonical_vector_key(network) else { continue };
-        *counts.entry(key.clone()).or_insert(0) += 1;
-        keys.push((node.id, key, network));
+        let Some(fp) = vector_fingerprint(network) else { continue };
+        *fp_counts.entry(fp).or_insert(0) += 1;
+        candidates.push((node.id, fp, network));
+    }
+
+    // Group only nodes whose fingerprint appeared >= 2 times, verifying exact structural equality.
+    let mut groups: HashMap<[u8; 32], Vec<(&'a VectorNetwork, Vec<NodeId>)>> = HashMap::new();
+    for (id, fp, net) in &candidates {
+        if fp_counts.get(fp).copied().unwrap_or(0) < 2 {
+            continue;
+        }
+        let bucket = groups.entry(*fp).or_default();
+        if let Some((_, ids)) = bucket.iter_mut().find(|(rep, _)| exact_vector_network_eq(rep, net)) {
+            ids.push(*id);
+        } else {
+            bucket.push((net, vec![*id]));
+        }
     }
 
     let mut vectors: Vec<&'a VectorNetwork> = Vec::new();
-    let mut index_by_key: HashMap<Vec<u8>, u32> = HashMap::new();
     let mut vector_refs: BTreeMap<NodeId, u32> = BTreeMap::new();
-    for (id, key, net) in keys {
-        if counts.get(&key).copied().unwrap_or(0) < 2 {
+    let mut assigned: HashMap<[u8; 32], Vec<(&'a VectorNetwork, u32)>> = HashMap::new();
+    for (id, fp, net) in candidates {
+        let Some(bucket) = groups.get(&fp) else { continue };
+        let repeated = bucket.iter().any(|(rep, ids)| ids.len() >= 2 && exact_vector_network_eq(rep, net));
+        if !repeated {
             continue;
         }
-        let idx = if let Some(&existing) = index_by_key.get(&key) {
+        let entry = assigned.entry(fp).or_default();
+        let idx = if let Some(&(_, existing)) = entry.iter().find(|(rep, _)| exact_vector_network_eq(rep, net)) {
             existing
         } else {
             let Ok(next) = u32::try_from(vectors.len()) else { continue };
             vectors.push(net);
-            index_by_key.insert(key, next);
+            entry.push((net, next));
             next
         };
         vector_refs.insert(id, idx);
@@ -121,13 +139,31 @@ fn build_vector_table<'a>(doc: &'a Document, mirrors: &BTreeSet<NodeId>) -> (Vec
 
 /// Ensures an honest document never compacts below the decoder's amplification budget.
 ///
-/// If a pathological fan-out would exceed `materialized_budget(est_json_bytes)`, drops compact
-/// encoding so the saved document always reloads cleanly.
+/// Mirrors the decoder's per-record pre-clone and post-patch charge so shrinking overrides
+/// (e.g. long source text overridden with a short string) are accounted identically to `decode.rs`.
 fn enforce_reload_budget(doc: &Document, mirrors: &mut BTreeSet<NodeId>, vectors: &mut Vec<&VectorNetwork>, vector_refs: &mut BTreeMap<NodeId, u32>) {
     if mirrors.is_empty() && vectors.is_empty() {
         return;
     }
-    let nodes_charge: usize = doc.nodes().map(est_node_bytes).fold(0usize, usize::saturating_add);
+    let nodes_charge: usize = doc
+        .nodes()
+        .map(|node| {
+            let own = est_node_bytes(node);
+            if mirrors.contains(&node.id)
+                && let Some(src) = node.source.and_then(|id| doc.node(id))
+            {
+                let vref_extra = vector_refs
+                    .get(&node.id)
+                    .and_then(|&idx| usize::try_from(idx).ok())
+                    .and_then(|i| vectors.get(i))
+                    .map_or(0, |v| est_vector_bytes(v));
+                let pre = est_node_bytes(src).saturating_add(vref_extra);
+                pre.max(own)
+            } else {
+                own
+            }
+        })
+        .fold(0usize, usize::saturating_add);
     let vecs_charge: usize = vectors.iter().map(|v| est_vector_bytes(v)).fold(0usize, usize::saturating_add);
     let total_materialized = nodes_charge.saturating_add(vecs_charge);
     let est_compact = doc

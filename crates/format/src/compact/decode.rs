@@ -38,7 +38,7 @@ pub(crate) fn materialized_budget(input_bytes: usize) -> usize {
 /// Parse a `document.json` string (legacy v1 or compact mirrors/vectors), checking the native
 /// header and version first.
 pub(crate) fn parse_compact_document(text: &str) -> Result<(Document, Header), FormatError> {
-    if !text.contains("\"mirror\"") && !text.contains("\"vectorRef\"") {
+    if !text.contains("\"mirror\"") && !text.contains("\"vectorRef\"") && !text.contains("\\u") {
         return craft_figcraft_format::read_document_json::<Document>(text).map_err(|e| match e {
             craft_figcraft_format::ReadDocumentError::Json(error) => FormatError::Corrupt(error.to_string()),
             craft_figcraft_format::ReadDocumentError::NewerVersion(error) => FormatError::Newer(error.0),
@@ -63,7 +63,7 @@ struct CompactDocWire {
     kind: FileKind,
     pages: Vec<NodeId>,
     nodes: BTreeMap<NodeId, CompactNodeEntry>,
-    vectors: Vec<VectorNetwork>,
+    vectors_raw: Option<Value>,
     next_id: NodeId,
     styles: Vec<Style>,
     variables: Variables,
@@ -135,7 +135,7 @@ struct DocParseState {
     kind: Option<FileKind>,
     pages: Option<Vec<NodeId>>,
     nodes: Option<BTreeMap<NodeId, CompactNodeEntry>>,
-    vectors: Option<Vec<VectorNetwork>>,
+    vectors_raw: Option<Value>,
     next_id: Option<NodeId>,
     styles: Option<Vec<Style>>,
     variables: Option<Variables>,
@@ -161,7 +161,7 @@ impl DocParseState {
             kind: self.kind.unwrap_or_default(),
             pages: self.pages.ok_or_else(|| E::missing_field("pages"))?,
             nodes: self.nodes.ok_or_else(|| E::missing_field("nodes"))?,
-            vectors: self.vectors.unwrap_or_default(),
+            vectors_raw: self.vectors_raw,
             next_id: self.next_id.ok_or_else(|| E::missing_field("next_id"))?,
             styles: self.styles.unwrap_or_default(),
             variables: self.variables.unwrap_or_default(),
@@ -188,7 +188,7 @@ fn read_doc_field<'de, A: MapAccess<'de>>(key: &str, map: &mut A, s: &mut DocPar
         "kind" => s.kind = Some(map.next_value()?),
         "pages" => s.pages = Some(map.next_value()?),
         "nodes" => s.nodes = Some(map.next_value_seed(NodesMapSeed { budget })?),
-        "vectors" => s.vectors = Some(map.next_value()?),
+        "vectors" => s.vectors_raw = Some(map.next_value()?),
         "next_id" => s.next_id = Some(map.next_value()?),
         "styles" => s.styles = Some(map.next_value()?),
         "variables" => s.variables = Some(map.next_value()?),
@@ -442,7 +442,18 @@ fn build_full_kind<E: DeError>(
 }
 
 fn materialize(wire: CompactDocWire, budget: usize) -> Result<Document, FormatError> {
-    let vectors = wire.vectors;
+    let uses_vectors = wire.nodes.values().any(|entry| match entry {
+        CompactNodeEntry::Full { vector_ref, .. } => vector_ref.is_some(),
+        CompactNodeEntry::Mirror(m) => m.vector_ref.is_some(),
+    });
+    let vectors: Vec<VectorNetwork> = if uses_vectors {
+        match wire.vectors_raw {
+            Some(v) => serde_json::from_value(v).map_err(|e| FormatError::Corrupt(e.to_string()))?,
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
     let mut charged: usize = vectors.iter().map(est_vector_bytes).fold(0usize, usize::saturating_add);
     if charged > budget {
         return Err(FormatError::Corrupt("document vectors exceed materialized memory budget".into()));
