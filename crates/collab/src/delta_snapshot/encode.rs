@@ -152,8 +152,9 @@ fn estimate_decode_charge(meta: &WireMeta, vectors: &[VectorNetwork], records: &
             WireRecord::Mirror(m) => {
                 let src_size = node_sizes.get(&m.source).copied().unwrap_or(0);
                 let est = src_size.saturating_add(est_deltas_extra_bytes(&m.deltas, &vector_sizes)).saturating_add(m.pos.len());
+                let overrides = m.overrides.iter().fold(0usize, |a, s| a.saturating_add(s.len()).saturating_add(24));
                 total = total.saturating_add(est);
-                node_sizes.insert(m.id, est);
+                node_sizes.insert(m.id, est.saturating_add(overrides));
             }
         }
     }

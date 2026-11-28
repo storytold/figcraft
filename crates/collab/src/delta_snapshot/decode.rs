@@ -139,6 +139,11 @@ pub(super) fn est_meta_bytes(meta: &WireMeta) -> usize {
     let vars = meta.variables.collections.len().saturating_mul(128).saturating_add(meta.variables.variables.len().saturating_mul(128));
     let libs = meta.libraries.components.len().saturating_mul(128).saturating_add(meta.libraries.styles.len().saturating_mul(128));
     let votes = meta.votes.iter().fold(0usize, |a, (k, v)| a.saturating_add(k.len()).saturating_add(v.len().saturating_mul(size_of::<NodeId>())));
+    let categories = meta
+        .annotation_categories
+        .iter()
+        .flatten()
+        .fold(0usize, |a, c| a.saturating_add(c.id.len()).saturating_add(c.name.len()).saturating_add(128));
     meta.name
         .len()
         .saturating_add(images)
@@ -148,6 +153,7 @@ pub(super) fn est_meta_bytes(meta: &WireMeta) -> usize {
         .saturating_add(vars)
         .saturating_add(libs)
         .saturating_add(votes)
+        .saturating_add(categories)
         .saturating_add(meta.vote_history.len().saturating_mul(128))
         .saturating_add(meta.image_presets.len().saturating_mul(64))
         .saturating_add(meta.document_colors.len().saturating_mul(32))
