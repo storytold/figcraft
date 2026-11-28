@@ -6,8 +6,9 @@ use std::io::{BufWriter, Write};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, VectorNetwork};
 use sha2::{Digest as _, Sha256};
 
+use super::decode::{est_deltas_extra_bytes, est_meta_bytes, est_node_bytes, est_vector_bytes, materialized_budget};
 use super::fields::{diff_mirror_fields, exact_vector_network_eq};
-use super::{DELTA_MAGIC, DELTA_VERSION, DeltaWireRef, MirrorWire, WireImage, WireMeta, WireRecord};
+use super::{DEFAULT_MAX_MATERIALIZED_BYTES, DELTA_MAGIC, DELTA_VERSION, DeltaWireRef, MirrorWire, WireImage, WireMeta, WireRecord};
 use crate::Error;
 use crate::replica::Replica;
 
@@ -102,6 +103,9 @@ fn topo_order(doc: &Document) -> Vec<NodeId> {
 }
 
 /// Encode `replica` as a compressed `CatchUp::DeltaSnapshot` payload.
+///
+/// Returns `Error::TooLarge` if the payload would exceed the client decoder's materialized-memory
+/// budget, allowing callers such as `Server::join_as` to fall back to `CatchUp::Snapshot`.
 pub fn encode_delta_snapshot(replica: &Replica) -> Result<Vec<u8>, Error> {
     let doc = replica.document();
     let order = topo_order(doc);
@@ -118,8 +122,43 @@ pub fn encode_delta_snapshot(replica: &Replica) -> Result<Vec<u8>, Error> {
     }
 
     let meta = build_meta(doc);
+    let est_materialized = estimate_decode_charge(&meta, &interner.table, &records);
     let wire = DeltaWireRef { meta: &meta, vectors: &interner.table, records: &records };
-    compress_wire(&wire)
+    let (out, written) = compress_wire(&wire)?;
+    let budget = materialized_budget(written, DEFAULT_MAX_MATERIALIZED_BYTES);
+    if est_materialized > budget {
+        return Err(Error::TooLarge(budget));
+    }
+    Ok(out)
+}
+
+/// Mirror the decoder's materialized-byte accounting so the server never emits a delta snapshot
+/// that a compliant client would reject with `Error::TooLarge`.
+fn estimate_decode_charge(meta: &WireMeta, vectors: &[VectorNetwork], records: &[WireRecord]) -> usize {
+    let vector_sizes: Vec<usize> = vectors.iter().map(est_vector_bytes).collect();
+    let mut total = est_meta_bytes(meta);
+    for &vs in &vector_sizes {
+        total = total.saturating_add(vs);
+    }
+    let mut node_sizes: HashMap<NodeId, usize> = HashMap::with_capacity(records.len());
+    for rec in records {
+        match rec {
+            WireRecord::Full { pos, node, vref } => {
+                let vsize = vref.and_then(|idx| usize::try_from(idx).ok()).and_then(|i| vector_sizes.get(i).copied()).unwrap_or(0);
+                let est = est_node_bytes(node).saturating_add(pos.len()).saturating_add(vsize);
+                total = total.saturating_add(est);
+                node_sizes.insert(node.id, est);
+            }
+            WireRecord::Mirror(m) => {
+                let src_size = node_sizes.get(&m.source).copied().unwrap_or(0);
+                let est = src_size.saturating_add(est_deltas_extra_bytes(&m.deltas, &vector_sizes)).saturating_add(m.pos.len());
+                let overrides = m.overrides.iter().fold(0usize, |a, s| a.saturating_add(s.len()).saturating_add(24));
+                total = total.saturating_add(est);
+                node_sizes.insert(m.id, est.saturating_add(overrides));
+            }
+        }
+    }
+    total
 }
 
 fn encode_one_node(node: &Node, pos: String, seen: &HashMap<NodeId, &Node>, interner: &mut VectorInterner) -> Result<WireRecord, Error> {
@@ -143,7 +182,7 @@ fn encode_one_node(node: &Node, pos: String, seen: &HashMap<NodeId, &Node>, inte
     let vref = match &mut stripped.kind {
         NodeKind::Vector { network } if !network.vertices.is_empty() || !network.segments.is_empty() || !network.regions.is_empty() => {
             let idx = interner.intern(network)?;
-            *network = VectorNetwork::default();
+            *network = figcraft_doc::Shared::default();
             Some(idx)
         }
         _ => None,
@@ -202,7 +241,7 @@ impl<W: Write> Write for CountingWriter<W> {
     }
 }
 
-fn compress_wire(wire: &DeltaWireRef<'_>) -> Result<Vec<u8>, Error> {
+fn compress_wire(wire: &DeltaWireRef<'_>) -> Result<(Vec<u8>, usize), Error> {
     let mut out = Vec::with_capacity(4096);
     out.extend_from_slice(DELTA_MAGIC);
     out.push(DELTA_VERSION);
@@ -213,10 +252,11 @@ fn compress_wire(wire: &DeltaWireRef<'_>) -> Result<Vec<u8>, Error> {
     let mut buffered = BufWriter::with_capacity(64 * 1024, CountingWriter { inner: encoder, written: 0 });
     serde_json::to_writer(&mut buffered, wire).map_err(|e| Error::Encode(e.to_string()))?;
     let counting = buffered.into_inner().map_err(|e| Error::Encode(e.into_error().to_string()))?;
-    let len_u32 = u32::try_from(counting.written).map_err(|_| Error::TooLarge(u32::MAX as usize))?;
+    let written = counting.written;
+    let len_u32 = u32::try_from(written).map_err(|_| Error::TooLarge(u32::MAX as usize))?;
     let mut out = counting.inner.finish().map_err(|e| Error::Encode(e.to_string()))?;
     if let Some(slot) = out.get_mut(5..9) {
         slot.copy_from_slice(&len_u32.to_le_bytes());
     }
-    Ok(out)
+    Ok((out, written))
 }

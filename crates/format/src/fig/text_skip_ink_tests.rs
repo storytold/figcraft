@@ -181,7 +181,7 @@ fn export_writes_one_actual_node_value_and_complete_run_values_without_skip_only
     let mut skipped = text.style.clone();
     skipped.set_look(|look| look.skip_ink = true);
     text.runs = vec![StyleRun { start: 1, end: 3, style: skipped }];
-    doc.create(doc.first_page().unwrap(), NodeKind::Text(text), "Label", 0.0, 0.0, 100.0, 30.0).unwrap();
+    doc.create(doc.first_page().unwrap(), NodeKind::Text(text.into()), "Label", 0.0, 0.0, 100.0, 30.0).unwrap();
 
     let (bytes, warnings) = export(&doc, None).unwrap();
     assert!(warnings.is_empty(), "skip-ink is supported: {warnings:?}");
@@ -203,14 +203,14 @@ fn export_writes_one_actual_node_value_and_complete_run_values_without_skip_only
     custom.style.set_look(|look| look.skip_ink = true);
     custom.style.set_look(|look| look.thickness = figcraft_doc::DecorationLength::Pixels(2.0));
     let mut custom_doc = Document::new("Unsupported decoration");
-    custom_doc.create(custom_doc.first_page().unwrap(), NodeKind::Text(custom), "Custom", 0.0, 0.0, 100.0, 30.0).unwrap();
+    custom_doc.create(custom_doc.first_page().unwrap(), NodeKind::Text(custom.into()), "Custom", 0.0, 0.0, 100.0, 30.0).unwrap();
     let (_, warnings) = export(&custom_doc, None).unwrap();
     assert!(warnings.iter().any(|w| w.contains("text decoration looks")), "custom look warning missing: {warnings:?}");
 
     let mut variable = TextData::new("x");
     variable.style.variations.insert("wght".into(), 400.0);
     let mut variable_doc = Document::new("Variable font warning");
-    variable_doc.create(variable_doc.first_page().unwrap(), NodeKind::Text(variable), "Variable", 0.0, 0.0, 100.0, 30.0).unwrap();
+    variable_doc.create(variable_doc.first_page().unwrap(), NodeKind::Text(variable.into()), "Variable", 0.0, 0.0, 100.0, 30.0).unwrap();
     let (_, warnings) = export(&variable_doc, None).unwrap();
     assert!(warnings.iter().any(|w| w.contains("variable font settings")), "variation warning missing: {warnings:?}");
 
@@ -227,7 +227,15 @@ fn export_writes_one_actual_node_value_and_complete_run_values_without_skip_only
         bound: Default::default(),
     });
     let id = linked_doc
-        .create(linked_doc.first_page().unwrap(), NodeKind::Text(TextData { style: local, ..TextData::new("x") }), "Label", 0.0, 0.0, 100.0, 30.0)
+        .create(
+            linked_doc.first_page().unwrap(),
+            NodeKind::Text((TextData { style: local, ..TextData::new("x") }).into()),
+            "Label",
+            0.0,
+            0.0,
+            100.0,
+            30.0,
+        )
         .unwrap();
     linked_doc.node_mut(id).unwrap().styles.text = Some("body".into());
     let (bytes, warnings) = export(&linked_doc, None).unwrap();
@@ -259,7 +267,7 @@ fn skip_ink_without_an_underline_stays_out_of_the_look_and_exports_the_default()
 
     // ...and default native text writes the default, which reads back as the default look.
     let mut doc = Document::new("Plain");
-    doc.create(doc.first_page().unwrap(), NodeKind::Text(TextData::new("x")), "Label", 0.0, 0.0, 100.0, 30.0).unwrap();
+    doc.create(doc.first_page().unwrap(), NodeKind::Text(TextData::new("x").into()), "Label", 0.0, 0.0, 100.0, 30.0).unwrap();
     let (bytes, _) = export(&doc, None).unwrap();
     let archive = super::Archive::open(&bytes).unwrap();
     let (schema, body) = super::decode_canvas(&archive.canvas).unwrap();

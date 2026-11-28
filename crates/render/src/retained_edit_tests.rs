@@ -114,7 +114,7 @@ fn ridge(d: &mut Document, page: NodeId, teeth: usize) -> NodeId {
     }
     pts.push(figcraft_geom::Point::new(240.0, 120.0));
     let network = figcraft_doc::VectorNetwork::from_points(&pts, true);
-    let id = d.create(page, NodeKind::Vector { network }, "Ridge", 20.0, 20.0, 240.0, 120.0).unwrap();
+    let id = d.create(page, NodeKind::Vector { network: network.into() }, "Ridge", 20.0, 20.0, 240.0, 120.0).unwrap();
     d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::from_hex("7FAE9C").unwrap())];
     id
 }

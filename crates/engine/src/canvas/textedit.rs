@@ -83,7 +83,7 @@ fn next_editing_session() -> u64 {
 
 fn text_of(s: &Session, id: NodeId) -> Result<TextData> {
     match &s.doc()?.get(id)?.kind {
-        NodeKind::Text(t) => Ok(t.clone()),
+        NodeKind::Text(t) => Ok((**t).clone()),
         _ => Err(EngineError::Other(format!("{id} is not a text layer"))),
     }
 }

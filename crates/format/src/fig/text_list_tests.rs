@@ -77,7 +77,7 @@ fn the_export_writes_where_a_list_starts() {
     let mut td = figcraft_doc::TextData::new("two\nthree\nplain\nsix\ndot");
     let pl = |list, start_offset| ParaList { list, indent: 0, start_offset, ..ParaList::default() };
     td.paragraphs = vec![pl(N, 1), pl(N, 0), pl(P, 0), pl(N, 5), pl(B, 4)];
-    doc.create(page, NodeKind::Text(td), "List", 0.0, 0.0, 200.0, 80.0).unwrap();
+    doc.create(page, NodeKind::Text(td.into()), "List", 0.0, 0.0, 200.0, 80.0).unwrap();
     let (bytes, _) = super::super::export(&doc, None).unwrap();
     let a = Archive::open(&bytes).unwrap();
     let (schema, message) = decode_canvas(&a.canvas).unwrap();

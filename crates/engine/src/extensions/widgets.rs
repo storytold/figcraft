@@ -277,7 +277,7 @@ fn build(s: &mut Session, plugin: &str, w: NodeId, r: &WidgetRender) -> Result<(
 fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str, pixels: &mut u64) -> Result<()> {
     let (kind, name) = match d.kind {
         WidgetKind::Frame => (NodeKind::Frame, "Frame"),
-        WidgetKind::Text => (NodeKind::Text(TextData { characters: d.text.clone(), ..TextData::default() }), "Text"),
+        WidgetKind::Text => (NodeKind::Text((TextData { characters: d.text.clone(), ..TextData::default() }).into()), "Text"),
         WidgetKind::Rectangle => (NodeKind::Rectangle, "Rectangle"),
         WidgetKind::Ellipse => (NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse"),
         WidgetKind::Image => (NodeKind::Rectangle, "Image"),

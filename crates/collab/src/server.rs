@@ -427,12 +427,15 @@ impl Server {
                 CatchUp::Delta(self.log.iter().filter(|a| a.seq > r.seq).cloned().collect())
             }
             // Only send the cached delta snapshot to peers that also read `design-review`, since
-            // the compressed payload carries the document's review config without per-peer filtering.
-            // If delta encoding ever fails, fall back to the legacy snapshot instead of refusing join.
-            _ if reads_delta && reads_design_review => match self.cached_delta_snapshot() {
-                Ok(bytes) => CatchUp::DeltaSnapshot(bytes),
-                Err(_) => CatchUp::Snapshot(self.state.snapshot().map_err(|e| refuse(&e.to_string()))?),
-            },
+            // the compressed payload carries the document's review config without per-peer filtering,
+            // and only when the document fits within the client decoder's default node cap.
+            // If delta encoding fails (e.g. materialized budget exceeded), fall back to `Snapshot`.
+            _ if reads_delta && reads_design_review && self.state.document().node_count() <= Limits::default().max_nodes => {
+                match self.cached_delta_snapshot() {
+                    Ok(bytes) => CatchUp::DeltaSnapshot(bytes),
+                    Err(_) => CatchUp::Snapshot(self.state.snapshot().map_err(|e| refuse(&e.to_string()))?),
+                }
+            }
             _ => CatchUp::Snapshot(self.state.snapshot().map_err(|e| refuse(&e.to_string()))?),
         };
         // A peer that doesn't read the review settings can't decode them: its catch-up carries

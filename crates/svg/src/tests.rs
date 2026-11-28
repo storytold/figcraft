@@ -49,7 +49,7 @@ fn export_vector_region_paints_independently() {
             Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(Vec::new()), ..Default::default() },
         ],
     };
-    let id = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 20.0, 10.0).unwrap();
+    let id = d.create(p, NodeKind::Vector { network: network.into() }, "V", 0.0, 0.0, 20.0, 10.0).unwrap();
     let svg = export_svg(&d, &[id], &SvgOptions::default()).unwrap();
     assert!(svg.contains("#FF0000") && svg.contains("#0000FF"), "{svg}");
     assert_eq!(svg.matches("<path ").count(), 2, "empty region emits no path");
@@ -72,7 +72,7 @@ fn region_gradient_export_keeps_the_original_paint_box() {
     let mut network = VectorNetwork::from_path(&Rect::new(20.0, 10.0, 80.0, 40.0).to_path(0.1));
     network.regions[0].fills = Some(vec![Paint::gradient(Gradient::default_for(GradientKind::Linear, Color::BLACK))]);
     network.regions[0].paint_space = Some(RegionPaintSpace { width: 60.0, height: 30.0, transform: Affine::translate((20.0, 10.0)) });
-    let id = d.create(page, NodeKind::Vector { network }, "V", 0.0, 0.0, 120.0, 100.0).unwrap();
+    let id = d.create(page, NodeKind::Vector { network: network.into() }, "V", 0.0, 0.0, 120.0, 100.0).unwrap();
     let svg = export_svg(&d, &[id], &SvgOptions::default()).unwrap();
     assert!(svg.contains("x1=\"30\" y1=\"0\" x2=\"30\" y2=\"30\""), "{svg}");
 }
@@ -142,7 +142,7 @@ fn two_colour_text() -> (Document, figcraft_doc::NodeId) {
     style.fills = Some(vec![Paint::solid(Color::from_hex("00FF00").unwrap())]);
     text.runs.push(StyleRun { start: 1, end: 2, style });
     text.normalize();
-    let id = d.create(page, NodeKind::Text(text), "Text", 0.0, 0.0, 100.0, 40.0).unwrap();
+    let id = d.create(page, NodeKind::Text(text.into()), "Text", 0.0, 0.0, 100.0, 40.0).unwrap();
     d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
     (d, id)
 }
@@ -176,7 +176,7 @@ fn title_case_does_not_restart_words_across_fill_runs_in_live_text() {
     style.fills = Some(vec![Paint::solid(Color::from_hex("00FF00").unwrap())]);
     text.runs.push(StyleRun { start: 2, end: 3, style });
     text.normalize();
-    let id = d.create(page, NodeKind::Text(text), "Text", 0.0, 0.0, 200.0, 40.0).unwrap();
+    let id = d.create(page, NodeKind::Text(text.into()), "Text", 0.0, 0.0, 200.0, 40.0).unwrap();
     d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
     let svg = export_svg(&d, &[id], &SvgOptions { outline_text: false, ..SvgOptions::default() }).unwrap();
     assert!(svg.contains(">He</tspan>") && svg.contains(">l</tspan>") && svg.contains(">lo</tspan>"), "{svg}");
@@ -199,7 +199,7 @@ fn live_text_export_drops_xml_forbidden_control_characters() {
             text.runs.push(StyleRun { start: 5, end: 12, style });
             text.normalize();
         }
-        let id = d.create(page, NodeKind::Text(text), "Text", 0.0, 0.0, 600.0, 40.0).unwrap();
+        let id = d.create(page, NodeKind::Text(text.into()), "Text", 0.0, 0.0, 600.0, 40.0).unwrap();
         d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
         let svg = export_svg(&d, &[id], &SvgOptions { outline_text: false, ..SvgOptions::default() }).unwrap();
         assert!(!svg.contains('\u{b}') && !svg.contains('\u{1}'), "{svg:?}");
@@ -223,7 +223,7 @@ fn ids_and_font_families_drop_xml_forbidden_control_characters() {
     let mut text = TextData::new(format!("a{junk}b"));
     text.style.font_size = 24.0;
     text.style.font_family = format!("Font{junk}<&\"");
-    let id = d.create(page, NodeKind::Text(text), &format!("Layer{junk}"), 0.0, 0.0, 600.0, 40.0).unwrap();
+    let id = d.create(page, NodeKind::Text(text.into()), &format!("Layer{junk}"), 0.0, 0.0, 600.0, 40.0).unwrap();
     d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
     let svg = export_svg(&d, &[id], &SvgOptions { outline_text: false, include_ids: true, ..SvgOptions::default() }).unwrap();
     assert!(!svg.contains(forbidden), "{svg:?}");
@@ -267,7 +267,7 @@ fn point_joins_equal_to_the_layer_join_keep_a_plain_stroke() {
         }
         let mut d = Document::new("t");
         let p = d.first_page().unwrap();
-        let v = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 50.0).unwrap();
+        let v = d.create(p, NodeKind::Vector { network: network.into() }, "V", 0.0, 0.0, 100.0, 50.0).unwrap();
         let n = d.get_mut(v).unwrap();
         n.strokes = vec![Paint::solid(Color::from_hex("000000").unwrap())];
         n.stroke.weight = 2.0;
@@ -397,7 +397,7 @@ fn a_dash_cap_writes_the_line_cap_of_a_dashed_stroke() {
 fn a_dashed_line_exports_as_the_canvas_draws_it() {
     let line = Segment::line(0, 1);
     let open = VectorNetwork { vertices: vec![Vertex::new(0.0, 0.0), Vertex::new(107.0, 0.0)], segments: vec![line], ..Default::default() };
-    let svg = dashed(NodeKind::Vector { network: open }, vec![10.0, 10.0]);
+    let svg = dashed(NodeKind::Vector { network: open.into() }, vec![10.0, 10.0]);
     assert_eq!(dash_attrs(&svg), [("10.7 10.7".to_string(), Some("5.35".to_string()))], "{svg}");
 }
 
@@ -415,7 +415,7 @@ fn each_subpath_of_a_dashed_vector_exports_its_own_fit() {
         segments: vec![Segment::line(0, 1), Segment::line(2, 3)],
         ..Default::default()
     };
-    let svg = dashed(NodeKind::Vector { network: two }, vec![10.0, 10.0]);
+    let svg = dashed(NodeKind::Vector { network: two.into() }, vec![10.0, 10.0]);
     assert_eq!(dash_attrs(&svg).len(), 2, "{svg}");
 }
 

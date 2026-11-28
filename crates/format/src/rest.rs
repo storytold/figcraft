@@ -628,13 +628,13 @@ impl<'a> Ctx<'a> {
                 }
             }
             // Point counts aren't part of the documented JSON: the outline is exact when present.
-            "REGULAR_POLYGON" | "STAR" if point_count().is_none() && has_geometry => NodeKind::Vector { network: VectorNetwork::default() },
+            "REGULAR_POLYGON" | "STAR" if point_count().is_none() && has_geometry => NodeKind::Vector { network: VectorNetwork::default().into() },
             "REGULAR_POLYGON" => NodeKind::Polygon { count: point_count().unwrap_or_else(|| self.default_count(3)) },
             "STAR" => NodeKind::Star {
                 count: point_count().unwrap_or_else(|| self.default_count(5)),
                 inner_ratio: num(j, "innerRadius").map_or(0.382, |r| r.clamp(0.01, 1.0)),
             },
-            "VECTOR" => NodeKind::Vector { network: VectorNetwork::default() },
+            "VECTOR" => NodeKind::Vector { network: VectorNetwork::default().into() },
             "BOOLEAN_OPERATION" => NodeKind::BooleanOp {
                 op: match text(j, "booleanOperation") {
                     Some("SUBTRACT") => BoolOp::Subtract,
@@ -643,7 +643,7 @@ impl<'a> Ctx<'a> {
                     _ => BoolOp::Union,
                 },
             },
-            "TEXT" => NodeKind::Text(text::text_data(self, j)),
+            "TEXT" => NodeKind::Text(text::text_data(self, j).into()),
             "COMPONENT" => NodeKind::Component { description: description(&self.component_meta, j), props: BTreeMap::new(), prop_order: Vec::new() },
             "COMPONENT_SET" => NodeKind::ComponentSet { description: description(&self.set_meta, j) },
             "SLICE" => NodeKind::Slice,
@@ -830,7 +830,7 @@ impl<'a> Ctx<'a> {
         if let Some(net) = net {
             match net {
                 Some(network) => {
-                    n.kind = NodeKind::Vector { network };
+                    n.kind = NodeKind::Vector { network: network.into() };
                     return false;
                 }
                 None => self.warn("invalid or oversized vector networks import as outlines"),
@@ -853,7 +853,7 @@ impl<'a> Ctx<'a> {
         for r in &mut network.regions {
             r.winding = winding;
         }
-        n.kind = NodeKind::Vector { network };
+        n.kind = NodeKind::Vector { network: network.into() };
         outline
     }
 
@@ -963,7 +963,7 @@ impl<'a> Ctx<'a> {
                     "grid"
                 }
                 StyleKind::Text { .. } => {
-                    sample.kind = NodeKind::Text(text::text_data(self, node));
+                    sample.kind = NodeKind::Text(text::text_data(self, node).into());
                     "text"
                 }
             };

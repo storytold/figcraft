@@ -27,7 +27,7 @@ fn flattening_a_boolean_past_the_caps_is_refused() {
         .into_iter()
         .map(|across| {
             let network = VectorNetwork::from_path(&bars(750, across));
-            s.doc_mut().unwrap().create(page, NodeKind::Vector { network }, "Bars", 0.0, 0.0, 3000.0, 3000.0).unwrap()
+            s.doc_mut().unwrap().create(page, NodeKind::Vector { network: network.into() }, "Bars", 0.0, 0.0, 3000.0, 3000.0).unwrap()
         })
         .collect();
     let g = id_of(&s.execute("bool.union", &json!({"ids": ids})).unwrap()["id"]).unwrap();
