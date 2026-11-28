@@ -162,7 +162,13 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
             if server.is_empty() {
                 return Err(EngineError::Disabled(CMD.into(), ONLINE_OFF.into()));
             }
-            start_publish(s, CMD, &server, p, true)?
+            let id = start_publish(s, CMD, &server, p, true)?;
+            // A file published with the key has no owner token: stopping and sharing again go as
+            // the server's operator, with the key in the address as `collab.share {server}` takes it.
+            if let Some(key) = string(p, "key").map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+                server = with_key(&server, &key);
+            }
+            id
         }
     };
     if let Some(live) = s.live.sessions.get_mut(&id) {
@@ -177,6 +183,20 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
         live.share = Some(Share { via, server, access, links });
     }
     Ok(s.live_summary())
+}
+
+/// `server` with `key` in its query (`?key=…`), escaped so any key reads back the same. It replaces
+/// a key the address carries: the one given is the one the file was published with.
+fn with_key(server: &str, key: &str) -> String {
+    let escaped: String = key
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { char::from(b).to_string() } else { format!("%{b:02X}") })
+        .collect();
+    let (base, query) = server.split_once('?').unwrap_or((server, ""));
+    let mut pairs: Vec<&str> = query.split('&').filter(|p| !p.is_empty() && p.split('=').next() != Some("key")).collect();
+    let key = format!("key={escaped}");
+    pairs.push(&key);
+    format!("{base}?{}", pairs.join("&"))
 }
 
 /// A way into a session this app hosts: its invite link and the join code that stands for it
