@@ -857,7 +857,7 @@ fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult
     let r = exec(b, "node.create", Value::Object(params))?;
     let id = r.get("id").cloned().ok_or("node.create returned no id")?;
     let warnings = r.get("warnings").cloned();
-    let node = node_at(b, id_arg(&id)?, 0, &options)?.0;
+    let node = node_get(b, id_arg(&id)?, 0, &options)?;
     let mut out = json!({"id": id, "node": node});
     if let Some(w) = warnings {
         out["warnings"] = w;
@@ -892,7 +892,7 @@ fn set_properties(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolRes
             .map(|a| a.iter().filter_map(Value::as_u64).collect())
             .unwrap_or_default(),
     };
-    let nodes: Vec<Value> = ids.iter().take(20).filter_map(|&i| node_at(b, i, 0, &options).ok().map(|(v, _)| v)).collect();
+    let nodes: Vec<Value> = ids.iter().take(20).filter_map(|&i| node_get(b, i, 0, &options).ok()).collect();
     let mut out = json!({"ok": true, "nodes": nodes});
     if let Some(w) = warnings {
         out["warnings"] = w;
@@ -952,12 +952,17 @@ fn inspect_at(b: &mut dyn Backend, depth: u64, all: bool, options: &Value) -> Re
     Ok((value, wire))
 }
 
-/// One layer's subtree at `depth`, and what its text block would take on the wire.
-fn node_at(b: &mut dyn Backend, id: u64, depth: u64, options: &Value) -> Result<(Value, usize), String> {
+/// One layer's subtree at `depth`, with the `fields` / `outline` options applied.
+fn node_get(b: &mut dyn Backend, id: u64, depth: u64, options: &Value) -> Result<Value, String> {
     let mut params = options.clone();
     params["id"] = json!(id);
     params["depth"] = json!(depth);
-    let value = b.call("node.get", params)?;
+    b.call("node.get", params)
+}
+
+/// One layer's subtree at `depth`, and what its text block would take on the wire.
+fn node_at(b: &mut dyn Backend, id: u64, depth: u64, options: &Value) -> Result<(Value, usize), String> {
+    let value = node_get(b, id, depth, options)?;
     let wire = wire_size(&value);
     Ok((value, wire))
 }
