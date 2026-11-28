@@ -84,7 +84,13 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
         if shown.is_positive() {
             let (a, b) = (l.place.page(shown.min), l.place.page(shown.max));
             let visible = figcraft_geom::Rect::new(a.x, a.y, b.x, b.y);
-            let moving = p.fling.is_some() || p.drag_scroll.is_some() || p.wheel.is_some();
+            // A zoom, a resize or any other change of the view moves it too: the detail is rendered
+            // once it is still (a frame is asked for then, as nothing else may draw one).
+            let changed = p.last_view.replace((visible, px)).is_some_and(|(v, s)| !same_view(v, visible) || s != px);
+            if changed {
+                ctx.request_repaint();
+            }
+            let moving = changed || p.fling.is_some() || p.drag_scroll.is_some() || p.wheel.is_some();
             detail = p.detail_texture(ctx, &l.disp, p.current, px, to.bounds, visible, moving, now);
         }
         let hole = detail.as_ref().map(|d| l.clip.intersect(l.place.rect(d.bounds)));
@@ -159,4 +165,11 @@ pub(super) fn base_parts(clip: Rect, hole: Option<Rect>) -> Vec<Rect> {
     .into_iter()
     .filter(|r| r.is_positive())
     .collect()
+}
+
+/// Whether two views of the page are the same up to the rounding of converting them back from the
+/// screen.
+fn same_view(a: figcraft_geom::Rect, b: figcraft_geom::Rect) -> bool {
+    const EPS: f64 = 1e-3;
+    (a.x0 - b.x0).abs() < EPS && (a.y0 - b.y0).abs() < EPS && (a.x1 - b.x1).abs() < EPS && (a.y1 - b.y1).abs() < EPS
 }
