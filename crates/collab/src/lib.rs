@@ -24,6 +24,7 @@
 pub mod change;
 pub mod client;
 pub mod code;
+pub mod delta_snapshot;
 mod diff;
 mod docprops;
 pub mod frac;
@@ -142,6 +143,10 @@ mod codec_tests;
 mod comment_access_tests;
 #[cfg(test)]
 mod deleted_cap_tests;
+#[cfg(test)]
+mod delta_dst_tests;
+#[cfg(test)]
+mod delta_snapshot_tests;
 #[cfg(test)]
 mod diff_tests;
 #[cfg(test)]
