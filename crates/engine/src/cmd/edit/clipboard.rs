@@ -580,7 +580,8 @@ pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, prop
     // values it gave are pasted without a link, so the layer's own link goes too.
     let here = |v: &Value| v.as_str().is_none_or(|sid| doc.style(sid).is_some());
     for (k, v) in m.iter_mut() {
-        if k.ends_with("Style") && !k.starts_with("font") && !here(v) {
+        // `cornerStyle` is a value (round, chamfer, concave), not a link to a shared style.
+        if k.ends_with("Style") && !k.starts_with("font") && k != "cornerStyle" && !here(v) {
             *v = Value::Null;
         }
     }
