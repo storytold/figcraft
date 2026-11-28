@@ -1,6 +1,7 @@
-//! `#join=` and `?control` in the page's URL, and the server the page names for itself.
+//! `#join=`, `?control` and `?save=managed` in the page's URL, and the server the page names for
+//! itself.
 
-use crate::query::{control, join_link, page_server};
+use crate::query::{confirms_saves, control, join_link, page_server};
 
 #[test]
 fn join_takes_the_rest_of_the_fragment() {
@@ -81,4 +82,15 @@ fn a_page_rejects_server_delimiters_that_endpoint_parsing_would_strip() {
         assert!(figcraft_collab_net::Endpoint::parse(&server).is_ok(), "the parser cleans {server:?}");
         assert_eq!(page_server(&server), None, "{server:?} must not replace the default server");
     }
+}
+
+#[test]
+fn confirmed_saves_are_opt_in() {
+    assert!(confirms_saves("?host=parent&save=managed", None));
+    assert!(confirms_saves("save=managed", None), "no leading ?");
+    assert!(confirms_saves("", Some("managed")), "a page host's canvas attribute");
+    for search in ["", "?host=parent", "?save", "?save=", "?save=auto", "?save=managedx", "?xsave=managed", "?save=Managed"] {
+        assert!(!confirms_saves(search, None), "{search:?}");
+    }
+    assert!(!confirms_saves("?host=parent", Some("auto")));
 }

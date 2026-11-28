@@ -1,7 +1,8 @@
 //! The browser shell: web `Services` and the eframe web runner.
 
 use figcraft_engine::Session;
-use figcraft_ui_egui::{ContentsFuture, FigApp, Services};
+use figcraft_engine::cmd::file::FileSnapshot;
+use figcraft_ui_egui::{ContentsFuture, Delivery, FigApp, Services};
 use wasm_bindgen::JsCast as _;
 
 const CANVAS_ID: &str = "figcraft_canvas";
@@ -36,11 +37,11 @@ pub fn start() {
         // documents in it and stores what it saves (`host`); unframed there is no parent, so that URL
         // on its own stays the normal app with downloads. `data-host="page"` on the canvas opts a
         // page in instead: it runs FigCraft in its own document and talks over DOM `CustomEvent`s on
-        // the canvas.
-        let bridge = crate::host::Bridge::connect(&canvas);
+        // the canvas. `?save=managed` (or `data-save="managed"` on the canvas) opts the host in to
+        // confirmed saves: a document save waits for its `saved` (`host_saves`).
+        let confirms_saves = crate::query::confirms_saves(&query(), canvas.get_attribute("data-save").as_deref());
+        let bridge = crate::host::Bridge::connect(&canvas, confirms_saves);
         let app_bridge = bridge.clone();
-        // Files the host sends, on their way into the app's own open queue each frame.
-        let opens: crate::host::OpenQueue = std::rc::Rc::default();
         let mut options = eframe::WebOptions::default();
         // `?webgl`: force the WebGL2 backend (troubleshooting, and headless browsers whose WebGPU
         // adapter request returns nothing).
@@ -101,9 +102,9 @@ pub fn start() {
                     }
                     // The host's files arrive on the app's own open path (a dropped file's).
                     if let Some(bridge) = &app_bridge {
-                        bridge.listen(opens.clone(), cc.egui_ctx.clone());
+                        bridge.listen(cc.egui_ctx.clone());
                     }
-                    Ok(Box::new(WebShell { fig, host: app_bridge, opens }))
+                    Ok(Box::new(WebShell { fig, host: app_bridge }))
                 }),
             )
             .await;
@@ -169,6 +170,12 @@ fn page_meta(name: &str) -> Option<String> {
     document.query_selector(&format!("meta[name=\"{name}\"]")).ok().flatten()?.get_attribute("content")
 }
 
+/// The clock confirmed saves time out by (milliseconds; `Date.now()`, which
+/// [`crate::host_saves`] tolerates going back).
+fn now_ms() -> u64 {
+    js_sys::Date::now().max(0.0) as u64
+}
+
 fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
@@ -181,31 +188,22 @@ struct WebShell {
     fig: FigApp,
     /// The host bridge, when the page hosts the app (`?host=parent` or `data-host="page"`).
     host: Option<crate::host::Bridge>,
-    /// Files the host sent, waiting to join the app's own open queue.
-    opens: crate::host::OpenQueue,
 }
 
 impl eframe::App for WebShell {
     // eframe runs `logic` for visible tabs and, with only `run_logic`, for hidden ones: keep
     // autosave/live/control deadlines moving without a paint. `FigApp::ui` does not repeat it.
-    /// Run the browser shell's eframe logic callback: hand the host's files to the app's open
-    /// queue, guard `background_tick` so hidden tabs still advance autosave, live and control
-    /// deadlines without painting, and report unsaved changes to the host. `FigApp::ui` does
-    /// not repeat it.
+    /// Run the browser shell's eframe logic callback: handle what the host sent (its files join
+    /// the app's open queue, its save confirmations mark documents saved), guard `background_tick`
+    /// so hidden tabs still advance autosave, live and control deadlines without painting, and
+    /// report unsaved changes to the host. `FigApp::ui` does not repeat it.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Every frame, hidden or not, starts here: what the last one left is what a panic keeps.
         UNSAVED.with(|u| u.try_borrow_mut().map(|mut u| u.follow(&self.fig.session))).ok();
-        // Files the host sent join the app's own open queue (a dropped file's): the same
-        // "Opening as a new file" card, and `file.open` with the contents once read.
-        for (name, bytes) in std::mem::take(&mut *self.opens.borrow_mut()) {
-            let read: figcraft_ui_egui::ReadFuture = Box::pin(std::future::ready(Ok(bytes)));
-            self.fig.ui.pending_opens.push(figcraft_ui_egui::pending_open::PendingOpen {
-                label: name.clone(),
-                params: serde_json::json!({ "name": name }),
-                command: "file.open",
-                target: None,
-                read: Some(read),
-            });
+        // Files the host sent join the app's own open queue (a dropped file's), and its answers to
+        // confirmed saves land, in the order they came (crate::host).
+        if let Some(bridge) = &self.host {
+            bridge.frame(&mut self.fig, ctx, now_ms());
         }
         figcraft_ui_egui::windows::guard(&mut self.fig, ctx, |fig| fig.background_tick(ctx));
         // The host hears when unsaved changes appear or go away (crate::host).
@@ -281,6 +279,18 @@ impl Services for WebServices {
                 false
             }
         }
+    }
+    /// The document's own file (Save, Save As): as [`download`](Self::download), except that a
+    /// host that confirms saves gets it with an `id` and it stays unsaved until the host answers
+    /// ([`crate::host`]).
+    fn deliver_document(&mut self, name: &str, bytes: &[u8], file: FileSnapshot) -> Delivery {
+        if crate::api::capture(name, bytes) {
+            return Delivery::Saved;
+        }
+        if let Some(bridge) = &self.host {
+            return bridge.post_document(name, bytes, file, now_ms(), &self.ctx);
+        }
+        if self.download(name, bytes) { Delivery::Saved } else { Delivery::Refused }
     }
     fn host_file(&self) -> Option<String> {
         self.host.as_ref()?.host_file()
