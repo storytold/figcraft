@@ -105,6 +105,7 @@ fn cmd_or_ctrl_suspends_guide_snapping() {
     let mut u = rulers(s);
     let start = from_top_ruler(&u);
     let to = u.app.to_screen(200.0, 102.0);
-    drag_with(&mut u, start, to, Modifiers::CTRL);
+    // The platform's command key: on macOS a press with Control alone is a secondary press.
+    drag_with(&mut u, start, to, Modifiers::COMMAND);
     assert_eq!(guides(&u, page(&u)), vec![(false, 102.0)]);
 }
