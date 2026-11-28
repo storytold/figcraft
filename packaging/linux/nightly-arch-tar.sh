@@ -14,7 +14,7 @@ cp -R "$source_tree" "$stage"
 mkdir "$stage/bin/.figcraft-nightly"
 mv "$stage/bin/figcraft" "$stage/bin/.figcraft-nightly/figcraft"
 awk -v real='"$(dirname "$0")/.figcraft-nightly/figcraft"' '{ gsub(/@REAL_BIN@/, real); print }' \
-  "$here/nightly-launch.sh" >"$stage/bin/figcraft"
+  "$here/nightly-package-launch.sh" >"$stage/bin/figcraft"
 chmod 755 "$stage/bin/figcraft"
 tar -C "$work" -czf "$destination/$basename.tar.gz" "$basename"
 echo "wrote $destination/$basename.tar.gz"

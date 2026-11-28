@@ -69,10 +69,19 @@ if [[ -n "$ARCH_TAR_DIR" && "$IS_NIGHTLY" != 1 ]]; then
   exit 2
 fi
 
+# The man-and-completions example writes figcraft-cli's man pages and shell completions below
+# (Stable only: a Nightly renames the CLI, so pages for `figcraft-cli` would document a command it
+# lacks). It is built in its own cargo run: built with the binaries, its dev-dependencies' features
+# would be unified into them. It runs here, so a cross build builds it for the host.
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+
 echo "==> FigCraft $VERSION for Linux $ARCH ($FORMATS; ${BINS[*]}; channel=${FIGCRAFT_BUILD_CHANNEL:-stable})"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked "${CARGO_PKGS[@]}" ${CROSS_TARGET:+--target "$CROSS_TARGET"})
+  if [[ "$HAS_CLI" = 1 && "$IS_NIGHTLY" = 0 ]]; then
+    (cd "$ROOT" && cargo build --release --locked --target "$HOST_TRIPLE" -p figcraft-cli --example man-and-completions)
+  fi
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
 WORK="$CARGO_TARGET_DIR/linux-package"
@@ -84,13 +93,29 @@ for bin in "${BINS[@]}"; do
   install -Dm755 "$BIN/$bin" "$STAGE/usr/bin/$bin"
   "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/$bin" 2>/dev/null || true
 done
+# figcraft-cli's man pages and shell completions (RFC-0018 rule 1.9), from its clap definition,
+# written by the example built above (a --skip-build run needs it built too). zsh reads
+# site-functions on Fedora and openSUSE; the deb also links the completion into Debian's
+# vendor-completions (nfpm.yaml).
+if [[ "$HAS_CLI" = 1 && "$IS_NIGHTLY" = 0 ]]; then
+  CLI_DOCS="$CARGO_TARGET_DIR/$HOST_TRIPLE/release/examples/man-and-completions"
+  if [[ ! -x "$CLI_DOCS" ]]; then
+    echo "error: $CLI_DOCS is not built (cargo build --release --target $HOST_TRIPLE -p figcraft-cli --example man-and-completions)" >&2
+    exit 1
+  fi
+  "$CLI_DOCS" "$WORK/cli-docs"
+  install -Dm644 -t "$STAGE/usr/share/man/man1" "$WORK"/cli-docs/*.1
+  install -Dm644 "$WORK/cli-docs/figcraft-cli.bash" "$STAGE/usr/share/bash-completion/completions/figcraft-cli"
+  install -Dm644 "$WORK/cli-docs/_figcraft-cli" "$STAGE/usr/share/zsh/site-functions/_figcraft-cli"
+  install -Dm644 "$WORK/cli-docs/figcraft-cli.fish" "$STAGE/usr/share/fish/vendor_completions.d/figcraft-cli.fish"
+fi
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 if [[ "$IS_NIGHTLY" = 1 ]]; then
-  # The nightly entry point is the shared launcher (packaging/linux/nightly-launch.sh): every
-  # format starts the GUI on the Launcher's nightly-v1 profile, so nothing reads or writes the
+  # The nightly entry point is the distro launcher (packaging/linux/nightly-package-launch.sh):
+  # every format starts the GUI on the Launcher's nightly-v1 profile, so nothing reads or writes the
   # stable app's user state. The deb/rpm wrapper and the AppImage entry below specialise its path.
   awk -v real='"$(dirname "$0")/figcraft"' '{ gsub(/@REAL_BIN@/, real); print }' \
-    "$HERE/nightly-launch.sh" >"$STAGE/usr/bin/figcraft-nightly"
+    "$HERE/nightly-package-launch.sh" >"$STAGE/usr/bin/figcraft-nightly"
   chmod 755 "$STAGE/usr/bin/figcraft-nightly"
   # The entry starts the launcher, names the Nightly and registers no file types (a Nightly never
   # takes a document association from the stable app). `#` delimits, so \(...\|...\) is alternation.
@@ -174,10 +199,10 @@ if has deb || has rpm; then
     rm -rf "$NFPM_STAGE"
     cp -R "$STAGE" "$NFPM_STAGE"
     install -Dm755 "$NFPM_STAGE/usr/bin/figcraft" "$NFPM_STAGE/usr/lib/figcraft-nightly/figcraft"
-    # The shared launcher (packaging/linux/nightly-launch.sh) starts the GUI on the Launcher's
-    # nightly-v1 profile, so the package never reads or writes the stable app's user state.
+    # The distro launcher (packaging/linux/nightly-package-launch.sh) starts the GUI on the
+    # Launcher's nightly-v1 profile, so the package never reads or writes the stable app's user state.
     awk -v real='/usr/lib/figcraft-nightly/figcraft' '{ gsub(/@REAL_BIN@/, real); print }' \
-      "$HERE/nightly-launch.sh" >"$NFPM_STAGE/usr/bin/$NFPM_BIN"
+      "$HERE/nightly-package-launch.sh" >"$NFPM_STAGE/usr/bin/$NFPM_BIN"
     chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_BIN"
     rm -f "$NFPM_STAGE/usr/bin/figcraft"
     if [[ "$HAS_CLI" = 1 ]]; then
@@ -211,8 +236,11 @@ if has deb || has rpm; then
   [[ -d "$NFPM_STAGE/usr/lib" ]] || DROP_LIB_TREE='\|^  - src: \${STAGE}/usr/lib/|,+2d;'
   cli_filter='/#cli$/d'
   [[ "$HAS_CLI" = 1 ]] && cli_filter='s/ #cli$//'
+  # The zsh link into Debian's vendor-completions is for the stable CLI's completion: a Nightly has none.
+  stable_filter='s/ #stable-cli$//'
+  [[ "$HAS_CLI" = 1 && "$IS_NIGHTLY" = 0 ]] || stable_filter='/#stable-cli$/d'
   # shellcheck disable=SC2016
-  sed -e "${DROP_LIB_TREE}s|\${STAGE}|$NFPM_STAGE|g;s|\${NFPM_BIN}|$NFPM_BIN|g;s|\${NFPM_CLI}|$NFPM_CLI|g" -e "$cli_filter" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  sed -e "${DROP_LIB_TREE}s|\${STAGE}|$NFPM_STAGE|g;s|\${NFPM_BIN}|$NFPM_BIN|g;s|\${NFPM_CLI}|$NFPM_CLI|g" -e "$cli_filter" -e "$stable_filter" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
   done

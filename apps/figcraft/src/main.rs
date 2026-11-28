@@ -106,9 +106,6 @@ impl eframe::App for App {
             figcraft_ui_egui::windows::guard(fig, ctx, |fig| fig.background_tick(ctx));
             #[cfg(target_os = "macos")]
             apple_events::poll(&self.apple_events, fig, ctx);
-            // Closing the window asks about unsaved changes (and keeps the app running while other
-            // windows are open).
-            figcraft_ui_egui::windows::on_close_request(fig, ctx);
             fig.title()
         });
         // Window title follows the document.
@@ -128,21 +125,28 @@ impl eframe::App for App {
         {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
+        // Last: closing the main window asks about unsaved changes (and keeps the app running
+        // while other windows are open), through the runtime's close path.
+        with_app(|fig| fig.close_path(ctx));
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // winit gives an undecorated window its caption back when it changes the window's flags
         // (maximize, restore, ...): take it off again before the frame is laid out (#1343).
         self.window_frame.run();
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
-        if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
+        if let Some(events) = with_app(|fig| {
+            fig.before_input(ctx);
+            figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)
+        }) {
             raw_input.events.extend(events);
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        figcraft_ui_egui::framework::before_ui(&ctx, &*frame);
         services::parented(frame, || with_app(|fig| figcraft_ui_egui::windows::guard(fig, &ctx, |fig| fig.ui(ui))));
         // This frame drew the queued interrupted-session notice: the interruption is now reported.
         if self.nightly_notice_pending {
@@ -190,11 +194,20 @@ fn initialize_nightly_identity() -> Result<(), String> {
     process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, NIGHTLY_WINDOW_ID)
 }
 
-/// Say why a launch profile was refused: in a dialog for a Nightly started from the desktop (its
-/// release build has no console), and on standard error in every case. Always exits 2.
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hung in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26).
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
+/// Say why a launch profile was refused: in a dialog for a Nightly started from a Windows or
+/// X11/Wayland desktop (its release build has no console), and on standard error in every case (macOS
+/// included: a modal there before the event loop never appears). Always exits 2.
 fn report_launch_profile_error(error: &str) -> ! {
     eprintln!("FigCraft launch profile: {error}");
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session()) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session(), cfg!(target_os = "macos")) {
         if let Err(error) = initialize_nightly_identity() {
             eprintln!("FigCraft launch profile: {error}");
         } else {
@@ -331,6 +344,14 @@ fn main() -> eframe::Result {
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
     session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
+    // The preferences first: a file named on the command line opens where it was left and goes to
+    // the top of the recent files, and they hold the online files a recovered document may be one of.
+    let recovery = recovery::Shared::default();
+    let svc = services::Desktop::load(recovery.clone());
+    svc.follow_system_dark(wake(&ctx_slot));
+    if let Some(prefs) = svc.prefs.clone() {
+        session.prefs = prefs;
+    }
     // A file that won't open is said in the window too: it may have been double-clicked.
     let mut failed_open = None;
     for f in &args.files {
@@ -340,16 +361,9 @@ fn main() -> eframe::Result {
             failed_open = Some(format!("{name}: {e}"));
         }
     }
-    let opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
+    let mut opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
     // Documents a crashed or killed run left unsaved come back; this run keeps its own copies.
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
-    // The preferences first: they hold the online files a recovered document may be one of.
-    let recovery = recovery::Shared::default();
-    let svc = services::Desktop::load(recovery.clone());
-    svc.follow_system_dark(wake(&ctx_slot));
-    if let Some(prefs) = svc.prefs.clone() {
-        session.prefs = prefs;
-    }
     let recovered = recovery_root.as_deref().map(|r| recovery::recover_all(r, &mut session)).unwrap_or_default();
     let mut copies = recovery_root.as_deref().and_then(recovery::Recovery::start);
     // Copies of online files stay until their files arrive from their servers.
@@ -367,7 +381,20 @@ fn main() -> eframe::Result {
         session.invite_links_startup();
     }
     let first_run = svc.prefs.is_none() && args.join.is_none();
-    if session.docs.is_empty() && opens_new_file(first_run, session.prefs.start_on_home, port.is_some()) {
+    if reopens_files(first_run, session.prefs.start_on_home) {
+        let before: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
+        for (path, e) in session.reopen_files() {
+            log::error!("{path}: {e}");
+            let name = std::path::Path::new(&path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+            failed_open = Some(format!("{name}: {e}"));
+        }
+        // A file named on the command line stays in front.
+        if let Some(i) = opened.last().and_then(|uid| session.docs.iter().position(|d| d.uid == *uid)) {
+            session.active = i;
+        }
+        opened.extend(session.docs.iter().map(|d| d.uid).filter(|u| !before.contains(u)));
+    }
+    if session.docs.is_empty() && opens_new_file(first_run, port.is_some()) {
         let _ = session.execute("file.new", &json!({}));
     }
     // The interface language from the first frame on, and for the message when the window can't
@@ -382,7 +409,8 @@ fn main() -> eframe::Result {
     }
     fig.automation_roots = roots;
     fig.ui.home = false;
-    // Files named on the command line are the user's too: their missing fonts are listed.
+    // Files named on the command line or reopened are the user's too: their missing fonts are
+    // listed.
     fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
     if let Some(message) = failed_open {
@@ -460,6 +488,8 @@ fn main() -> eframe::Result {
         figcraft_ui_egui::channel::name(),
         options,
         Box::new(|cc| {
+            // The UI runtime FigCraft's egui UI is hosted by, before the first pass.
+            figcraft_ui_egui::framework::install(&cc.egui_ctx)?;
             if let Some(state) = &cc.wgpu_render_state {
                 graphics.opened(&state.adapter.get_info());
             }
@@ -501,12 +531,17 @@ fn main() -> eframe::Result {
     graphics.finish(result, frames, port.is_some())
 }
 
-/// With nothing to open, whether the window starts in a new file rather than on the home screen.
-/// A first run (no settings kept yet) shows the home screen's tips and templates, and later runs
-/// start in a new file unless the preference asks for Home, which `--control` overrides: its
-/// callers expect a document to act on.
-fn opens_new_file(first_run: bool, start_on_home: bool, control: bool) -> bool {
-    !first_run && (!start_on_home || control)
+/// Whether the files open when the app last quit open again: not on a first run (no settings kept
+/// yet), nor when the preference asks for the Home screen.
+fn reopens_files(first_run: bool, start_on_home: bool) -> bool {
+    !first_run && !start_on_home
+}
+
+/// With nothing open, whether the window starts in a new file rather than on the home screen: only
+/// with a control port open (`--control`), whose callers expect a document to act on. A first run
+/// shows the home screen's tips and templates whatever the port.
+fn opens_new_file(first_run: bool, control: bool) -> bool {
+    !first_run && control
 }
 
 /// The title bar FigCraft starts with, decided by the shared craft-window crate so every Craft app
@@ -602,13 +637,33 @@ mod title_bar_tests {
 
 #[cfg(test)]
 mod start_tests {
-    use super::opens_new_file;
+    use super::{opens_new_file, reopens_files};
 
     #[test]
-    fn the_home_preference_starts_on_home_except_for_control_callers() {
-        assert!(opens_new_file(false, false, false), "a new file by default");
-        assert!(!opens_new_file(false, true, false), "Home when the preference asks");
-        assert!(opens_new_file(false, true, true), "--control still starts with a document");
-        assert!(!opens_new_file(true, false, false), "a first run shows the home screen");
+    fn the_last_files_reopen_unless_the_home_preference_asks_or_on_a_first_run() {
+        assert!(reopens_files(false, false), "by default");
+        assert!(!reopens_files(false, true), "Home when the preference asks");
+        assert!(!reopens_files(true, false), "a first run has nothing to reopen");
+    }
+
+    #[test]
+    fn with_nothing_open_only_control_callers_start_in_a_new_file() {
+        assert!(!opens_new_file(false, false), "the home screen, not an empty file");
+        assert!(opens_new_file(false, true), "--control starts with a document");
+        assert!(!opens_new_file(true, true), "a first run shows the home screen");
+    }
+}
+
+#[cfg(test)]
+mod refusal_dialog_tests {
+    use super::refusal_dialog;
+    use crate::build_flavor::BuildFlavor;
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        assert!(refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }

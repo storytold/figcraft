@@ -69,10 +69,11 @@ pub enum ToolId {
     Highlighter,
     Eraser,
     Stamp,
+    MindMap,
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 27] = [
+    pub const ALL: [ToolId; 28] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -100,6 +101,7 @@ impl ToolId {
         ToolId::Highlighter,
         ToolId::Eraser,
         ToolId::Stamp,
+        ToolId::MindMap,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -130,6 +132,7 @@ impl ToolId {
             ToolId::Highlighter => "highlighter",
             ToolId::Eraser => "eraser",
             ToolId::Stamp => "stamp",
+            ToolId::MindMap => "mindMap",
         }
     }
     /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
@@ -169,6 +172,7 @@ impl ToolId {
             ToolId::Highlighter => "Highlighter",
             ToolId::Eraser => "Eraser",
             ToolId::Stamp => "Stamp",
+            ToolId::MindMap => "Mind map",
         }
     }
 
@@ -176,7 +180,14 @@ impl ToolId {
     pub fn on_boards(self) -> bool {
         matches!(
             self,
-            ToolId::Sticky | ToolId::BoardShape | ToolId::Connector | ToolId::Marker | ToolId::Highlighter | ToolId::Eraser | ToolId::Stamp
+            ToolId::Sticky
+                | ToolId::BoardShape
+                | ToolId::Connector
+                | ToolId::Marker
+                | ToolId::Highlighter
+                | ToolId::Eraser
+                | ToolId::Stamp
+                | ToolId::MindMap
         )
     }
     /// The tool's key (from [`crate::keymap`]; empty when it has none).
@@ -622,6 +633,8 @@ pub struct ToolState {
     pub labels: Vec<(NodeId, [Point; 4])>,
     /// The brush the Pencil draws with (`tool.pencilBrush`; `None`: a plain stroke).
     pub pencil_brush: Option<figcraft_doc::Brush>,
+    /// The ink new Pencil strokes get (`tool.ink`).
+    pub pencil_ink: Ink,
     /// The board tools' colours and choices.
     pub board: crate::board::BoardTool,
     /// The eyedropper samples for a colour picker (`edit.pickColor` with `apply: false`): the
@@ -638,9 +651,38 @@ pub struct ToolState {
     pub place_at: Option<Point>,
     /// The document (uid) and page the crosshair was shown on.
     pub(crate) place_on: Option<(u64, NodeId)>,
+    /// The last two Move or Scale presses, oldest first: where each was and the selection just
+    /// before it. A Shift double-click works from the selection its first click found. A press
+    /// with another tool clears them, and so does the double-click that uses them.
+    pub(crate) selections_before_last_two_presses: [Option<(Point, Vec<NodeId>)>; 2],
+}
+
+/// A drawing tool's ink (`tool.ink`): the colour and stroke weight its new strokes get. A colour
+/// of `None` is the Pencil's own: black, or white on a dark page or frame (#1741).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Ink {
+    pub color: Option<figcraft_color::Color>,
+    pub weight: f64,
+}
+
+impl Default for Ink {
+    fn default() -> Self {
+        Ink { color: None, weight: PENCIL_STROKE.1 }
+    }
 }
 
 impl ToolState {
+    /// The ink `tool` draws with now; `None` for a tool that draws no ink.
+    pub fn ink(&self, tool: ToolId) -> Option<Ink> {
+        let b = &self.board;
+        match tool {
+            ToolId::Pencil => Some(self.pencil_ink),
+            ToolId::Marker => Some(Ink { color: Some(b.marker), weight: b.marker_weight }),
+            ToolId::Highlighter => Some(Ink { color: Some(b.highlighter), weight: b.highlighter_weight }),
+            _ => None,
+        }
+    }
+
     pub fn busy(&self) -> bool {
         !matches!(self.gesture, Gesture::None)
     }

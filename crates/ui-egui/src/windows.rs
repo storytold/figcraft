@@ -10,7 +10,8 @@
 
 use std::cell::RefCell;
 
-use egui::{Context, Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportId};
+use craft_ui::shell::embed::CloseDecision;
+use egui::{Context, Key, KeyboardShortcut, Modifiers, Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportId};
 use figcraft_engine::{DocState, Session};
 use serde_json::{Value, json};
 
@@ -376,19 +377,38 @@ pub fn list(app: &FigApp) -> Value {
     )
 }
 
-/// The window drawing now was asked to close (its close button, the system's): its files close
-/// with it, after asking when one has unsaved changes. The main window closes last: while other
-/// windows are open it takes over one of them. The desktop app calls it from the main window's
-/// `logic` (which runs even while the window is minimised); other windows call it themselves.
+/// Ctrl+Q asks the window it is pressed in to close, as its close button does: only that window's
+/// files are asked about and close. Last in the window's frame, so its widgets and shortcuts read
+/// the key first. (On macOS Cmd+Q is the app menu's Quit, which asks the main window to close.)
+pub(crate) fn quit_key(ctx: &Context) {
+    const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
+    if ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
+        ctx.send_viewport_cmd(ViewportCommand::Close);
+    }
+}
+
+/// Another window drawing now was asked to close (its close button, Ctrl+Q, the system's): its
+/// files close with it, after asking when one has unsaved changes. The main window's close goes
+/// through the runtime's close path ([`close_decision`]).
 pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
     if app.ui.quit || !ctx.input(|i| i.viewport().close_requested()) {
         return;
     }
-    let unsaved = !app.unsaved().is_empty();
-    if app.windows.current == 0 && (unsaved || !app.windows.list.is_empty()) {
-        ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-    }
     request_close(app, ctx);
+}
+
+/// The main window was asked to close (its close button, the system's, a quit): its files close
+/// with it, after asking when one has unsaved changes. The main window closes last: while other
+/// windows are open it takes over one of them, and the window stays open. Runs in the runtime's
+/// close path ([`FigApp::close_path`]), from the main window's `logic`, which runs even while the
+/// window is minimised.
+pub(crate) fn close_decision(app: &mut FigApp, ctx: &Context) -> CloseDecision {
+    if app.ui.quit {
+        return CloseDecision::Close;
+    }
+    let hold = !app.unsaved().is_empty() || !app.windows.list.is_empty();
+    request_close(app, ctx);
+    if hold { CloseDecision::Hold } else { CloseDecision::Close }
 }
 
 /// The custom title bar's Close button uses the same unsaved-file check as a system close event.
@@ -478,7 +498,7 @@ fn unsaved_question(ctx: &Context, names: &[String]) -> Option<CloseAnswer> {
             }
         });
         // Save is the default: Enter answers it when no button has the keyboard.
-        if answer.is_none() && ui.memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if answer.is_none() && !crate::a11y::field_focused(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             answer = Some(CloseAnswer::Save);
         }
     });
@@ -834,6 +854,7 @@ fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
         app.viewport_setup(&ctx);
         app.frame(ui)
     });
+    quit_key(&ctx);
     app.end_input_frame(&ctx);
     adopt(app, &e);
     settle(app, &ctx, files_before);

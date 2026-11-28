@@ -59,7 +59,7 @@ pub struct Asset {
 }
 
 /// Most assets listed for one selection.
-const MAX_ASSETS: usize = 200;
+pub const MAX_ASSETS: usize = 200;
 /// Largest side of a layer listed as an icon.
 const ICON_MAX: f64 = 128.0;
 
@@ -223,10 +223,10 @@ pub struct DevItem {
 
 /// Whether Dev Mode runs command `id` from the menus and shortcuts: commands that don't edit the
 /// document, and Dev Mode's own edits (annotations, statuses, dev resources, measurements, code
-/// connections, comments). Choosing a tool other than moving around and commenting is refused too,
+/// connections, screen size marks and rules, comments). Choosing a tool other than moving around and commenting is refused too,
 /// and so is Revert to saved, which isn't an undo step but throws the design's unsaved edits away.
 pub fn dev_mode_allows(id: &str) -> bool {
-    const OWN: [&str; 6] = ["annotation.", "dev.", "devMode.", "devResource.", "codeConnect.", "comment."];
+    const OWN: [&str; 7] = ["annotation.", "dev.", "devMode.", "devResource.", "codeConnect.", "responsive.", "comment."];
     // Edits recorded as one grouped undo step, so their spec says no history of its own.
     const GROUPED: [&str; 1] = ["data.fill"];
     match id.strip_prefix("tool.") {

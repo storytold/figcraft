@@ -19,6 +19,7 @@ bash packaging/linux/nightly-arch-tar-test.sh
 # Every Nightly shell script must parse: a quoting slip breaks bash -n, and nothing else would
 # catch it until a runner started the script for real.
 for script in packaging/nightly-common.sh packaging/linux/nightly.sh packaging/linux/nightly-launch.sh \
+  packaging/linux/nightly-package-launch.sh \
   packaging/linux/nightly-launch-test.sh \
   packaging/linux/nightly-arch-tar.sh packaging/macos/nightly-lib.sh packaging/macos/nightly.sh \
   packaging/macos/nightly-sign.sh packaging/macos/nightly-verify.sh; do

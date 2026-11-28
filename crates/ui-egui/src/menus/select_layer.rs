@@ -24,7 +24,7 @@ pub(super) fn select_layer_menu(app: &mut FigApp, ui: &mut Ui, pos: egui::Pos2, 
     let p = app.to_page(pos);
     let Ok(ds) = app.session.ds() else { return false };
     let tol = 2.0 / ds.view.zoom.max(1e-6);
-    let opts = figcraft_doc::geometry::HitOpts { locked: true };
+    let opts = figcraft_doc::geometry::HitOpts { locked: true, ..Default::default() };
     let layers: Vec<(figcraft_doc::NodeId, usize, String, bool)> = {
         let result = figcraft_engine::booleans::result_outline(&ds.doc, &ds.selection);
         figcraft_doc::geometry::layers_at_opts(&ds.doc, ds.page, p, tol, Some(&result), opts)

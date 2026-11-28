@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Translated strings in this file may be used under its CC0-1.0 metadata license. -->
 <!-- AppStream metadata (software centres, Flathub). Template: package.sh and the Flatpak
      manifest substitute @VERSION@ and @DATE@ from Cargo.toml and the build date. -->
 <component type="desktop-application">
@@ -7,6 +8,7 @@
   <project_license>MIT OR Apache-2.0</project_license>
   <name>FigCraft</name>
   <summary>Design and prototype user interfaces</summary>
+  <summary xml:lang="ru">Дизайн и прототипирование пользовательских интерфейсов</summary>
   <developer id="ai.storyteller">
     <name>Learning Machines LLC</name>
   </developer>
@@ -16,13 +18,25 @@
       on an infinite canvas with frames, auto layout and constraints, build reusable components
       and variants, and link screens into clickable prototypes.
     </p>
+    <p xml:lang="ru">
+      FigCraft — открытый нативный инструмент для дизайна и прототипирования интерфейсов.
+      Размещайте экраны на бесконечном холсте с помощью Frame, автолейаута и ограничений,
+      создавайте повторно используемые компоненты и варианты и связывайте экраны в
+      кликабельные прототипы.
+    </p>
     <ul>
       <li>Frames, vector shapes, text and images on an infinite canvas</li>
+      <li xml:lang="ru">Frame, векторные фигуры, текст и изображения на бесконечном холсте</li>
       <li>Auto layout and constraints for responsive designs</li>
+      <li xml:lang="ru">Автолейаут и ограничения для адаптивных макетов</li>
       <li>Components, variants, shared styles and variables</li>
+      <li xml:lang="ru">Компоненты, варианты, общие стили и переменные</li>
       <li>Prototyping with interactions and transitions, and a presentation mode</li>
+      <li xml:lang="ru">Прототипирование со взаимодействиями и переходами, режим презентации</li>
       <li>Inspect panel with measurements and code snippets; SVG and PNG export</li>
+      <li xml:lang="ru">Панель «Инспектор» с измерениями и фрагментами кода; экспорт в SVG и PNG</li>
       <li>Every action is a command, scriptable from a CLI, a JSON control channel and an MCP server</li>
+      <li xml:lang="ru">Каждое действие — это команда, которую можно вызывать из CLI, через управляющий канал JSON и сервер MCP</li>
     </ul>
   </description>
   <launchable type="desktop-id">ai.storyteller.figcraft.desktop</launchable>
@@ -40,9 +54,13 @@
   </categories>
   <keywords>
     <keyword>interface design</keyword>
+    <keyword xml:lang="ru">дизайн интерфейсов</keyword>
     <keyword>prototyping</keyword>
+    <keyword xml:lang="ru">прототипирование</keyword>
     <keyword>ui</keyword>
+    <keyword xml:lang="ru">ui</keyword>
     <keyword>wireframe</keyword>
+    <keyword xml:lang="ru">вайрфрейм</keyword>
   </keywords>
   <branding>
     <color type="primary" scheme_preference="light">#9fd3ff</color>

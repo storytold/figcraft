@@ -353,6 +353,31 @@ pub fn bindable(
     bind_button(ui, area, ids, field, kind);
 }
 
+/// In a paint field's text area `text_r`: the chip of the colour variable `name` that `key` of
+/// `ids` is bound to (its last path part, the whole name on hover) and a button that detaches it.
+pub fn paint_chip(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], key: &str, name: &str, text_r: Rect, id: Id) {
+    let t = Tokens::get(ui.ctx());
+    let r = ui.max_rect();
+    let chip = Rect::from_min_max(pos2(text_r.min.x - 2.0, r.min.y + 3.0), pos2(text_r.max.x - 20.0, r.max.y - 3.0));
+    ui.painter().rect_filled(chip, CornerRadius::same(4), t.hover);
+    ui.painter().rect_stroke(chip, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let short = name.rsplit('/').next().unwrap_or(name).to_string();
+    ui.painter().with_clip_rect(chip.shrink2(vec2(5.0, 0.0))).text(
+        pos2(chip.min.x + 5.0, r.center().y),
+        Align2::LEFT_CENTER,
+        short,
+        regular(11.0),
+        t.text,
+    );
+    let _ = ui.interact(chip, id, Sense::hover()).on_hover_text(name);
+    let dr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
+    let dresp = ui.interact(dr, id.with("detach"), Sense::click()).tip(tr("Detach variable"));
+    icons::paint(ui.painter(), dr.shrink(3.0), Icon::Detach, t.icon_secondary);
+    if dresp.clicked() {
+        app.run("variable.bind", json!({"ids": ids, "field": key, "variable": null}));
+    }
+}
+
 /// A variable button at the right end of `rect` while the pointer is over it: opens the picker
 /// to bind `field` of `ids`.
 pub fn bind_button(ui: &mut Ui, rect: Rect, ids: &[NodeId], field: &str, kind: VariableType) {

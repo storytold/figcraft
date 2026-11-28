@@ -1,11 +1,10 @@
 # Windows, Linux and macOS release-ref nightly: supervised manual go-live
 
 **Enabled for supervised manual runs, not yet qualified.** The producer (`nightly.yml`, main) and the
-signer (`nightly-sign.yml`, release) keep only their exact context guards and run when one of the reviewed
+signer (`nightly-sign.yml`, on the dedicated `nightly-signer` branch) keep only their exact context guards and run when one of the reviewed
 manual actors dispatches them. There is no schedule or automatic completion dispatcher yet. The installed
 policy [`.github/nightly-signing-policy.json`](../.github/nightly-signing-policy.json) is the v3 policy
-for FigCraft. Once `nightly.yml` reaches `main`, populate `producer_workflow_id` before promoting the
-policy to `release` by reading:
+for FigCraft. `producer_workflow_id` is the registered `nightly.yml` workflow id, read with:
 
 ```bash
 gh api repos/storytold/figcraft/actions/workflows/nightly.yml --jq .id
@@ -14,26 +13,44 @@ gh api repos/storytold/figcraft/actions/workflows/nightly.yml --jq .id
 The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `605d58766e8f536564da8fc81d3676ac86816dea`, the craft-common-actions
-main commit that merged [#339](https://github.com/storytold/craft-common-actions/pull/339) (bounded
-lineage compares and an issue reread at the end of candidate admission) on top of
-[#342](https://github.com/storytold/craft-common-actions/pull/342) (policy v3, the `platforms` input
-and the Linux and macOS legs). Both callers name it in `uses` and `tooling-revision`. A pin is reviewed
-source availability, not provider, queue, native signing or crypto qualification.
+Shared tooling is pinned to `be00e5ccd18b68e950c8a08532f2230e7c3d0cba`, the craft-common-actions
+main commit that merged [#371](https://github.com/storytold/craft-common-actions/pull/371) (the
+candidate is admitted on the built commit's own Sonar analysis, not main's latest) after
+[#370](https://github.com/storytold/craft-common-actions/pull/370) (the Windows and macOS nightly
+registry rows for the 14 apps) and
+[#369](https://github.com/storytold/craft-common-actions/pull/369) (shared helper checkouts kept out
+of the app's clean-source check, and macOS on `macos-15`), following
+[#364](https://github.com/storytold/craft-common-actions/pull/364) (the signer may run on the
+policy's signer branch) and [#363](https://github.com/storytold/craft-common-actions/pull/363) (the
+multi-app pipeline, which makes the signer's `app-name` input required and admits any reviewed
+registry app), with #342 (`a4f6fd51`, policy v3 and the `platforms` input) and #339 (`605d5876`)
+earlier. Both callers name it in `uses` and `tooling-revision`. A pin is reviewed source
+availability, not provider, queue, native signing or crypto qualification.
+**Signer branch.** The signer runs on `refs/heads/nightly-signer`, not on the stable `release`
+branch, so nightly signer files never need a stable release sync. The policy's `release_branch`
+names it, the signer's guard requires it and its caller passes `app-name`. The branch only
+fast-forwards to reviewed main commits, through the nightly-signer settings script's `advance` (no
+queued signer run, a trust-closure scan, then the full diff of `.github/` and `packaging/`), and the
+existing `release` environment must admit `nightly-signer` alongside `release` before the first
+dispatch (a repository settings change, not a workflow one). Its trust closure is all of `.github/`
+and `packaging/`, including `packaging/env.sh`, which `import-cert.sh` sources with the Apple keys.
+On that branch only the pinned `nightly-sign.yml` caller may reach an environment: no app workflow
+binds one, nothing else calls `nightly-release.yml`, and the only caller of the shared stable
+`release.yml` is `release.yml`, whose callee must carry the stable-only environment guard. The
+contract tests check the in-repo part on every main PR; the settings scan also resolves the callee.
+Stable releases still come only from `refs/heads/release`. History does not carry over a switch
+between `release` and `nightly-signer`, so the switch happens before the first publication.
+
 Existing stable workflows are unchanged.
 
-**The shared-workflow port is a prerequisite.** At this pin both reusable workflows admit only
-PhotoCraft: `nightly-unsigned.yml` requires `inputs.app-name == 'photocraft'` and
-`github.repository == 'storytold/photocraft'` on its build jobs, and `nightly-release.yml` requires the
-same repository in `validate` and every signing job (its concurrency group is
-`craft-release-ref-signer-photocraft`). A FigCraft dispatch therefore builds and signs nothing until
-`storytold/craft-common-actions` admits `storytold/figcraft`. No dispatch can produce a release before
-that port, and both callers' `uses`, `tooling-revision` and the policy pins must move to the same
-reviewed revision together. The port is craft-common-actions #363 ("run the shared nightly pipeline
-for any reviewed registry app"); until it merges these callers are inert.
+**The shared pipeline is included.** This pin contains craft-common-actions #363, which runs the
+shared nightly pipeline for any reviewed `nightly-apps.json` registry app: the signer passes
+`app-name` and the shared scripts derive this app's names from that row, so no shared-workflow port
+is still outstanding. The app's registry row is the admission boundary for what the producer may build, and
+each platform needs its own reviewed target row there.
 
 **First runs.** The first runs are manual dispatches in this order: `nightly.yml` on `main` (only a
-listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `release` with that
+listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `nightly-signer` with that
 producer run ID and attempt, by a listed manual actor.
 
 **Manual actors.** `bflatastic`, `dylanmtaylor`, `echelon`, `FredApps` and `skylartaylor`, in the
@@ -56,8 +73,8 @@ there is no separate Linux or macOS caller job and the signer caller has no plat
 | Field | Value | Source |
 |---|---|---|
 | `repository_id` | `1412112308` | `gh api repos/storytold/figcraft --jq .id` |
-| `producer_workflow_id` | `null` (pending `nightly.yml` on `main`) | `gh api repos/storytold/figcraft/actions/workflows/nightly.yml --jq .id` once merged to `main` |
-| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `605d5876…` (craft-common-actions #339) | The callers' pin |
+| `producer_workflow_id` | `429731005` | `gh api repos/storytold/figcraft/actions/workflows/nightly.yml` (path `.github/workflows/nightly.yml`, state `active`) |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `be00e5cc…` (craft-common-actions exact-analysis admission, #371 after #370 and #369, following #364) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members; equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist |
 | `platforms` | three rows | Storytold stable signing identities (`windows-x86_64`, `linux-x86_64`, `macos-aarch64`) |
@@ -67,15 +84,15 @@ there is no separate Linux or macOS caller job and the signer caller has no plat
 
 The candidate check refuses whenever main's unresolved vulnerability set differs from `debt`, whether
 an issue is new or fixed, and whenever a required condition fails or a listed CI job is renamed. Refresh
-those values and `producer_workflow_id` in the same reviewed change that promotes the policy to `release`.
+those values and `producer_workflow_id` in the same reviewed change that `nightly-signer` is then advanced to.
 
 ## Ownership and interface
 
 - `.github/workflows/nightly.yml`: default-main registration of the unsigned producer, named
   `FigCraft unsigned nightly`, enabled for manual dispatch by `manual-actors`; no signing secrets
   may be passed or inherited.
-- `.github/workflows/nightly-sign.yml`: top-level release registration, enabled for manual dispatch,
-  and identical on `main` and `release` after reviewed promotion. It rejects wrong repository/event/actual
+- `.github/workflows/nightly-sign.yml`: top-level signer registration, enabled for manual dispatch
+  on `nightly-signer`, which carries a reviewed main commit. It rejects wrong repository/event/actual
   branch, including same-name tags. Its constant whole-run concurrency (`figcraft-nightly-release`) is
   distinct from stable and cancellation is off. The caller itself
   passes no credentials; only the shared callee's sign jobs bind the `release` environment.
@@ -123,3 +140,6 @@ profile at `$XDG_DATA_HOME/figcraft-nightly/profile`.
 - Matching `uses` and `tooling-revision` 40-hex commit pin across both callers and the installed policy.
 - Exact `manual_actors` match between `nightly.yml` and `.github/nightly-signing-policy.json`, with empty `automatic_signer_actors`.
 - Policy v3 schema, platform list/trust anchor shapes, required CI workflow check, and `sonar-project.properties` alignment.
+- The `nightly-signer` trust-closure scan: no app workflow binds `environment:`, only
+  `nightly-sign.yml` calls `nightly-release.yml` at a 40-hex SHA, and the only caller of the
+  shared stable `release.yml` is `release.yml`.

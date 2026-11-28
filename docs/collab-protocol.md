@@ -99,15 +99,24 @@ fit FigCraft's architecture:
   collide with what a connected client makes, because a client's numbers continue above every id of
   its space already in the document. Removed entries are part of the saved session state
   (`SessionState::removed`).
-- **Branches** of a file in a session stay with the person who made them; nothing about them goes
-  over the wire until a merge, which is an ordinary batch from that person (no message or format
-  change). So that the server takes the layers a branch made, a branch made in the session makes
-  its ids in its author's own client space, 2^24 above every id made there on the main file and the
-  author's other branches. Layers of the branch's base that main deleted during the session come
-  back with their ids (the server accepts re-creating deleted ids). Merging a branch whose new
-  layers, styles, variables or comments lie in another id space (one made offline or in an earlier
-  session) is refused by the app before anything is sent, since the server would refuse it (see
-  `crates/engine/src/sharing/branches.rs`).
+- **Branches** of a file in a live session sync across everyone when both sides announce the
+  `branches` capability in `Hello::client_version` (older clients never receive branch messages, and
+  clients connected to an older server keep branches local to their author). Right after `Welcome`,
+  the server sends `ServerMsg::Branches(Vec<SharedBranch>)` with each branch encoded as diffs from
+  the current main state (`base_diff` to base, `head_diff` to head; at most `MAX_SHARED_BRANCHES`,
+  64). Editors send `ClientMsg::Branch(BranchReq)` (`Create`, `Edit`, `UpdateFromMain`, `SetState`
+  for `Merged`/`Archived`) and peers receive `ServerMsg::Branch(BranchEvent)`. The server refuses
+  branch mutations from view or comment links, stamps `client` from the authenticated sender, checks
+  node/entry id spaces, geometry, and image entries on every branch change, and persists branches in
+  `SessionState::branches` and the server journal (`Journal::BranchCreate` / `BranchEdit` /
+  `BranchUpdateFromMain` / `BranchState`; `figcraft-server` falls back to decoding pre-branch
+  snapshots without `branches`). Each editor allocates new branch ids in their own client space,
+  2^24 above every id made there on the main file and its branches. When any editor merges a shared
+  branch, the merge goes out as one ordinary batch on main (the server accepts node and entry ids
+  that already belong to a kept shared branch), and peers with that branch tab open have it closed.
+  Merging an offline or earlier-session branch whose new layers, styles, variables or comments lie
+  in another id space is still refused by the app before anything is sent (see
+  `crates/engine/src/sharing/branches.rs` and `crates/engine/src/sharing/live/branches.rs`).
 - Objects inside an entry are not separate objects: modes are part of their collection, a
   variable's values per mode part of the variable and replies part of their comment thread. Two
   people adding a mode to the same collection, editing different modes of one variable, or replying
@@ -148,7 +157,14 @@ As built:
   A diff gives new keys only to the children that need them (the longest run of old keys that is
   still increasing keeps its keys) and re-spaces a parent whose keys would grow past 48 characters.
 - **Document-level objects covered now**: the file name, the current page, document colours, the
-  colour profile, image presets, annotation categories and library data (whole values); styles,
+  colour profile, image presets, annotation categories, the design review settings
+  (`DocProp::DesignReview`, sent only to clients whose `client_version` announces
+  `design-review`; a client that doesn't gets every batch, catch-up delta and snapshot without
+  them, and an accepted batch still reaches it when nothing of it is left, so sequence numbers
+  never skip; a snapshot saved with longer lists opens clamped to the limits `design.configure`
+  keeps, and a session restored from such a snapshot catches every resuming client up with that
+  snapshot, since its saved batches still hold the value past the limits; a host refuses to share
+  a file whose settings are already past the limits) and library data (whole values); styles,
   comment threads, variable collections and variables (one entry per id plus the order of ids;
   the whole list when ids aren't unique); dev-mode snapshots (per layer); images (per content
   hash, the encoded bytes as base64; as an entry applies the claim is checked: every key is

@@ -4,6 +4,7 @@
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, NodeId, NodeKind, Routing, Stamp, StrokeCap};
+use figcraft_engine::ToolId;
 use figcraft_engine::board::{BoardTool, STICKY_SIZES, TEXT_SIZES};
 use figcraft_engine::board_grid::GridStyle;
 use serde_json::{Value, json};
@@ -20,6 +21,7 @@ pub(crate) enum Mark {
     Color(figcraft_color::Color),
     Shape(BoardShape),
     Stamp(Stamp),
+    Icon(Icon),
 }
 
 /// One choice of a board tool's flyout: its name, the tool's params, whether it is the tool's now.
@@ -28,30 +30,46 @@ pub(crate) struct Choice {
     pub params: Value,
     pub on: bool,
     pub mark: Mark,
+    /// The tool the choice picks when it isn't the group's own.
+    pub tool: Option<ToolId>,
 }
 
 /// The choices a board tool's flyout offers.
-pub(crate) fn choices(options: Options, board: &BoardTool) -> Vec<Choice> {
+pub(crate) fn choices(options: Options, board: &BoardTool, current: ToolId) -> Vec<Choice> {
     match options {
         Options::Colors => BOARD_COLORS
             .iter()
-            .map(|(n, c)| Choice { label: color_label(n), params: json!({"color": n}), on: board.sticky == *c, mark: Mark::Color(*c) })
+            .map(|(n, c)| Choice { label: color_label(n), params: json!({"color": n}), on: board.sticky == *c, mark: Mark::Color(*c), tool: None })
             .collect(),
         Options::Shapes => BoardShape::ALL
             .iter()
-            .map(|b| Choice { label: b.label(), params: json!({"shape": b.id()}), on: board.shape == *b, mark: Mark::Shape(*b) })
+            .map(|b| Choice {
+                label: b.label(),
+                params: json!({"shape": b.id()}),
+                on: current != ToolId::MindMap && board.shape == *b,
+                mark: Mark::Shape(*b),
+                tool: None,
+            })
+            .chain([Choice {
+                label: ToolId::MindMap.label(),
+                params: json!({}),
+                on: current == ToolId::MindMap,
+                mark: Mark::Icon(Icon::MindMap),
+                tool: Some(ToolId::MindMap),
+            }])
             .collect(),
         Options::Stamps => Stamp::ALL
             .iter()
-            .map(|b| Choice { label: b.label(), params: json!({"stamp": b.id()}), on: board.stamp == *b, mark: Mark::Stamp(*b) })
+            .map(|b| Choice { label: b.label(), params: json!({"stamp": b.id()}), on: board.stamp == *b, mark: Mark::Stamp(*b), tool: None })
             .collect(),
         Options::None => Vec::new(),
     }
 }
 
-/// A board colour's name as the UI says it.
-fn color_label(name: &str) -> &'static str {
+/// A board or ink colour's name as the UI says it.
+pub(crate) fn color_label(name: &str) -> &'static str {
     match name {
+        "black" => tr_noop("Black"),
         "yellow" => tr_noop("Yellow"),
         "orange" => tr_noop("Orange"),
         "red" => tr_noop("Red"),
@@ -75,6 +93,7 @@ pub(crate) fn paint_choice(p: &egui::Painter, r: Rect, mark: &Mark, ink: Color32
             let path = figcraft_geom::Affine::translate((1.0, 1.0)) * path;
             icons::paint_outlines(p, r, 16.0, &[(&path, false)], ink, 1.2);
         }
+        Mark::Icon(icon) => icons::paint(p, r, *icon, ink),
         Mark::Stamp(s) => {
             p.circle_filled(r.center(), r.width().min(r.height()) / 2.0, c32(s.color()));
             let parts: Vec<(figcraft_geom::BezPath, bool)> =
@@ -112,6 +131,8 @@ struct Line {
     end: StrokeCap,
     weight: f64,
     dashed: bool,
+    /// Every selected connector is a mind map's branch: no line types.
+    branch: bool,
     ids: Vec<NodeId>,
 }
 
@@ -147,11 +168,18 @@ fn has(app: &FigApp) -> Option<Has> {
                     end: s.cap_end,
                     weight: s.weight,
                     dashed: !s.dashes.is_empty(),
+                    branch: true,
                     ids: Vec::new(),
                 });
+                line.branch &= c.branch;
                 line.ids.push(n.id);
             }
-            Some(BoardItem::Label { .. } | BoardItem::MindNode) => h.text = true,
+            Some(BoardItem::MindNode) => {
+                // A node's text takes the board colours as its colour.
+                h.color = true;
+                h.text = true;
+            }
+            Some(BoardItem::Label { .. }) => h.text = true,
             Some(BoardItem::Table) => h.table = true,
             Some(BoardItem::Stamp { .. } | BoardItem::CodeBlock { .. }) | None => {}
         }
@@ -161,8 +189,8 @@ fn has(app: &FigApp) -> Option<Has> {
 }
 
 const CELL: f32 = 28.0;
-const SWATCH: f32 = 20.0;
-const GAP: f32 = 4.0;
+pub(crate) const SWATCH: f32 = 20.0;
+pub(crate) const GAP: f32 = 4.0;
 /// The room each part takes after its controls (the divider and the gap around it).
 const PART_END: f32 = 8.0;
 /// The sticky size menu's width: its name ("Extra large") and the chevron.
@@ -188,7 +216,7 @@ impl Has {
             w += TEXT_SIZES.len() as f32 * (CELL + 2.0) + PART_END;
         }
         if self.connector.is_some() {
-            w += LINE_W;
+            w += LINE_W - if self.connector.as_ref().is_some_and(|l| l.branch) { ROUTING_W } else { 0.0 };
         }
         if self.table {
             w += crate::board_picker::TABLE_PART_W;
@@ -225,12 +253,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let at = place(sel, size, app.canvas.rect);
     let t = Tokens::get(ctx);
     egui::Area::new(egui::Id::unique("board_bar")).fixed_pos(at).order(egui::Order::Middle).show(ctx, |ui| {
-        let (rect, _) = ui.allocate_exact_size(size, Sense::click());
-        a11y::container_bounds(ui, rect);
-        let p = ui.painter();
-        p.rect_filled(rect.expand(2.0).translate(vec2(0.0, 1.0)), CornerRadius::same(12), Color32::from_black_alpha(18));
-        p.rect_filled(rect, CornerRadius::same(10), t.panel);
-        p.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, t.border), StrokeKind::Inside);
+        let rect = bar(ui, size, &t);
         let cy = rect.center().y;
         let mut x = rect.min.x + 8.0;
         if h.color {
@@ -252,6 +275,17 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             line_part(app, ui, line, pos2(x, cy), &t);
         }
     });
+}
+
+/// A floating bar `size` big where `ui` starts (its shadow, panel and border); its rect.
+pub(crate) fn bar(ui: &mut Ui, size: egui::Vec2, t: &Tokens) -> Rect {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::click());
+    a11y::container_bounds(ui, rect);
+    let p = ui.painter();
+    p.rect_filled(rect.expand(2.0).translate(vec2(0.0, 1.0)), CornerRadius::same(12), Color32::from_black_alpha(18));
+    p.rect_filled(rect, CornerRadius::same(10), t.panel);
+    p.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    rect
 }
 
 /// The board colours from `x` (`board.setColor`), and for connectors `lines` any colour in the
@@ -285,7 +319,7 @@ fn color_part(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens, li
 }
 
 /// A small colour wheel: the button for any colour.
-fn paint_wheel(p: &egui::Painter, c: Pos2, r: f32) {
+pub(crate) fn paint_wheel(p: &egui::Painter, c: Pos2, r: f32) {
     const STEPS: usize = 12;
     let at = |i: usize| {
         let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;
@@ -397,7 +431,9 @@ const CAP_W: f32 = 62.0;
 /// The line style menu's width.
 const STYLE_W: f32 = CELL + 12.0;
 /// The connector part's width: the three routings, the two ends and the line style.
-const LINE_W: f32 = 3.0 * (CELL + 2.0) + 8.0 + 2.0 * CAP_W + 2.0 + 8.0 + STYLE_W + PART_END;
+const LINE_W: f32 = ROUTING_W + 2.0 * CAP_W + 2.0 + 8.0 + STYLE_W + PART_END;
+/// The three routing cells and the divider after them (a mind map's branch has none).
+const ROUTING_W: f32 = 3.0 * (CELL + 2.0) + 8.0;
 /// The weights the line style menu offers.
 const WEIGHTS: [f64; 4] = [1.0, 2.0, 4.0, 6.0];
 /// A dashed connector's dashes and gaps.
@@ -412,14 +448,16 @@ fn line_part(app: &mut FigApp, ui: &mut Ui, line: &Line, at: Pos2, t: &Tokens) {
         (Icon::CurvedConnector, tr("Curved"), Routing::Curved, "curved"),
     ];
     let mut x = at.x;
-    for (i, (icon, tip, routing, id)) in cells.into_iter().enumerate() {
-        let r = Rect::from_center_size(pos2(x + CELL / 2.0, at.y), vec2(CELL, CELL));
-        if crate::toolbar::tool_cell(ui, t, r, ("bb_line", i), icon, line.routing == routing, tip).clicked() {
-            app.run("board.setStyle", json!({"style": id}));
+    if !line.branch {
+        for (i, (icon, tip, routing, id)) in cells.into_iter().enumerate() {
+            let r = Rect::from_center_size(pos2(x + CELL / 2.0, at.y), vec2(CELL, CELL));
+            if crate::toolbar::tool_cell(ui, t, r, ("bb_line", i), icon, line.routing == routing, tip).clicked() {
+                app.run("board.setStyle", json!({"style": id}));
+            }
+            x += CELL + 2.0;
         }
-        x += CELL + 2.0;
+        x = divider(ui, t, x - 2.0, at.y);
     }
-    x = divider(ui, t, x - 2.0, at.y);
     for (start, cap) in [(true, line.start), (false, line.end)] {
         cap_menu(app, ui, t, pos2(x, at.y), start, cap);
         x += CAP_W + 2.0;

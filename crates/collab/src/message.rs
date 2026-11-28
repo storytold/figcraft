@@ -34,9 +34,19 @@ pub const COMMENTS: &str = "comments";
 /// read it).
 pub const PACKED: &str = "packed";
 
+/// The word a client puts in its [`Hello::client_version`] when it reads [`ServerMsg::Branches`]
+/// and [`ServerMsg::Branch`]: a server syncs shared branches only with clients that say so.
+pub const BRANCHES: &str = "branches";
+
+/// The word a client puts in its [`Hello::client_version`] when it reads
+/// [`DocProp::DesignReview`](crate::DocProp::DesignReview): a server keeps review-setting changes
+/// out of the batches, catch-up deltas and snapshots it sends to clients that don't say so
+/// (older ones couldn't decode the variant at all).
+pub const DESIGN_REVIEW: &str = "design-review";
+
 /// The `client_version` this build announces: its version, then what it reads beyond the protocol.
 pub fn client_version() -> String {
-    format!("{} {SIGNALS} {HOSTING} {COMMENTS} {PACKED}", env!("CARGO_PKG_VERSION"))
+    format!("{} {SIGNALS} {HOSTING} {COMMENTS} {PACKED} {DESIGN_REVIEW} {BRANCHES}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Whether `client_version` announces `word`.
@@ -62,6 +72,16 @@ pub fn reads_comments(client_version: &str) -> bool {
 /// A [`Hello::client_version`] that announces [`PACKED`].
 pub fn reads_packed(client_version: &str) -> bool {
     announces(client_version, PACKED)
+}
+
+/// A [`Hello::client_version`] that announces [`DESIGN_REVIEW`].
+pub fn reads_design_review(client_version: &str) -> bool {
+    announces(client_version, DESIGN_REVIEW)
+}
+
+/// A [`Hello::client_version`] that announces [`BRANCHES`].
+pub fn reads_branches(client_version: &str) -> bool {
+    announces(client_version, BRANCHES)
 }
 
 /// Join a file's session.
@@ -821,6 +841,99 @@ pub enum PluginReply {
     },
 }
 
+/// Most shared branches one session keeps.
+pub const MAX_SHARED_BRANCHES: usize = 64;
+
+/// Where a shared branch is in its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BranchStatus {
+    Active,
+    Merged,
+    Archived,
+}
+
+/// A shared branch kept by the server and sent to joining clients announcing [`BRANCHES`].
+/// `base_diff` turns the server's current main document into the branch's base; `head_diff` turns
+/// that base into the branch's head.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SharedBranch {
+    pub id: String,
+    pub name: String,
+    pub time: u64,
+    pub client: u32,
+    pub status: BranchStatus,
+    pub rev: u64,
+    pub base_diff: Vec<Change>,
+    pub head_diff: Vec<Change>,
+}
+
+/// Client -> server shared branch requests.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BranchReq {
+    Create { id: String, name: String, time: u64, base_seq: u64, base_diff: Vec<Change>, head_diff: Vec<Change> },
+    Edit { id: String, changes: Vec<Change> },
+    UpdateFromMain { id: String, base_changes: Vec<Change>, head_changes: Vec<Change> },
+    SetState { id: String, status: BranchStatus },
+}
+
+impl BranchReq {
+    /// The branch id this request targets.
+    pub fn id(&self) -> &str {
+        match self {
+            BranchReq::Create { id, .. } | BranchReq::Edit { id, .. } | BranchReq::UpdateFromMain { id, .. } | BranchReq::SetState { id, .. } => id,
+        }
+    }
+}
+
+/// Server -> client shared branch updates.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BranchEvent {
+    Created {
+        author: u32,
+        branch: SharedBranch,
+    },
+    Edited {
+        id: String,
+        author: u32,
+        rev: u64,
+        changes: Vec<Change>,
+    },
+    UpdatedFromMain {
+        id: String,
+        author: u32,
+        rev: u64,
+        base_changes: Vec<Change>,
+        head_changes: Vec<Change>,
+    },
+    State {
+        id: String,
+        author: u32,
+        rev: u64,
+        status: BranchStatus,
+    },
+    /// Sent only to the sender of a refused [`BranchReq`].
+    Rejected {
+        id: String,
+        reason: String,
+    },
+}
+
+impl BranchEvent {
+    /// The branch id this event targets.
+    pub fn id(&self) -> &str {
+        match self {
+            BranchEvent::Created { branch, .. } => &branch.id,
+            BranchEvent::Edited { id, .. }
+            | BranchEvent::UpdatedFromMain { id, .. }
+            | BranchEvent::State { id, .. }
+            | BranchEvent::Rejected { id, .. } => id,
+        }
+    }
+}
+
 /// Client → server.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -866,6 +979,8 @@ pub enum ClientMsg {
     /// Ask for the link of a file on the server's team list (the first message on a connection,
     /// instead of `Hello`).
     ResolveTeam(ResolveTeam),
+    /// Shared branch actions (only to a server that sent [`ServerMsg::Branches`]).
+    Branch(Box<BranchReq>),
 }
 
 /// Server → client.
@@ -937,6 +1052,10 @@ pub enum ServerMsg {
         file: String,
         token: String,
     },
+    /// The file's shared branches, sent right after `Welcome` to clients announcing [`BRANCHES`].
+    Branches(Vec<SharedBranch>),
+    /// A shared branch update, sent to clients announcing [`BRANCHES`].
+    Branch(Box<BranchEvent>),
 }
 
 /// (days since 1970-01-01, seconds-of-day, nanos) → (proleptic Gregorian year, the same wall-clock
@@ -995,6 +1114,36 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8], max_bytes: usize) -> Result<T, 
         return Err(Error::Decode(format!("wire version {version}, expected {WIRE_VERSION}")));
     }
     from_postcard(body)
+}
+
+/// Read a server message, including the original welcome without a reconnect secret.
+/// `serde(default)` handles absent JSON fields, but postcard reports EOF for that missing
+/// final field. Accept only a complete legacy welcome, including its explicit access level;
+/// malformed messages, partial secrets and trailing bytes still fail closed.
+pub fn decode_server(bytes: &[u8], max_bytes: usize) -> Result<ServerMsg, Error> {
+    let error = match decode(bytes, max_bytes) {
+        Ok(msg) => return Ok(msg),
+        Err(error) => error,
+    };
+    let Some(body) = bytes.strip_prefix(&[WIRE_VERSION, 0]) else { return Err(error) };
+    if bytes.len() > max_bytes {
+        return Err(error);
+    }
+    #[derive(Deserialize)]
+    struct LegacyWelcome {
+        session: u64,
+        client_id: u32,
+        seq: u64,
+        catch_up: CatchUp,
+        processed: Processed,
+        peers: Vec<Peer>,
+        access: Access,
+    }
+    let Ok(LegacyWelcome { session, client_id, seq, catch_up, processed, peers, access }) = from_postcard(body) else {
+        return Err(error);
+    };
+    // Zero is the existing sentinel for a host that supplied no reconnect credential.
+    Ok(ServerMsg::Welcome { session, client_id, seq, catch_up, processed, peers, access, secret: 0 })
 }
 
 /// One postcard value that fills `body` (no trailing bytes).

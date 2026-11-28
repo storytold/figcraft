@@ -259,14 +259,36 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     });
 }
 
+/// Whether the widget with the keyboard is a field drawn inside `panel`.
+fn field_focused_in(ctx: &egui::Context, panel: Rect) -> bool {
+    a11y::field_focused(ctx) && ctx.memory(|m| m.focused()).and_then(|f| ctx.read_response(f)).is_some_and(|r| panel.intersects(r.rect))
+}
+
+/// The layers the Design panel shows: the selection, except while one of its fields has the
+/// keyboard and for the pass after, when it shows the layers that field was edited for (while
+/// they are still there). A field commits when it lets go, and the click that takes the keyboard
+/// may select another layer first (a layers panel row draws before this panel): the field's text
+/// still goes to the layers it was typed for, not into the ones just selected.
+fn design_selection(app: &mut FigApp, ctx: &egui::Context) -> Vec<NodeId> {
+    let pass = ctx.cumulative_pass_nr();
+    let focused = app.ui.right_panel_rect.is_some_and(|panel| field_focused_in(ctx, panel));
+    let Ok(ds) = app.session.ds() else { return Vec::new() };
+    let held = app.ui.field_selection.as_ref().filter(|(at, ids)| at + 1 >= pass && !ids.is_empty() && ids.iter().all(|&n| ds.doc.node(n).is_some()));
+    let sel = held.map_or_else(|| ds.selection.clone(), |(_, ids)| ids.clone());
+    if focused {
+        app.ui.field_selection = Some((pass, sel.clone()));
+    }
+    sel
+}
+
 fn design(app: &mut FigApp, ui: &mut Ui) {
+    let sel = design_selection(app, ui.ctx());
     let Ok(ds) = app.session.ds() else { return };
     // The panel shows the document itself, not a live text preview over it.
     let doc = ds.text_preview.clone().unwrap_or_else(|| ds.doc.clone());
     // While a gesture only moves the selection, nothing the sections show changes but where it
     // is: they show the document it started from, so what they keep stays kept (#1571).
     let shown = crate::selection_cache::moved(ds).filter(|_| ds.text_preview.is_none()).map_or_else(|| doc.clone(), |(b, _)| b);
-    let sel = ds.selection.clone();
     let vector_edit = ds.vector_edit.clone();
     if sel.is_empty() {
         if app.session.tool.tool == figcraft_engine::ToolId::Scale {
@@ -335,10 +357,18 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     widgets::section_header(ui, tr("Page"), &[], false);
     // The new colour and, from a scrub, whether the scrub is over (live edits stay one undo step).
     let mut new_color: Option<(figcraft_color::Color, Option<bool>)> = None;
+    // The colour variable the background follows in the page's mode (#2343), as a fill shows one.
+    let bound = crate::variable_ui::bound_name(doc, &[page], "background");
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
+        let mut hex_area = None;
         let (sw, opacity) =
             widgets::paint_field(ui, Id::unique("pagebg_swatch"), Id::unique("pagebg_a"), &p, ui.available_width(), |child, text_r| {
+                if let Some(name) = &bound {
+                    crate::variable_ui::paint_chip(app, child, &[page], "background", name, text_r, Id::unique("pagebg_bound"));
+                    return;
+                }
+                hex_area = Some(text_r);
                 // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
                 // (`FF000080`; `FF0000FF` asks for opaque).
                 if let Some(h) = widgets::text_field_inline(child, Id::unique("pagebg"), &bg.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
@@ -349,6 +379,9 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
                     new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
                 }
             });
+        if let Some(area) = hex_area {
+            crate::variable_ui::bind_button(ui, area, &[page], "background", VariableType::Color);
+        }
         app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
         // The opacity: a field like every other opacity field, not a label (#1748).
         let alpha = |v: f64| bg.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);
