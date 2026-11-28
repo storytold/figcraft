@@ -543,6 +543,8 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
+    /// The picker target and document/page it belongs to, for safe retargeting across tabs.
+    pub(crate) picker_context: Option<(colorpicker::PickerTarget, u64, NodeId, bool)>,
     /// Crop mode (`image.crop`): the layer and the index of the image fill whose crop handles
     /// show on the canvas until Enter, Escape or a click outside the image.
     pub crop: Option<(NodeId, usize)>,
@@ -747,6 +749,7 @@ impl Default for UiState {
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
+            picker_context: None,
             crop: None,
             picker_popover: None,
             picker_button: None,
