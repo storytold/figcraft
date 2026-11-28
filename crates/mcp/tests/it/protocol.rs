@@ -59,6 +59,20 @@ fn tools_list_is_complete_and_schemas_are_objects() {
 }
 
 #[test]
+fn export_accepts_explicit_penpot_format() {
+    let mut c = Client::new();
+    let list = c.rpc("tools/list", json!({}));
+    let export = list["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "export").unwrap();
+    let formats = export["inputSchema"]["properties"]["format"]["enum"].as_array().unwrap();
+    assert!(formats.contains(&json!("penpot")));
+
+    c.create(json!({"type": "rectangle", "width": 30, "height": 40}));
+    let r = c.ok("export", json!({"format": "penpot"}));
+    assert_eq!(r["format"], "penpot");
+    assert!(r["data"].as_str().unwrap().starts_with("UEsD"));
+}
+
+#[test]
 fn batch_schema_exposes_the_optional_error_policy() {
     let mut c = Client::new();
     let r = c.rpc("tools/list", json!({}));
