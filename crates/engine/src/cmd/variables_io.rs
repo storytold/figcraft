@@ -1,6 +1,6 @@
 //! Variables import and export: a file's collections as the local variables JSON (the shape the
-//! REST importer reads, so exports round-trip), as CSS custom properties or as Dart constants for
-//! Flutter, and such JSON read back into a file.
+//! REST importer reads, so exports round-trip), as CSS custom properties, as Dart constants for
+//! Flutter or as DTCG design tokens, and such JSON or tokens read back into a file.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,14 +18,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "variable.export",
             "Export variables",
-            "{collections? [ids or names; default every collection of this file, not library copies], format? (json (default): the local variables JSON that variable.import reads, colour calculations as the colour they show in each mode with other collections in their default modes | css: custom properties, the default mode on :root and each other mode on [data-<collection>=\"<mode>\"], colour calculations as the colour they show in that mode with other collections in their default modes; numbers in px unless layers or scopes use them as opacity or font weight | tailwind: a Tailwind CSS v4 stylesheet, the default mode as an @theme block named the way inspect.code's tailwind utilities read them: --color-*, --radius-*, --text-*, --spacing-*, --font-*, unique per file; each other mode as in css; colour calculations as the colour they show in that mode, other collections in their default modes) | dart: a Dart file for Flutter, a class of constants per collection and mode (Color, double, String, bool), aliases and colour calculations resolved), path? (write it there)}  → {text}, or {path} when written; the json format adds a top-level `textStyles` array (this file's text styles as style.list returns them, `bound` holding the ids `meta.variables` is keyed by), a FigCraft extension beside the REST-compatible `meta`",
+            "{collections? [ids or names; default every collection of this file, not library copies], format? (json (default): the local variables JSON that variable.import reads, colour calculations as the colour they show in each mode with other collections in their default modes | css: custom properties, the default mode on :root and each other mode on [data-<collection>=\"<mode>\"], colour calculations as the colour they show in that mode with other collections in their default modes; numbers in px unless layers or scopes use them as opacity or font weight | tailwind: a Tailwind CSS v4 stylesheet, the default mode as an @theme block named the way inspect.code's tailwind utilities read them: --color-*, --radius-*, --text-*, --spacing-*, --font-*, unique per file; each other mode as in css; colour calculations as the colour they show in that mode, other collections in their default modes) | dart: a Dart file for Flutter, a class of constants per collection and mode (Color, double, String, bool), aliases and colour calculations resolved | dtcg: design tokens in the DTCG format (2025.10), a group per collection and a token per variable (color, dimension in px or number where layers use it unitless, aliases as {group.token}, colour calculations as the colour they show), strings, booleans and every mode's value under $extensions, which variable.import reads back), mode? (dtcg: the mode whose values are the tokens' $value, by name; collections without it, and every collection by default, in their default mode), path? (write it there)}  → {text, warnings? (dtcg: what was left out)}, or {path, warnings?} when written; the json format adds a top-level `textStyles` array (this file's text styles as style.list returns them, `bound` holding the ids `meta.variables` is keyed by), a FigCraft extension beside the REST-compatible `meta`",
             false,
             export
         ),
         spec!(
             "variable.import",
             "Import variables",
-            "{variables (the local variables JSON, as variable.export writes it: an object, JSON text or a path to a regular file of at most 256 MiB; `variableCollections` and `variables` under `meta` or at the top level; a top-level `textStyles` array, a FigCraft extension, adds this file's text styles by name with their variable bindings re-pointed)}  collections join this file's collection of the same name (values by mode name; new modes and variables are added, a variable of another type is skipped), others are added  → {collections (added), variables (added), updated, styles {added, updated}, warnings (also when it holds no variables, or fewer than its collections list)}",
+            "{variables (the local variables JSON, as variable.export writes it: an object, JSON text or a path to a regular file of at most 256 MiB; `variableCollections` and `variables` under `meta` or at the top level; a top-level `textStyles` array, a FigCraft extension, adds this file's text styles by name with their variable bindings re-pointed; or design tokens in the DTCG format, read when it holds a `$value`: each top-level group a collection, top-level tokens one named Tokens, each token a variable named by its path; color, dimension (px, rem at 16 px), number, fontWeight, duration (ms), fontFamily, strings, booleans and aliases, the modes variable.export lists under $extensions, else this file's collection's default mode; composite tokens are skipped with a warning)}  collections join this file's collection of the same name (values by mode name; new modes and variables are added, a variable of another type is skipped), others are added  → {collections (added), variables (added), updated, styles {added, updated}, warnings (also when it holds no variables, or fewer than its collections list)}",
             true,
             import
         ),
@@ -43,26 +43,40 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
             .collect::<Result<_>>()?,
         Some(_) => return Err(bad(cmd, "collections: [collection ids or names]")),
     };
+    let pretty = |v: &Value| serde_json::to_string_pretty(v).map_err(|e| EngineError::Other(e.to_string()));
+    let mut warnings = Vec::new();
     let text = match string(p, "format").as_deref().unwrap_or("json") {
         "json" => {
             let mut out = figcraft_format::rest::export_variables(&doc.variables, &colls);
             if let Value::Object(m) = &mut out {
                 m.insert("textStyles".into(), text_styles(doc));
             }
-            serde_json::to_string_pretty(&out).map_err(|e| EngineError::Other(e.to_string()))?
+            pretty(&out)?
         }
         "css" => css(doc, &colls, false),
         "tailwind" => css(doc, &colls, true),
         "dart" => dart(&doc.variables, &colls),
-        _ => return Err(bad(cmd, "format: json|css|tailwind|dart")),
+        "dtcg" => {
+            let roles = crate::token_roles::Roles::new(doc);
+            let unitless = |v: &Variable| roles.role(v) == crate::token_roles::NumberRole::Unitless;
+            let (tokens, left_out) =
+                figcraft_format::dtcg::export(&doc.variables, &colls, doc.color_profile, string(p, "mode").as_deref(), &unitless);
+            warnings = left_out;
+            pretty(&tokens)?
+        }
+        _ => return Err(bad(cmd, "format: json|css|tailwind|dart|dtcg")),
     };
-    match string(p, "path") {
+    let mut out = match string(p, "path") {
         Some(path) => {
             super::file::write(&path, text.as_bytes())?;
-            Ok(json!({"path": path}))
+            json!({"path": path})
         }
-        None => Ok(json!({"text": text})),
+        None => json!({"text": text}),
+    };
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
     }
+    Ok(out)
 }
 
 /// This file's own text styles as `style.list {type: "text"}` returns them (values and `bound`,
@@ -362,10 +376,18 @@ fn dart(vars: &Variables, colls: &[&Collection]) -> String {
 
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.import";
-    let v =
-        super::file::variables_param(cmd, p)?.ok_or_else(|| bad(cmd, "`variables` (the variables JSON: an object, JSON text or a path) required"))?;
-    let (src, mut warnings) = figcraft_format::rest::read_variables(&v).ok_or_else(|| bad(cmd, "not a variables JSON"))?;
+    let v = super::file::variables_param(cmd, p, true)?
+        .ok_or_else(|| bad(cmd, "`variables` (the variables JSON: an object, JSON text or a path) required"))?;
     let doc = s.doc_mut()?;
+    let tokens = figcraft_format::dtcg::is_tokens(&v);
+    let read = if tokens {
+        // A collection that lists no modes fills the default mode of this file's collection of its name.
+        let default_mode = |name: &str| doc.variables.collections.iter().find(|c| c.name == name)?.modes.first().map(|m| m.name.clone());
+        figcraft_format::dtcg::import(&v, doc.color_profile, &default_mode)
+    } else {
+        figcraft_format::rest::read_variables(&v)
+    };
+    let (src, mut warnings) = read.ok_or_else(|| bad(cmd, "not a variables JSON or design tokens file"))?;
     // Imported collection → (this file's collection, imported mode → its mode).
     let mut colls: BTreeMap<CollectionId, (CollectionId, BTreeMap<ModeId, ModeId>)> = BTreeMap::new();
     let mut added_colls = 0usize;
@@ -469,7 +491,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let (styles_added, styles_updated) = match v.get("textStyles") {
+    let (styles_added, styles_updated) = match v.get("textStyles").filter(|_| !tokens) {
         Some(entries) => import_text_styles(doc, entries, &ids, &mut warnings),
         None => (0, 0),
     };

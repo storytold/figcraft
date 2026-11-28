@@ -17,6 +17,7 @@
 //! [`rest`] imports the public REST API file JSON; [`fig`] imports `.fig` files (best effort).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod dtcg;
 pub mod fig;
 pub mod jpeg;
 pub mod library;
@@ -950,6 +951,8 @@ pub fn load_file(path: &std::path::Path) -> Result<(Document, Vec<String>), Form
 
 #[cfg(test)]
 mod branch_tests;
+#[cfg(test)]
+mod dtcg_tests;
 #[cfg(test)]
 mod guides_tests;
 #[cfg(test)]

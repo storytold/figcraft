@@ -443,6 +443,8 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`), which keeps one copy of the document however many steps there are (an `edit.undo` step undoes the batch's edits so far together); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: name it with `"as": "card"` and `{"$ref": "card"}` anywhere in a later step's params becomes the `id` in its result (`{"$step": n}` does the same by zero-based position); `"field"` takes another key or a slash path such as `ids/0` (see Step references below). |
 | `create_node {type, x, y, width, height, parent, index, name, text, path, props, fields?, outline?}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. `warnings` reports a fontStyle that draws in another face. `fields` / `outline` shrink `node` as they do for `get_node`; a bad option is an error and creates nothing. |
 | `set_properties {ids, props, fields?, outline?}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers (up to 20), which `fields` / `outline` shrink as they do for `get_node`; a bad option is an error and sets nothing. |
+| `create_node {type, x, y, width, height, parent, index, name, text, path, props, children}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. `warnings` reports a fontStyle that draws in another face. `children` makes the layers inside it in the same call and undo step: each takes the same keys but `parent`, its own `children` included, and the result's `children` mirrors the tree (`[{id, children?}, …]`), so a batch step names any of them with a `field` path such as `children/1/id`. A refused child is named by its place (`children[1].children[0]: …`) and nothing is made (#2185). |
+| `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
@@ -1452,7 +1454,12 @@ opacity or a font weight, so `border-radius: var(--radius)` reads `12px`) or as
 Dart constants for Flutter (`format: "dart"`: an `abstract final class` per collection and mode, the
 default mode's named after the collection and the others after the collection and the mode, with a
 `static const` `Color`, `double`, `String` or `bool` per variable; names become camelCase Dart
-identifiers kept apart, aliases are resolved to their value in that mode), and
+identifiers kept apart, aliases are resolved to their value in that mode) or as DTCG design tokens
+(`format: "dtcg"`, format 2025.10: a group per collection, a token per variable nested by the `/`
+parts of its name, colours as `colorSpace`/`components` objects, numbers as px dimensions or plain
+numbers, aliases as `{group.token}`; strings, booleans, every mode's value and scopes under
+`$extensions.ai.storyteller.figcraft`; `mode` names the mode written as `$value`, else the default;
+`warnings` lists what was left out), and
 returns `{text}` (or writes `path` and returns `{path}`). The JSON format also carries a top-level `textStyles` array beside `meta`, a FigCraft extension (the REST `styles` metadata has no values): each entry is what `style.list {type: "text"}` returns (`name`, `style`, `paragraph`, and `bound` holding the ids `meta.variables` is keyed by, which it holds only for the variables of the exported local collections, so a file's own export with `collections` left out of it names variables its `meta` lacks, and an import keeps such a binding on the style it replaces; an entry's `style` keys are snake_case and its `bound` keys camelCase, `bound.fontSize` binding `style.font_size`); CSS, Tailwind and Dart are variables only. `variable.import {variables}` (an object,
 JSON text or a path to a regular file of at most 256 MiB;
 `variableCollections` and `variables` under `meta` or at the top level) reads
@@ -1461,7 +1468,12 @@ one back: a collection joins this file's collection of the same name
 skipped with a warning; library copies and extended collections are never targets), others are
 added; aliases are checked for loops; a `textStyles` array is read too (a style joins this file's text style of the same name, others are added; bindings follow the imported variables; one to a variable the JSON lacks (unless the style it replaces already holds that id), to a field the style lacks or to a variable of another type is dropped with a warning; at most 10,000 styles and 32 bindings each are read); it returns `{collections, variables, updated, styles: {added, updated}, warnings}`,
 with a warning when the JSON holds no variables (`no variables found: expected meta.variables …`)
-or fewer than its collections list in `variableIds`. The
+or fewer than its collections list in `variableIds`. A file holding a `$value` reads as DTCG design
+tokens instead: each top-level group a collection (top-level tokens one named Tokens), each token a
+variable named by its path, types handed down from groups; `color`, `dimension` (px, rem at 16 px),
+`number`, `fontWeight`, `duration` (ms), `fontFamily`, strings, booleans and aliases come in, with the
+modes the export listed, else into the default mode of this file's collection of that name; composite
+tokens are skipped and counted in `warnings`. The
 Variables editor's Import… and Export… buttons do the same through file dialogs.
 
 Strokes take colour styles and variables like fills: `style.apply {style, target: "stroke"}` links
