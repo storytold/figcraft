@@ -306,6 +306,20 @@ fn collections_and_modes_resolve_stored_ids_never_by_name() {
 }
 
 #[test]
+fn corner_style_roundtrips_and_old_radii_default_to_round() {
+    use figcraft_geom::CornerStyle;
+    let legacy = serde_json::json!({"radii": [2.0, 4.0, 6.0, 8.0], "smoothing": 0.4});
+    let mut corners: crate::Corners = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(corners.style, CornerStyle::Round);
+    assert_eq!(serde_json::to_value(corners).unwrap(), legacy);
+    for style in [CornerStyle::Chamfer, CornerStyle::Concave] {
+        corners.style = style;
+        let saved = serde_json::to_value(corners).unwrap();
+        assert_eq!(serde_json::from_value::<crate::Corners>(saved).unwrap(), corners);
+    }
+}
+
+#[test]
 fn serde_roundtrip_and_repair() {
     let mut d = Document::new("x");
     let p = page(&d);

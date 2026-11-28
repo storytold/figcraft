@@ -14,7 +14,6 @@ figcraft-pathops = { workspace = true }
 figcraft-layout = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-zip = { workspace = true }
 flate2 = { workspace = true }
 ruzstd = { workspace = true }
 sha1 = { workspace = true }
@@ -32,3 +31,6 @@ craft-raw = { workspace = true }
 craft-develop = { workspace = true }
 craft-color-transform = { workspace = true }
 craft-geom = { workspace = true }
+
+[dev-dependencies]
+zip = { workspace = true }

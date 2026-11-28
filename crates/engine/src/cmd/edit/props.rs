@@ -163,7 +163,7 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
             names.join(", ")
         ));
     }
-    let mut hugging = crate::cmd::props::hugging_parents(&s.ds()?.doc, &ids, &props);
+    let hugging = crate::cmd::props::hugging_parents(&s.ds()?.doc, &ids, &props);
     let filling = crate::cmd::props::filling_children(&s.ds()?.doc, &ids, &props);
     let targets = ids.clone();
     let doc = s.doc_mut()?;
@@ -194,12 +194,46 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
         for f in &targets {
             figcraft_layout::coherent_sizing(doc, *f);
         }
-        hugging.extend(filling);
     }
-    if let Some(notice) = crate::cmd::props::fixed_notice(&s.ds()?.doc, &hugging) {
+    // The canvas shows the notice; a script reads the same side effects in `warnings` (#2178).
+    let doc = &s.ds()?.doc;
+    let parents = crate::cmd::props::turned_fixed(doc, &hugging);
+    let children = crate::cmd::props::turned_fixed(doc, &filling);
+    for ((n, horizontal), (was, why)) in parents
+        .iter()
+        .map(|f| (f, ("Hug", "a layer in it now fills it")))
+        .chain(children.iter().map(|f| (f, ("Fill", "the frame it is in now hugs it"))))
+    {
+        let key = if *horizontal { "sizingH" } else { "sizingV" };
+        warnings.push(format!("{} “{}” ({}): `{key}` {was} → Fixed, because {why}", n.id, n.name, n.kind.type_name()));
+    }
+    warnings.extend(clipped_variants(doc, &targets));
+    let notice = crate::cmd::props::fixed_notice(&[parents, children].concat());
+    if let Some(notice) = notice {
         s.message = Some(notice);
     }
     if warnings.is_empty() { ok() } else { Ok(json!({"ok": true, "warnings": warnings})) }
+}
+
+/// Variants among `ids` that reach past their component set while it clips them and has no auto
+/// layout to grow with them: the set keeps its size, as it does on the canvas, so the cut-off part
+/// is hidden (#2182).
+fn clipped_variants(doc: &figcraft_doc::Document, ids: &[NodeId]) -> Vec<String> {
+    ids.iter()
+        .filter_map(|i| {
+            let n = doc.node(*i)?;
+            let set = doc.node(n.parent?).filter(|p| matches!(p.kind, NodeKind::ComponentSet { .. }) && p.clip && p.layout.is_none())?;
+            // The variant's box in the set's space, as `fit_set` measures it.
+            let b = figcraft_geom::transform_rect_bbox(n.transform, n.local_rect());
+            let outside = b.x0 < -0.01 || b.y0 < -0.01 || b.x1 > set.width + 0.01 || b.y1 > set.height + 0.01;
+            outside.then(|| {
+                format!(
+                    "{} “{}” reaches past its component set {} “{}”, which clips it: the part outside is hidden (`layout.add` on the set makes it grow with its variants)",
+                    n.id, n.name, set.id, set.name
+                )
+            })
+        })
+        .collect()
 }
 
 /// A `fontStyle` draws in the family's face nearest to it, as a text layer resolves it. When that

@@ -57,7 +57,7 @@ fn a_packed_welcome_is_much_smaller_and_reads_back_the_same() {
     assert_eq!(back, plain);
     // The client opens the same document from it.
     let ServerMsg::Welcome { catch_up: CatchUp::Snapshot(changes), .. } = &plain else { panic!("not a snapshot") };
-    assert_eq!(Client::join(back).unwrap().document(), Replica::from_snapshot(changes).unwrap().document());
+    assert_eq!(Client::join(back).unwrap().document(), Replica::from_snapshot(changes.clone()).unwrap().document());
 }
 
 #[test]
