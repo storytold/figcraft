@@ -480,3 +480,55 @@ fn a_whole_ellipse_drawn_backwards_carries_its_stroke_ring() {
     assert_eq!(forwards.0, "ODD");
     assert_eq!(ring(-std::f64::consts::TAU), Some(forwards));
 }
+
+/// A vector whose filled areas use different winding rules writes one outline per rule, each
+/// filled with its own, so another reader fills every area as the network does (with rounded
+/// points too, whose outline comes from the network drawn with its corners); the import keeps each
+/// area's rule.
+#[test]
+fn a_vectors_filled_areas_keep_their_own_winding_rules_in_its_outline() {
+    for radius in [0.0, 5.0] {
+        filled_areas_keep_their_winding_rules(radius);
+    }
+}
+
+fn filled_areas_keep_their_winding_rules(radius: f64) {
+    let mut doc = Document::new("Winding");
+    let page = doc.first_page().unwrap();
+    let mut path = figcraft_doc::geom::BezPath::new();
+    for x in [0.0, 60.0] {
+        path.move_to((x, 0.0));
+        path.line_to((x + 40.0, 0.0));
+        path.line_to((x + 40.0, 40.0));
+        path.line_to((x, 40.0));
+        path.close_path();
+    }
+    let mut network = VectorNetwork::from_path(&path);
+    let loops: Vec<Vec<usize>> = network.regions.iter().flat_map(|r| r.loops.clone()).collect();
+    assert_eq!(loops.len(), 2);
+    network.regions = loops
+        .into_iter()
+        .zip([WindingRule::EvenOdd, WindingRule::NonZero])
+        .map(|(lp, winding)| Region { loops: vec![lp], winding, ..Default::default() })
+        .collect();
+    for v in &mut network.vertices {
+        v.radius = radius;
+    }
+    let id = doc.create(page, NodeKind::Vector { network: network.into() }, "V", 0.0, 0.0, 100.0, 40.0).unwrap();
+    doc.node_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("winding")), "radius {radius}: {warnings:?}");
+    with_changes(&doc, |of, _| {
+        let vector = of("VECTOR");
+        let rules: Vec<&str> = vector.get("fillGeometry").map(Kv::list).unwrap_or_default().iter().map(|p| name(p, "windingRule")).collect();
+        assert_eq!(rules, ["ODD", "NONZERO"], "radius {radius}: the first area's rule first, then the other");
+    });
+    let windings = |d: &Document| {
+        d.nodes().find_map(|n| match &n.kind {
+            NodeKind::Vector { network } => Some(network.regions.iter().map(|r| r.winding).collect::<Vec<_>>()),
+            _ => None,
+        })
+    };
+    let (back, _) = import(&bytes, "x").unwrap();
+    assert_eq!(windings(&back), windings(&doc), "radius {radius}");
+}
