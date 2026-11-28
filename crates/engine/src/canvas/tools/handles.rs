@@ -116,25 +116,15 @@ pub fn selection_box(doc: &Document, sel: &[NodeId]) -> Option<[Point; 4]> {
 }
 
 /// The selection's handle box: the page transform of its top-left corner (axes along the box) and
-/// its size. One layer: its own box; several sharing a rotation: a box turned with them;
-/// otherwise the page-aligned bounds.
+/// its size. One layer: its own box; several layers: the page-aligned bounds.
 pub fn selection_frame(doc: &Document, sel: &[NodeId]) -> Option<(Affine, f64, f64)> {
     let ids = roots(doc, sel);
     if let [id] = ids.as_slice() {
         let n = doc.node(*id)?;
         return Some((doc.world_transform(*id), n.width, n.height));
     }
-    let Some(angle) = shared_rotation(doc, &ids) else {
-        let b = doc.bounds_of(&ids)?;
-        return Some((Affine::translate((b.x0, b.y0)), b.width(), b.height()));
-    };
-    let rot = Affine::rotate(angle);
-    let inv = rot.inverse();
-    let b = ids
-        .iter()
-        .filter_map(|i| Some(figcraft_geom::transform_rect_bbox(inv * doc.world_transform(*i), doc.node(*i)?.local_rect())))
-        .reduce(|a, b| a.union(b))?;
-    Some((rot * Affine::translate((b.x0, b.y0)), b.width(), b.height()))
+    let b = doc.bounds_of(&ids)?;
+    Some((Affine::translate((b.x0, b.y0)), b.width(), b.height()))
 }
 
 /// The rotation `ids` share on the page (degrees, counter-clockwise positive), else 0 (the handle
