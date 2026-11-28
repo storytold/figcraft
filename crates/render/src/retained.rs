@@ -4,11 +4,11 @@
 //! Views are snapped to whole device pixels so that, at one zoom, the pixels of every render line
 //! up and a pan is an integer shift of the previous image. Anything the partial path can't vouch
 //! for (another zoom, page or set of options, new fonts, a page-level edit, a large change) is a
-//! full render, the same as [`render_view`].
+//! full render, the same as [`render_view`](crate::render_view).
 
 use std::sync::Arc;
 
-use figcraft_doc::{Document, Effect, EffectKind, NodeId, NodeKind};
+use figcraft_doc::{Document, Effect, EffectKind, Node, NodeId, NodeKind};
 use figcraft_geom::Rect;
 use tiny_skia::Pixmap;
 
@@ -68,54 +68,105 @@ struct Sensitive {
     pattern_sources: Vec<NodeId>,
 }
 
-/// Grain effects (noise, texture) work on their layer's pixels, which end where a render cuts the
-/// layer (texture scatters pixels from across the cut): grainy layers are redrawn whole.
+/// The paints a vector's regions or a text's runs draw with besides the layer's own fills.
+fn own_paints(n: &Node) -> impl Iterator<Item = &figcraft_color::Paint> {
+    let regions = match &n.kind {
+        NodeKind::Vector { network } => network.regions.as_slice(),
+        _ => &[],
+    };
+    let text = match &n.kind {
+        NodeKind::Text(t) => Some(t),
+        _ => None,
+    };
+    let styles = text.into_iter().flat_map(|t| std::iter::once(&t.style).chain(t.runs.iter().map(|r| &r.style)));
+    regions.iter().filter_map(|r| r.fills.as_deref()).chain(styles.filter_map(|s| s.fills.as_deref())).flatten()
+}
+
+/// The pattern source `p` draws, when it is a pattern.
+fn pattern_source(p: &figcraft_color::Paint) -> Option<NodeId> {
+    match &p.kind {
+        figcraft_color::PaintKind::Pattern(pt) => Some(NodeId(pt.source)),
+        _ => None,
+    }
+}
+
+/// The pattern sources of every paint `n` draws with: its fills and strokes, its vector regions'
+/// own fills and its text runs' own fills.
+fn pattern_sources_of(n: &Node) -> impl Iterator<Item = NodeId> + '_ {
+    let more = matches!(n.kind, NodeKind::Vector { .. } | NodeKind::Text(_)).then(|| own_paints(n));
+    n.fills.iter().chain(&n.strokes).filter_map(pattern_source).chain(more.into_iter().flatten().filter_map(pattern_source))
+}
+
+/// Whether `n`'s look depends on where a render cuts it: grain effects (noise, texture) work on
+/// its pixels, which end at the cut (texture scatters pixels from across it).
+fn grainy(n: &Node) -> bool {
+    n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::Noise(_) | EffectKind::Texture(_)))
+}
+
+/// What a render of `page` must know: grainy layers are redrawn whole, an edit inside a pattern
+/// source shows wherever the pattern does, and backdrop blurs read around them.
 ///
-/// Only what `page` draws counts: its layers, and the pattern sources they fill with wherever those
-/// are (and the sources those fill with in turn), whose edits show on the page and whose backdrop
-/// blurs count too. A source's grain is drawn in its cells, not where the source lies, so only the
-/// page's own grainy layers give areas. One walk down the page rather than passes over every page
-/// of the file: in a large file those passes took most of an edit's frame, and a blur on another
-/// page widened every pan's strips and every band's overlap.
+/// Only what the page draws counts: its layers, and the pattern sources they fill with wherever
+/// those are (and the sources those fill with in turn), whose edits show on the page and whose
+/// backdrop blurs count too. A source's grain is drawn in its cells, not where the source lies, so
+/// only the page's own grainy layers give areas. One walk down the page rather than passes over
+/// every page of the file: in a large file those passes took most of an edit's frame, and a blur
+/// on another page widened every pan's strips and every band's overlap.
 fn sensitive(doc: &Document, page: NodeId) -> Sensitive {
+    page_walk(doc, page).unwrap_or_else(|| whole_file(doc))
+}
+
+/// [`sensitive`] from a walk down `page`; `None` when the walk runs out of its budget.
+fn page_walk(doc: &Document, page: NodeId) -> Option<Sensitive> {
     let mut noisy: Vec<(NodeId, Rect)> = Vec::new();
     let mut backdrop_blur = 0.0f64;
     let mut pattern_sources = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    // A tree visits each node once (a source on the page twice); child lists repeated in a
-    // hostile file are cut off rather than walked in full.
-    let mut left = doc.node_count().saturating_mul(2).saturating_add(8);
-    // Each node with whether it is drawn where it lies on the page (a source's layers are drawn
+    let mut sources = std::collections::BTreeSet::new();
+    // Layers walked as part of a source: sources inside sources are walked once.
+    let mut in_sources = std::collections::BTreeSet::new();
+    // A tree takes at most three visits a layer: on the page, in a source and as a source's root
+    // met again. Child lists that repeat (a hostile file) run out the budget: then what the page
+    // draws can't be told, and [`sensitive`] counts the whole file.
+    let mut left = doc.node_count().saturating_mul(3).saturating_add(8);
+    // Each layer with whether it is drawn where it lies on the page (a source's layers are drawn
     // in its cells).
     let mut stack = vec![(page, true)];
     while let Some((id, on_page)) = stack.pop() {
-        let Some(budget) = left.checked_sub(1) else { break };
-        left = budget;
+        left = left.checked_sub(1)?;
+        if !on_page && !in_sources.insert(id) {
+            continue;
+        }
         let Some(n) = doc.node(id) else { continue };
         if on_page
-            && n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::Noise(_) | EffectKind::Texture(_)))
+            && grainy(n)
             && let Some(r) = draw::paint_bounds(doc, id)
         {
             noisy.push((id, r));
         }
         backdrop_blur = n.effects.iter().map(Effect::backdrop_radius).fold(backdrop_blur, f64::max);
-        for p in n.fills.iter().chain(&n.strokes) {
-            if let figcraft_color::PaintKind::Pattern(pt) = &p.kind {
-                let src = NodeId(pt.source);
-                if seen.insert(src) {
-                    pattern_sources.push(src);
-                    // A page as a source draws nothing.
-                    if doc.node(src).is_some_and(|s| !s.is_page()) {
-                        stack.push((src, false));
-                    }
+        for src in pattern_sources_of(n) {
+            if sources.insert(src) {
+                pattern_sources.push(src);
+                // A page as a source draws nothing.
+                if doc.node(src).is_some_and(|s| !s.is_page()) {
+                    stack.push((src, false));
                 }
             }
         }
         stack.extend(n.children.iter().map(|c| (*c, on_page)));
     }
-    // In id order, as a pass over the file found them.
+    // In id order, as a pass over the file finds them.
     noisy.sort_by_key(|(id, _)| *id);
-    Sensitive { areas: noisy.into_iter().map(|(_, r)| r).collect(), backdrop_blur, pattern_sources }
+    Some(Sensitive { areas: noisy.into_iter().map(|(_, r)| r).collect(), backdrop_blur, pattern_sources })
+}
+
+/// [`sensitive`] for every layer of the file, whatever page it is on.
+fn whole_file(doc: &Document) -> Sensitive {
+    Sensitive {
+        areas: doc.nodes().filter(|n| grainy(n)).filter_map(|n| draw::paint_bounds(doc, n.id)).collect(),
+        backdrop_blur: crate::max_backdrop_blur(doc),
+        pattern_sources: doc.nodes().flat_map(pattern_sources_of).collect(),
+    }
 }
 
 /// [`sensitive`] for the large-file timings: how many areas it found.

@@ -8,7 +8,7 @@ use figcraft_doc::{Blur, Document, Effect, EffectKind, NodeId, NodeKind};
 use figcraft_geom::Affine;
 
 use crate::retained_tests::assert_same;
-use crate::{Options, Pixmap, Retained, View, Work, render_view};
+use crate::{Begun, Options, Pixmap, Retained, View, Work, render_view};
 
 fn solid(d: &mut Document, id: NodeId, hex: &str) {
     d.get_mut(id).unwrap().fills = vec![Paint::solid(Color::from_hex(hex).unwrap())];
@@ -167,16 +167,102 @@ fn a_page_shown_again_after_another_matches() {
     assert!(matches!(check(&mut r, &moved, p, &v(24.0)), Work::Partial { .. }));
 }
 
-#[test]
-fn a_layer_listed_as_its_own_child_ends_the_page_walk() {
-    let mut d = Document::new("loop");
+/// A render drawn band by band through [`Retained::begin`], kept with [`Retained::finish`].
+fn stepped(r: &mut Retained, doc: &Arc<Document>, page: NodeId, v: &View, band_h: u32) -> (Pixmap, View) {
+    match r.begin(doc, page, v, &Options::default(), band_h).unwrap() {
+        Begun::Done(shown, pix, _) => (pix.clone(), shown),
+        Begun::Steps(mut steps) => {
+            while !steps.step() {}
+            let (shown, pix) = r.finish(*steps);
+            (pix.clone(), shown)
+        }
+    }
+}
+
+/// Stripes under a glass pane and a background blur on the first page, a much wider blur on the
+/// second: (document, first page, a stripe beside the pane).
+fn backdrops_here_and_wider_elsewhere() -> (Arc<Document>, NodeId, NodeId) {
+    let mut d = Document::new("backdrops");
     let p = d.first_page().unwrap();
-    let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 50.0, 50.0).unwrap();
-    solid(&mut d, f, "E03030");
-    d.get_mut(f).unwrap().children.push(f);
-    let doc = Arc::new(d);
+    let mut stripes = Vec::new();
+    for i in 0..16u32 {
+        let s = d.create(p, NodeKind::Rectangle, "Stripe", f64::from(i) * 40.0, 0.0, 40.0, 500.0).unwrap();
+        solid(&mut d, s, ["E03030", "2040E0", "20C060", "F0C830"][i as usize % 4]);
+        stripes.push(s);
+    }
+    let pane = d.create(p, NodeKind::Rectangle, "Glass", 120.0, 100.0, 240.0, 160.0).unwrap();
+    let n = d.get_mut(pane).unwrap();
+    n.corners.radii = [24.0; 4];
+    n.fills = vec![Paint::solid(Color { a: 0.1, ..Color::WHITE })];
+    n.effects = vec![Effect { kind: EffectKind::Glass(figcraft_doc::Glass::default()), visible: true }];
+    let frosted = d.create(p, NodeKind::Rectangle, "Frosted", 420.0, 260.0, 160.0, 120.0).unwrap();
+    d.get_mut(frosted).unwrap().fills = vec![Paint::solid(Color { a: 0.2, ..Color::WHITE })];
+    d.get_mut(frosted).unwrap().effects = vec![Effect { kind: EffectKind::BackgroundBlur(Blur::uniform(6.0)), visible: true }];
+    let other = d.add_page("Other");
+    let wide = d.create(other, NodeKind::Rectangle, "Wide", 0.0, 0.0, 300.0, 200.0).unwrap();
+    d.get_mut(wide).unwrap().effects = vec![Effect { kind: EffectKind::BackgroundBlur(Blur::uniform(400.0)), visible: true }];
+    (Arc::new(d), p, stripes[9])
+}
+
+#[test]
+fn backdrops_on_the_page_draw_as_render_view_does_with_a_wider_blur_elsewhere() {
+    let (doc, p, beside) = backdrops_here_and_wider_elsewhere();
+    let v = |x: f64, scale: f64| View { origin: (x, 0.0), scale, width: 640, height: 480 };
     let mut r = Retained::default();
-    let v = View { origin: (0.0, 0.0), scale: 1.0, width: 100, height: 100 };
-    assert!(r.render(&doc, p, &v, &Options::default()).is_some());
-    assert!(r.render(&doc, p, &View { origin: (5.0, 0.0), ..v }, &Options::default()).is_some());
+    assert_eq!(check(&mut r, &doc, p, &v(0.0, 1.0)), Work::Full);
+    // A new zoom: bands overlapping by the page's own blurs, the same pixels as render_view's
+    // (whose bands overlap by the other page's blur).
+    assert_eq!(check(&mut r, &doc, p, &v(0.0, 1.5)), Work::Full);
+    assert!(matches!(check(&mut r, &doc, p, &v(30.0, 1.5)), Work::Partial { .. }), "a pan");
+    let moved = edit(&doc, |d| d.get_mut(beside).unwrap().transform = Affine::translate((372.0, 12.0)));
+    assert!(matches!(check(&mut r, &moved, p, &v(30.0, 1.5)), Work::Partial { .. }), "an edit beside the glass");
+    // The browser's render, a band at a time.
+    for band_h in [24, 64, 200] {
+        let mut r = Retained::default();
+        let (pix, shown) = stepped(&mut r, &moved, p, &v(10.0, 1.37), band_h);
+        let full = render_view(&moved, p, &shown, &Options::default()).unwrap();
+        assert!(pix.data() == full.data(), "bands of {band_h} rows");
+    }
+}
+
+#[test]
+fn a_child_list_that_loops_counts_the_whole_file() {
+    let (doc, p, _) = backdrops_here_and_wider_elsewhere();
+    // On top of the page: a frame listed as its own child, whose walk never ends. The blurs
+    // under it are still counted.
+    let doc = edit(&doc, |d| {
+        let f = d.create(p, NodeKind::Frame, "Loop", 600.0, 420.0, 20.0, 20.0).unwrap();
+        solid(d, f, "202020");
+        d.get_mut(f).unwrap().children.push(f);
+    });
+    let v = |x: f64| View { origin: (x, 0.0), scale: 1.0, width: 640, height: 480 };
+    let mut r = Retained::default();
+    assert_eq!(check(&mut r, &doc, p, &v(0.0)), Work::Full);
+    for i in 1..=3 {
+        check(&mut r, &doc, p, &v(f64::from(i) * 50.0));
+    }
+}
+
+#[test]
+fn edits_to_a_pattern_a_vector_region_fills_with_show_on_the_page() {
+    use figcraft_doc::{Region, Segment, VectorNetwork, Vertex, WindingRule};
+    let mut d = Document::new("region pattern");
+    let p = d.first_page().unwrap();
+    let other = d.add_page("Sources");
+    let source = d.create(other, NodeKind::Rectangle, "Source", 0.0, 0.0, 20.0, 20.0).unwrap();
+    solid(&mut d, source, "E03030");
+    let tile = Paint { kind: PaintKind::Pattern(PatternPaint::new(source.0)), ..Paint::solid(Color::BLACK) };
+    let network = VectorNetwork {
+        vertices: [(0.0, 0.0), (200.0, 0.0), (200.0, 160.0), (0.0, 160.0)].into_iter().map(|(x, y)| Vertex::new(x, y)).collect(),
+        segments: (0..4).map(|i| Segment::line(i, (i + 1) % 4)).collect(),
+        regions: vec![Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(vec![tile]), ..Default::default() }],
+    };
+    let v = d.create(p, NodeKind::Vector { network: network.into() }, "V", 20.0, 20.0, 200.0, 160.0).unwrap();
+    d.get_mut(v).unwrap().fills.clear();
+    let doc = Arc::new(d);
+    let view = View { origin: (0.0, 0.0), scale: 1.0, width: 260, height: 220 };
+    let mut r = Retained::default();
+    check(&mut r, &doc, p, &view);
+    let recoloured = edit(&doc, |d| solid(d, source, "2040E0"));
+    assert_ne!(check(&mut r, &recoloured, p, &view), Work::Reused);
 }
