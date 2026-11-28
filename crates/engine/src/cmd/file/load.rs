@@ -757,8 +757,9 @@ pub(super) fn sibling_variables(_path: &str) -> Option<Value> {
     None
 }
 
-/// The local variables JSON a command passes as `variables`: an object, JSON text or a file path.
-pub(crate) fn variables_param(cmd: &str, p: &Value) -> Result<Option<Value>> {
+/// The local variables JSON a command passes as `variables`: an object, JSON text or a file path;
+/// with `tokens`, DTCG design tokens too (`variable.import`).
+pub(crate) fn variables_param(cmd: &str, p: &Value, tokens: bool) -> Result<Option<Value>> {
     let parse = |text: &[u8]| serde_json::from_slice::<Value>(text).map_err(|e| bad(cmd, format!("variables: {e}")));
     let v = match get(p, "variables") {
         None | Some(Value::Null) => return Ok(None),
@@ -771,8 +772,9 @@ pub(crate) fn variables_param(cmd: &str, p: &Value) -> Result<Option<Value>> {
         Some(Value::String(path)) => parse(&read(path)?)?,
         Some(_) => return Err(bad(cmd, "variables: the local variables JSON (an object, JSON text or a path)")),
     };
-    if !figcraft_format::rest::is_variables_json(&v) {
-        return Err(bad(cmd, "variables: expected the local variables JSON (`meta.variableCollections` and `meta.variables`)"));
+    if !(figcraft_format::rest::is_variables_json(&v) || (tokens && figcraft_format::dtcg::is_tokens(&v))) {
+        let or = if tokens { ", or design tokens with a `$value`" } else { "" };
+        return Err(bad(cmd, format!("variables: expected the local variables JSON (`meta.variableCollections` and `meta.variables`){or}")));
     }
     Ok(Some(v))
 }
