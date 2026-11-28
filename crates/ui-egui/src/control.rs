@@ -548,8 +548,9 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             app.control_queue.push(r);
             continue;
         }
-        if r.method == "ui.input" {
-            // Keep one synthetic batch until a real UI pass consumes it.
+        if r.method == "ui.input" || app.applied_frame == Some(crate::windows::viewport(target)) {
+            // Keep one synthetic batch until a real UI pass consumes it, and what was queued behind
+            // a batch already taken until the pass that applies it has presented.
             app.control_queue.push(r);
             continue;
         }
@@ -775,6 +776,13 @@ fn route_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now
     }
     if r.method == "ui.screenshot" {
         admit(app, r, target, now);
+        return;
+    }
+    if app.applied_frame == Some(viewport) {
+        // This pass applies an injected batch: what was queued behind it runs next frame, so a
+        // file switch can't send the batch's keys or pointer into another document (#1503).
+        ctx.request_repaint();
+        app.control_queue.push(r);
         return;
     }
     if !r.begin() {

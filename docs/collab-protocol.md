@@ -288,7 +288,7 @@ Server → client:
 
 | Message | Meaning |
 |---|---|
-| `Welcome {session, client_id, seq, catch_up: Snapshot, Delta or Packed, processed, peers, access}` | Join accepted: the full document, or for a reconnecting client the batches it missed; `Packed` is the full document compressed (deflate of the snapshot's postcard bytes), sent only to clients whose hello announced `packed`, which read it back within the size an uncompressed welcome could have had; what the server did with that client's batches (`processed {last_batch, refused}`); `access` is `edit`, `view` (a view link: every batch is refused) or `comment` (a comment link: a batch is refused unless every change in it is to comment threads: a thread's `put` or `remove`, their order or the whole list). |
+| `Welcome {session, client_id, seq, catch_up: Snapshot, Delta, Packed or DeltaSnapshot, processed, peers, access}` | Join accepted: the full document, or for a reconnecting client the batches it missed; `Packed` is the full document compressed (deflate of the snapshot's postcard bytes), sent only to clients whose hello announced `packed`, which read it back within the size an uncompressed welcome could have had; `DeltaSnapshot` is a direct compressed mirror-delta and deduplicated-vector snapshot (`FCDS` header + version byte + exact inflated length + deflate), sent only to clients whose hello announced `delta-snapshot` (and `design-review`), enforcing inflated-byte, node-count and materialized-memory budgets during streaming decode; what the server did with that client's batches (`processed {last_batch, refused}`); `access` is `edit`, `view` (a view link: every batch is refused) or `comment` (a comment link: a batch is refused unless every change in it is to comment threads: a thread's `put` or `remove`, their order or the whole list). |
 | `Changes {seq, author, batch_id, changes}` | Accepted changes, in order, to everyone (the author gets its own back as confirmation). |
 | `Reject {batch_id, reason, fixes: [Change]}` | A batch (or part of it) was invalid: the current values to roll back to. |
 | `Presence {client_id, …}` / `PeerJoined` / `PeerLeft` | Other people's cursors, selections and arrivals. |
@@ -958,10 +958,13 @@ Decisions, as built:
   10 000, `max_log_changes`, default 1 000 000, and `max_log_bytes`, default 64 MiB, which a
   desktop host uses as they are and `figcraft-server` takes from its `max_log_mb`). If every batch
   after the client's sequence number is still in it, the welcome carries them (`CatchUp::Delta`);
-  otherwise the whole document (`CatchUp::Snapshot`), compressed for a client whose hello
-  announced `packed` (`CatchUp::Packed`, `message::pack` / `unpack`: deflate at its fastest level
-  on the hub's thread; a document's changes shrink about sevenfold, e.g. 397 KB to 53 KB for 4 040
-  layers). Older clients, and servers from before, keep the uncompressed snapshot.
+  otherwise the whole document: `CatchUp::DeltaSnapshot` for clients whose hello announced
+  `delta-snapshot` and `design-review` (Kahn `(parent, source)` topological order, exact
+  value-checked mirror deltas, deduplicated `VectorNetwork` table, cached per `seq` on the server
+  up to 16 MiB compressed; breaking `FieldDelta` additions bump the version/capability word),
+  `CatchUp::Packed` (`message::pack` / `unpack`: deflate at its fastest level on the hub's thread)
+  for older clients that announced `packed`, and uncompressed `CatchUp::Snapshot` for the oldest
+  clients.
 - **What happened to the batches in flight.** The server remembers per client the last batch id it
   processed and the latest refused ids (at most 1 024). Batches up to that id that the catch-up
   doesn't confirm were refused (the user is told); the others are sent again, in order, keeping
