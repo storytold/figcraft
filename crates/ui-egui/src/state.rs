@@ -27,10 +27,11 @@ pub enum TitleBar {
 pub type AutoSaveEncoding = std::thread::JoinHandle<(figcraft_engine::cmd::file::FileSnapshot, figcraft_engine::Result<Vec<u8>>)>;
 
 /// The side panels' widths: the least and most a drag of their edge gives, what a double-click on
-/// the edge puts back, and how much of the window they leave the canvas.
-pub const LEFT_PANEL: std::ops::RangeInclusive<f32> = 200.0..=480.0;
+/// the edge puts back, and how much of the window they leave the canvas. The limits are Figma's,
+/// measured in the web app: left 240 to 450, right 240 to 500, both 240 by default.
+pub const LEFT_PANEL: std::ops::RangeInclusive<f32> = 240.0..=450.0;
 
-pub const RIGHT_PANEL: std::ops::RangeInclusive<f32> = 240.0..=480.0;
+pub const RIGHT_PANEL: std::ops::RangeInclusive<f32> = 240.0..=500.0;
 
 pub const PANEL_DEFAULT: f32 = 240.0;
 

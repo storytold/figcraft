@@ -57,29 +57,54 @@ fn anchors_round_trip() {
 }
 
 #[test]
-fn the_pivot_is_the_anchor_unless_it_is_on_the_dragged_side() {
+fn the_pivot_is_the_opposite_handle_or_the_centre_with_alt() {
     let (w, h) = (100.0, 50.0);
-    let tl = (0, 0);
-    // Bottom-right corner from the top-left anchor: classic, by the axis that moved the most.
-    assert_eq!(scale_factor(Handle::Corner(2), Point::new(200.0, 60.0), w, h, tl, false), Some((2.0, Point::new(0.0, 0.0))));
-    // Top-right corner: the anchor is on its top side, so the opposite corner stays put.
-    assert_eq!(scale_factor(Handle::Corner(1), Point::new(150.0, -25.0), w, h, tl, false), Some((1.5, Point::new(0.0, 50.0))));
-    // Right edge: from the anchor; left edge: the anchor is on it, so from the right edge.
-    assert_eq!(scale_factor(Handle::Edge(1), Point::new(50.0, 999.0), w, h, tl, false), Some((0.5, Point::new(0.0, 0.0))));
-    assert_eq!(scale_factor(Handle::Edge(3), Point::new(-100.0, 0.0), w, h, tl, false), Some((2.0, Point::new(100.0, 25.0))));
-    // A centre anchor, or Alt, scales about the centre.
-    assert_eq!(scale_factor(Handle::Corner(2), Point::new(150.0, 75.0), w, h, (1, 1), false), Some((2.0, Point::new(50.0, 25.0))));
-    assert_eq!(scale_factor(Handle::Edge(2), Point::new(0.0, 75.0), w, h, tl, true), Some((2.0, Point::new(50.0, 25.0))));
+    // Bottom-right corner: the top-left corner stays put, by the axis that moved the most.
+    assert_eq!(scale_factor(Handle::Corner(2), Point::new(200.0, 60.0), w, h, false), Some((2.0, Point::new(0.0, 0.0))));
+    // Top-right corner: the bottom-left corner stays put.
+    assert_eq!(scale_factor(Handle::Corner(1), Point::new(150.0, -25.0), w, h, false), Some((1.5, Point::new(0.0, 50.0))));
+    // Right edge: the left edge's middle; left edge: the right edge's middle.
+    assert_eq!(scale_factor(Handle::Edge(1), Point::new(50.0, 999.0), w, h, false), Some((0.5, Point::new(0.0, 25.0))));
+    assert_eq!(scale_factor(Handle::Edge(3), Point::new(-100.0, 0.0), w, h, false), Some((2.0, Point::new(100.0, 25.0))));
+    // Alt scales about the centre.
+    assert_eq!(scale_factor(Handle::Edge(2), Point::new(0.0, 75.0), w, h, true), Some((2.0, Point::new(50.0, 25.0))));
     // Past the pivot flips; it never collapses to nothing.
-    assert_eq!(scale_factor(Handle::Corner(2), Point::new(-100.0, -50.0), w, h, tl, false).map(|k| k.0), Some(-1.0));
-    assert_eq!(scale_factor(Handle::Corner(2), Point::new(0.0, 0.0), w, h, tl, false).map(|k| k.0), Some(0.01));
+    assert_eq!(scale_factor(Handle::Corner(2), Point::new(-100.0, -50.0), w, h, false).map(|k| k.0), Some(-1.0));
+    assert_eq!(scale_factor(Handle::Corner(2), Point::new(0.0, 0.0), w, h, false).map(|k| k.0), Some(0.01));
     // Lines (no height) scale along their length.
-    assert_eq!(scale_factor(Handle::Corner(1), Point::new(300.0, 7.0), 100.0, 0.0, tl, false).map(|k| k.0), Some(3.0));
+    assert_eq!(scale_factor(Handle::Corner(1), Point::new(300.0, 7.0), 100.0, 0.0, false).map(|k| k.0), Some(3.0));
     for bad in [f64::NAN, f64::INFINITY] {
-        assert_eq!(scale_factor(Handle::Corner(2), Point::new(bad, 0.0), w, h, tl, false), None);
+        assert_eq!(scale_factor(Handle::Corner(2), Point::new(bad, 0.0), w, h, false), None);
     }
-    assert_eq!(scale_factor(Handle::Rotate(0), Point::new(1.0, 1.0), w, h, tl, false), None);
-    assert_eq!(scale_factor(Handle::Corner(2), Point::new(5.0, 5.0), 0.0, 0.0, tl, false), None);
+    assert_eq!(scale_factor(Handle::Rotate(0), Point::new(1.0, 1.0), w, h, false), None);
+    assert_eq!(scale_factor(Handle::Corner(2), Point::new(5.0, 5.0), 0.0, 0.0, false), None);
+}
+
+/// Measured in Figma's web app, 2026-11-09: a drag ignores the origin grid and pivots on the
+/// opposite handle (a 100 x 100 layer at 9000, 5000: the bottom-right corner keeps the top left;
+/// the right edge keeps the left edge's middle and scales both ways).
+#[test]
+fn a_scale_handle_drag_pivots_on_the_opposite_handle_whatever_the_origin() {
+    for origin in ["c", "tl"] {
+        let mut s = Session::new();
+        let r = rect(&mut s, 9000.0, 5000.0, 100.0, 100.0);
+        ex(&mut s, "select.set", json!({"ids": [r]}));
+        ex(&mut s, "tool.scale", json!({}));
+        ex(&mut s, "tool.scaleAnchor", json!({"anchor": origin}));
+        drag(&mut s, (9100.0, 5100.0), (9144.0, 5144.0), false);
+        assert_rect(bounds(&s, r), [9000.0, 5000.0, 9144.0, 5144.0]);
+        s.undo().unwrap();
+        // The right edge's middle: the left edge's middle stays, the layer scales evenly.
+        drag(&mut s, (9100.0, 5050.0), (9150.0, 5050.0), false);
+        assert_rect(bounds(&s, r), [9000.0, 4975.0, 9150.0, 5125.0]);
+    }
+}
+
+#[test]
+fn the_scale_origin_starts_at_the_centre() {
+    let mut s = Session::new();
+    assert_eq!(ex(&mut s, "tool.scaleAnchor", json!({}))["anchor"], json!("c"));
+    assert_eq!(s.tool.scale_anchor, (1, 1));
 }
 
 #[test]
@@ -118,7 +143,7 @@ fn the_live_readout_shows_the_factor_and_pivot() {
 }
 
 #[test]
-fn the_anchor_and_alt_choose_what_stays_put() {
+fn the_anchor_is_read_back_and_alt_scales_from_the_centre() {
     let mut s = Session::new();
     let r = rect(&mut s, 0.0, 0.0, 100.0, 50.0);
     ex(&mut s, "select.set", json!({"ids": [r]}));
@@ -126,12 +151,13 @@ fn the_anchor_and_alt_choose_what_stays_put() {
     assert_eq!(ex(&mut s, "tool.scaleAnchor", json!({"anchor": "c"}))["anchor"], json!("c"));
     assert_eq!(ex(&mut s, "tool.scaleAnchor", json!({}))["anchor"], json!("c"), "reads it back");
     assert!(s.execute("tool.scaleAnchor", &json!({"anchor": "nowhere"})).is_err());
+    // A drag pivots on the opposite corner whatever the anchor.
     drag(&mut s, (100.0, 50.0), (150.0, 75.0), false);
-    assert_rect(bounds(&s, r), [-50.0, -25.0, 150.0, 75.0]);
+    assert_rect(bounds(&s, r), [0.0, 0.0, 150.0, 75.0]);
     // Alt scales from the centre whatever the anchor.
     ex(&mut s, "tool.scaleAnchor", json!({"anchor": "tl"}));
     drag(&mut s, (150.0, 75.0), (125.0, 62.5), true);
-    assert_rect(bounds(&s, r), [-25.0, -12.5, 125.0, 62.5]);
+    assert_rect(bounds(&s, r), [25.0, 12.5, 125.0, 62.5]);
 }
 
 #[test]

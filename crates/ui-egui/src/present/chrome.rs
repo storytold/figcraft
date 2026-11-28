@@ -51,7 +51,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let mut action = None;
     // Typing a reply to a comment keeps the keys from the prototype, and so does the link notice
     // while it shows; Shift+C shows the comments.
-    let typing = ctx.egui_wants_keyboard_input() || pres.link_notice.is_some();
+    let typing = crate::a11y::field_focused(&ctx) || pres.link_notice.is_some();
     if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::C)) {
         action = Some(BarAction::Comments);
     }
@@ -94,12 +94,24 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         }
         _ => {}
     }
+    // Escape with no draft or thread open turns the comment mode off and keeps the presentation.
+    let cu = &app.ui.comments;
+    if live
+        && pres.view.comments
+        && pres.link_notice.is_none()
+        && cu.open.is_none()
+        && cu.draft.is_none()
+        && !cu.mention.active()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        pres.view.comments = false;
+    }
     if live
         && pres.view.comments
         && let Some((frame, place, clip)) = pres.shown
     {
         crate::comments::presenter(app, &ctx, frame, place, clip);
-    } else if app.ui.comments.open.is_some() {
+    } else if app.ui.comments.open.is_some() || app.ui.comments.draft.is_some() {
         app.ui.comments.close();
     }
     finish(app, &mut pres);

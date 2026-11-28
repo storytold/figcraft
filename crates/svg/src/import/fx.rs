@@ -70,10 +70,15 @@ impl Img {
     }
 }
 
-fn stack(bottom: Img, top: Img) -> Img {
+/// The most layers a stack may hold. Results that name earlier results can double a stack at each
+/// of up to 64 primitives; real shadow chains hold a handful of layers, and a longer stack isn't
+/// an effect list anyone wrote.
+const MAX_STACK: usize = 64;
+
+fn stack(bottom: Img, top: Img) -> Option<Img> {
     let mut v = bottom.into_layers();
     v.extend(top.into_layers());
-    Img::Stack(v)
+    (v.len() <= MAX_STACK).then_some(Img::Stack(v))
 }
 
 /// The effects `filters` amount to on a layer whose user space maps to the page by `world`; `None`
@@ -148,13 +153,16 @@ fn primitive(k: &Kind, get: &dyn Fn(&Input) -> Option<Img>) -> Option<Img> {
             let mut v = Vec::new();
             for i in m.inputs() {
                 v.extend(get(i)?.into_layers());
+                if v.len() > MAX_STACK {
+                    return None;
+                }
             }
             Img::Stack(v)
         }
         Kind::Blend(b) => {
             let (top, bottom) = (get(b.input1())?, get(b.input2())?);
             match b.mode() {
-                usvg::BlendMode::Normal => stack(bottom, top),
+                usvg::BlendMode::Normal => stack(bottom, top)?,
                 _ => return None,
             }
         }
@@ -162,7 +170,7 @@ fn primitive(k: &Kind, get: &dyn Fn(&Input) -> Option<Img>) -> Option<Img> {
             let sigma = (f64::from(d.std_dev_x().get()) + f64::from(d.std_dev_y().get())) / 2.0;
             let s = Sh { dx: f64::from(d.dx()), dy: f64::from(d.dy()), sigma, color: color(d.color(), d.opacity().get()), ..Sh::alpha() };
             match get(d.input())? {
-                Img::Layer(b) => stack(Img::Shadow(s), Img::Layer(b)),
+                Img::Layer(b) => stack(Img::Shadow(s), Img::Layer(b))?,
                 _ => return None,
             }
         }
@@ -190,7 +198,7 @@ fn tint(v: &[f32], s: Sh) -> Option<Img> {
 fn composite(a: Img, b: Img, op: CompositeOperator) -> Option<Img> {
     let tinted = |s: Sh, c: Color| Sh { color: Color::new(c.r, c.g, c.b, (c.a * s.color.a).clamp(0.0, 1.0)), ..s };
     Some(match (op, a, b) {
-        (CompositeOperator::Over, a, b) => stack(b, a),
+        (CompositeOperator::Over, a, b) => stack(b, a)?,
         (CompositeOperator::In, Img::Flood(c), Img::Shadow(s)) | (CompositeOperator::In, Img::Shadow(s), Img::Flood(c)) => Img::Shadow(tinted(s, c)),
         // A flood cut to everything but a shadow, then cut to the layer: an inner shadow.
         (CompositeOperator::Out, Img::Flood(c), Img::Shadow(s)) if !s.inner && !s.inverted => Img::Shadow(Sh { inverted: true, ..tinted(s, c) }),

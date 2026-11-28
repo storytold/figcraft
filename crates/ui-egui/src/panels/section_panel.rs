@@ -71,7 +71,7 @@ pub fn status_icon(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId]
         Some((DevStatus::None, _)) | None => t.icon,
         Some(_) => t.accent_text,
     };
-    icons::paint(ui.painter(), rect.shrink(5.0), Icon::Code, color);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(rect), Icon::Code, color);
     menu_popup(&resp).width(160.0).show(|ui| status_menu(app, ui, ids, doc));
 }
 

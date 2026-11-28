@@ -170,14 +170,29 @@ pub(super) fn outline_path(doc: &Document, n: &figcraft_doc::Node) -> Option<fig
     figcraft_render::node_outline(doc, n).map(|(p, _)| p)
 }
 
+/// How far, in screen points, the flattened outline of a path with `curves` curved segments may
+/// stray from it. Up to [`SMOOTH_CURVES`] curves it is 0.02, so the outline bends smoothly. Above
+/// that it grows with the count, up to 0.5 at 25 times as many. The outline is flattened again each
+/// frame the view moves or the layer is hovered, and egui tessellates every point each frame, so a
+/// heavy vector keeps about as many points as at 0.5.
+pub(super) fn outline_tolerance(curves: usize) -> f64 {
+    (0.02 * curves as f64 / SMOOTH_CURVES as f64).clamp(0.02, 0.5)
+}
+
+/// The most curved segments an outline flattens at the smooth 0.02 pt ([`outline_tolerance`]).
+pub(super) const SMOOTH_CURVES: usize = 200;
+
 /// [`outline_path`] on screen, flattened into polylines.
 fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos2>>> {
+    use figcraft_geom::kurbo::PathEl;
     let n = doc.node(id)?;
     let path = outline_path(doc, n)?;
     let w = doc.world_transform(id);
     let mut out = Vec::new();
     let mut cur: Vec<Pos2> = Vec::new();
-    figcraft_geom::kurbo::flatten(path.iter(), 0.5 / app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0), |el| {
+    let curves = path.elements().iter().filter(|el| matches!(el, PathEl::QuadTo(..) | PathEl::CurveTo(..))).count();
+    let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
+    figcraft_geom::kurbo::flatten(path.iter(), outline_tolerance(curves) / zoom, |el| {
         use figcraft_geom::kurbo::PathEl::*;
         match el {
             MoveTo(p) => {

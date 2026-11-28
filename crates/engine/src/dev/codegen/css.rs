@@ -126,6 +126,16 @@ pub(super) fn css(doc: &Document, id: NodeId) -> String {
 /// The CSS declarations for `n`'s own look and size, one per line; `hug` leaves out the width
 /// and/or height (they follow the content). Bound variables become `var(--name, value)`.
 pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bool)) -> String {
+    css_decls_impl(doc, n, t, hug, false)
+}
+
+/// The declarations around an embedded vector image: its SVG owns shadows and layer blur, so
+/// only the markup wrapper omits those. Standalone CSS and ordinary shapes keep them.
+pub(crate) fn css_decls_for_markup(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bool)) -> String {
+    css_decls_impl(doc, n, t, hug, true)
+}
+
+fn css_decls_impl(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bool), vector_svg: bool) -> String {
     let px = |v: f64| format!("{}px", num(v));
     let mut out = String::new();
     let mut put = |key: &str, value: String| out.push_str(&format!("{key}: {value};\n"));
@@ -160,23 +170,69 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
         put("transform", format!("rotate({}deg)", num(-rot)));
         put("transform-origin", "top left".into());
     }
-    for (i, p) in n.fills.iter().enumerate().filter(|(_, p)| p.visible) {
-        match &p.kind {
-            PaintKind::Solid { color } => {
-                let key = if matches!(n.kind, NodeKind::Text(_)) { "color" } else { "background" };
-                let c = color.with_alpha(color.a * p.opacity).to_css();
-                // A variable binds the first paint's colour.
-                put(key, if i == 0 { tok(doc, n, &["fill"], c, t) } else { c });
+    if matches!(n.kind, NodeKind::Text(_)) {
+        // Text: a solid is the ink (`color`), one per fill, so the last (top) one wins.
+        let top = n.fills.iter().rposition(|p| p.visible);
+        for (i, p) in n.fills.iter().enumerate().filter(|(_, p)| p.visible) {
+            match &p.kind {
+                PaintKind::Solid { color } => {
+                    let c = color.with_alpha(color.a * p.opacity).to_css();
+                    // A variable binds the first paint's colour.
+                    put("color", if i == 0 { tok(doc, n, &["fill"], c, t) } else { c });
+                }
+                PaintKind::Gradient(g) => {
+                    put("background", css_gradient(g, n.width, n.height, p.opacity));
+                    // A gradient on top fills the glyphs: clip the background to the text and clear the ink.
+                    // Under a later paint it must not hide that paint's colour, so it stays a plain background.
+                    if Some(i) == top {
+                        put("-webkit-background-clip", "text".into());
+                        put("background-clip", "text".into());
+                        put("color", "transparent".into());
+                    }
+                }
+                PaintKind::Image(_) => put("background", "url(image.png) center / cover".into()),
+                PaintKind::Pattern(_) => put("background", "url(pattern.png) repeat".into()),
             }
-            PaintKind::Gradient(g) => put("background", css_gradient(g, n.width, n.height, p.opacity)),
-            PaintKind::Image(_) => put("background", "url(image.png) center / cover".into()),
-            PaintKind::Pattern(_) => put("background", "url(pattern.png) repeat".into()),
+        }
+    } else {
+        // One `background` with every visible fill as a layer, top first (a document's fills run
+        // bottom to top, as the renderer paints them). CSS allows a plain colour only as the last
+        // layer, so a solid above another fill becomes a one-colour gradient.
+        let visible: Vec<(usize, &figcraft_color::Paint)> = if matches!(n.kind, NodeKind::Vector { .. }) {
+            // The SVG carries the path's fills; an image's box must not get a rectangular one.
+            Vec::new()
+        } else {
+            n.fills.iter().enumerate().filter(|(_, p)| p.visible).collect()
+        };
+        let layers: Vec<String> = visible
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(pos, (i, p))| match &p.kind {
+                PaintKind::Solid { color } => {
+                    let c = color.with_alpha(color.a * p.opacity).to_css();
+                    if pos > 0 {
+                        format!("linear-gradient(0deg, {c}, {c})")
+                    } else if *i == 0 {
+                        // A variable binds the first paint's colour.
+                        tok(doc, n, &["fill"], c, t)
+                    } else {
+                        c
+                    }
+                }
+                PaintKind::Gradient(g) => css_gradient(g, n.width, n.height, p.opacity),
+                PaintKind::Image(_) => "url(image.png) center / cover".into(),
+                PaintKind::Pattern(_) => "url(pattern.png) repeat".into(),
+            })
+            .collect();
+        if !layers.is_empty() {
+            put("background", layers.join(", "));
         }
     }
     for (key, value) in css_borders(doc, n, t) {
         put(&key, value);
     }
-    effect_decls(n, &mut put);
+    effect_decls(n, &mut put, vector_svg && matches!(n.kind, NodeKind::Vector { .. }));
     if let NodeKind::Text(tx) = &n.kind {
         text_decls(doc, n, tx, t, &mut put);
     }
@@ -233,12 +289,14 @@ fn layout_decls(doc: &Document, n: &Node, l: &figcraft_doc::AutoLayout, t: &mut 
     }
 }
 
-/// Shadows and blurs of `n`.
-fn effect_decls(n: &Node, put: &mut impl FnMut(&str, String)) {
+/// Shadows and blurs of `n`. `svg_owned` leaves shadows and layer blur to the embedded SVG;
+/// backdrop filters stay in CSS because the self-contained asset has no outer page behind it.
+fn effect_decls(n: &Node, put: &mut impl FnMut(&str, String), svg_owned: bool) {
     let shadows: Vec<String> = n
         .effects
         .iter()
         .filter(|e| e.visible)
+        .filter(|e| !(svg_owned && matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_))))
         .filter_map(|e| match &e.kind {
             EffectKind::DropShadow(s) => {
                 Some(format!("{}px {}px {}px {}px {}", num(s.offset.0), num(s.offset.1), num(s.radius), num(s.spread), s.color.to_css()))
@@ -255,7 +313,7 @@ fn effect_decls(n: &Node, put: &mut impl FnMut(&str, String)) {
     for e in n.effects.iter().filter(|e| e.visible) {
         match e.kind {
             // CSS blurs are uniform: a progressive blur has no CSS equivalent and is left out.
-            EffectKind::LayerBlur(ref b) if !b.is_progressive() => put("filter", format!("blur({}px)", num(b.radius / 2.0))),
+            EffectKind::LayerBlur(ref b) if !svg_owned && !b.is_progressive() => put("filter", format!("blur({}px)", num(b.radius / 2.0))),
             EffectKind::BackgroundBlur(ref b) if !b.is_progressive() => put("backdrop-filter", format!("blur({}px)", num(b.radius / 2.0))),
             // CSS has no refraction: the frost is the nearest.
             EffectKind::Glass(ref g) => put("backdrop-filter", format!("blur({}px)", num(g.sanitized().frost / 2.0))),
@@ -302,10 +360,12 @@ fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tok
         TextAlignH::Right => put("text-align", "right".into()),
         TextAlignH::Justified => put("text-align", "justify".into()),
     }
-    match tx.wrap_style {
-        figcraft_doc::WrapStyle::Auto => {}
-        figcraft_doc::WrapStyle::Balance => put("text-wrap", "balance".into()),
-        figcraft_doc::WrapStyle::Pretty => put("text-wrap", "pretty".into()),
+    // CSS has one `text-wrap` per element: written when every paragraph has the same one.
+    let wrap = (0..tx.paragraph_count()).map(|p| tx.para_wrap_style(p)).collect::<Vec<_>>();
+    match wrap.first().copied().filter(|w| wrap.iter().all(|x| x == w)) {
+        Some(figcraft_doc::WrapStyle::Balance) => put("text-wrap", "balance".into()),
+        Some(figcraft_doc::WrapStyle::Pretty) => put("text-wrap", "pretty".into()),
+        _ => {}
     }
     // A base direction forced on every paragraph (CSS has one per element).
     let dir = tx.paragraphs.first().map(|p| p.direction).filter(|d| tx.paragraphs.iter().all(|p| p.direction == *d));
@@ -331,6 +391,11 @@ fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tok
         TextDecoration::None => {}
         TextDecoration::Underline => put("text-decoration", "underline".into()),
         TextDecoration::Strikethrough => put("text-decoration", "line-through".into()),
+    }
+    match tx.position_of(s) {
+        figcraft_doc::TextPosition::None => {}
+        figcraft_doc::TextPosition::Superscript => put("vertical-align", "super".into()),
+        figcraft_doc::TextPosition::Subscript => put("vertical-align", "sub".into()),
     }
     decoration_decls(s, put);
     if tx.leading_trim == figcraft_doc::LeadingTrim::CapHeight {

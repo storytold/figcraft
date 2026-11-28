@@ -73,7 +73,12 @@ fn toast(app: &FigApp) -> &str {
 }
 
 fn expected_picker() -> Vec<(String, String, Vec<String>)> {
-    vec![("Save as".into(), "Prototype.figcraft".into(), vec!["figcraft".into(), "fig".into()])]
+    picker_named("Prototype")
+}
+
+/// The Save as picker suggesting `name` with the native extension.
+fn picker_named(name: &str) -> Vec<(String, String, Vec<String>)> {
+    vec![("Save as".into(), format!("{name}.figcraft"), vec!["figcraft".into(), "fig".into()])]
 }
 
 #[test]
@@ -124,7 +129,8 @@ fn native_paths_and_an_extensionless_default_save_native_files_and_show_the_writ
         let mut reopened = Session::empty();
         reopened.execute("file.open", &json!({"path": path})).unwrap();
         assert_eq!(reopened.doc().unwrap().nodes().count(), app.session.doc().unwrap().nodes().count());
-        assert_eq!(reopened.doc().unwrap().name, "Prototype");
+        let stem = std::path::Path::new(written).file_stem().unwrap().to_str().unwrap();
+        assert_eq!(reopened.doc().unwrap().name, stem, "named after the file it was saved as");
     }
 }
 
@@ -261,16 +267,19 @@ fn saving_legacy_fig_paths_keeps_the_success_toast_and_original_source_bytes() {
             let legacy_bytes = std::fs::read(&legacy).unwrap();
             app.save();
             app.poll_dialog(&egui::Context::default());
-            assert_eq!(*picks.lock().unwrap(), expected_picker());
+            assert_eq!(*picks.lock().unwrap(), picker_named("original"), "named after the file it was saved as first");
             assert_eq!(std::fs::read(&legacy).unwrap(), legacy_bytes);
             assert!(target.is_file());
             assert!(app.ui.last_error.is_none());
-            assert_eq!(app.session.doc().unwrap(), &before);
             if destination == "corrected.figcraft" {
+                let mut renamed = before.clone();
+                renamed.name = "corrected".into();
+                assert_eq!(app.session.doc().unwrap(), &renamed, "saved to another file: named after it");
                 assert_eq!(toast(&app), "Saved corrected.figcraft");
                 assert_eq!(app.session.ds().unwrap().path.as_deref(), target.to_str());
                 assert!(!app.session.ds().unwrap().is_dirty());
             } else {
+                assert_eq!(app.session.doc().unwrap(), &before, "an export leaves the document alone");
                 assert_eq!(toast(&app), "Exported copy.fig");
                 assert_eq!(app.session.ds().unwrap().path.as_deref(), Some(legacy_path.as_str()));
                 assert!(app.session.ds().unwrap().is_dirty());

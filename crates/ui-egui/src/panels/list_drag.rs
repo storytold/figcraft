@@ -75,8 +75,19 @@ impl ListDrag {
     /// Item `index` (model order) was laid out with its main row at `header`, covering `extent`
     /// (the header plus anything open under it). Its grip starts a drag carrying `label`.
     pub fn row(&mut self, ui: &mut Ui, index: usize, header: Rect, extent: Rect, label: impl FnOnce() -> String) {
+        self.grip_row(ui, index, header, extent, Sense::drag(), label);
+    }
+
+    /// [`Self::row`] whose grip also takes a click, the way a click beside the row's fields
+    /// highlights a fill, stroke or effect row: `true` when it was clicked. The grip senses the
+    /// click without being focusable, so Tab doesn't stop on it.
+    pub fn row_clicked(&mut self, ui: &mut Ui, index: usize, header: Rect, extent: Rect, label: impl FnOnce() -> String) -> bool {
+        self.grip_row(ui, index, header, extent, Sense::DRAG | Sense::CLICK, label)
+    }
+
+    fn grip_row(&mut self, ui: &mut Ui, index: usize, header: Rect, extent: Rect, sense: Sense, label: impl FnOnce() -> String) -> bool {
         let grip = Rect::from_min_max(header.min, pos2(header.min.x + PAD, header.max.y));
-        let resp = ui.interact(grip, grip_of(self.list, index), Sense::drag());
+        let resp = ui.interact(grip, grip_of(self.list, index), sense);
         // The handle shows while the pointer is over the row (or the row is being dragged).
         let shown = match self.dragging {
             Some(d) => d == index,
@@ -93,6 +104,7 @@ impl ListDrag {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         self.row_by(&resp, index, extent, label);
+        resp.clicked()
     }
 
     /// Item `index` laid out over `extent`, dragged by the whole row (`resp` senses drags; the

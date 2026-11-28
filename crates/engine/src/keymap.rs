@@ -161,7 +161,7 @@ pub static KEYS: &[Binding] = &[
     // Essential
     k(Essential, "app.actions", &["Cmd+K", "Cmd+/"]).label("Actions…"),
     k(Essential, "help.shortcuts", &["Ctrl+Shift+?"]).both(),
-    k(Essential, "view.toggleUi", &["Cmd+\\"]),
+    k(Essential, "view.toggleUi", &["Cmd+\\", "Cmd+."]),
     k(Essential, "view.fullscreen", &["Ctrl+Cmd+F"]).win(&["F11"]),
     k(Essential, "edit.pickColor", &["I", "Ctrl+C"]).win(&["I"]),
     k(Essential, "app.preferences", &["Cmd+,"]),
@@ -192,6 +192,7 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.pencil", &["Shift+P"]),
     k(Tools, "tool.text", &["T"]),
     k(Tools, "tool.comment", &["C"]),
+    k(Tools, "tool.annotation", &["Shift+T"]),
     k(Tools, "tool.shapeBuilder", &["Shift+M"]),
     // Board tools (on boards only), on keys nothing else uses.
     k(Tools, "tool.sticky", &["Q"]),
@@ -201,7 +202,11 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.highlighter", &["U"]),
     k(Tools, "tool.eraser", &["E"]),
     k(Tools, "tool.stamp", &["W"]),
-    k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"]).label("Board: a new sticky beside the selected one, or the next shape joined to it").both(),
+    k(Tools, "tool.codeBlock", &["`"]),
+    k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"])
+        .label("Board: a new sticky beside the selected one, the next shape joined to it, or a mind map node's next sibling")
+        .both(),
+    k(Tools, "board.mindMapAdd", &["Cmd+Enter"]).label("Board: a child of the selected mind map node").both(),
     // View
     // The documentation gives both keys for the pixel grid in different places.
     k(View, "view.pixelGrid", &["Shift+'", "Cmd+'"]),
@@ -312,6 +317,7 @@ pub static KEYS: &[Binding] = &[
     k(Edit, "edit.copyProperties", &["Alt+Cmd+C"]),
     k(Edit, "edit.pasteProperties", &["Alt+Cmd+V"]),
     k(Edit, "edit.copyAsPng", &["Shift+Cmd+C"]),
+    k(Edit, "edit.copyLink", &["Cmd+L"]),
     k(Edit, "file.export", &["Shift+Cmd+E"]),
     k(Edit, "file.import", &["Shift+Cmd+I"]),
     // Transform
@@ -364,6 +370,7 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Selection, "Pick select: next or previous layer", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
     (Selection, "Pick select: into a layer, out to its parent", "↵ / ⇧↵", "Enter / Shift+Enter"),
     (Selection, "Pick select: select the picked layer", "Space", "Space"),
+    (Text, "While editing text: next or previous text layer", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
     (Edit, "Duplicate by dragging", "⌥ drag", "Alt+drag"),
     (Transform, "Nudge (Shift: big nudge)", "← ↑ → ↓", "← ↑ → ↓"),
     (Transform, "Resize by the nudge amount", "⌘ arrows", "Ctrl+arrows"),
@@ -385,7 +392,7 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Prototype, "Presenting: cycle the size options", "Z", "Z"),
     (Prototype, "Presenting: comments", "C or ⇧C", "C or Shift+C"),
     (Prototype, "Presenting: full screen", "F", "F"),
-    (View, "Next or previous control in the focused region", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
+    (View, "Next or previous control", "⇥ / ⇧⇥", "Tab / Shift+Tab"),
     (View, "Move along the toolbar or the layer rows", "← → ↑ ↓", "← → ↑ ↓"),
     (View, "Back to the canvas from a focused region", "Esc", "Esc"),
 ];

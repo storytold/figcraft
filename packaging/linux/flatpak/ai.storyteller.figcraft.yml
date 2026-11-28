@@ -22,6 +22,8 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: figcraft
 finish-args:
+  # The shared updater inspects and updates this installation via flatpak-spawn --host.
+  - --talk-name=org.freedesktop.Flatpak
   - --filesystem=xdg-data/ArtCraft/versions:ro
   # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland

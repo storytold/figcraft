@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use craft_settings::Probe;
 use figcraft_engine::Prefs;
 
-use crate::services::{Desktop, settings_dir, write_prefs};
+use crate::launch_profile::Profile;
+use crate::services::{Desktop, config_dir_for, settings_dir, write_prefs};
 
 /// A fresh temporary folder with an `app` folder (the executable's) and an `appdata` folder (the
 /// platform's config folder).
@@ -97,5 +98,26 @@ fn figcraft_config_dir_names_the_folder_and_empty_means_none() {
 fn without_a_platform_folder_there_are_no_settings() {
     let root = root("nowhere");
     assert_eq!(settings_dir(&probe(&root, None, None)), None, "not the current directory");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A Nightly keeps every part of its user state in the profile the Launcher validated, whatever
+/// the stable rules would say: the preferences, the recovery copies and the plugins all hang off
+/// this one folder (`config_dir`), so the stable app's folder is never read or written.
+#[test]
+fn a_nightly_profile_replaces_every_stable_data_root() {
+    let root = root("nightly");
+    let profile = root.join("profiles").join("figcraft");
+    let stable = root.join("appdata").join("FigCraft");
+    write_prefs(&stable, &prefs("stable user"));
+    // The portable marker would decide for a stable start; the profile decides instead.
+    std::fs::write(root.join("app").join("portable"), "").unwrap();
+    let rules = probe(&root, Some(root.join("appdata")), None);
+    assert_eq!(config_dir_for(&Profile::Stable, &rules), Some(root.join("app").join("config")));
+    let nightly = Profile::NightlyV1(profile.clone());
+    assert_eq!(config_dir_for(&nightly, &rules), Some(profile.clone()));
+    assert_eq!(nightly.root(), Some(profile.as_path()));
+    assert_eq!(loaded_name(profile), None, "the stable preferences are not carried over");
+    assert_eq!(loaded_name(stable), Some("stable user".into()), "and they stay where they were");
     let _ = std::fs::remove_dir_all(&root);
 }

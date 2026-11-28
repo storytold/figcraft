@@ -812,6 +812,21 @@ fn generated_documents_round_trip() {
 }
 
 #[test]
+fn a_boolean_groups_corner_radius_round_trips() {
+    let mut doc = Document::new("t");
+    let page = doc.first_page().unwrap();
+    let g = doc.create(page, NodeKind::BooleanOp { op: BoolOp::Union }, "G", 0.0, 0.0, 0.0, 0.0).unwrap();
+    doc.create(g, NodeKind::Rectangle, "A", 0.0, 0.0, 200.0, 100.0).unwrap();
+    doc.create(g, NodeKind::Rectangle, "B", 150.0, 0.0, 100.0, 200.0).unwrap();
+    doc.fit_to_children(g).unwrap();
+    doc.get_mut(g).unwrap().corners = Corners { radii: [20.0; 4], smoothing: 0.6 };
+    let (back, _) = round_trip(&doc, "boolean radius");
+    let n = back.nodes().find(|n| matches!(n.kind, NodeKind::BooleanOp { .. })).unwrap();
+    assert!(n.corners.radii.iter().all(|r| (r - 20.0).abs() < 1e-4), "{:?}", n.corners);
+    assert!((n.corners.smoothing - 0.6).abs() < 1e-4, "{:?}", n.corners);
+}
+
+#[test]
 fn round_trip_keeps_the_details() {
     let doc = generate(3);
     let (back, warnings) = round_trip(&doc, "seed 3");
@@ -828,21 +843,38 @@ fn round_trip_keeps_the_details() {
 }
 
 #[test]
-fn fig_export_warns_when_region_paints_are_left_out() {
-    let mut doc = generate(3);
-    let Some(id) = doc.nodes().find_map(|node| match &node.kind {
-        NodeKind::Vector { network } if !network.regions.is_empty() => Some(node.id),
-        _ => None,
-    }) else {
-        panic!("generated document has no filled vector");
-    };
-    let node = doc.node_mut(id).unwrap();
-    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
-    let region = network.regions.first_mut().unwrap();
-    region.fills = Some(Vec::new());
+fn vector_region_paints_round_trip() {
+    let square = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y));
+    let mut doc = Document::new("regions");
+    let page = doc.first_page().unwrap();
+    let mut two = VectorNetwork::from_points(&square, true);
+    let again = two.regions[0].clone();
+    two.regions.push(again);
+    let mut half = Paint::solid(Color { r: 0.25, g: 0.5, b: 0.75, a: 1.0 });
+    half.opacity = 0.5;
+    let gradient = Paint::gradient(Gradient::default_for(GradientKind::Linear, Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }));
+    two.regions[0].fills = Some(vec![half, gradient]);
+    two.regions[1].fills = Some(Vec::new());
+    let id = doc.create(page, NodeKind::Vector { network: two }, "Painted", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.node_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let inherit = VectorNetwork::from_points(&square, true);
+    let id2 = doc.create(page, NodeKind::Vector { network: inherit }, "Inherits", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.node_mut(id2).unwrap().fills = vec![Paint::solid(Color::BLACK)];
 
-    let (_, warnings) = export(&doc, None).unwrap();
-    assert!(warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+    let (back, warnings) = round_trip(&doc, "region paints");
+    assert!(!warnings.iter().any(|w| w.contains("region")), "{warnings:?}");
+    let regions_of = |d: &Document, name: &str| match d.nodes().find(|n| n.name == name).map(|n| &n.kind) {
+        Some(NodeKind::Vector { network }) => network.regions.clone(),
+        k => panic!("{name}: {k:?}"),
+    };
+    let painted = regions_of(&back, "Painted");
+    assert_eq!(painted.len(), 2);
+    let fills = painted[0].fills.as_ref().expect("the first region keeps its paints");
+    assert_eq!(fills.len(), 2);
+    assert!(matches!(&fills[0].kind, PaintKind::Solid { .. }) && (fills[0].opacity - 0.5).abs() < 1e-6);
+    assert!(matches!(&fills[1].kind, PaintKind::Gradient(_)));
+    assert_eq!(painted[1].fills, Some(Vec::new()), "an unfilled region stays unfilled");
+    assert_eq!(regions_of(&back, "Inherits")[0].fills, None, "a region with no paints of its own still shows the layer's");
 }
 
 #[test]
@@ -860,16 +892,18 @@ fn fig_export_warns_when_inherited_region_paints_have_a_paint_frame() {
     let region = network.regions.first_mut().unwrap();
     region.fills = None;
     region.paint_space = Some(RegionPaintSpace { width: 20.0, height: 10.0, transform: Affine::translate((4.0, 8.0)) });
+    let text = "vector region paint frames were left out (their gradients and images follow the layer's box)";
 
     let (_, warnings) = export(&doc, None).unwrap();
-    assert!(warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+    assert!(warnings.iter().any(|warning| warning == text), "{warnings:?}");
 
     let mut plain = doc;
     let node = plain.node_mut(id).unwrap();
     let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
     network.regions[0].paint_space = None;
+    network.regions[0].fills = Some(vec![Paint::solid(Color::BLACK)]);
     let (_, warnings) = export(&plain, None).unwrap();
-    assert!(!warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+    assert!(!warnings.iter().any(|warning| warning.contains("region paint")), "{warnings:?}");
 }
 
 #[test]
@@ -953,6 +987,25 @@ fn closed_vector_geometry_is_written_with_its_corner_smoothing() {
     let NodeKind::Vector { network } = &v.kind else { panic!("vector") };
     let radii: Vec<f64> = network.vertices.iter().map(|x| x.radius).collect();
     assert_eq!(radii, vec![20.0, 0.0, 10.0, 0.0], "each point keeps its own radius");
+}
+
+#[test]
+fn sharp_points_on_a_rounded_vector_stay_sharp() {
+    // A point without a radius takes the layer's when read, so a sharp point on a vector with a
+    // layer radius is written with its own zero.
+    let mut doc = Document::new("sharp point");
+    let page = doc.first_page().unwrap();
+    let mut network = VectorNetwork::from_points(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y)), true);
+    for (v, r) in network.vertices.iter_mut().zip([8.0, 0.0, 8.0, 0.0]) {
+        v.radius = r;
+    }
+    let id = doc.create(page, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.node_mut(id).unwrap().corners.radii = [8.0; 4];
+    let (back, _) = round_trip(&doc, "sharp point");
+    let v = back.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).unwrap();
+    let NodeKind::Vector { network } = &v.kind else { panic!("vector") };
+    let radii: Vec<f64> = network.vertices.iter().map(|x| x.radius).collect();
+    assert_eq!(radii, vec![8.0, 0.0, 8.0, 0.0]);
 }
 
 #[test]

@@ -5,7 +5,7 @@ use figcraft_doc::{Document, ImagePreset, Node};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::{f64_of, get, num, req_index, req_string, req_targets, string, targets};
+use crate::params::{f64_of, get, req_index, req_string, req_targets, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -111,14 +111,26 @@ fn adjust(s: &mut Session, p: &Value) -> Result<Value> {
     if preset.is_none() && values.is_none() {
         return Err(bad(cmd, "pass `preset` or `filters`"));
     }
+    let has_target =
+        |paints: &[Paint]| paints.iter().enumerate().any(|(i, paint)| index.is_none_or(|k| k == i) && matches!(paint.kind, PaintKind::Image(_)));
     let doc = s.doc_mut()?;
     let mut changed = 0;
     for id in ids {
         let n = doc.get(id)?;
-        if !if stroke { &n.strokes } else { &n.fills }.iter().any(|x| matches!(x.kind, PaintKind::Image(_))) {
+        let character_fills = !stroke && crate::cmd::lists::has_character_fills(n);
+        let has_image = if character_fills {
+            crate::cmd::lists::character_fills(n).is_some_and(|fills| has_target(&fills))
+        } else {
+            has_target(if stroke { &n.strokes } else { &n.fills })
+        };
+        if !has_image {
             continue;
         }
         let n = doc.get_mut(id)?;
+        // A text fill row edits the list all characters show.
+        if character_fills {
+            crate::cmd::lists::take_character_fills(n);
+        }
         let list = if stroke { &mut n.strokes } else { &mut n.fills };
         let mut touched = false;
         for (i, paint) in list.iter_mut().enumerate() {
@@ -222,6 +234,9 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         // Like any paint edit, the layer leaves its paint style.
         n.styles.fill = None;
     }
+    if s.ds()?.vector_edit.is_some() {
+        crate::vectoredit::end(s)?;
+    }
     s.request_ui(cmd, json!({"id": id, "index": index}));
     Ok(json!({"id": id, "index": index}))
 }
@@ -236,7 +251,10 @@ fn save_preset(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => with_values(cmd, ImageFilters::NONE, v)?,
         None => {
             let stroke = strokes(cmd, p)?;
-            let index = num(p, "index").filter(|k| k.is_finite() && *k >= 0.0).map(|k| k as usize);
+            let index = match get(p, "index") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(req_index(cmd, p, "index")?),
+            };
             let doc = s.doc()?;
             targets(s, p)
                 .iter()

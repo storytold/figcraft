@@ -4,11 +4,14 @@
 //! list (dragging pages, dividers). Rows the documentation is silent on say so and pin today's
 //! behaviour. What the gestures do to the document is in the engine's `panels_behaviour_tests`.
 
+use std::sync::{Arc, Mutex};
+
 use egui::{Event, Id, Modifiers, Pos2};
 use figcraft_doc::NodeId;
 use figcraft_engine::Session;
 use serde_json::json;
 
+use crate::Services;
 use crate::layers_drag_tests::Ui;
 
 fn id(v: serde_json::Value) -> NodeId {
@@ -250,6 +253,54 @@ fn sweeping_across_eyes_and_padlocks_sets_several_layers() {
     let ra = u.row_at(a);
     click(&mut u, Pos2::new(eye, ra.y), Modifiers::NONE);
     assert!(!u.app.session.doc().unwrap().node(a).unwrap().visible, "a click on the eye hides that layer");
+}
+
+#[test]
+fn the_padlock_of_a_layer_in_a_locked_frame_is_inert() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Locked frame"})).unwrap());
+    let child = rect(&mut s, "child", 0.0, Some(frame));
+    s.execute("select.none", &json!({})).unwrap();
+    s.execute("object.toggleLock", &json!({"ids": [frame], "locked": true})).unwrap();
+    let mut u = Ui::new(s);
+    // Selecting the child reveals its row; then the selection goes away.
+    u.app.run("select.set", json!({"ids": [child]}));
+    u.frame(vec![]);
+    u.app.run("select.none", json!({}));
+    u.frame(vec![]);
+    let steps = u.app.session.undo_depth();
+    let r = u.row_at(child);
+    // The padlock column (see the sweep test above).
+    click(&mut u, Pos2::new(250.0, r.y), Modifiers::NONE);
+    assert!(!u.app.session.doc().unwrap().node(child).unwrap().locked, "the child's padlock doesn't lock it");
+    assert_eq!(u.app.session.undo_depth(), steps, "and adds no undo step");
+}
+
+#[test]
+fn a_padlock_sweep_skips_the_children_of_a_locked_frame() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Locked frame"})).unwrap());
+    let c1 = rect(&mut s, "child 1", 0.0, Some(frame));
+    let c2 = rect(&mut s, "child 2", 20.0, Some(frame));
+    let sibling = rect(&mut s, "sibling", 40.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    s.execute("object.toggleLock", &json!({"ids": [frame], "locked": true})).unwrap();
+    let mut u = Ui::new(s);
+    // Selecting a child reveals the frame's rows; then the selection goes away.
+    u.app.run("select.set", json!({"ids": [c1]}));
+    u.frame(vec![]);
+    u.app.run("select.none", json!({}));
+    u.frame(vec![]);
+    let padlock = 250.0;
+    let (rs, rc) = (u.row_at(sibling), u.row_at(c1));
+    let from = Pos2::new(padlock, rs.y);
+    u.frame(vec![Event::PointerMoved(from)]);
+    u.drag_to(from, Pos2::new(padlock, rc.y));
+    u.button(Pos2::new(padlock, rc.y), false);
+    let doc = u.app.session.doc().unwrap();
+    assert!(doc.node(sibling).unwrap().locked, "the sibling is locked by the sweep");
+    assert!(!doc.node(c1).unwrap().locked, "a child of a locked frame keeps its own flag");
+    assert!(!doc.node(c2).unwrap().locked, "so does the other child");
 }
 
 #[test]
@@ -595,6 +646,112 @@ fn the_page_menus_rename_starts_with_the_keyboard_in_the_name() {
     assert_clicking_page_opens_it(&mut u, p2, p1, r2);
 }
 
+/// Right-clicks `at` in the pages list and returns the menu's "Set as opening page" item, if shown.
+fn opening_item(u: &mut Ui, at: Pos2) -> Option<Pos2> {
+    u.frame(vec![
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+    let shapes: Vec<egui::Shape> = u.frame_output(vec![]).shapes.into_iter().map(|c| c.shape).collect();
+    crate::live_tests::has_text(&shapes, "Set as opening page").then(|| crate::live_tests::text_center(&shapes, "Set as opening page"))
+}
+
+/// The pages list's menu offers "Set as opening page" on a page and not on a divider, and using it
+/// writes the document's opening page without moving the viewer's own page (#1817).
+#[test]
+fn the_page_menu_sets_the_opening_page_and_not_on_dividers() {
+    let mut s = Session::new();
+    let p1 = s.page().unwrap();
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    let div = id(s.execute("page.add", &json!({"name": "-"})).unwrap());
+    s.execute("page.move", &json!({"id": div, "index": 1})).unwrap();
+    s.execute("page.select", &json!({"id": p1})).unwrap();
+    let mut u = Ui::new(s);
+    let (r1, r2) = (page_row(&mut u, p1, p2), page_row(&mut u, p2, p1));
+    let mid = Pos2::new(r1.x, (r1.y + r2.y) / 2.0);
+    u.app.session.execute("page.select", &json!({"id": p1})).unwrap();
+    u.frame(vec![]);
+    assert_eq!(opening_item(&mut u, mid), None, "a divider has no such item");
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    let item = opening_item(&mut u, r2).expect("a page has the item (and its menu is open)");
+    assert_ne!(u.app.session.doc().unwrap().current_page, Some(p2), "not the opening page yet");
+    u.frame(vec![Event::PointerMoved(item)]);
+    u.button(item, true);
+    u.button(item, false);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.doc().unwrap().current_page, Some(p2), "the document's opening page is the clicked page");
+    assert_eq!(u.app.session.page().unwrap(), p1, "the viewer's own page stays");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+/// Right-clicks `at` in the pages list and returns the menu's "Copy link to page" item, if shown.
+fn copy_link_item(u: &mut Ui, at: Pos2) -> Option<Pos2> {
+    u.frame(vec![
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+    let shapes: Vec<egui::Shape> = u.frame_output(vec![]).shapes.into_iter().map(|c| c.shape).collect();
+    crate::live_tests::has_text(&shapes, "Copy link to page").then(|| crate::live_tests::text_center(&shapes, "Copy link to page"))
+}
+
+/// The pages list's menu offers "Copy link to page" on a page and not on a divider, and using it
+/// copies the page's node link to the clipboard and shows a toast without moving the viewer's page (#2379).
+#[test]
+fn the_page_menu_copies_link_to_page_and_not_on_dividers() {
+    let mut s = Session::new();
+    let p1 = s.page().unwrap();
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    let div = id(s.execute("page.add", &json!({"name": "-"})).unwrap());
+    s.execute("page.move", &json!({"id": div, "index": 1})).unwrap();
+    s.execute("page.select", &json!({"id": p1})).unwrap();
+    let mut u = Ui::new(s);
+    let copied = Arc::new(Mutex::new(Vec::new()));
+    struct Clip(Arc<Mutex<Vec<String>>>);
+    impl Services for Clip {
+        fn clipboard_set_text(&mut self, s: &str) {
+            self.0.lock().unwrap().push(s.to_string());
+        }
+    }
+    u.app.services = Box::new(Clip(copied.clone()));
+    let (r1, r2) = (page_row(&mut u, p1, p2), page_row(&mut u, p2, p1));
+    let mid = Pos2::new(r1.x, (r1.y + r2.y) / 2.0);
+    u.app.session.execute("page.select", &json!({"id": p1})).unwrap();
+    u.frame(vec![]);
+
+    // A divider has no "Copy link to page" menu item.
+    assert_eq!(copy_link_item(&mut u, mid), None, "a divider has no such item");
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+
+    // A normal page has "Copy link to page".
+    let item = copy_link_item(&mut u, r2).expect("a page has the item (and its menu is open)");
+    u.frame(vec![Event::PointerMoved(item)]);
+    u.button(item, true);
+    u.button(item, false);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+
+    // Checks:
+    // 1. Link format is `figcraft://node/<p2_id>`
+    assert_eq!(*copied.lock().unwrap(), vec![format!("figcraft://node/{}", p2.0)]);
+    // 2. Toast "Link copied" is shown
+    assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Link copied"));
+    // 3. Document opening page and viewer's current page are unaffected
+    assert_ne!(u.app.session.doc().unwrap().current_page, Some(p2));
+    assert_eq!(u.app.session.page().unwrap(), p1);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
 /// The y of the line between the pages and the layers, above the layers' row at `layer` (found by
 /// the resize cursor it shows when hovered).
 fn pages_edge_at(u: &mut Ui, layer: f32) -> f32 {
@@ -792,4 +949,159 @@ fn search_fields_keep_their_text_in_the_middle() {
     u.app.ui.left_tab = crate::LeftTab::Assets;
     let off = off_centre(&mut u, "Search assets");
     assert!(off < 1.0, "Search assets is {off} points off the middle");
+}
+
+#[test]
+fn a_shift_range_across_frames_keeps_a_frame_and_not_its_covered_children() {
+    let mut s = Session::new();
+    let frame1 = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Frame 1"})).unwrap());
+    let rect2 = rect(&mut s, "Rect 2", 0.0, Some(frame1));
+    let rect3 = rect(&mut s, "Rect 3", 30.0, Some(frame1));
+    let frame2 = id(s.execute("frame.create", &json!({"x": 200, "y": 0, "width": 100, "height": 100, "name": "Frame 2"})).unwrap());
+    let rect4 = rect(&mut s, "Rect 4", 0.0, Some(frame2));
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame1, frame2]);
+    u.frame(vec![]);
+    let (row4, row2) = (u.row_at(rect4), u.row_at(rect2));
+    click(&mut u, row4, Modifiers::NONE);
+    click(&mut u, row2, SHIFT);
+    assert_eq!(
+        sorted(u.app.session.selection()),
+        sorted(vec![rect4, frame1]),
+        "the range keeps Frame 1 and drops its covered children {rect3:?} and {rect2:?}"
+    );
+}
+
+#[test]
+fn a_second_shift_click_after_a_reverse_cross_frame_range_extends_the_range() {
+    let mut s = Session::new();
+    let frame1 = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Frame 1"})).unwrap());
+    let rect2 = rect(&mut s, "Rect 2", 0.0, Some(frame1));
+    let rect3 = rect(&mut s, "Rect 3", 30.0, Some(frame1));
+    let frame2 = id(s.execute("frame.create", &json!({"x": 200, "y": 0, "width": 100, "height": 100, "name": "Frame 2"})).unwrap());
+    let rect4 = rect(&mut s, "Rect 4", 0.0, Some(frame2));
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame1, frame2]);
+    u.frame(vec![]);
+    let (row2, row4, row3) = (u.row_at(rect2), u.row_at(rect4), u.row_at(rect3));
+    click(&mut u, row2, Modifiers::NONE);
+    click(&mut u, row4, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![rect4, frame1]));
+    // Rows run Frame 2, Rect 4, Frame 1, Rect 3, Rect 2: the range from Rect 2 to Rect 3 is those two.
+    click(&mut u, row3, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![rect3, rect2]), "the range still runs from Rect 2, not a toggle");
+}
+
+#[test]
+fn a_shift_range_inside_one_frame_is_unchanged() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "F"})).unwrap());
+    let kids = [0.0, 30.0, 60.0].map(|x| rect(&mut s, "k", x, Some(frame)));
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.insert(frame);
+    u.frame(vec![]);
+    let (first, last) = (u.row_at(kids[0]), u.row_at(kids[2]));
+    click(&mut u, first, Modifiers::NONE);
+    click(&mut u, last, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(kids.to_vec()));
+}
+
+/// The centre of `id`'s icon, a top-level row: the row's left edge is the first point from the
+/// left at which the pointer is over it, and the icon's centre is 8 (margin) + 4 + 22 points
+/// further right.
+fn icon_of(u: &mut Ui, id: NodeId) -> Pos2 {
+    let y = u.row_at(id).y;
+    let mut left = None;
+    for x in 0..150 {
+        let p = Pos2::new(x as f32, y);
+        u.app.session.ds_mut().unwrap().hover = None;
+        u.frame(vec![Event::PointerMoved(p)]);
+        if u.app.session.ds().unwrap().hover == Some(id) {
+            left = Some(x as f32);
+            break;
+        }
+    }
+    Pos2::new(left.expect("the row has a left edge") + 34.0, y)
+}
+
+/// Measured in Figma's web app, 2026-11-12: a double-click on a layer's icon zooms the canvas to
+/// the layer and starts no rename (a double-click on the name renames, as before).
+#[test]
+fn a_double_click_on_a_layers_icon_zooms_to_it_instead_of_renaming() {
+    let mut s = Session::new();
+    rect(&mut s, "near", 0.0, None);
+    let far = rect(&mut s, "far", 3000.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let icon = icon_of(&mut u, far);
+    let view = |u: &Ui| {
+        let v = &u.app.session.ds().unwrap().view;
+        (v.cx, v.cy, v.zoom)
+    };
+    let before = view(&u);
+    for _ in 0..2 {
+        u.button(icon, true);
+        u.button(icon, false);
+    }
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.rename, None, "a double-click on the icon renames nothing");
+    assert_eq!(u.app.session.selection(), vec![far], "the layer is selected");
+    let after = view(&u);
+    assert_ne!(after, before, "the view moved");
+    u.app.session.execute("view.set", &json!({"cx": before.0, "cy": before.1, "zoom": before.2})).unwrap();
+    u.app.session.execute("view.zoomSelection", &json!({})).unwrap();
+    assert_eq!(after, view(&u), "the view frames the layer, as view.zoomSelection does");
+}
+
+/// A double-click's release is also a click on the row; with Ctrl held it must not toggle the layer
+/// back out of the selection the zoom just made, nor can Shift restore a range.
+#[test]
+fn an_icon_double_click_keeps_its_selection_when_a_modifier_is_held() {
+    let mut s = Session::new();
+    rect(&mut s, "near", 0.0, None);
+    let far = rect(&mut s, "far", 3000.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let icon = icon_of(&mut u, far);
+    let before = (u.app.session.ds().unwrap().view.cx, u.app.session.ds().unwrap().view.zoom);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: CMD };
+            u.frame_with(vec![Event::PointerMoved(icon), e], CMD);
+        }
+    }
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), vec![far], "the layer stays selected");
+    assert_eq!(u.app.ui.rename, None);
+    let v = &u.app.session.ds().unwrap().view;
+    assert_ne!((v.cx, v.zoom), before, "the view frames the layer");
+}
+
+/// A Shift-double-click on an icon leaves just that layer selected, and it becomes the anchor: the
+/// next Shift-click selects the range from it, not a toggle.
+#[test]
+fn an_icon_double_click_becomes_the_range_anchor() {
+    let (mut u, [a, b, c, d]) = four();
+    u.frame(vec![]);
+    let a_row = u.row_at(a);
+    click(&mut u, a_row, Modifiers::NONE);
+    let icon = icon_of(&mut u, b);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: SHIFT };
+            u.frame_with(vec![Event::PointerMoved(icon), e], SHIFT);
+        }
+    }
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.selection(), vec![b], "the icon's layer is all that is selected");
+    let d_row = u.row_at(d);
+    click(&mut u, d_row, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![b, c, d]), "the range from the icon's layer");
 }

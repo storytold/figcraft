@@ -52,6 +52,10 @@ pub enum PickerTarget {
         id: String,
         index: usize,
     },
+    /// The ink a drawing tool's new strokes get (`tool.ink`).
+    Ink {
+        tool: figcraft_engine::ToolId,
+    },
     /// A colour field of a plugin's panel or parameters form. A drag only shows `pending`; the
     /// plugin hears of the colour when the drag ends.
     PluginField {
@@ -114,6 +118,10 @@ fn current_paint(app: &FigApp, target: &PickerTarget) -> Option<Paint> {
             _ => None,
         },
         PickerTarget::Style { id, index } => style_paints(doc, id)?.get(*index).cloned(),
+        PickerTarget::Ink { tool } => {
+            let ink = app.session.tool.ink(*tool)?;
+            Some(Paint::solid(ink.color.unwrap_or(figcraft_engine::tools::PENCIL_STROKE.0)))
+        }
         PickerTarget::PluginField { plugin, control, pending } => {
             let hex = match pending {
                 Some(hex) => hex.clone(),
@@ -157,6 +165,10 @@ fn paint_command(app: &FigApp, target: &PickerTarget, paint: &Paint) -> Option<(
                 *slot = paint.clone();
             }
             ("style.update", json!({"style": id, "value": paints}))
+        }
+        PickerTarget::Ink { tool } => {
+            let c = paint.solid_color().unwrap_or(Color::BLACK);
+            ("tool.ink", json!({"tool": tool.id(), "color": c.to_css_hex()}))
         }
     })
 }
@@ -782,6 +794,9 @@ fn image_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &
         });
         if icons::button(ui, Icon::Rotate, 24.0, false, tr("Rotate 90°")).clicked() {
             img.rotation = (img.rotation + 1) % 4;
+            if img.scale_mode == ImageScaleMode::Crop {
+                img.crop = None;
+            }
             paint.kind = PaintKind::Image(img.clone());
             write(app, target, paint, false);
         }
@@ -974,6 +989,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let stale = match &target {
         PickerTarget::Paint { ids, .. } | PickerTarget::Effect { ids, .. } => *ids != app.session.selection(),
         PickerTarget::TextRange { id, .. } => !app.session.selection().contains(id),
+        PickerTarget::Ink { tool } => *tool != app.session.tool.tool,
         _ => false,
     };
     let current = if stale { None } else { current_paint(app, &target) };
@@ -1016,7 +1032,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let picking = app.session.tool.pick_only || app.session.tool.picked.is_some();
     // Nor may a press on the open gradient's handles or stops on the canvas: they are this picker's
     // controls, and the canvas took the press before the picker drew (#1852).
-    let own = picking || crate::handles::gradient_dragging(ctx);
+    // Nor may one on the crop of an image paint held in Crop mode (#2307).
+    let own = picking || crate::handles::gradient_dragging(ctx) || crate::handles::crop_dragging(ctx);
     pop = pop.close_on_outside(!own);
     // Only the opening control is held out: any other sidebar or canvas press dismisses it.
     let mut held: Vec<Rect> = app.ui.picker_button.into_iter().collect();
@@ -1030,14 +1047,22 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         // Paint type.
         if !matches!(
             target,
-            PickerTarget::Effect { .. } | PickerTarget::PageBackground | PickerTarget::Variable { .. } | PickerTarget::PluginField { .. }
+            PickerTarget::Effect { .. }
+                | PickerTarget::PageBackground
+                | PickerTarget::Variable { .. }
+                | PickerTarget::PluginField { .. }
+                | PickerTarget::Ink { .. }
         ) {
             paint_type_row(ui, app, &target, &mut paint);
         }
         // The paint's own blend mode, with the paints and layers under it.
         if !matches!(
             target,
-            PickerTarget::Effect { .. } | PickerTarget::PageBackground | PickerTarget::Variable { .. } | PickerTarget::PluginField { .. }
+            PickerTarget::Effect { .. }
+                | PickerTarget::PageBackground
+                | PickerTarget::Variable { .. }
+                | PickerTarget::PluginField { .. }
+                | PickerTarget::Ink { .. }
         ) {
             blend_row(ui, app, &target, &mut paint);
         }

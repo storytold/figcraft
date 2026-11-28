@@ -9,7 +9,7 @@ fn board_schema() -> Schema {
 
 /// [`board_schema`] over another base schema.
 fn board_schema_of(base: &str) -> Schema {
-    Schema::parse(&base.replace(
+    Schema::parse(&base.replace("enum ShapeWithTextType SQUARE ELLIPSE", "enum ShapeWithTextType SQUARE ROUNDED_RECTANGLE ELLIPSE DIAMOND TRIANGLE_UP TRIANGLE_DOWN PARALLELOGRAM_RIGHT PARALLELOGRAM_LEFT TRAPEZOID PENTAGON HEXAGON OCTAGON STAR PLUS ARROW_LEFT ARROW_RIGHT CHEVRON SPEECH_BUBBLE ENG_DATABASE DOCUMENT_SINGLE PREDEFINED_PROCESS MANUAL_INPUT INTERNAL_STORAGE ENG_QUEUE ENG_FILE ENG_FOLDER SHIELD DOCUMENT_MULTIPLE SUMMING_JUNCTION OR").replace(
         "\nmessage Blob ",
         ", GeneratedData nodeGenerationData, GeneratedData derivedImmutableFrameData, string textAlignHorizontal, string textAlignVertical\nmessage GeneratedData NodeChange[] overrides, uint version\nmessage Blob ",
     ))
@@ -446,10 +446,277 @@ fn a_jam_file_imports_like_a_fig() {
         let (doc, warnings) = import(&bytes, "Synthetic board").unwrap();
         assert_eq!(doc.kind, figcraft_doc::FileKind::Board, "a FigJam whiteboard opens as a board");
         let note = named(&doc, "Board object");
-        assert!(matches!(note.kind, NodeKind::Frame) && note.children.len() == 3, "the sticky with its background, note and author");
+        assert!(matches!(note.kind, NodeKind::Frame) && note.children.len() == 2, "the sticky is native: its note and author");
+        assert_eq!(note.board, Some(figcraft_doc::BoardItem::Sticky { author: "Test Author".into() }));
         assert!(matches!(named(&doc, "Synthetic table").kind, NodeKind::Frame));
         assert!(doc.nodes().all(|n| n.name != "Unknown object"), "left out");
         assert!(warnings.iter().any(|w| w.contains("table layers import as")), "{warnings:?}");
         assert!(warnings.iter().any(|w| w.contains("SYNTHETIC_JAM_ONLY")), "a note says what was left out: {warnings:?}");
     }
+}
+
+/// Import `layer` through the public importer as a FigJam whiteboard (`fig-jam.` header).
+fn jam(layer: Kv<'static>) -> (Document, Vec<String>) {
+    let mut bytes = canvas(&board_schema(), &message(layer));
+    bytes.splice(..8, *b"fig-jam.");
+    import(&bytes, "Synthetic board").unwrap()
+}
+
+/// On a whiteboard a sticky is a native sticky: its colour, size, text and author come along.
+#[test]
+fn a_jam_sticky_is_a_native_sticky_with_its_colour_text_and_author() {
+    let (doc, warnings) = jam(board_node("STICKY"));
+    assert_eq!(doc.kind, figcraft_doc::FileKind::Board);
+    let frame = named(&doc, "Board object");
+    assert_eq!(frame.board, Some(figcraft_doc::BoardItem::Sticky { author: "Test Author".into() }));
+    assert_eq!(frame.fills[0].solid_color().unwrap().to_rgba8(), [255, 191, 64, 255]);
+    assert_eq!((frame.width, frame.height), (240.0, 240.0));
+    assert_eq!(frame.opacity, 0.5);
+    let layout = frame.layout.as_ref().expect("sticky auto layout");
+    assert_eq!(layout.padding, [20.0; 4]);
+    assert_eq!(frame.child_layout.min_h, Some(240.0));
+    assert_eq!(frame.children.len(), 2, "the note and its author, no background vector");
+    let texts: Vec<_> = frame.children.iter().map(|id| doc.node(*id).unwrap()).collect();
+    assert!(texts.iter().all(|n| n.kind.text().is_some()));
+    let note = texts[0].kind.text().unwrap();
+    assert_eq!(note.characters, "Olá\nIdea");
+    assert_eq!(note.style.font_size, 24.0);
+    assert!(note.runs.iter().any(|r| r.style.font_size == 18.0), "inline styles survive");
+    let author = texts[1].kind.text().unwrap();
+    assert_eq!(author.characters, "Test Author");
+    assert_eq!(author.style.font_size, 12.0);
+    assert!(!warnings.iter().any(|w| w.contains("skipped")), "{warnings:?}");
+}
+
+/// A sticky whose author line is not saved has an empty author and just its note.
+#[test]
+fn a_jam_sticky_without_an_author_line_has_no_author() {
+    let mut layer = board_node("STICKY");
+    let background = record(0, vec![("fillPaints", arr(vec![solid(1.0, 0.75, 0.25)]))]);
+    set(&mut layer, "nodeGenerationData", o(vec![("overrides", arr(vec![background, record(1, text("Olá\nIdea", 24.0))]))]));
+    let (doc, _) = jam(layer);
+    let frame = named(&doc, "Board object");
+    assert_eq!(frame.children.len(), 1);
+    let Some(figcraft_doc::BoardItem::Sticky { author }) = &frame.board else { panic!("{:?}", frame.board) };
+    assert!(author.is_empty());
+}
+
+/// A sticky record that isn't complete keeps today's generated layers and no board item.
+#[test]
+fn a_damaged_jam_sticky_keeps_the_generated_layers() {
+    let gradient = o(vec![("type", e("GRADIENT_LINEAR")), ("visible", Kv::Bool(true))]);
+    let cases: Vec<Kv<'static>> = {
+        let mut v = Vec::new();
+        // Layout version 2.
+        let mut a = board_node("STICKY");
+        set(&mut a, "derivedImmutableFrameData", o(vec![("version", u(2))]));
+        v.push(a);
+        // Background record missing.
+        let mut b = board_node("STICKY");
+        set(&mut b, "nodeGenerationData", o(vec![("overrides", arr(vec![record(1, text("Olá", 24.0))]))]));
+        v.push(b);
+        // A stroke on the background.
+        let mut c = board_node("STICKY");
+        let stroked = record(0, vec![("fillPaints", arr(vec![solid(1.0, 0.75, 0.25)])), ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)]))]);
+        set(&mut c, "nodeGenerationData", o(vec![("overrides", arr(vec![stroked, record(1, text("Olá", 24.0))]))]));
+        v.push(c);
+        // A gradient on the background.
+        let mut d = board_node("STICKY");
+        let graded = record(0, vec![("fillPaints", arr(vec![gradient]))]);
+        set(&mut d, "nodeGenerationData", o(vec![("overrides", arr(vec![graded, record(1, text("Olá", 24.0))]))]));
+        v.push(d);
+        // Blank note.
+        let mut f = board_node("STICKY");
+        let background = record(0, vec![("fillPaints", arr(vec![solid(1.0, 0.75, 0.25)]))]);
+        set(&mut f, "nodeGenerationData", o(vec![("overrides", arr(vec![background, record(1, text("  ", 24.0))]))]));
+        v.push(f);
+        v
+    };
+    for (i, layer) in cases.into_iter().enumerate() {
+        let (as_fig, _) = imported(layer.clone());
+        let (doc, _) = jam(layer);
+        let frame = named(&doc, "Board object");
+        assert!(frame.board.is_none(), "case {i}");
+        assert_eq!(frame.children.len(), named(&as_fig, "Board object").children.len(), "case {i}: the generated layers, as in a .fig");
+    }
+}
+
+/// The same sticky in a `.fig` stays the design frame it always was.
+#[test]
+fn a_fig_sticky_stays_a_design_frame() {
+    let (doc, _) = imported(board_node("STICKY"));
+    let frame = named(&doc, "Board object");
+    assert!(frame.board.is_none());
+    assert_eq!(frame.children.len(), 3);
+}
+
+/// `board_node("SHAPE_WITH_TEXT")` of one FigJam kind.
+fn shape_node(kind: &'static str) -> Kv<'static> {
+    let mut layer = board_node("SHAPE_WITH_TEXT");
+    set(&mut layer, "shapeWithTextType", e(kind));
+    layer
+}
+
+/// On a whiteboard a diamond is a native shape: FigCraft draws its outline and its text sits inside.
+#[test]
+fn a_jam_diamond_is_a_native_shape_drawn_by_figcraft() {
+    let (doc, warnings) = jam(shape_node("DIAMOND"));
+    let frame = named(&doc, "Board object");
+    assert_eq!(frame.board, Some(figcraft_doc::BoardItem::Shape { shape: figcraft_doc::BoardShape::Diamond }));
+    assert!(frame.fills.is_empty());
+    assert_eq!((frame.width, frame.height), (240.0, 240.0));
+    assert_eq!(frame.layout.as_ref().expect("shape auto layout").padding, [0.25 * 240.0; 4]);
+    assert_eq!(
+        (frame.child_layout.sizing_h, frame.child_layout.sizing_v),
+        (figcraft_doc::Sizing::Fixed, figcraft_doc::Sizing::Fixed),
+        "a fixed box, as a shape made here: it must not hug its text"
+    );
+    assert_eq!(frame.children.len(), 2, "the outline and the text: {warnings:?}");
+    let outline = doc.node(frame.children[0]).unwrap();
+    let NodeKind::Vector { network } = &outline.kind else { panic!("{:?}", outline.kind) };
+    assert_eq!(*network, figcraft_doc::VectorNetwork::from_path(&figcraft_doc::BoardShape::Diamond.path(240.0, 240.0)));
+    assert_eq!(outline.fills[0].solid_color().unwrap().to_rgba8(), [255, 191, 64, 255]);
+    assert!(outline.child_layout.absolute);
+    assert_eq!(outline.constraints.horizontal, figcraft_doc::HConstraint::Scale);
+    assert_eq!(outline.constraints.vertical, figcraft_doc::VConstraint::Scale);
+    let label = doc.node(frame.children[1]).unwrap().kind.text().unwrap();
+    assert_eq!(label.characters, "Olá\nIdea");
+    assert_eq!(label.align_h, figcraft_doc::TextAlignH::Center);
+}
+
+/// A shape past the importer's size cap is drawn at the capped size, so its outline stays inside
+/// its frame.
+#[test]
+fn a_jam_shape_past_the_size_cap_draws_its_outline_at_the_cap() {
+    let mut layer = shape_node("DIAMOND");
+    set(&mut layer, "size", xy(2_000_000.0, 2_000_000.0));
+    let (doc, warnings) = jam(layer);
+    let frame = named(&doc, "Board object");
+    assert_eq!(frame.board, Some(figcraft_doc::BoardItem::Shape { shape: figcraft_doc::BoardShape::Diamond }), "{warnings:?}");
+    assert_eq!((frame.width, frame.height), (1e6, 1e6));
+    let outline = doc.node(frame.children[0]).unwrap();
+    let NodeKind::Vector { network } = &outline.kind else { panic!("{:?}", outline.kind) };
+    assert_eq!(*network, figcraft_doc::VectorNetwork::from_path(&figcraft_doc::BoardShape::Diamond.path(1e6, 1e6)));
+}
+
+/// 23 of FigJam's 30 shape kinds have a FigCraft outline; the other 7 stay frames and say which.
+#[test]
+fn every_figjam_shape_kind_maps_or_stays_a_frame() {
+    let kinds = [
+        "SQUARE",
+        "ROUNDED_RECTANGLE",
+        "ELLIPSE",
+        "DIAMOND",
+        "TRIANGLE_UP",
+        "TRIANGLE_DOWN",
+        "PARALLELOGRAM_RIGHT",
+        "PARALLELOGRAM_LEFT",
+        "TRAPEZOID",
+        "PENTAGON",
+        "HEXAGON",
+        "OCTAGON",
+        "STAR",
+        "PLUS",
+        "ARROW_LEFT",
+        "ARROW_RIGHT",
+        "CHEVRON",
+        "SPEECH_BUBBLE",
+        "ENG_DATABASE",
+        "DOCUMENT_SINGLE",
+        "PREDEFINED_PROCESS",
+        "MANUAL_INPUT",
+        "INTERNAL_STORAGE",
+        "ENG_QUEUE",
+        "ENG_FILE",
+        "ENG_FOLDER",
+        "SHIELD",
+        "DOCUMENT_MULTIPLE",
+        "SUMMING_JUNCTION",
+        "OR",
+    ];
+    assert_eq!(kinds.len(), 30);
+    let mut mapped = 0;
+    for kind in kinds {
+        let table = super::map::board_shape(kind);
+        let (doc, warnings) = jam(shape_node(kind));
+        let frame = named(&doc, "Board object");
+        if let Some(shape) = table {
+            mapped += 1;
+            assert_eq!(frame.board, Some(figcraft_doc::BoardItem::Shape { shape }), "{kind}");
+        } else {
+            assert!(frame.board.is_none(), "{kind}");
+            assert!(warnings.iter().any(|w| w.contains(kind) && w.contains("no FigCraft outline")), "{kind}: {warnings:?}");
+        }
+    }
+    assert_eq!(mapped, 23);
+}
+
+/// A square keeps the paints and weight the file gave it, as read.
+#[test]
+fn a_square_keeps_its_paints_and_weight() {
+    let mut layer = shape_node("SQUARE");
+    let background =
+        record(0, vec![("fillPaints", arr(vec![solid(1.0, 1.0, 1.0)])), ("strokePaints", arr(vec![solid(0.5, 0.5, 0.5)])), ("strokeWeight", f(4.0))]);
+    set(&mut layer, "nodeGenerationData", o(vec![("overrides", arr(vec![background, record(1, text("Olá", 16.0))]))]));
+    let (doc, _) = jam(layer);
+    let frame = named(&doc, "Board object");
+    assert_eq!(frame.board, Some(figcraft_doc::BoardItem::Shape { shape: figcraft_doc::BoardShape::Rectangle }));
+    let outline = doc.node(frame.children[0]).unwrap();
+    assert_eq!(outline.fills[0].solid_color().unwrap().to_rgba8(), [255, 255, 255, 255]);
+    assert_eq!(outline.strokes[0].solid_color().unwrap().to_rgba8(), [128, 128, 128, 255]);
+    assert_eq!(outline.stroke.weight, 4.0);
+}
+
+/// A shape record that isn't complete keeps today's generated layers and no board item.
+#[test]
+fn a_damaged_shape_record_keeps_the_generated_layers() {
+    let mut cases = Vec::new();
+    let mut a = shape_node("DIAMOND");
+    set(&mut a, "derivedImmutableFrameData", o(vec![("version", u(2))]));
+    cases.push(a);
+    let mut b = shape_node("DIAMOND");
+    set(&mut b, "nodeGenerationData", o(vec![("overrides", arr(vec![record(1, text("Olá", 16.0))]))]));
+    cases.push(b);
+    let mut c = shape_node("DIAMOND");
+    let background = record(0, vec![("fillPaints", arr(vec![solid(1.0, 1.0, 1.0)]))]);
+    set(&mut c, "nodeGenerationData", o(vec![("overrides", arr(vec![background]))]));
+    cases.push(c);
+    for (i, layer) in cases.into_iter().enumerate() {
+        let (as_fig, fig_warnings) = imported(layer.clone());
+        let (doc, warnings) = jam(layer);
+        let frame = named(&doc, "Board object");
+        assert!(frame.board.is_none(), "case {i}");
+        assert_eq!(frame.children.len(), named(&as_fig, "Board object").children.len(), "case {i}: the generated layers, as in a .fig");
+        let sorted = |mut w: Vec<String>| {
+            w.sort();
+            w
+        };
+        assert_eq!(sorted(warnings), sorted(fig_warnings), "case {i}: today's warnings");
+    }
+}
+
+/// A shape with no text yet is still a native shape (an empty one).
+#[test]
+fn a_jam_shape_without_text_is_still_a_native_shape() {
+    let mut layer = shape_node("SQUARE");
+    let background = record(0, vec![("fillPaints", arr(vec![solid(1.0, 1.0, 1.0)]))]);
+    set(&mut layer, "nodeGenerationData", o(vec![("overrides", arr(vec![background, record(1, text("", 16.0))]))]));
+    let (doc, _) = jam(layer);
+    let frame = named(&doc, "Board object");
+    assert_eq!(frame.board, Some(figcraft_doc::BoardItem::Shape { shape: figcraft_doc::BoardShape::Rectangle }));
+    assert_eq!(doc.node(frame.children[1]).unwrap().kind.text().unwrap().characters, "");
+}
+
+/// Blank generated text must not hide text the outer node still carries (#1397): on a whiteboard
+/// too, such a shape keeps the generated layers.
+#[test]
+fn a_jam_shape_whose_text_only_the_outer_node_carries_keeps_it() {
+    let mut layer = shape_node("SQUARE");
+    set(&mut layer, "textData", o(vec![("characters", s("Outer saved text"))]));
+    let background = record(0, vec![("fillPaints", arr(vec![solid(1.0, 1.0, 1.0)]))]);
+    set(&mut layer, "nodeGenerationData", o(vec![("overrides", arr(vec![background, record(1, text("  ", 24.0))]))]));
+    let (doc, _) = jam(layer);
+    let frame = named(&doc, "Board object");
+    assert!(frame.board.is_none(), "the generated layers keep the outer text");
+    assert!(frame.children.iter().filter_map(|id| doc.node(*id)?.kind.text()).any(|t| t.characters == "Outer saved text"));
 }

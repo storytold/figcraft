@@ -67,7 +67,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "library.swap",
             "Swap library",
-            "{from (an enabled library: id, name or path), to (another enabled library)}  re-points every component instance, style and variable copied from `from` to the published one of the same name in `to` (instances keep their overrides) → {components, styles, variables, unmatched: [names still from `from`], removed (nothing of `from` is used any more: it was removed)}",
+            "{from (an enabled library: id, name or path), to (another enabled library)}  re-points every component instance, style and variable copied from `from` to the published one of the same name in `to` (instances keep their overrides) → {components, styles, variables, unmatched: [names still from `from`], dropped: [names of `from`'s copies nothing used (a component imported but not placed, a variable imported but not bound): removed, not moved], removed (nothing of `from` is used any more: it was removed)}",
             true,
             swap_cmd
         ),
@@ -436,6 +436,8 @@ fn usage_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         Err(EngineError::Waiting) => return Err(EngineError::Waiting),
         _ => None,
     };
+    let asset_weeks = asset_week_rows(s, &link, since)?;
+    let asset_actions = asset_period(asset_weeks.as_deref().unwrap_or_default());
     let m = &lib.manifest;
     // Component → (instances, files using it, instances detached).
     let mut per: std::collections::BTreeMap<NodeId, (u64, u64, u64)> = std::collections::BTreeMap::new();
@@ -481,30 +483,62 @@ fn usage_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         "files": rows,
         "components": components,
         "assetsKnown": assets.is_some(),
-        "styles": asset_rows(assets.iter().flatten().map(|a| &a.styles), |id| {
+        "assetActionsKnown": asset_weeks.is_some(),
+        "styles": asset_rows(assets.iter().flatten().map(|a| &a.styles), &asset_actions, |id| {
             m.style(id).map(|x| json!({"name": x.name, "type": x.kind}))
         }),
-        "variables": asset_rows(assets.iter().flatten().map(|a| &a.variables), |id| {
+        "variables": asset_rows(assets.iter().flatten().map(|a| &a.variables), &asset_actions, |id| {
             let v = m.variable(id)?;
             Some(json!({"name": v.name, "collection": m.collection(&v.collection).map(|c| c.name.clone())}))
         }),
     }))
 }
 
-/// The style or variable reports' totals, the most used first: each one's `id`, `layers` and
-/// `files`, with what `describe` says of it (nothing for one no longer published).
-fn asset_rows<'a>(reports: impl Iterator<Item = &'a Vec<(String, u32)>>, describe: impl Fn(&str) -> Option<Value>) -> Vec<Value> {
+/// The styles' and variables' weeks overlapping a period from `since`; `None` from a server from
+/// before them.
+fn asset_week_rows(s: &mut Session, link: &str, since: u64) -> Result<Option<Vec<WeekActions<String>>>> {
+    match s.library_request(link, LibraryReq::AssetActions) {
+        Ok(LibraryReply::AssetActions(w)) => Ok(Some(w.into_iter().filter(|w| w.week.saturating_add(7 * 86_400) > since).collect())),
+        Err(EngineError::Waiting) => Err(EngineError::Waiting),
+        _ => Ok(None),
+    }
+}
+
+/// Each style's or variable's insertions and detachments in `weeks`.
+fn asset_period(weeks: &[WeekActions<String>]) -> std::collections::BTreeMap<&str, (u64, u64)> {
+    let mut per = std::collections::BTreeMap::<&str, (u64, u64)>::new();
+    for w in weeks {
+        let e = per.entry(&w.component).or_default();
+        e.0 += u64::from(w.insertions);
+        e.1 += u64::from(w.detachments);
+    }
+    per
+}
+
+/// The style or variable reports' totals, the most used first: each one's `id`, `layers`, `files`,
+/// `insertions` and `detachments` in the period, with what `describe` says of it (nothing for one
+/// no longer published). One only inserted or detached is listed too, when it's of this kind.
+fn asset_rows<'a>(
+    reports: impl Iterator<Item = &'a Vec<(String, u32)>>,
+    actions: &std::collections::BTreeMap<&str, (u64, u64)>,
+    describe: impl Fn(&str) -> Option<Value>,
+) -> Vec<Value> {
     let mut per = std::collections::BTreeMap::<&str, (u64, u64)>::new();
     for (id, n) in reports.flatten() {
         let e = per.entry(id).or_default();
         e.0 += u64::from(*n);
         e.1 += 1;
     }
+    for id in actions.keys().filter(|id| describe(id).is_some()) {
+        per.entry(id).or_default();
+    }
     let mut rows: Vec<_> = per.into_iter().collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.1.0));
     let row = |(id, (layers, files)): (&str, (u64, u64))| {
         let mut r = describe(id).unwrap_or_else(|| json!({}));
+        let (insertions, detachments) = actions.get(id).copied().unwrap_or_default();
         (r["id"], r["layers"], r["files"]) = (json!(id), json!(layers), json!(files));
+        (r["insertions"], r["detachments"]) = (json!(insertions), json!(detachments));
         r
     };
     rows.into_iter().map(row).collect()
@@ -565,7 +599,9 @@ fn swap_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`from` and `to` are the same library"));
     }
     let r = crate::library_swap::swap_library(s.doc_mut()?, &from, &lib)?;
-    Ok(json!({"components": r.components, "styles": r.styles, "variables": r.variables, "unmatched": r.unmatched, "removed": r.removed}))
+    Ok(
+        json!({"components": r.components, "styles": r.styles, "variables": r.variables, "unmatched": r.unmatched, "dropped": r.dropped, "removed": r.removed}),
+    )
 }
 
 fn assets_json(lib: &PublishedLibrary) -> Value {
@@ -646,7 +682,13 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
                 l.path = path.clone();
                 l.name = m.name.clone();
             }
-            None => libs.enabled.push(LibraryLink { id: m.id.clone(), name: m.name.clone(), path: path.clone(), version: m.version }),
+            None => libs.enabled.push(LibraryLink {
+                id: m.id.clone(),
+                name: m.name.clone(),
+                path: path.clone(),
+                version: m.version,
+                relative: String::new(),
+            }),
         }
     }
     let mut out = assets_json(&lib);

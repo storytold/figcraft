@@ -72,19 +72,24 @@ impl Replica {
 
     /// Rebuild a replica from a [`snapshot`](Self::snapshot).
     pub fn from_snapshot(changes: &[Change]) -> Result<Replica, Error> {
-        Self::from_snapshot_leaving_out(changes).map(|(r, _)| r)
+        Self::from_snapshot_leaving_out(changes).map(|(r, _, _)| r)
     }
 
     /// [`from_snapshot`](Self::from_snapshot), and how many image entries it left out: a
     /// snapshot saved before the image checks may hold one they refuse, and opens without it.
-    pub(crate) fn from_snapshot_leaving_out(changes: &[Change]) -> Result<(Replica, usize), Error> {
+    /// Review settings past the current limits are clamped to them, not dropped (see
+    /// [`docprops::clamp_snapshot_design_review`]); the last value says whether that happened,
+    /// because a session whose settings had to be clamped can no longer replay its saved batches
+    /// for clients that resume (they hold the value past the limits).
+    pub(crate) fn from_snapshot_leaving_out(changes: &[Change]) -> Result<(Replica, usize, bool), Error> {
         let mut r = Replica { doc: Document::without_pages(""), positions: Positions::new() };
         let mut changes = changes.to_vec();
+        let clamped = docprops::clamp_snapshot_design_review(&mut changes);
         let left_out = r.apply_kept(&mut changes, Change::is_image)?;
         if r.doc.pages.is_empty() {
             return Err(Error::Invalid("a snapshot needs a page".into()));
         }
-        Ok((r, left_out))
+        Ok((r, left_out, clamped))
     }
 
     /// Apply `changes` strictly. When they don't apply together — history written under older
@@ -321,7 +326,7 @@ impl Replica {
     }
 
     /// The checks a server makes on what a batch touched.
-    fn check(&self, touched: &BTreeSet<NodeId>) -> Result<(), Error> {
+    pub(crate) fn check(&self, touched: &BTreeSet<NodeId>) -> Result<(), Error> {
         if self.doc.pages.is_empty() {
             return Err(Error::Invalid("a file needs at least one page".into()));
         }

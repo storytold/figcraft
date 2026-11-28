@@ -5,7 +5,7 @@
 //! canvas where shortcuts work again, and a pointer press ends keyboard mode.
 
 use egui::accesskit::{Node, Role, Toggled};
-use egui::{Event, Key, Modifiers};
+use egui::{Event, Key, Modifiers, Pos2, pos2};
 use figcraft_doc::NodeId;
 use figcraft_engine::{Session, ToolId};
 use serde_json::json;
@@ -34,6 +34,24 @@ fn name(u: &Ui) -> String {
 
 fn region(u: &Ui) -> Region {
     u.app.ui.nav.region
+}
+
+fn click(u: &mut Ui, at: Pos2) {
+    u.button(at, true);
+    u.button(at, false);
+    u.frame(vec![]);
+}
+
+/// The middle of the control with the keyboard.
+fn focused_at(u: &Ui) -> Pos2 {
+    let id = u.ctx.memory(|m| m.focused()).unwrap();
+    u.ctx.viewport(|v| v.prev_pass.widgets.get(id).map(|w| w.rect.center())).unwrap()
+}
+
+fn nothing_focused(u: &mut Ui) {
+    u.ctx.memory_mut(|m| m.surrender_focus(m.focused().unwrap_or(egui::Id::NULL)));
+    u.frame(vec![]);
+    assert!(u.ctx.memory(|m| m.focused()).is_none());
 }
 
 /// Two rectangles, "Rect A" and "Rect B" (listed above A: it's on top), A selected.
@@ -127,26 +145,23 @@ fn f6_cycles_the_regions_and_lands_on_the_active_tool_and_the_selected_row() {
 }
 
 #[test]
-fn tab_moves_between_the_properties_controls_and_wraps_without_leaving_the_panel() {
+fn tab_walks_the_properties_controls_then_leaves_the_panel_in_the_framework_order() {
     let (mut u, a, _) = setup();
     f6(&mut u, false);
-    let first = name(&u);
-    let mut seen = vec![first.clone()];
+    assert_eq!(region(&u), Region::Properties);
+    let mut seen = vec![name(&u)];
     for _ in 0..200 {
         press(&mut u, Key::Tab, Modifiers::NONE);
-        assert_eq!(region(&u), Region::Properties);
-        if name(&u) == first {
+        if region(&u) != Region::Properties {
             break;
         }
+        // Names repeat (unnamed stops, one "Apply variable" per field), so only leaving the panel shows Tab doesn't wrap.
         seen.push(name(&u));
     }
-    assert_eq!(name(&u), first, "Tab wraps round to the panel's first control");
+    assert_ne!(region(&u), Region::Properties, "Tab after the last Properties control leaves the panel");
     for want in ["Width", "Height", "Rotation", "Opacity"] {
         assert!(seen.iter().any(|n| n == want), "{want} not reached by Tab: {seen:?}");
     }
-    // Shift+Tab steps back.
-    press(&mut u, Key::Tab, Modifiers::SHIFT);
-    assert_eq!(Some(&name(&u)), seen.last());
     // Tab moved the keyboard, not the selection.
     assert_eq!(u.app.session.selection(), vec![a]);
 }
@@ -214,18 +229,66 @@ fn escape_returns_to_the_canvas_where_shortcuts_and_tab_work_again() {
     // Tab on the canvas selects the next layer and keeps the keyboard there.
     press(&mut u, Key::Tab, Modifiers::NONE);
     assert_eq!(u.app.session.selection(), vec![b]);
-    assert_eq!(name(&u), "Canvas");
+    assert_eq!((region(&u), name(&u)), (Region::Canvas, "Canvas".to_string()), "Tab on the focused canvas keeps focus there");
     press(&mut u, Key::R, Modifiers::NONE);
     assert_eq!(u.app.session.tool.tool, ToolId::Rectangle);
 }
 
 #[test]
-fn tab_on_the_canvas_selects_the_next_layer_without_keyboard_mode() {
-    let (mut u, _, b) = setup();
+fn a_bare_tab_with_nothing_focused_selects_no_layer_and_moves_focus_into_the_window() {
+    let (mut u, a, _) = setup();
+    nothing_focused(&mut u);
     press(&mut u, Key::Tab, Modifiers::NONE);
     u.frame(vec![]);
-    assert_eq!(u.app.session.selection(), vec![b]);
-    assert!(u.ctx.memory(|m| m.focused()).is_none(), "Tab doesn't wander into the tab bar");
+    assert_eq!(u.app.session.selection(), vec![a], "the selection is unchanged");
+    assert!(u.ctx.memory(|m| m.focused()).is_some(), "Tab focuses a stop in the window");
+}
+
+#[test]
+fn tab_after_a_click_on_the_canvas_selects_the_next_layer_also_after_escape() {
+    let (mut u, a, b) = setup();
+    nothing_focused(&mut u);
+    let at = u.app.to_screen(20.0, 15.0);
+    click(&mut u, at);
+    assert_eq!((name(&u), u.app.session.selection()), ("Canvas".to_string(), vec![a]));
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!((name(&u), u.app.session.selection()), ("Canvas".to_string(), vec![b]));
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(u.app.session.selection().is_empty());
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!((name(&u), u.app.session.selection().len()), ("Canvas".to_string(), 1));
+}
+
+#[test]
+fn a_click_on_a_panel_leaves_tab_to_pick_select() {
+    let (mut u, a, b) = setup();
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(a));
+    // Empty space below the layer rows.
+    let at = pos2(u.app.canvas.rect.min.x - 100.0, 850.0);
+    click(&mut u, at);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!((name(&u), u.app.picked()), ("Canvas".to_string(), Some(b)));
+}
+
+#[test]
+fn an_opened_file_gives_its_canvas_the_keyboard_once_a_dialog_has_closed() {
+    let (mut u, ..) = setup();
+    assert_eq!(name(&u), "Canvas");
+    nothing_focused(&mut u);
+    u.app.ui.about = true;
+    u.app.run("file.new", json!({}));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_ne!(name(&u), "Canvas", "About is open");
+    u.app.ui.about = false;
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(name(&u), "Canvas");
 }
 
 #[test]
@@ -279,6 +342,38 @@ fn a_pointer_press_ends_keyboard_mode() {
     u.button(p, false);
     assert!(!u.app.ui.nav.keyboard);
     assert_eq!(region(&u), Region::Canvas);
+}
+
+#[test]
+fn tab_after_a_click_turns_keyboard_mode_on_and_a_click_into_a_field_leaves_it_off() {
+    let (mut u, ..) = setup();
+    f6(&mut u, true);
+    f6(&mut u, true);
+    assert_eq!(name(&u), "Move");
+    let at = focused_at(&u);
+    click(&mut u, at);
+    assert!(!u.app.ui.nav.keyboard);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert!(u.app.ui.nav.keyboard, "Tab from a toolbar button");
+    while region(&u) != Region::Properties {
+        f6(&mut u, false);
+    }
+    for _ in 0..100 {
+        if name(&u) == "Width" {
+            break;
+        }
+        press(&mut u, Key::Tab, Modifiers::NONE);
+    }
+    assert_eq!(name(&u), "Width");
+    let at = focused_at(&u);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("64".into())]);
+    assert!(u.ctx.text_edit_focused(), "the click opened the field's editor");
+    assert!(!u.app.ui.nav.keyboard, "the app moved the keyboard into the editor, not a key");
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(name(&u), "Height");
+    assert!(u.app.ui.nav.keyboard, "Tab from the field");
 }
 
 #[test]
@@ -430,4 +525,81 @@ fn the_custom_panel_edges_never_enter_the_keyboard_or_focus_order() {
         }
     }
     assert!(!seen.contains(&left) && !seen.contains(&right), "Tab never stops on a panel edge: {seen:?}");
+}
+
+#[test]
+fn a_mixed_checkbox_is_announced_as_mixed_and_a_checked_one_as_true() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::widgets::checkbox_tri(ui, None, "Mixed one");
+        crate::widgets::checkbox_tri(ui, Some(true), "Checked one");
+        crate::widgets::checkbox_tri(ui, Some(false), "Plain one");
+    });
+    out.textures_delta.clear();
+    let nodes: Vec<Node> = out.platform_output.accesskit_update.expect("an AccessKit update").nodes.into_iter().map(|(_, n)| n).collect();
+    assert_eq!(find(&nodes, Role::CheckBox, "Mixed one").toggled(), Some(Toggled::Mixed));
+    assert_eq!(find(&nodes, Role::CheckBox, "Checked one").toggled(), Some(Toggled::True));
+    assert_eq!(find(&nodes, Role::CheckBox, "Plain one").toggled(), Some(Toggled::False));
+}
+
+/// Runs one headless frame of a lone tri-state checkbox; returns whether it was clicked.
+fn tri_frame(ctx: &egui::Context, state: Option<bool>, events: Vec<Event>) -> bool {
+    let mut clicked = false;
+    let input = egui::RawInput { events, ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| {
+        clicked = crate::widgets::checkbox_tri(ui, state, "Keyed one");
+    });
+    out.textures_delta.clear();
+    clicked
+}
+
+fn key(key: Key, pressed: bool) -> Event {
+    Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }
+}
+
+#[test]
+fn a_checkbox_is_keyboard_operable_tab_to_it_then_space_or_enter_toggles_it() {
+    for activate in [Key::Space, Key::Enter] {
+        let ctx = egui::Context::default();
+        tri_frame(&ctx, Some(false), vec![]);
+        tri_frame(&ctx, Some(false), vec![key(Key::Tab, true), key(Key::Tab, false)]);
+        assert!(ctx.memory(|m| m.focused()).is_some(), "Tab focuses the checkbox");
+        tri_frame(&ctx, Some(false), vec![]);
+        let clicked = tri_frame(&ctx, Some(false), vec![key(activate, true), key(activate, false)]);
+        assert!(clicked, "{activate:?} on the focused checkbox toggles it");
+    }
+}
+
+/// The marks (paths, meshes, segments) painted inside the 14-point box of a lone checkbox.
+fn box_marks(state: Option<bool>) -> Vec<egui::Rect> {
+    fn walk(s: &egui::Shape, out: &mut Vec<egui::Rect>) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Path(_) | egui::Shape::Mesh(_) | egui::Shape::LineSegment { .. } => out.push(s.visual_bounding_rect()),
+            _ => {}
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut out = Vec::new();
+    for _ in 0..2 {
+        let mut o = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::widgets::checkbox_tri(ui, state, "Painted one");
+        });
+        o.textures_delta.clear();
+        out.clear();
+        o.shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+    }
+    out
+}
+
+#[test]
+fn a_mixed_checkbox_paints_a_dash_and_a_checked_one_a_tick() {
+    // Icon::Minus is one flat bar; Icon::Check is a taller path.
+    let mixed = box_marks(None);
+    assert!(mixed.iter().any(|r| r.width() >= 5.0 && r.height() <= 2.5), "a flat dash is painted for the mixed state: {mixed:?}");
+    let checked = box_marks(Some(true));
+    assert!(checked.iter().any(|r| r.width() >= 5.0 && r.height() > 3.5), "a tick is painted for the checked state: {checked:?}");
+    assert!(!checked.iter().any(|r| r.width() >= 5.0 && r.height() <= 2.5), "no dash on a checked box: {checked:?}");
+    assert!(box_marks(Some(false)).is_empty(), "an empty box paints no mark");
 }

@@ -147,7 +147,15 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
         ui.vertical(|ui| {
             let (wordmark, _) = ui.allocate_exact_size(vec2(130.0, 23.0), Sense::hover());
             crate::theme::paint_wordmark(ui.painter(), egui::pos2(wordmark.min.x, wordmark.center().y), 18.0, t);
-            ui.label(RichText::new(trf("Version {version}", &[("version", &VERSION)])).color(t.text_secondary));
+            let version = crate::channel::version();
+            ui.label(RichText::new(trf("Version {version}", &[("version", &version)])).color(t.text_secondary));
+            // Which channel this is, and where to report a problem with it: a Nightly is not the
+            // stable app, and its reports need the commit it was built from.
+            if crate::channel::is_nightly() {
+                let build = crate::channel::describe();
+                ui.label(RichText::new(build).color(t.text_secondary).font(regular(11.0)));
+                ui.hyperlink_to("Report a problem", "https://github.com/storytold/figcraft/issues/new/choose");
+            }
         });
     });
     ui.add_space(12.0);
@@ -170,22 +178,10 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     if egui::Popup::is_any_open(ctx) {
         return;
     }
-    let u = &mut app.ui;
-    let open = u.color_profile.is_some()
-        || u.menu_input.is_some()
-        || u.find.is_some()
-        || u.batch_rename.is_some()
-        || u.import_report.is_some()
-        || u.missing_fonts.is_some()
-        || u.confirm_close
-        || matches!(u.close_tab, Some(crate::windows::TabClose::Ask(_)))
-        || u.export_preview
-        || u.shortcuts_panel
-        || u.preferences
-        || u.about;
-    if !open || !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if !open(&app.ui) || !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         return;
     }
+    let u = &mut app.ui;
     if u.menu_input.take().is_some()
         || u.color_profile.take().is_some()
         || u.find.take().is_some()
@@ -204,6 +200,22 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
             return;
         }
     }
+}
+
+/// Whether one of the dialogs Escape closes ([`keys`]) is open.
+pub(crate) fn open(u: &crate::UiState) -> bool {
+    u.color_profile.is_some()
+        || u.menu_input.is_some()
+        || u.find.is_some()
+        || u.batch_rename.is_some()
+        || u.import_report.is_some()
+        || u.missing_fonts.is_some()
+        || u.confirm_close
+        || matches!(u.close_tab, Some(crate::windows::TabClose::Ask(_)))
+        || u.export_preview
+        || u.shortcuts_panel
+        || u.preferences
+        || u.about
 }
 
 /// Draw the app's dialogs and cards: pending opens/imports/missing fonts, About,
@@ -246,6 +258,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                 (tr("Show dimensions on objects"), prefs.show_dimensions, "pref.showDimensions"),
                 (tr("Use number keys for opacity"), prefs.number_keys_opacity, "pref.numberKeysOpacity"),
                 (tr("Scroll wheel zoom"), prefs.scroll_wheel_zoom, "pref.scrollWheelZoom"),
+                (tr("Invert zoom direction"), prefs.invert_zoom, "pref.invertZoom"),
                 (tr("Reduce motion"), prefs.reduce_motion, "pref.reduceMotion"),
             ] {
                 if crate::widgets::checkbox(ui, val, label) {
@@ -335,13 +348,17 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                 let selected = langs().find(|(code, _)| on(code)).map_or(tr("System"), |(_, name)| name);
                 let resp = crate::widgets::dropdown(ui, selected, 220.0, None);
                 let mut pick = None;
-                crate::right::menu_popup(&resp).show(|ui| {
-                    for (code, name) in langs() {
-                        if crate::right::menu_check(ui, on(code), name, "") {
-                            pick = Some(code);
-                            ui.close();
+                // Vertical-only fallback: keep the menu anchored to the dropdown's start edge.
+                let alt = if ui.style().right_to_left { &[egui::RectAlign::TOP_END] } else { &[egui::RectAlign::TOP_START] };
+                crate::right::menu_popup(&resp).align_alternatives(alt).show(|ui| {
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for (code, name) in langs() {
+                            if crate::right::menu_check(ui, on(code), name, "") {
+                                pick = Some(code);
+                                ui.close();
+                            }
                         }
-                    }
+                    });
                 });
                 if let Some(code) = pick {
                     app.run("pref.language", json!({"language": code}));

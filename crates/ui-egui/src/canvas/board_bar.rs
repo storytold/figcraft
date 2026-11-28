@@ -3,8 +3,9 @@
 //! board tools' flyouts share.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, NodeId, NodeKind, Routing, Stamp, StrokeCap};
-use figcraft_engine::board::{BoardTool, TEXT_SIZES};
+use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, CodeLanguage, NodeId, NodeKind, Routing, Stamp, StrokeCap};
+use figcraft_engine::ToolId;
+use figcraft_engine::board::{BoardTool, STICKY_SIZES, TEXT_SIZES};
 use figcraft_engine::board_grid::GridStyle;
 use serde_json::{Value, json};
 
@@ -20,6 +21,7 @@ pub(crate) enum Mark {
     Color(figcraft_color::Color),
     Shape(BoardShape),
     Stamp(Stamp),
+    Icon(Icon),
 }
 
 /// One choice of a board tool's flyout: its name, the tool's params, whether it is the tool's now.
@@ -28,30 +30,46 @@ pub(crate) struct Choice {
     pub params: Value,
     pub on: bool,
     pub mark: Mark,
+    /// The tool the choice picks when it isn't the group's own.
+    pub tool: Option<ToolId>,
 }
 
 /// The choices a board tool's flyout offers.
-pub(crate) fn choices(options: Options, board: &BoardTool) -> Vec<Choice> {
+pub(crate) fn choices(options: Options, board: &BoardTool, current: ToolId) -> Vec<Choice> {
     match options {
         Options::Colors => BOARD_COLORS
             .iter()
-            .map(|(n, c)| Choice { label: color_label(n), params: json!({"color": n}), on: board.sticky == *c, mark: Mark::Color(*c) })
+            .map(|(n, c)| Choice { label: color_label(n), params: json!({"color": n}), on: board.sticky == *c, mark: Mark::Color(*c), tool: None })
             .collect(),
         Options::Shapes => BoardShape::ALL
             .iter()
-            .map(|b| Choice { label: b.label(), params: json!({"shape": b.id()}), on: board.shape == *b, mark: Mark::Shape(*b) })
+            .map(|b| Choice {
+                label: b.label(),
+                params: json!({"shape": b.id()}),
+                on: current != ToolId::MindMap && board.shape == *b,
+                mark: Mark::Shape(*b),
+                tool: None,
+            })
+            .chain([Choice {
+                label: ToolId::MindMap.label(),
+                params: json!({}),
+                on: current == ToolId::MindMap,
+                mark: Mark::Icon(Icon::MindMap),
+                tool: Some(ToolId::MindMap),
+            }])
             .collect(),
         Options::Stamps => Stamp::ALL
             .iter()
-            .map(|b| Choice { label: b.label(), params: json!({"stamp": b.id()}), on: board.stamp == *b, mark: Mark::Stamp(*b) })
+            .map(|b| Choice { label: b.label(), params: json!({"stamp": b.id()}), on: board.stamp == *b, mark: Mark::Stamp(*b), tool: None })
             .collect(),
         Options::None => Vec::new(),
     }
 }
 
-/// A board colour's name as the UI says it.
-fn color_label(name: &str) -> &'static str {
+/// A board or ink colour's name as the UI says it.
+pub(crate) fn color_label(name: &str) -> &'static str {
     match name {
+        "black" => tr_noop("Black"),
         "yellow" => tr_noop("Yellow"),
         "orange" => tr_noop("Orange"),
         "red" => tr_noop("Red"),
@@ -75,6 +93,7 @@ pub(crate) fn paint_choice(p: &egui::Painter, r: Rect, mark: &Mark, ink: Color32
             let path = figcraft_geom::Affine::translate((1.0, 1.0)) * path;
             icons::paint_outlines(p, r, 16.0, &[(&path, false)], ink, 1.2);
         }
+        Mark::Icon(icon) => icons::paint(p, r, *icon, ink),
         Mark::Stamp(s) => {
             p.circle_filled(r.center(), r.width().min(r.height()) / 2.0, c32(s.color()));
             let parts: Vec<(figcraft_geom::BezPath, bool)> =
@@ -96,10 +115,15 @@ struct Has {
     color: bool,
     shape: Option<BoardShape>,
     text: bool,
+    /// The first selected sticky's text size: stickies take a size menu (not the S/M/L/XL cells)
+    /// when they are the only text-bearing objects selected.
+    sticky: Option<f64>,
     connector: Option<Line>,
     /// Every selected board object is a connector: the colour part offers any colour too.
     only_lines: bool,
     table: bool,
+    /// The first selected code block's language: the bar ends in the language menu.
+    code: Option<CodeLanguage>,
 }
 
 /// The selected connectors' line as the bar shows it (the first one's), and their ids.
@@ -109,6 +133,8 @@ struct Line {
     end: StrokeCap,
     weight: f64,
     dashed: bool,
+    /// Every selected connector is a mind map's branch: no line types.
+    branch: bool,
     ids: Vec<NodeId>,
 }
 
@@ -121,7 +147,15 @@ fn has(app: &FigApp) -> Option<Has> {
     for n in ds.selection.iter().filter_map(|id| ds.doc.node(*id)) {
         others |= n.board.is_some() && !matches!(n.board, Some(BoardItem::Connector(_)));
         match &n.board {
-            Some(BoardItem::Sticky { .. } | BoardItem::Ink) => h.color = true,
+            Some(BoardItem::Sticky { .. }) => {
+                h.color = true;
+                let size = figcraft_engine::board::text_of(&ds.doc, n.id)
+                    .and_then(|t| ds.doc.node(t))
+                    .and_then(|t| t.kind.text())
+                    .map_or(figcraft_engine::board::STICKY_TEXT_SIZE, |t| t.style.font_size);
+                h.sticky.get_or_insert(size);
+            }
+            Some(BoardItem::Ink) => h.color = true,
             Some(BoardItem::Shape { shape }) => {
                 h.color = true;
                 h.text = true;
@@ -136,24 +170,38 @@ fn has(app: &FigApp) -> Option<Has> {
                     end: s.cap_end,
                     weight: s.weight,
                     dashed: !s.dashes.is_empty(),
+                    branch: true,
                     ids: Vec::new(),
                 });
+                line.branch &= c.branch;
                 line.ids.push(n.id);
+            }
+            Some(BoardItem::MindNode) => {
+                // A node's text takes the board colours as its colour.
+                h.color = true;
+                h.text = true;
             }
             Some(BoardItem::Label { .. }) => h.text = true,
             Some(BoardItem::Table) => h.table = true,
+            Some(BoardItem::CodeBlock { language }) => {
+                h.code.get_or_insert(*language);
+            }
             Some(BoardItem::Stamp { .. }) | None => {}
         }
     }
     h.only_lines = h.connector.is_some() && !others;
-    (h.color || h.text || h.connector.is_some() || h.table).then_some(h)
+    (h.color || h.text || h.connector.is_some() || h.table || h.code.is_some()).then_some(h)
 }
 
 const CELL: f32 = 28.0;
-const SWATCH: f32 = 20.0;
-const GAP: f32 = 4.0;
+pub(crate) const SWATCH: f32 = 20.0;
+pub(crate) const GAP: f32 = 4.0;
 /// The room each part takes after its controls (the divider and the gap around it).
 const PART_END: f32 = 8.0;
+/// The sticky size menu's width: its name ("Extra large") and the chevron.
+const STICKY_W: f32 = 96.0;
+/// The language menu's width: its name ("JavaScript") and the chevron.
+const LANGUAGE_W: f32 = 104.0;
 
 impl Has {
     /// The bar's width for these parts.
@@ -168,14 +216,20 @@ impl Has {
         if self.shape.is_some() {
             w += CELL + 12.0 + GAP + PART_END;
         }
+        if self.sticky.is_some() && !self.text {
+            w += STICKY_W + PART_END;
+        }
         if self.text {
             w += TEXT_SIZES.len() as f32 * (CELL + 2.0) + PART_END;
         }
         if self.connector.is_some() {
-            w += LINE_W;
+            w += LINE_W - if self.connector.as_ref().is_some_and(|l| l.branch) { ROUTING_W } else { 0.0 };
         }
         if self.table {
             w += crate::board_picker::TABLE_PART_W;
+        }
+        if self.code.is_some() {
+            w += LANGUAGE_W + PART_END;
         }
         w
     }
@@ -209,12 +263,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let at = place(sel, size, app.canvas.rect);
     let t = Tokens::get(ctx);
     egui::Area::new(egui::Id::unique("board_bar")).fixed_pos(at).order(egui::Order::Middle).show(ctx, |ui| {
-        let (rect, _) = ui.allocate_exact_size(size, Sense::click());
-        a11y::container_bounds(ui, rect);
-        let p = ui.painter();
-        p.rect_filled(rect.expand(2.0).translate(vec2(0.0, 1.0)), CornerRadius::same(12), Color32::from_black_alpha(18));
-        p.rect_filled(rect, CornerRadius::same(10), t.panel);
-        p.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, t.border), StrokeKind::Inside);
+        let rect = bar(ui, size, &t);
         let cy = rect.center().y;
         let mut x = rect.min.x + 8.0;
         if h.color {
@@ -226,14 +275,30 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         }
         if h.text {
             x = size_part(app, ui, x, cy, &t);
+        } else if let Some(size) = h.sticky {
+            x = sticky_size_part(app, ui, size, pos2(x, cy), &t);
         }
         if h.table {
             x = crate::board_picker::table_part(app, ui, x, cy, &t);
+        }
+        if let Some(language) = h.code {
+            x = language_part(app, ui, language, pos2(x, cy), &t);
         }
         if let Some(line) = &h.connector {
             line_part(app, ui, line, pos2(x, cy), &t);
         }
     });
+}
+
+/// A floating bar `size` big where `ui` starts (its shadow, panel and border); its rect.
+pub(crate) fn bar(ui: &mut Ui, size: egui::Vec2, t: &Tokens) -> Rect {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::click());
+    a11y::container_bounds(ui, rect);
+    let p = ui.painter();
+    p.rect_filled(rect.expand(2.0).translate(vec2(0.0, 1.0)), CornerRadius::same(12), Color32::from_black_alpha(18));
+    p.rect_filled(rect, CornerRadius::same(10), t.panel);
+    p.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    rect
 }
 
 /// The board colours from `x` (`board.setColor`), and for connectors `lines` any colour in the
@@ -267,7 +332,7 @@ fn color_part(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens, li
 }
 
 /// A small colour wheel: the button for any colour.
-fn paint_wheel(p: &egui::Painter, c: Pos2, r: f32) {
+pub(crate) fn paint_wheel(p: &egui::Painter, c: Pos2, r: f32) {
     const STEPS: usize = 12;
     let at = |i: usize| {
         let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;
@@ -338,12 +403,73 @@ fn size_part(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens) -> 
     divider(ui, t, x, cy)
 }
 
+/// A sticky size's name as the UI says it (`None` when no entry has that size).
+fn sticky_size_label(size: f64) -> Option<&'static str> {
+    STICKY_SIZES.iter().find(|(_, s)| (*s - size).abs() < 0.01).map(|(name, _)| match *name {
+        "Small" => tr_noop("Small"),
+        "Medium" => tr_noop("Medium"),
+        "Large" => tr_noop("Large"),
+        "Extra large" => tr_noop("Extra large"),
+        _ => tr_noop("Huge"),
+    })
+}
+
+/// The sticky text size menu at `at` (its left edge and middle), showing `size` by name, or as a
+/// number when no entry has it; `board.setStyle {fontSize}`; where the next part starts.
+fn sticky_size_part(app: &mut FigApp, ui: &mut Ui, size: f64, at: Pos2, t: &Tokens) -> f32 {
+    let r = Rect::from_min_size(pos2(at.x, at.y - CELL / 2.0), vec2(STICKY_W, CELL));
+    let tip = tr("Text size");
+    let resp = ui.interact(r, ui.scope_id().with("bb_sticky_size"), Sense::click()).on_hover_text(tip);
+    a11y::menu_button(&resp, tip, a11y::menu_open(&resp));
+    if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+    }
+    let name = sticky_size_label(size).map_or_else(|| format!("{}", (size * 100.0).round() / 100.0), |l| tr(l).to_string());
+    ui.painter().text(pos2(r.min.x + 8.0, at.y), egui::Align2::LEFT_CENTER, name, semibold(11.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 9.0, at.y), vec2(12.0, 12.0)), Icon::Chevron, t.icon_secondary);
+    crate::right::menu_popup(&resp).show(|ui| {
+        for (name, value) in STICKY_SIZES {
+            let label = sticky_size_label(value).unwrap_or(name);
+            if crate::right::menu_check(ui, (value - size).abs() < 0.01, tr(label), "") {
+                app.run("board.setStyle", json!({"fontSize": value}));
+                ui.close();
+            }
+        }
+    });
+    divider(ui, t, at.x + STICKY_W, at.y)
+}
+
+/// The code language menu at `at` (its left edge and middle), showing `language`:
+/// `board.setLanguage` on the selected blocks; where the next part starts.
+fn language_part(app: &mut FigApp, ui: &mut Ui, language: CodeLanguage, at: Pos2, t: &Tokens) -> f32 {
+    let r = Rect::from_min_size(pos2(at.x, at.y - CELL / 2.0), vec2(LANGUAGE_W, CELL));
+    let tip = tr("Language");
+    let resp = ui.interact(r, ui.scope_id().with("bb_language"), Sense::click()).on_hover_text(tip);
+    a11y::menu_button(&resp, &format!("{tip} {}", tr(language.label())), a11y::menu_open(&resp));
+    if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+    }
+    ui.painter().text(pos2(r.min.x + 8.0, at.y), egui::Align2::LEFT_CENTER, tr(language.label()), semibold(11.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 9.0, at.y), vec2(12.0, 12.0)), Icon::Chevron, t.icon_secondary);
+    crate::right::menu_popup(&resp).show(|ui| {
+        for l in CodeLanguage::ALL {
+            if crate::right::menu_check(ui, l == language, tr(l.label()), "") {
+                app.run("board.setLanguage", json!({"language": l.id()}));
+                ui.close();
+            }
+        }
+    });
+    divider(ui, t, at.x + LANGUAGE_W, at.y)
+}
+
 /// A start or end point menu's width: the end's picture and the menu's chevron.
 const CAP_W: f32 = 62.0;
 /// The line style menu's width.
 const STYLE_W: f32 = CELL + 12.0;
 /// The connector part's width: the three routings, the two ends and the line style.
-const LINE_W: f32 = 3.0 * (CELL + 2.0) + 8.0 + 2.0 * CAP_W + 2.0 + 8.0 + STYLE_W + PART_END;
+const LINE_W: f32 = ROUTING_W + 2.0 * CAP_W + 2.0 + 8.0 + STYLE_W + PART_END;
+/// The three routing cells and the divider after them (a mind map's branch has none).
+const ROUTING_W: f32 = 3.0 * (CELL + 2.0) + 8.0;
 /// The weights the line style menu offers.
 const WEIGHTS: [f64; 4] = [1.0, 2.0, 4.0, 6.0];
 /// A dashed connector's dashes and gaps.
@@ -358,14 +484,16 @@ fn line_part(app: &mut FigApp, ui: &mut Ui, line: &Line, at: Pos2, t: &Tokens) {
         (Icon::CurvedConnector, tr("Curved"), Routing::Curved, "curved"),
     ];
     let mut x = at.x;
-    for (i, (icon, tip, routing, id)) in cells.into_iter().enumerate() {
-        let r = Rect::from_center_size(pos2(x + CELL / 2.0, at.y), vec2(CELL, CELL));
-        if crate::toolbar::tool_cell(ui, t, r, ("bb_line", i), icon, line.routing == routing, tip).clicked() {
-            app.run("board.setStyle", json!({"style": id}));
+    if !line.branch {
+        for (i, (icon, tip, routing, id)) in cells.into_iter().enumerate() {
+            let r = Rect::from_center_size(pos2(x + CELL / 2.0, at.y), vec2(CELL, CELL));
+            if crate::toolbar::tool_cell(ui, t, r, ("bb_line", i), icon, line.routing == routing, tip).clicked() {
+                app.run("board.setStyle", json!({"style": id}));
+            }
+            x += CELL + 2.0;
         }
-        x += CELL + 2.0;
+        x = divider(ui, t, x - 2.0, at.y);
     }
-    x = divider(ui, t, x - 2.0, at.y);
     for (start, cap) in [(true, line.start), (false, line.end)] {
         cap_menu(app, ui, t, pos2(x, at.y), start, cap);
         x += CAP_W + 2.0;

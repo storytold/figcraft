@@ -16,7 +16,8 @@
 //! What can't be represented (filters other than shadows and blurs, rotated repeating patterns,
 //! nested clip paths) is left out and reported in the import notes. Linked files are never read: only data URIs.
 
-mod budget;
+use craft_svg::tree::{self, usvg};
+
 mod css_color;
 mod fx;
 mod paint;
@@ -701,97 +702,10 @@ fn simple_hash(b: &[u8]) -> String {
     format!("{h1:016x}{h2:016x}")
 }
 
-/// Deepest element nesting the parser is given: deeper documents would exhaust the stack.
-const MAX_NESTING: usize = 512;
-
-/// How deep elements nest in `data`: a scan of its tags (comments, CDATA, declarations and quoted
-/// attribute values skipped) that stops once past `limit`.
-pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
-    let find = |from: usize, pat: &[u8]| -> usize {
-        data.get(from..).and_then(|r| r.windows(pat.len()).position(|w| w == pat)).map_or(data.len(), |p| from + p + pat.len())
-    };
-    let (mut depth, mut max, mut i) = (0usize, 0usize, 0usize);
-    while let Some(off) = data.get(i..).and_then(|r| r.iter().position(|b| *b == b'<')) {
-        i += off;
-        let rest = data.get(i..).unwrap_or(&[]);
-        if rest.starts_with(b"<!--") {
-            i = find(i + 4, b"-->");
-        } else if rest.starts_with(b"<![CDATA[") {
-            i = find(i + 9, b"]]>");
-        } else if rest.starts_with(b"<?") || rest.starts_with(b"<!") {
-            i = find(i + 2, b">");
-        } else if rest.starts_with(b"</") {
-            depth = depth.saturating_sub(1);
-            i = find(i + 2, b">");
-        } else {
-            // A start tag: to its `>` outside quotes; `/>` closes it.
-            let (mut quote, mut j, mut closed) = (None, i + 1, false);
-            while let Some(&c) = data.get(j) {
-                match quote {
-                    Some(q) if c == q => quote = None,
-                    Some(_) => {}
-                    None if c == b'"' || c == b'\'' => quote = Some(c),
-                    None if c == b'>' => {
-                        closed = data.get(j.wrapping_sub(1)) == Some(&b'/');
-                        break;
-                    }
-                    None => {}
-                }
-                j += 1;
-            }
-            if !closed {
-                depth += 1;
-                max = max.max(depth);
-                if max > limit {
-                    return max;
-                }
-            }
-            i = j + 1;
-        }
-    }
-    max
-}
-
-/// Whether `data` nests elements more than [`MAX_NESTING`] deep: the byte scan first, then the
-/// parsed tree (walked without recursion), which also counts what DTD entity references expand to.
-pub(crate) fn too_deep(data: &[u8]) -> bool {
-    if nesting(data, MAX_NESTING) > MAX_NESTING {
-        return true;
-    }
-    let Ok(text) = std::str::from_utf8(data) else { return false };
-    let opt = usvg::roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
-    let Ok(xml) = usvg::roxmltree::Document::parse_with_options(text, opt) else { return false };
-    // Depth-first by sibling and parent links; the root is depth 0, each child one deeper.
-    let (mut node, mut depth) = (xml.root(), 0usize);
-    loop {
-        if let Some(child) = node.first_child() {
-            node = child;
-            depth += 1;
-            if depth > MAX_NESTING {
-                return true;
-            }
-            continue;
-        }
-        loop {
-            if let Some(next) = node.next_sibling() {
-                node = next;
-                break;
-            }
-            match node.parent() {
-                Some(up) if depth > 0 => {
-                    node = up;
-                    depth -= 1;
-                }
-                _ => return false,
-            }
-        }
-    }
-}
-
-fn options(data: &[u8], limits: budget::Limits) -> usvg::Options<'static> {
+fn options(data: &[u8], limits: tree::Limits) -> usvg::Options<'static> {
     // Only data URIs, within budgets: an opened or pasted SVG never pulls other files off the disk
     // and never expands without limit.
-    let mut o = usvg::Options { image_href_resolver: budget::resolver(limits), ..Default::default() };
+    let mut o = usvg::Options { image_href_resolver: tree::image_resolver(limits), ..Default::default() };
     if data.windows(4).any(|w| w == b"text") {
         text::prepare(&mut o);
     }
@@ -869,29 +783,18 @@ pub fn import_svg(doc: &mut Document, data: &[u8], parent: NodeId, x: f64, y: f6
 
 /// [`import_svg`], with notes on what couldn't be represented.
 pub fn import_svg_with_notes(doc: &mut Document, data: &[u8], parent: NodeId, x: f64, y: f64, name: &str) -> Result<Imported, ImportError> {
-    import_within(doc, data, parent, x, y, name, budget::Limits::default())
+    import_within(doc, data, parent, x, y, name, tree::Limits::default())
 }
 
-fn import_within(
-    doc: &mut Document,
-    data: &[u8],
-    parent: NodeId,
-    x: f64,
-    y: f64,
-    name: &str,
-    limits: budget::Limits,
-) -> Result<Imported, ImportError> {
+fn import_within(doc: &mut Document, data: &[u8], parent: NodeId, x: f64, y: f64, name: &str, limits: tree::Limits) -> Result<Imported, ImportError> {
     // SVGZ is unpacked here, within a budget, so every check below sees the real document.
-    let data = budget::document(data, &limits).map_err(ImportError)?;
-    if too_deep(&data) {
-        return Err(ImportError(format!("elements nested more than {MAX_NESTING} deep")));
-    }
+    let text = craft_svg::svgz::text(data, limits.bytes).map_err(|e| ImportError(e.to_string()))?;
     // usvg reads neither `color()` nor `color-mix()`: they are resolved first.
-    let (data, color_notes) = match css_color::resolve(&data, doc.color_profile) {
-        Some(resolved) => resolved,
-        None => (data, Vec::new()),
+    let (data, color_notes) = match css_color::resolve(text.as_bytes(), doc.color_profile) {
+        Some((resolved, notes)) => (resolved, notes),
+        None => (text.into_owned().into_bytes(), Vec::new()),
     };
-    let tree = usvg::Tree::from_data(&data, &options(&data, limits)).map_err(|e| ImportError(e.to_string()))?;
+    let tree = tree::parse(&data, &limits, &options(&data, limits)).map_err(|e| ImportError(e.to_string()))?;
     let size = tree.size();
     let frame =
         doc.create(parent, NodeKind::Frame, name, x, y, f64::from(size.width()), f64::from(size.height())).map_err(|e| ImportError(e.to_string()))?;

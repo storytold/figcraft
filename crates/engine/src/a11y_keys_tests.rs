@@ -103,3 +103,24 @@ fn a_settings_file_without_or_with_a_wrong_interface_size_reads_as_the_systems_s
     let p: crate::Prefs = serde_json::from_value(json!({"ui_scale": 99, "theme": "dark"})).unwrap();
     assert_eq!((p.ui_scale, p.theme.as_str()), (crate::UI_SCALE_MAX, "dark"));
 }
+
+#[test]
+fn the_invert_zoom_preference_toggles_and_is_saved() {
+    let mut s = Session::new();
+    assert!(!s.prefs.invert_zoom, "off by default");
+    assert_eq!(s.execute("pref.invertZoom", &json!({})).unwrap()["on"], true);
+    assert!(s.prefs.invert_zoom);
+    let saved = serde_json::to_value(&s.prefs).unwrap();
+    assert_eq!(saved["invert_zoom"], true);
+    let loaded: crate::Prefs = serde_json::from_value(saved).unwrap();
+    assert!(loaded.invert_zoom);
+    assert_eq!(s.execute("pref.invertZoom", &json!({"on": false})).unwrap()["on"], false);
+    assert!(!s.prefs.invert_zoom);
+    let saved = serde_json::to_value(&s.prefs).unwrap();
+    assert_eq!(saved["invert_zoom"], false);
+    let loaded: crate::Prefs = serde_json::from_value(saved).unwrap();
+    assert!(!loaded.invert_zoom, "off persists after being on");
+    // Preferences saved before the setting existed read it as off.
+    let old: crate::Prefs = serde_json::from_value(json!({"theme": "dark"})).unwrap();
+    assert!(!old.invert_zoom);
+}
