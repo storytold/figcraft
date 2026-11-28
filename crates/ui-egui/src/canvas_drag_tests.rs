@@ -176,7 +176,8 @@ fn dragging_a_plain_frame_draws_its_sprite_with_the_outline() {
     u.button(p + vec2(90.0, 40.0), false);
     u.frame(vec![]);
     assert_eq!(u.app.canvas.submitted_skip(), Some(&[][..]), "the whole document is rendered again");
-    assert!(u.app.canvas.sprite_rect(&u.app).is_some(), "the sprite stays until that render is shown");
+    // The render can already be on screen by the end of this frame; until it is, the sprite stays.
+    assert!(u.app.canvas.sprite_rect(&u.app).is_some() || u.app.canvas.shows_whole_render(), "the sprite stays until that render is shown");
     settle(&mut u);
     u.frame(vec![]);
     assert!(u.app.canvas.sprite_rect(&u.app).is_none(), "the sprite goes once that render is shown");
@@ -245,7 +246,8 @@ fn a_cancelled_drag_keeps_its_sprite_until_the_restored_document_shows_and_the_n
     u.app.session.cancel_interaction().unwrap();
     u.frame(vec![]);
     assert_eq!(u.app.canvas.submitted_skip(), Some(&[][..]), "the restored document is rendered whole");
-    assert!(u.app.canvas.sprite_rect(&u.app).is_some(), "the sprite stays until that render is shown");
+    // The render can already be on screen by the end of this frame; until it is, the sprite stays.
+    assert!(u.app.canvas.sprite_rect(&u.app).is_some() || u.app.canvas.shows_whole_render(), "the sprite stays until that render is shown");
     u.button(p, false);
     settle(&mut u);
     u.frame(vec![]);
