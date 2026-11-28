@@ -1,6 +1,7 @@
 use super::{
-    CodeLang, Color, Ctx, Document, GradientKind, LayoutMode, Node, NodeId, NodeKind, PADDING, Paint, PaintKind, drop_shadow, first_fill,
-    gradient_axis, gradient_stops, indent, literal, named, native_gradient_kind, num, radius, stroke_color, visible_fills,
+    CodeLang, Color, Ctx, Document, GradientKind, ImageScaleMode, LayoutMode, Node, NodeId, NodeKind, PADDING, Paint, PaintKind, drop_shadow,
+    first_fill, gradient_axis, gradient_stops, image_asset, indent, literal, named, native_gradient_kind, num, paints_a_box, pattern_notes, radius,
+    stroke_color, visible_fills,
 };
 
 // ------------------------------------------------------------------ SwiftUI
@@ -30,24 +31,50 @@ fn swift_gradient(g: &figcraft_color::Gradient, w: f64, h: f64, opacity: f32) ->
     }
 }
 
-/// One paint (the one at document index `i`) as SwiftUI; `None` for an image or pattern, which no
-/// native target writes yet. Only a solid at index 0 takes the `fill` variable's name.
-fn swift_paint(doc: &Document, n: &Node, i: usize, p: &Paint) -> Option<String> {
+/// One paint (the one at document index `i`) as SwiftUI: a shape style, or for an image a view of
+/// its asset (`true`); `None` for a pattern (see [`pattern_notes`]). Only a solid at index 0 takes
+/// the `fill` variable's name.
+fn swift_paint(doc: &Document, n: &Node, i: usize, p: &Paint) -> Option<(String, bool)> {
     match &p.kind {
         PaintKind::Solid { .. } => {
             let c = swift_color(p.solid_color()?);
-            Some(if i == 0 { named(doc, n, "iOS", &["fill"], c) } else { c })
+            Some((if i == 0 { named(doc, n, "iOS", &["fill"], c) } else { c }, false))
         }
-        PaintKind::Gradient(g) => Some(swift_gradient(g, n.width, n.height, p.opacity)),
-        PaintKind::Image(_) | PaintKind::Pattern(_) => None,
+        PaintKind::Gradient(g) => Some((swift_gradient(g, n.width, n.height, p.opacity), false)),
+        PaintKind::Image(img) => {
+            let scale = match img.scale_mode {
+                ImageScaleMode::Fit => ".resizable().scaledToFit()",
+                ImageScaleMode::Tile => ".resizable(resizingMode: .tile)",
+                ImageScaleMode::Fill | ImageScaleMode::Crop => ".resizable().scaledToFill()",
+            };
+            let opacity = if p.opacity < 1.0 { format!(".opacity({})", num(f64::from(p.opacity))) } else { String::new() };
+            Some((format!("Image({}){scale}{opacity}", literal(&image_asset(doc, img).0, false)), true))
+        }
+        PaintKind::Pattern(_) => None,
     }
 }
 
 /// The modifiers filling a rectangle or ellipse: the bottom paint fills the `shape`, and each paint
-/// above it is a copy of the shape laid over it.
+/// above it is a copy of the shape, or an image, laid over it.
 fn swift_shape_fills(doc: &Document, n: &Node, shape: &str) -> Vec<String> {
-    let paints = visible_fills(n).filter_map(|(i, p)| swift_paint(doc, n, i, p));
-    paints.enumerate().map(|(at, c)| if at == 0 { format!(".fill({c})") } else { format!(".overlay({shape}.fill({c}))") }).collect()
+    let paints: Vec<(String, bool)> = visible_fills(n).filter_map(|(i, p)| swift_paint(doc, n, i, p)).collect();
+    let mut mods: Vec<String> = Vec::new();
+    // A shape with no fill draws in the foreground colour, so an image at the bottom lies over a clear one.
+    if paints.first().is_some_and(|(_, image)| *image) {
+        mods.push(".fill(Color.clear)".into());
+    }
+    for (c, image) in &paints {
+        mods.push(match (mods.is_empty(), image) {
+            (true, _) => format!(".fill({c})"),
+            (false, true) => format!(".overlay({c})"),
+            (false, false) => format!(".overlay({shape}.fill({c}))"),
+        });
+    }
+    // An image filling the shape is larger than it, so the shape clips what lies over it.
+    if paints.iter().any(|(_, image)| *image) {
+        mods.push(format!(".clipShape({shape})"));
+    }
+    mods
 }
 
 fn swift_weight(w: u16) -> &'static str {
@@ -103,6 +130,9 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
             out.push_str(&format!("{pad}    {m}\n"));
         }
         return;
+    }
+    if paints_a_box(n) {
+        out.push_str(&pattern_notes(n, &pad));
     }
     // A bound variable's iOS code syntax in place of the value.
     let bound = |fields: &[&str], value: String| named(doc, n, "iOS", fields, value);
@@ -181,9 +211,14 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
             }
             mods.push(format!(".frame(width: {w}, height: {h}, alignment: .topLeading)"));
             // Each background goes behind the ones before it, so the top fill is written first.
-            mods.extend(visible_fills(n).rev().filter_map(|(i, p)| swift_paint(doc, n, i, p)).map(|c| format!(".background({c})")));
+            let paints: Vec<(String, bool)> = visible_fills(n).rev().filter_map(|(i, p)| swift_paint(doc, n, i, p)).collect();
+            let image = paints.iter().any(|(_, image)| *image);
+            mods.extend(paints.into_iter().map(|(c, _)| format!(".background({c})")));
             if radius(n) > 0.0 {
                 mods.push(format!(".clipShape(RoundedRectangle(cornerRadius: {corner}))"));
+            } else if image {
+                // An image filling the frame is larger than it.
+                mods.push(".clipped()".into());
             }
         }
         _ => {
@@ -192,7 +227,9 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
             mods.push(format!(".frame(width: {w}, height: {h})"));
         }
     }
-    if let Some(c) = stroke_color(n) {
+    if !matches!(n.kind, NodeKind::Vector { .. })
+        && let Some(c) = stroke_color(n)
+    {
         mods.push(format!(
             ".overlay(RoundedRectangle(cornerRadius: {corner}).stroke({}, lineWidth: {}))",
             bound(&["stroke"], swift_color(c)),

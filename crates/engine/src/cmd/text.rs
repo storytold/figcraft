@@ -604,7 +604,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.style",
             "Style text range",
-            "{id?, start?, end?, fontFamily?, fontStyle?, fontWeight?, fontVariations? | variationSettings?, fontSize?, lineHeight?, letterSpacing?, textDecoration?, textDecorationStyle?, textDecorationThickness?, textDecorationOffset?, textDecorationSkipInk?, textDecorationColor?, textCase?, hyperlink?, textFills?}",
+            "{id?, start?, end?, fontFamily?, fontStyle?, fontWeight?, fontVariations? | variationSettings?, fontSize?, lineHeight?, letterSpacing?, textDecoration?, textDecorationStyle?, textDecorationThickness?, textDecorationOffset?, textDecorationSkipInk?, textDecorationColor?, textCase?, textPosition? (none|superscript|subscript), hyperlink?, textFills?}",
             true,
             |s, p| {
                 let ids = req_targets("text.style", s, p)?;
@@ -642,7 +642,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.edit.key",
             "Text key",
-            "{key: Backspace|Delete|Left|Right|Up|Down|Home|End|Enter|Tab|Escape|SelectAll, shift?, alt?, cmd?}  in a list, Tab nests the item and Shift+Tab, Enter on an empty item or Backspace at its start move it out; in a code block, Tab types two spaces and Enter keeps the line's indent",
+            "{key: Backspace|Delete|Left|Right|Up|Down|Home|End|Enter|Tab|Escape|SelectAll, shift?, alt?, cmd?}  in a list, Tab nests the item and Shift+Tab, Enter on an empty item or Backspace at its start move it out; in a code block, Tab types two spaces and Enter keeps the line's indent; elsewhere Tab and Shift+Tab edit the next or previous text layer of the frame in reading order (rows top to bottom, each left to right), all of it selected, and do nothing at the last and the first (in a board object or a widget's field Tab types a tab)",
             true,
             |s, p| {
                 let k = req_string("text.edit.key", p, "key")?;

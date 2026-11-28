@@ -12,6 +12,43 @@ use crate::sim::Rng;
 use crate::{Error, Replica, diff};
 
 #[test]
+fn legacy_welcome_without_secret_preserves_access_and_snapshot() {
+    for access in [Access::View, Access::Comment, Access::Edit] {
+        let welcome = ServerMsg::Welcome {
+            session: 77,
+            client_id: 4,
+            seq: 10,
+            catch_up: CatchUp::Snapshot(Replica::new(Document::new("Legacy share")).snapshot().unwrap()),
+            processed: Processed::default(),
+            peers: vec![],
+            access,
+            secret: 0,
+        };
+        let mut legacy = encode(&welcome).unwrap();
+        assert_eq!(legacy.pop(), Some(0), "omit only the final reconnect secret");
+        assert!(decode::<ServerMsg>(&legacy, legacy.len()).is_err(), "the strict decoder reproduces the old-host failure");
+        assert_eq!(crate::message::decode_server(&legacy, legacy.len()).unwrap(), welcome);
+        assert!(crate::message::decode_server(&legacy, legacy.len() - 1).is_err(), "keep the size limit");
+        assert!(crate::message::decode_server(&legacy[..legacy.len() - 1], legacy.len()).is_err(), "access is mandatory");
+        let mut partial_secret = legacy.clone();
+        partial_secret.push(0x80);
+        assert!(crate::message::decode_server(&partial_secret, usize::MAX).is_err(), "do not hide a truncated secret");
+        legacy[0] = WIRE_VERSION + 1;
+        assert!(crate::message::decode_server(&legacy, usize::MAX).is_err(), "keep the wire version check");
+    }
+}
+
+#[test]
+fn server_compatibility_keeps_current_messages_and_rejects_trailing_bytes() {
+    for msg in samples().1 {
+        let mut bytes = encode(&msg).unwrap();
+        assert_eq!(crate::message::decode_server(&bytes, bytes.len()).unwrap(), msg);
+        bytes.push(0);
+        assert!(crate::message::decode_server(&bytes, usize::MAX).is_err(), "trailing bytes after {msg:?}");
+    }
+}
+
+#[test]
 fn encoding_into_a_prefix_keeps_the_wire_body() {
     let msg = moved_layer();
     let prefix = b"container header".to_vec();

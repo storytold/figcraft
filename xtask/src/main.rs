@@ -256,6 +256,29 @@ fn parity() -> bool {
             md.push_str(&format!("- `{m}`\n"));
         }
     }
+    let rows = figcraft_engine::catalog::headless_rows();
+    let ids: Vec<(&str, bool)> = rows.iter().map(|r| (r.id, r.value == "yes")).collect();
+    let errs = figcraft_engine::catalog::headless_errors(figcraft_engine::catalog::HEADLESS, &ids);
+    if !errs.is_empty() {
+        eprintln!("parity: RFC-0052 headless marks in crates/engine/src/catalog.rs:\n  {}", errs.join("\n  "));
+        return false;
+    }
+    let (yes, no, partial, unknown) = figcraft_engine::catalog::headless_counts(&rows);
+    md.push_str(&format!(
+        "\n## Headless\n\n**Headless ([RFC-0052](https://github.com/storytold/craft-contrib/blob/main/rfcs/0052-headless-reach.md)): {yes} yes, {} no (window {}, os {}, engine-gap {}), {partial} partial, {unknown} unknown.**\n\nAn item is `headless: yes` when its id is in the engine registry that `figcraft-cli` and the MCP server load. The UI-layer ids that light up a menu item above don't count. Other values are the hand marks in `HEADLESS` (`crates/engine/src/catalog.rs`), or `unknown`.\n",
+        no.iter().sum::<usize>(),
+        no[0],
+        no[1],
+        no[2]
+    ));
+    let other: Vec<_> = rows.iter().filter(|r| r.value != "yes").collect();
+    if !other.is_empty() {
+        md.push('\n');
+    }
+    for r in other {
+        let reach = r.reach.map(|x| format!(", reach: {x} ({})", r.why)).unwrap_or_default();
+        md.push_str(&format!("- `{}` {}: headless: {}{reach}\n", r.id, r.label, r.value));
+    }
     md.push_str("\nMenu coverage measures breadth only; see docs/target-app-parity.md for depth and fidelity.\n");
     let path = root().join("docs/parity-checklist.md");
     if let Err(e) = std::fs::write(&path, md) {

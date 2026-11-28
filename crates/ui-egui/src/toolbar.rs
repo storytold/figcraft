@@ -90,7 +90,7 @@ const GROUPS: &[Group] = &[
     Group::tools("comment", tr_noop("Comment"), &[(ToolId::Comment, Icon::Comment)]),
 ];
 
-/// A board's toolbar: moving around, ink, stickies, shapes, connectors, text, sections, stamps.
+/// A board's toolbar: moving around, ink, stickies, shapes, connectors, text and code, sections, stamps.
 const BOARD_GROUPS: &[Group] = &[
     Group::tools("bmove", tr_noop("Move tools"), &[(ToolId::Move, Icon::Move), (ToolId::Hand, Icon::Hand)]),
     Group::tools(
@@ -99,9 +99,15 @@ const BOARD_GROUPS: &[Group] = &[
         &[(ToolId::Marker, Icon::Marker), (ToolId::Highlighter, Icon::Highlighter), (ToolId::Eraser, Icon::Eraser)],
     ),
     Group { key: "sticky", name: tr_noop("Sticky note colors"), tools: &[(ToolId::Sticky, Icon::Board)], options: Options::Colors },
-    Group { key: "bshape", name: tr_noop("Shapes"), tools: &[(ToolId::BoardShape, Icon::Shapes)], options: Options::Shapes },
+    Group {
+        key: "bshape",
+        name: tr_noop("Shapes"),
+        tools: &[(ToolId::BoardShape, Icon::Shapes), (ToolId::MindMap, Icon::MindMap)],
+        options: Options::Shapes,
+    },
     Group::tools("connector", tr_noop("Connector"), &[(ToolId::Connector, Icon::Connector)]),
-    Group::tools("text", tr_noop("Text"), &[(ToolId::Text, Icon::Text)]),
+    // Its own key: a design file's text group remembers other tools.
+    Group::tools("btext", tr_noop("Text tools"), &[(ToolId::Text, Icon::Text), (ToolId::CodeBlock, Icon::Code)]),
     Group::tools("section", tr_noop("Section"), &[(ToolId::Section, Icon::Section)]),
     Group { key: "stamp", name: tr_noop("Stamps"), tools: &[(ToolId::Stamp, Icon::Stamp)], options: Options::Stamps },
     Group::tools("comment", tr_noop("Comment"), &[(ToolId::Comment, Icon::Comment)]),
@@ -181,6 +187,7 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
         mode_switcher(app, ui, x, cy, t);
     }
     ui.set_clip_rect(outer_clip);
+    crate::canvas::ink_bar::show(app, ui, rect);
     help_button(app, ui, canvas, rect, t);
 }
 
@@ -338,6 +345,8 @@ fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Toke
     ui.painter().circle_filled(hr.center(), 16.0, t.panel);
     ui.painter().text(hr.center(), Align2::CENTER_CENTER, "?", crate::theme::regular(15.0), t.text);
     crate::right::menu_popup(&hresp).show(|ui| {
+        // The Nightly has no update check: the Launcher keeps it on the version it installed.
+        let checks = !crate::channel::is_nightly();
         for (l, c) in [
             (tr("Getting started"), "help.gettingStarted"),
             (tr("Keyboard shortcuts"), "help.shortcuts"),
@@ -345,6 +354,9 @@ fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Toke
             (tr("Check for updates…"), "help.checkForUpdates"),
             (tr("About FigCraft"), "help.about"),
         ] {
+            if c == "help.checkForUpdates" && !checks {
+                continue;
+            }
             if crate::right::menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")) {
                 crate::menus::invoke(app, c);
                 ui.close();
@@ -546,7 +558,7 @@ fn done_button(ui: &mut Ui, t: &Tokens, x: f32, cy: f32, tip: &str) -> bool {
 fn options_flyout(app: &mut FigApp, ui: &mut Ui, g: &Group, bottom_left: egui::Pos2) {
     let t = Tokens::get(ui.ctx());
     let Some(&(tool, _)) = g.tools.first() else { return };
-    let items = crate::board_bar::choices(g.options, &app.session.tool.board);
+    let items = crate::board_bar::choices(g.options, &app.session.tool.board, app.session.tool.tool);
     let (cell, pad) = (32.0, 8.0);
     let cols = items.len().clamp(1, 8);
     let rows = items.len().div_ceil(cols);
@@ -566,14 +578,14 @@ fn options_flyout(app: &mut FigApp, ui: &mut Ui, g: &Group, bottom_left: egui::P
             }
             crate::board_bar::paint_choice(ui.painter(), r.shrink(5.0), &c.mark, t.menu_text);
             if resp.clicked() {
-                chosen = Some(c.params.clone());
+                chosen = Some((c.tool.unwrap_or(tool), c.params.clone()));
             }
         }
     });
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.ui.tool_flyout = None;
     }
-    if let Some(params) = chosen {
+    if let Some((tool, params)) = chosen {
         app.run(&format!("tool.{}", tool.id()), params);
         app.ui.tool_flyout = None;
     }

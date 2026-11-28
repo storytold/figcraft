@@ -15,6 +15,7 @@ use crate::{BatchStep, EngineError, Result, Session, bad, spec};
 
 mod clipboard;
 mod props;
+pub(crate) use props::font_style_warnings;
 pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;
 mod vector_clipboard;
@@ -72,6 +73,7 @@ fn node_find(s: &mut Session, p: &Value) -> Result<Value> {
     let text = filter("text")?;
     let component = filter("component")?;
     let kind = filter("type")?;
+    let orphaned = get(p, "orphaned").map(|v| v.as_bool().ok_or_else(|| bad(cmd, "`orphaned` must be a boolean"))).transpose()?;
     if let Some(kind) = &kind
         && !LAYER_TYPES.iter().any(|t| t.eq_ignore_ascii_case(kind))
     {
@@ -100,6 +102,7 @@ fn node_find(s: &mut Session, p: &Value) -> Result<Value> {
             || component.as_ref().is_some_and(
                 |q| !matches!(&n.kind, NodeKind::Instance { component, .. } if doc.node(*component).is_some_and(|c| fold(&c.name).contains(q))),
             )
+            || orphaned.is_some_and(|want| !matches!(&n.kind, NodeKind::Instance { component, .. } if doc.contains(*component) != want))
         {
             continue;
         }
@@ -115,7 +118,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("edit.undo", "Undo", "{}", false, |s, _| Ok(json!({"undone": s.undo()?}))),
         spec!("edit.redo", "Redo", "{}", false, |s, _| Ok(json!({"redone": s.redo()?}))),
-        spec!("edit.delete", "Delete", "{ids?}", true, delete),
+        spec!("edit.delete", "Delete", "{ids?} → {deleted, hidden, orphaned? (surviving instances that lost their main)}", true, delete),
         spec!(
             "edit.duplicate",
             "Duplicate",
@@ -347,7 +350,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "node.find",
             "Find layers",
-            "{root? (strict descendants; default current page), name?, type? (canonical layer type), text?, component? (main component name), limit? (0-10000; default 100)}: every filter must match; name, text and component are case-insensitive substrings, type is exact (any case); returns {ids, total} and does not select",
+            "{root? (strict descendants; default current page), name?, type? (canonical layer type), text?, component? (main component name), orphaned?: bool (instances without a main if true, with a main if false), limit? (0-10000; default 100)}: every filter must match; name, text and component are case-insensitive substrings, type is exact (any case); returns {ids, total} and does not select",
             false,
             node_find
         ),
@@ -356,7 +359,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move layer into",
             "{ids?, parent, index? (final position among parent's children, bottom first; default top)}",
             true,
-            reparent
+            |s, p| reparent(s, p, "node.reparent", false)
+        ),
+        spec!(
+            "layers.reparent",
+            "Move layer into",
+            "{ids (in the destination's stored child order), parent, index? (final position among parent's children, bottom first; default top)}",
+            true,
+            |s, p| reparent(s, p, "layers.reparent", true)
         ),
         spec!("node.reorder", "Reorder layer", "{id, index}", true, |s, p| {
             let i = req_id("node.reorder", p, "id")?;
@@ -614,6 +624,26 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     // Select the parent frame like Figma? Figma clears the selection.
     s.set_selection(vec![]);
     Ok(json!({"deleted": ids, "hidden": hidden}))
+}
+
+/// Add only instances that still exist after the delete and instance synchronisation.
+pub(crate) fn report_orphaned_instances(result: &mut Value, before: &Document, after: &Document) {
+    let removed: BTreeSet<_> = after
+        .changed_ids(before, usize::MAX)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|&id| !after.contains(id) && matches!(before.node(id).map(|n| &n.kind), Some(NodeKind::Component { .. })))
+        .collect();
+    if removed.is_empty() {
+        return;
+    }
+    let orphaned: Vec<_> =
+        after.nodes().filter(|n| matches!(&n.kind, NodeKind::Instance { component, .. } if removed.contains(component))).map(|n| n.id).collect();
+    if !orphaned.is_empty()
+        && let Some(result) = result.as_object_mut()
+    {
+        result.insert("orphaned".into(), json!(orphaned));
+    }
 }
 
 /// Layers duplicated last (Duplicate or Alt-drag) and their copies, in the same order. While the

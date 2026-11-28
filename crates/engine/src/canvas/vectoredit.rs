@@ -642,10 +642,12 @@ fn index(cmd: &str, p: &Value, key: &str) -> Result<usize> {
 }
 
 /// Delete the points and segments of `parts` (`heal` keeps paths through deleted points closed).
-pub(crate) fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool) -> Result<()> {
+pub(crate) fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool, then_select_next: bool) -> Result<()> {
     let doc = s.doc_mut()?;
+    let mut next = Vec::new();
     for EditPart { id, vertices: verts, segments: segs } in parts {
-        edit(doc, id, |net| {
+        let following = edit(doc, id, |net| {
+            let following = if then_select_next { points_following(net, &verts) } else { Vec::new() };
             // Segments first (their indices refer to the network before points go).
             let segs: Vec<usize> =
                 segs.into_iter().filter(|si| net.segments.get(*si).is_some_and(|x| !verts.contains(&x.a) && !verts.contains(&x.b))).collect();
@@ -654,13 +656,50 @@ pub(crate) fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool
             // Point indices may have shifted: find them again by position.
             let now: Vec<usize> = pts.iter().filter_map(|p| net.vertices.iter().position(|v| v.point() == *p)).collect();
             ops::delete_vertices(net, &now, heal);
+            following.iter().filter_map(|p| net.vertices.iter().position(|v| v.point() == *p)).collect::<Vec<usize>>()
         })?;
+        next.push((id, following));
     }
     set_state(s, |ve| {
         ve.clear_selection();
         ve.anchor = None;
         ve.pen_out = None;
+        for (id, following) in next {
+            if id == ve.id {
+                ve.vertices = following;
+            } else if let Some(o) = ve.others.iter_mut().find(|o| o.id == id) {
+                o.vertices = following;
+            }
+        }
     })
+}
+
+fn points_following(net: &VectorNetwork, deleted: &[usize]) -> Vec<Point> {
+    let step = |from: usize, forward: bool| {
+        net.segments.iter().find_map(|sg| match forward {
+            true => (sg.a == from).then_some(sg.b),
+            false => (sg.b == from).then_some(sg.a),
+        })
+    };
+    let mut out: Vec<Point> = Vec::new();
+    for &v in deleted {
+        let found = [true, false].into_iter().find_map(|forward| {
+            let mut at = v;
+            for _ in 0..net.vertices.len() {
+                at = step(at, forward)?;
+                if !deleted.contains(&at) {
+                    return Some(at);
+                }
+            }
+            None
+        });
+        if let Some(p) = found.and_then(|i| net.vertices.get(i)).map(|x| x.point())
+            && !out.contains(&p)
+        {
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// The points a command acts on, per layer: `vertices` names points of the active layer; without
@@ -1112,7 +1151,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("vector.deleteHeal", "Delete and heal selection", "{vertices?} (default the selected points of every edited layer)", true, |s, p| {
             let parts = point_sets(s, p, false)?.into_iter().map(|(id, vertices)| EditPart { id, vertices, segments: vec![] }).collect();
-            delete_selection(s, parts, true)?;
+            delete_selection(s, parts, true, true)?;
             Ok(json!({"ok": true}))
         }),
         spec!("vector.edit.delete", "Delete points", "{vertices?, segments?} (default the selection in every edited layer)", true, |s, p| {
@@ -1121,7 +1160,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 (None, None) => ve.parts(),
                 (v, sg) => vec![EditPart { id: ve.id, vertices: v.unwrap_or_default(), segments: sg.unwrap_or_default() }],
             };
-            delete_selection(s, parts, false)?;
+            delete_selection(s, parts, false, true)?;
             Ok(json!({"ok": true}))
         }),
         spec!("vector.edit.cornerRadius", "Point corner radius", "{radius, vertices?}", true, |s, p| {

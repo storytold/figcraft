@@ -22,6 +22,7 @@ fn reset_for_reconnect(live: &mut Live) {
     live.presence.clear();
     live.sent = None;
     live.signals = false;
+    live.shared_branches = false;
     live.chats.clear();
     live.chat.clear();
     live.spotlight = None;

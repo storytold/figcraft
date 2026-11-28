@@ -4,7 +4,7 @@ use figcraft_color::{Color, Paint};
 use figcraft_doc::{
     AutoLayout, Brush, ChildLayout, DecorationStyle, DevStatus, Document, Effect, GridTrack, LayoutMode, LetterSpacing, LineHeight, ListStyle,
     MAX_LIST_INDENT, MaskType, Node, NodeId, NodeKind, Sizing, StrokeCap, StrokeProps, TextAutoResize, TextCase, TextData, TextDecoration,
-    WidthPoint, WidthPreset, WidthProfile, style_weight, valid_axis_tag, valid_feature_tag,
+    TextPosition, WidthPoint, WidthPreset, WidthProfile, style_weight, valid_axis_tag, valid_feature_tag,
 };
 use figcraft_geom::{Affine, Point};
 use serde_json::{Map, Value, json};
@@ -23,7 +23,7 @@ clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, paddi
 mainAlign (min|center|max, or the auto gaps spaceBetween|spaceAround|spaceEvenly), crossAlign (min|center|max|baseline: first text baselines, horizontal layouts), contentAlign (wrapped lines: auto = packed where crossAlign says | spaceBetween), wrap (rows of a horizontal layout, columns of a vertical one), strokesIncluded (the frame's inside stroke takes up space), reverseZ (canvas stacking: true = first on top), \
 columnGap / rowGap (aliases of gap / crossGap), gridColumns, gridRows, columnTracks / rowTracks ([120 | \"1fr\" | \"auto\" | {sizing, value}]), \
 gridColumn / gridRow (0-based cell anchor, null = auto), gridColumnSpan, gridRowSpan, gridAlignH / gridAlignV (a grid child's alignment in its cell: min|center|max, auto/null = the frame's), sizingH / sizingV (fixed|hug|fill), \
-absolute (ignore auto layout; follows constraints), minWidth, maxWidth, minHeight, maxHeight (null removes), constraints {horizontal, vertical}, grids, exports, characters, fontFamily, fontStyle, \
+absolute (ignore auto layout; follows constraints), minWidth, maxWidth, minHeight, maxHeight (null removes), constraints {horizontal, vertical}, grids, exports, characters, fontFamily, fontStyle, fontWeight (a number: 400 Regular, 600 Semi Bold — the nearest face the family has), \
 fontSize, lineHeight (auto|px|\"150%\"), letterSpacing (px|\"2%\"), textAlign (left|center|right|justified), textAlignVertical, textAutoResize \
 (widthAndHeight|height|none|truncate), textDecoration, textDecorationStyle (solid|dotted|wavy), textDecorationThickness / textDecorationOffset \
 (auto|px|\"10%\" of the font size; the offset runs from the baseline down to an underline's top edge), textDecorationSkipInk (underlines break around descenders), \
@@ -980,6 +980,7 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
         | "letterSpacing"
         | "textDecoration"
         | "textCase"
+        | "textPosition"
         | "hyperlink"
         | "textFills"
         | "fontVariations"
@@ -1401,6 +1402,10 @@ pub fn apply_text_style(cmd: &str, t: &mut TextData, start: usize, end: usize, k
         "textCase" => {
             let c: TextCase = enum_of(v).ok_or_else(|| bad(cmd, "textCase: original|upper|lower|title|smallCaps"))?;
             t.restyle(start, end, |s| s.case = c);
+        }
+        "textPosition" => {
+            let p: TextPosition = enum_of(v).ok_or_else(|| bad(cmd, "textPosition: none|superscript|subscript"))?;
+            t.set_position(start, end, p);
         }
         "hyperlink" => {
             let l = string_val(v);

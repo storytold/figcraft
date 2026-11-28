@@ -1,6 +1,8 @@
 //! Document inspection as JSON, so agents can verify their work without screenshots.
 
-use figcraft_doc::{Document, Node, NodeId, NodeKind, StrokeCap, StrokeJoin, TextAlignV, TextCase, TextData, TextDecoration};
+use figcraft_doc::{
+    Document, Node, NodeId, NodeKind, StrokeCap, StrokeJoin, TextAlignV, TextCase, TextData, TextDecoration, TextPosition, TextStyle,
+};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -44,6 +46,7 @@ pub const NODE_KEYS: &[&str] = &[
     "fontFamily",
     "fontSize",
     "fontStyle",
+    "fontWeight",
     "fontVariations",
     "gridCell",
     "grids",
@@ -110,6 +113,7 @@ pub const NODE_KEYS: &[&str] = &[
     "textDecorationThickness",
     "textDirection",
     "textPath",
+    "textPosition",
     "textStyleRanges",
     "type",
     "variableModes",
@@ -435,6 +439,7 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
     });
     insert_prop(o, options, "fontFamily", || json!(t.style.font_family));
     insert_prop(o, options, "fontStyle", || json!(t.style.font_style));
+    insert_prop(o, options, "fontWeight", || json!(t.style.weight()));
     insert_prop(o, options, "fontSize", || json!(t.style.font_size));
     if !t.style.variations.is_empty() {
         insert_prop(o, options, "fontVariations", || json!(t.style.variations));
@@ -446,9 +451,7 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
         insert_prop(o, options, "textAlignVertical", || json!(t.align_v));
     }
     insert_prop(o, options, "textAutoResize", || json!(t.auto_resize));
-    if t.style.case != TextCase::default() {
-        insert_prop(o, options, "textCase", || json!(t.style.case));
-    }
+    case_props(&t.style, o, options);
     for (k, v) in [("paragraphSpacing", t.paragraph_spacing), ("paragraphIndent", t.paragraph_indent)] {
         if v != 0.0 {
             insert_prop(o, options, k, || json!(v));
@@ -524,6 +527,16 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
         if !linked.is_empty() {
             insert_prop(o, options, "textStyleRanges", || Value::Array(linked));
         }
+    }
+}
+
+/// The base style's case and position, when not the defaults.
+fn case_props(s: &TextStyle, o: &mut serde_json::Map<String, Value>, options: &InspectOptions) {
+    if s.case != TextCase::default() {
+        insert_prop(o, options, "textCase", || json!(s.case));
+    }
+    if s.position != TextPosition::None {
+        insert_prop(o, options, "textPosition", || json!(s.position));
     }
 }
 
