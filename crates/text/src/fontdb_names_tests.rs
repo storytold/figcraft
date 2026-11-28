@@ -145,3 +145,22 @@ fn a_family_per_weight_offers_its_italics_too() {
     db.add(face("Synthetic Slab Semi Light", "Italic", 350, true));
     assert_eq!(listed(&mut db), want(&[("Semi Light", 350), ("Semi Light Italic", 350), ("Regular", 400)]));
 }
+
+#[test]
+fn a_well_known_family_that_isnt_installed_draws_with_a_close_stand_in_in_its_style() {
+    // #1237: the default face (the first of Inter, Helvetica…, in Regular) stood in for every
+    // missing family, so code set in Menlo came out proportional and SF Pro Bold came out regular.
+    let Some(f) = CRAFT_FONTS.first() else { return };
+    let face = |family: &str, style: &str| Face::from_bytes(FontBytes::Static(f.bytes), 0, Some(family), Some(style)).unwrap();
+    let mut db = FontDb::default();
+    let inter = db.add(face("Inter", "Regular"));
+    let inter_bold = db.add(face("Inter", "Bold"));
+    let roboto = db.add(face("Roboto", "Regular"));
+    let consolas = db.add(face("Consolas", "Regular"));
+    assert!(Arc::ptr_eq(&db.find_or_stand_in("Menlo", "Regular").unwrap(), &consolas), "a code font for a code font");
+    assert!(Arc::ptr_eq(&db.find_or_stand_in("Google Sans", "Regular").unwrap(), &roboto), "ahead of the default");
+    assert!(Arc::ptr_eq(&db.find_or_stand_in("SF Pro Display", "Bold").unwrap(), &inter_bold), "the style asked for");
+    assert!(Arc::ptr_eq(&db.find_or_stand_in("Synthetic Unknown", "Bold").unwrap(), &inter), "others keep the default");
+    // The stand-in only draws: the family itself is still missing.
+    assert!(!db.has_family("Menlo") && !db.has_family("Google Sans"));
+}

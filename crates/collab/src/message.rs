@@ -1192,6 +1192,7 @@ pub fn unpack(msg: &mut ServerMsg, max_bytes: usize) -> Result<(), Error> {
     if let ServerMsg::Welcome { catch_up, .. } = msg {
         match catch_up {
             CatchUp::Packed(packed) => {
+                let _reading = crate::heap::reading();
                 let mut raw = Vec::new();
                 let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX).saturating_add(1);
                 flate2::read::DeflateDecoder::new(packed.as_slice())

@@ -28,6 +28,7 @@ pub mod delta_snapshot;
 mod diff;
 mod docprops;
 pub mod frac;
+mod heap;
 mod history;
 pub mod merge;
 pub mod message;

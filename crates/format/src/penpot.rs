@@ -8,6 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Cursor, Read};
 
+use crate::{FormatError, add_image};
+use craft_zip::{SeekableArchive, SeekableLimits};
 use figcraft_doc::color::{BlendMode, Color, ColorStop, Gradient, GradientKind, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::geom::{Affine, BezPath, Shape};
 use figcraft_doc::{
@@ -17,9 +19,8 @@ use figcraft_doc::{
     Variable, VariableType, VariableValue, VectorNetwork,
 };
 use serde_json::Value;
-use zip::ZipArchive;
 
-use crate::{FormatError, add_image};
+type PenpotArchive<'a> = SeekableArchive<Cursor<&'a [u8]>>;
 
 mod embedded_fonts;
 mod export;
@@ -135,11 +136,12 @@ impl<R: Read> Read for BudgetReader<'_, R> {
 }
 
 /// Read a JSON archive member within the per-member decompression limit.
-fn json(z: &mut ZipArchive<Cursor<&[u8]>>, path: &str, budget: &mut InflateBudget) -> Result<Value, FormatError> {
-    let entry = z.by_name(path).map_err(|e| corrupt(format!("{path}: {e}")))?;
-    if entry.size() > MAX_JSON {
+fn json(z: &mut PenpotArchive<'_>, path: &str, budget: &mut InflateBudget) -> Result<Value, FormatError> {
+    let declared = z.declared_size(path).ok_or_else(|| corrupt(format!("{path}: missing ZIP member")))?;
+    if declared > MAX_JSON {
         return Err(corrupt(format!("JSON member too large: {path}")));
     }
+    let entry = z.open_entry(path, MAX_JSON).map_err(|e| corrupt(e.to_string()))?.ok_or_else(|| corrupt(format!("{path}: missing ZIP member")))?;
     let mut data = Vec::new();
     BudgetReader { inner: entry, budget }.take(MAX_JSON + 1).read_to_end(&mut data).map_err(|e| corrupt(e.to_string()))?;
     if data.len() as u64 > MAX_JSON {
@@ -149,14 +151,15 @@ fn json(z: &mut ZipArchive<Cursor<&[u8]>>, path: &str, budget: &mut InflateBudge
 }
 
 /// Read a shape JSON member within member and per-page decompression limits.
-fn shape_json(z: &mut ZipArchive<Cursor<&[u8]>>, path: &str, budget: &mut InflateBudget, page_budget: &mut u64) -> Result<Value, FormatError> {
-    let entry = z.by_name(path).map_err(|e| corrupt(format!("{path}: {e}")))?;
-    if entry.size() > MAX_JSON {
+fn shape_json(z: &mut PenpotArchive<'_>, path: &str, budget: &mut InflateBudget, page_budget: &mut u64) -> Result<Value, FormatError> {
+    let declared = z.declared_size(path).ok_or_else(|| corrupt(format!("{path}: missing ZIP member")))?;
+    if declared > MAX_JSON {
         return Err(corrupt(format!("JSON member too large: {path}")));
     }
-    if entry.size() > *page_budget {
+    if declared > *page_budget {
         return Err(corrupt("page shapes exceed byte budget"));
     }
+    let entry = z.open_entry(path, MAX_JSON).map_err(|e| corrupt(e.to_string()))?.ok_or_else(|| corrupt(format!("{path}: missing ZIP member")))?;
     let mut data = Vec::new();
     let max_read = (MAX_JSON + 1).min(*page_budget + 1);
     BudgetReader { inner: entry, budget }.take(max_read).read_to_end(&mut data).map_err(|e| corrupt(e.to_string()))?;
@@ -360,29 +363,35 @@ fn finish_masked_group(doc: &mut Document, group: NodeId, source: &Value, warnin
     }
 }
 
+fn open_archive(bytes: &[u8]) -> Result<PenpotArchive<'_>, FormatError> {
+    let limits = SeekableLimits {
+        max_entries: MAX_ENTRIES as u64,
+        max_metadata_bytes: MAX_ARCHIVE as u64,
+        // The Penpot budget also charges partial reads (embedded font signatures) and
+        // remembers an overflow that an optional-member caller might otherwise swallow.
+        max_total_bytes: u64::MAX,
+    };
+    let z = SeekableArchive::open(Cursor::new(bytes), limits).map_err(|e| match e {
+        craft_zip::Error::TooManyEntries { .. } => corrupt("too many ZIP members"),
+        _ => corrupt(format!("invalid ZIP: {e}")),
+    })?;
+    if let Some(name) = z.duplicate_names().next() {
+        return Err(corrupt(format!("duplicate ZIP member: {}", name.chars().take(200).collect::<String>())));
+    }
+    Ok(z)
+}
+
 /// Read one exported `.penpot` archive without touching the filesystem or running a converter.
 /// Returns native, editable FigCraft nodes plus notes about unsupported features.
 pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
     if bytes.len() > MAX_ARCHIVE {
         return Err(corrupt("archive exceeds 512 MiB"));
     }
-    let mut z = ZipArchive::new(Cursor::new(bytes)).map_err(|e| corrupt(format!("invalid ZIP: {e}")))?;
-    if z.len() > MAX_ENTRIES {
-        return Err(corrupt("too many ZIP members"));
-    }
-    // Reject oversized logical archives before decoding any JSON. This guards against ZIP bombs
-    // whose compressed size is innocuous but whose advertised uncompressed size is enormous.
+    let mut z = open_archive(bytes)?;
+    // Check declared totals and member paths before decoding any JSON.
     let mut expanded = 0_u64;
-    let mut names = BTreeSet::new();
     for index in 0..z.len() {
-        let member = z.by_index(index).map_err(|e| corrupt(e.to_string()))?;
-        // An importer never extracts members to disk, but ambiguous ZIP names can
-        // cause one member to be inspected and another member to be read by name.
-        // Reject duplicates and traversal instead of guessing which version is real.
-        let name = member.name();
-        if !names.insert(name.to_owned()) {
-            return Err(corrupt(format!("duplicate ZIP member: {}", name.chars().take(200).collect::<String>())));
-        }
+        let name = z.entry_name(index).map_err(|e| corrupt(e.to_string()))?.ok_or_else(|| corrupt("missing ZIP member"))?;
         if name.starts_with('/')
             || name.contains('\\')
             || name.split('/').any(|part| part == "." || part == "..")
@@ -390,10 +399,14 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
         {
             return Err(corrupt("unsafe ZIP member path"));
         }
-        expanded = expanded.saturating_add(member.size());
+        let (size, _) = z.entry_sizes(index).map_err(|e| corrupt(e.to_string()))?.ok_or_else(|| corrupt("missing ZIP member"))?;
+        expanded = expanded.saturating_add(size);
         if expanded > MAX_DECOMPRESSED {
             return Err(corrupt("ZIP contents exceed 1 GiB"));
         }
+        // The old indexing pass also rejected entries the decoder could not open,
+        // even when mapping the document would never request those members.
+        z.open_entry_index(index, MAX_DECOMPRESSED).map_err(|e| corrupt(e.to_string()))?.ok_or_else(|| corrupt("missing ZIP member"))?;
     }
     let mut inflate_budget = InflateBudget::new();
     let manifest = json(&mut z, "manifest.json", &mut inflate_budget)?;
@@ -447,12 +460,12 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
         // The page index files are peers of the directories containing their layers.
         let prefix = format!("{base}/pages/");
         let page_names: Vec<String> = z
-            .file_names()
+            .names()
             .filter(|name| {
                 name.strip_prefix(&prefix).is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid))
             })
             .take(501)
-            .map(str::to_owned)
+            .map(std::borrow::Cow::into_owned)
             .collect();
         if page_names.len() > 500 {
             return Err(corrupt("too many pages"));
@@ -508,13 +521,13 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
             }
             let page_prefix = format!("{prefix}{page_id}/");
             let paths: Vec<String> = z
-                .file_names()
+                .names()
                 .filter(|name| {
                     name.strip_prefix(&page_prefix)
                         .is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid))
                 })
                 .take(MAX_LAYERS + 1)
-                .map(str::to_owned)
+                .map(std::borrow::Cow::into_owned)
                 .collect();
             if paths.len() > MAX_LAYERS {
                 return Err(corrupt("too many layers on a page"));
@@ -1439,13 +1452,13 @@ fn bind_applied_tokens(doc: &mut Document, active_modes: &BTreeMap<String, Strin
 
 /// Import Penpot library colors as reusable native styles. Original design-token
 /// references are handled separately by `bind_applied_tokens` after shape import.
-fn import_document_colors(z: &mut ZipArchive<Cursor<&[u8]>>, base: &str, doc: &mut Document, warnings: &mut Vec<String>, budget: &mut InflateBudget) {
+fn import_document_colors(z: &mut PenpotArchive<'_>, base: &str, doc: &mut Document, warnings: &mut Vec<String>, budget: &mut InflateBudget) {
     let prefix = format!("{base}/colors/");
     let paths = z
-        .file_names()
+        .names()
         .filter(|name| name.strip_prefix(&prefix).is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid)))
         .take(2049)
-        .map(str::to_owned)
+        .map(std::borrow::Cow::into_owned)
         .collect::<Vec<_>>();
     if paths.len() > 2048 {
         warn(warnings, "Penpot color library exceeds 2048 swatches; truncated".into());
@@ -1483,7 +1496,7 @@ fn import_document_colors(z: &mut ZipArchive<Cursor<&[u8]>>, base: &str, doc: &m
 /// Keep original values on the text nodes: attaching a shared style automatically
 /// would override local formatting unless the source explicitly links it.
 fn import_typography_styles(
-    z: &mut ZipArchive<Cursor<&[u8]>>,
+    z: &mut PenpotArchive<'_>,
     base: &str,
     doc: &mut Document,
     warnings: &mut Vec<String>,
@@ -1492,10 +1505,10 @@ fn import_typography_styles(
     let mut custom_refs = Vec::new();
     let prefix = format!("{base}/typographies/");
     let paths: Vec<String> = z
-        .file_names()
+        .names()
         .filter(|name| name.strip_prefix(&prefix).is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid)))
         .take(2049)
-        .map(str::to_owned)
+        .map(std::borrow::Cow::into_owned)
         .collect();
     if paths.len() > 2048 {
         warn(warnings, "Penpot typography library exceeds 2048 entries; truncated".into());
@@ -2359,7 +2372,7 @@ fn import_themed_tokens(
 
 /// Import supported scalar tokens and retain their original source.
 fn import_token_variables(
-    z: &mut ZipArchive<Cursor<&[u8]>>,
+    z: &mut PenpotArchive<'_>,
     base: &str,
     doc: &mut Document,
     active_modes: &mut BTreeMap<String, String>,
@@ -2367,7 +2380,9 @@ fn import_token_variables(
     budget: &mut InflateBudget,
 ) -> Option<String> {
     let path = format!("{base}/tokens.json");
-    z.index_for_name(&path)?;
+    if !z.contains(&path) {
+        return None;
+    }
     let value = match json(z, &path, budget) {
         Ok(v) => v,
         Err(_) => {
@@ -2501,16 +2516,16 @@ fn report_design_system_limits(doc: &Document, warnings: &mut Vec<String>) {
 /// that original into a native FigCraft component. Copies are still independent layers until the
 /// Penpot override/source graph can be translated safely (see docs).
 fn component_masters(
-    z: &mut ZipArchive<Cursor<&[u8]>>,
+    z: &mut PenpotArchive<'_>,
     base: &str,
     budget: &mut InflateBudget,
 ) -> (BTreeMap<String, String>, BTreeMap<String, String>, BTreeMap<String, String>) {
     let prefix = format!("{base}/components/");
     let paths = z
-        .file_names()
+        .names()
         .filter(|name| name.strip_prefix(&prefix).is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid)))
         .take(10001)
-        .map(str::to_owned)
+        .map(std::borrow::Cow::into_owned)
         .collect::<Vec<_>>();
     let mut result = BTreeMap::new();
     let mut variant_names = BTreeMap::new();
@@ -2971,7 +2986,7 @@ fn svg_paint_ref(text: &str) -> Option<&str> {
 /// What importing a page's layers shares from layer to layer: the archive and the page's shapes,
 /// and the document, budgets and warnings they add to.
 struct LayerImport<'a, 'b> {
-    z: &'a mut ZipArchive<Cursor<&'b [u8]>>,
+    z: &'a mut PenpotArchive<'b>,
     base: &'a str,
     shapes: &'a BTreeMap<String, Value>,
     children_by_parent: &'a BTreeMap<String, Vec<String>>,
@@ -4137,7 +4152,7 @@ fn effects(v: &Value, warnings: &mut Vec<String>) -> Vec<Effect> {
 
 /// Resolve a Penpot image fill through `media/<id>.json` -> `objects/<mediaId>.png|jpg`.
 fn paints(
-    z: &mut ZipArchive<Cursor<&[u8]>>,
+    z: &mut PenpotArchive<'_>,
     base: &str,
     shape: &Value,
     key: &str,
@@ -4172,10 +4187,7 @@ fn paints(
                     };
                     if let Some(obj) = object_id {
                         let p = format!("objects/{obj}.{extension}");
-                        let data = z.by_name(&p).ok().and_then(|f| {
-                            if f.size() > MAX_IMAGE {
-                                return None;
-                            }
+                        let data = z.open_entry(&p, MAX_IMAGE).ok().flatten().and_then(|f| {
                             let mut bytes = Vec::new();
                             BudgetReader { inner: f, budget: &mut *budget }.take(MAX_IMAGE + 1).read_to_end(&mut bytes).ok()?;
                             if bytes.len() as u64 > MAX_IMAGE || bytes.len() > MAX_TOTAL_IMAGES.saturating_sub(*image_bytes) {
@@ -4387,7 +4399,7 @@ mod tests {
             writer.write_all(b"[0,0]").unwrap();
         }
         let bytes = writer.finish().unwrap().into_inner();
-        let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut archive = open_archive(&bytes).unwrap();
         let mut budget = InflateBudget { json_values: 6, ..InflateBudget::new() };
         let mut page_bytes = MAX_PAGE_SHAPES_BYTES;
         assert_eq!(json(&mut archive, "tokens.json", &mut budget).unwrap(), serde_json::json!([0, 0]));
@@ -4436,8 +4448,8 @@ mod tests {
         assert!(dense.len() < MAX_JSON as usize);
         for index in 0..source.len() {
             let mut member = source.by_index(index).unwrap();
-            writer.start_file(member.name(), crate::json_options()).unwrap();
-            if member.name().ends_with(&format!("/{id}.json")) {
+            writer.start_file(member.name().expect("ZIP member name"), crate::json_options()).unwrap();
+            if member.name().expect("ZIP member name").ends_with(&format!("/{id}.json")) {
                 writer.write_all(dense.as_bytes()).unwrap();
             } else {
                 io::copy(&mut member, &mut writer).unwrap();
@@ -4495,14 +4507,14 @@ mod tests {
         z.start_file("shape.json", SimpleFileOptions::default()).unwrap();
         z.write_all(br#"{"id":"00000000-0000-0000-0000-000000000001","type":"rect"}"#).unwrap();
         let bytes = z.finish().unwrap().into_inner();
-        let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut archive = open_archive(&bytes).unwrap();
 
         let mut inflate_budget = InflateBudget::new();
         let mut page_budget = 10u64; // Too small for the shape JSON (~60 bytes)
         let res = shape_json(&mut archive, "shape.json", &mut inflate_budget, &mut page_budget);
         assert!(res.is_err());
 
-        let mut archive2 = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut archive2 = open_archive(&bytes).unwrap();
         let mut inflate_budget2 = InflateBudget::new();
         let mut page_budget2 = 1000u64;
         let res2 = shape_json(&mut archive2, "shape.json", &mut inflate_budget2, &mut page_budget2);
@@ -4510,7 +4522,7 @@ mod tests {
         assert!(page_budget2 < 1000);
     }
     use std::io::Write;
-    use zip::write::SimpleFileOptions;
+    use zip::{ZipArchive, write::SimpleFileOptions};
 
     fn archive_with_shapes(shapes: &[(&str, Value)]) -> Vec<u8> {
         archive_with_components(shapes, &[])
@@ -4546,6 +4558,23 @@ mod tests {
             z.write_all(data.to_string().as_bytes()).unwrap();
         }
         z.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn import_allows_a_legacy_encoded_ancillary_zip_member() {
+        let id = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        let bytes = archive_with_shapes(&[(id, serde_json::json!({"id":id,"type":"rect","name":"Imported rectangle","width":40,"height":25}))]);
+        let mut writer = zip::ZipWriter::new_append(Cursor::new(bytes)).unwrap();
+        // Unflagged CP437, as written by legacy ZIP tools: 0x82 is é.
+        writer.start_file_with_options(SimpleFileOptions::default().name(b"caf\x82.txt")).unwrap();
+        writer.write_all(b"Ancillary archive note").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let mut archive = open_archive(&bytes).unwrap();
+        assert!((0..archive.len()).any(|i| archive.entry_name(i).unwrap().as_deref() == Some("café.txt")));
+        let (doc, warnings) = import(&bytes).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(doc.nodes().any(|node| node.name == "Imported rectangle"));
     }
 
     #[test]
@@ -4931,12 +4960,12 @@ mod tests {
             let mut e = z.by_index(i).unwrap();
             let mut content = Vec::new();
             e.read_to_end(&mut content).unwrap();
-            if e.name().ends_with(&format!("/{ROOT_ID}.json")) {
+            if e.name().expect("ZIP member name").ends_with(&format!("/{ROOT_ID}.json")) {
                 let mut v: Value = serde_json::from_slice(&content).unwrap();
                 v["shapes"] = serde_json::json!([one]);
                 content = serde_json::to_vec(&v).unwrap();
             }
-            members.push((e.name().to_string(), content));
+            members.push((e.name().expect("ZIP member name").to_string(), content));
         }
         drop(z);
         let cursor = Cursor::new(Vec::new());

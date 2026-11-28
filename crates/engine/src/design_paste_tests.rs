@@ -73,6 +73,27 @@ fn layers_paste_into_the_page_and_undo() {
     assert!(ids.iter().all(|i| !s.doc().unwrap().contains(*i)));
 }
 
+/// Layers copied with a fill bound to a variable the copy doesn't bring along paste unbound, in
+/// the colour they showed (#2524), rather than bound to a variable that isn't in the file.
+#[test]
+fn bindings_to_variables_the_file_lacks_paste_as_their_values() {
+    let mut src = Session::new();
+    let r = id(&src.execute("node.create", &json!({"type": "rectangle", "x": 0, "y": 0, "width": 40, "height": 20, "name": "Swatch"})).unwrap());
+    src.execute("variable.createCollection", &json!({"name": "Tokens"})).unwrap();
+    src.execute("variable.create", &json!({"collection": "Tokens", "name": "Brand", "type": "color", "value": "#3366FF"})).unwrap();
+    src.execute("variable.bind", &json!({"ids": [r], "field": "fill", "variable": "Brand"})).unwrap();
+    let file = B64.decode(src.execute("file.export", &json!({"format": "fig"})).unwrap()["data"].as_str().unwrap()).unwrap();
+    let mut s = Session::new();
+    let out = s.execute("edit.pasteDesignLayers", &json!({"html": clipboard_html(&file)})).unwrap();
+    let copied = s.clipboard.nodes[0].1[0].clone();
+    assert!(!copied.bound.is_empty(), "the copy is bound");
+    let doc = s.doc().unwrap();
+    let pasted = doc.node(params::id_of(&out["ids"][0]).unwrap()).unwrap();
+    assert!(copied.bound.values().all(|v| doc.variables.get_by_id(v).is_none()), "the file hasn't the variable");
+    assert!(pasted.bound.is_empty(), "no binding to a variable the file hasn't: {:?}", pasted.bound);
+    assert_eq!(pasted.fills, copied.fills, "the colour it showed");
+}
+
 #[test]
 fn a_second_paste_repeats_the_copied_layers() {
     let mut s = Session::new();

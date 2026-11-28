@@ -1084,6 +1084,14 @@ impl FontDb {
         faces.into_iter().min_by_key(|f| cost(f)).cloned()
     }
 
+    /// The face to draw `family` + `style` with: the family's own, else for a well-known family
+    /// that isn't installed a close stand-in in the same style ([`stand_ins`]), else the default.
+    pub fn find_or_stand_in(&mut self, family: &str, style: &str) -> Option<Arc<Face>> {
+        self.find(family, style)
+            .or_else(|| stand_ins(&family.trim().to_lowercase()).iter().find_map(|f| self.find(f, style)))
+            .or_else(|| self.default_face())
+    }
+
     /// The default face (Inter Regular if embedded, else any system sans).
     pub fn default_face(&mut self) -> Option<Arc<Face>> {
         for fam in ["Inter", "Helvetica Neue", "Helvetica", "Arial", "Segoe UI", "Roboto", "DejaVu Sans", "Liberation Sans", "Noto Sans"] {
@@ -1534,6 +1542,26 @@ pub fn apple_alias(key: &str) -> Option<&'static str> {
     })
 }
 
+/// Installed families of similar design and width to draw a well-known UI family with when it
+/// isn't installed (`key` lowercase), best first (#1237): the platform UI and code families that
+/// designs use most and other systems lack. Text still names the family it asked for, which stays
+/// reported as missing.
+fn stand_ins(key: &str) -> &'static [&'static str] {
+    const MONO: &[&str] = &["Cascadia Mono", "Consolas", "SF Mono", "Menlo", "DejaVu Sans Mono", "Liberation Mono", "Courier New"];
+    let key = key.trim_start_matches('.');
+    if ["sf mono", "menlo", "monaco"].iter().any(|m| key.starts_with(m)) {
+        MONO
+    } else if key.starts_with("sf pro") || key.starts_with("sf compact") || apple_alias(key).is_some() {
+        &["Inter", "Pretendard"]
+    } else if key.starts_with("google sans") {
+        &["Roboto", "Inter"]
+    } else if key.starts_with("euclid") {
+        &["DM Sans", "Inter"]
+    } else {
+        &[]
+    }
+}
+
 /// Convenience: find a face with the global db.
 /// The family and style of the installed face whose PostScript name is `ps`.
 pub fn postscript_face(ps: &str) -> Option<(String, String)> {
@@ -1545,7 +1573,7 @@ pub fn postscript_face(ps: &str) -> Option<(String, String)> {
 
 pub fn find_face(family: &str, style: &str) -> Option<Arc<Face>> {
     let mut db = db().write().unwrap_or_else(std::sync::PoisonError::into_inner);
-    db.find(family, style).or_else(|| db.default_face())
+    db.find_or_stand_in(family, style)
 }
 
 /// All family names known to the global db.
