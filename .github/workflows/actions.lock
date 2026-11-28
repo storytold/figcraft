@@ -65,3 +65,5 @@ dependencies:
         commit: 'sha1-f94a43818dabb2e85f2f4d5cd768bb8e5662600a'
         owner_id: 76897702
         repo_id: 1414429108
+        uses:
+            - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
