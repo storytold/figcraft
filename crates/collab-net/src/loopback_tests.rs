@@ -189,9 +189,13 @@ fn guests_join_and_see_each_other() {
     let Some(Event::Welcome { info, peers }) = ap.events.iter().rev().find(|e| matches!(e, Event::Welcome { .. })) else { panic!("no welcome") };
     assert_eq!(info.name, "Ada");
     assert!(
-        ap.events.iter().any(
-            |e| matches!(e, Event::Sync(ServerMsg::Welcome { catch_up: figcraft_collab::CatchUp::Snapshot(snapshot), .. }) if !snapshot.is_empty())
-        ),
+        ap.events.iter().any(|e| matches!(
+            e,
+            Event::Sync(ServerMsg::Welcome { catch_up: figcraft_collab::CatchUp::Snapshot(snapshot), .. }) if !snapshot.is_empty()
+        ) || matches!(
+            e,
+            Event::Sync(ServerMsg::Welcome { catch_up: figcraft_collab::CatchUp::DeltaSnapshot(bytes), .. }) if !bytes.is_empty()
+        )),
         "the welcome carries the document for the sync client"
     );
     assert_eq!(peers.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Hana"], "the host is already here");
@@ -670,12 +674,21 @@ fn welcomes_are_packed_only_for_clients_that_read_them() {
     let addr: SocketAddr = invite.server.host.parse().unwrap();
     let mut old = Raw::connect(addr);
     let ClientMsg::Hello(h) = Client::hello(FILE, TOKEN, "Old", "") else { panic!("not a hello") };
-    assert!(old.send(&ClientMsg::Hello(Hello { client_version: "0.12.1 signals hosting comments".into(), ..h })));
+    assert!(old.send(&ClientMsg::Hello(Hello { client_version: "0.12.1 signals hosting comments".into(), ..h.clone() })));
     let Some(ServerMsg::Welcome { catch_up: CatchUp::Snapshot(plain), .. }) = old.next() else { panic!("no plain welcome") };
+    let mut mid = Raw::connect(addr);
+    assert!(mid.send(&ClientMsg::Hello(Hello { client_version: "0.18.1 signals hosting comments packed design-review branches".into(), ..h })));
+    let Some(mut packed_welcome @ ServerMsg::Welcome { catch_up: CatchUp::Packed(_), .. }) = mid.next() else { panic!("no packed welcome") };
+    message::unpack(&mut packed_welcome, 64 << 20).unwrap();
+    assert!(matches!(packed_welcome, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(s), .. } if s == plain), "the same document");
     let mut new = Raw::hello(addr, TOKEN);
-    let Some(mut welcome @ ServerMsg::Welcome { catch_up: CatchUp::Packed(_), .. }) = new.next() else { panic!("no packed welcome") };
-    message::unpack(&mut welcome, 64 << 20).unwrap();
-    assert!(matches!(welcome, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(s), .. } if s == plain), "the same document");
+    let Some(mut delta_welcome @ ServerMsg::Welcome { catch_up: CatchUp::DeltaSnapshot(_), .. }) = new.next() else {
+        panic!("no delta snapshot welcome")
+    };
+    message::unpack(&mut delta_welcome, 64 << 20).unwrap();
+    let delta_doc = Client::join(delta_welcome).unwrap().document().clone();
+    let plain_doc = figcraft_collab::Replica::from_snapshot(&plain).unwrap().document().clone();
+    assert_eq!(delta_doc, plain_doc, "delta snapshot opens the exact same document");
     host.stop();
 }
 
