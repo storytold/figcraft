@@ -122,6 +122,7 @@ pub(super) fn est_deltas_extra_bytes(deltas: &[FieldDelta], vector_sizes: &[usiz
             FieldDelta::Effects(v) => v.len().saturating_mul(size_of::<Effect>()),
             FieldDelta::Bound(m) | FieldDelta::VarModes(m) | FieldDelta::PluginData(m) | FieldDelta::PropRefs(m) => est_str_map(m),
             FieldDelta::Annotations(v) => v.len().saturating_mul(size_of::<Annotation>()),
+            FieldDelta::CodeLinks(v) => v.len().saturating_mul(size_of::<CodeLink>()),
             _ => 0,
         };
         acc.saturating_add(extra)
