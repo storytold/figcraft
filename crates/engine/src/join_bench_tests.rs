@@ -38,7 +38,7 @@ fn big_doc(layers: usize) -> Document {
             let frame = doc.create(page, NodeKind::Frame, &format!("Card {pi}.{f}"), x, y, 360.0, 260.0).unwrap();
             for c in 0..8 {
                 let kind = match c % 3 {
-                    0 => NodeKind::Text(TextData::new(format!("Label {f} {c}"))),
+                    0 => NodeKind::Text(TextData::new(format!("Label {f} {c}")).into()),
                     1 => NodeKind::Rectangle,
                     _ => NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 },
                 };
