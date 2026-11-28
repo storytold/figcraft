@@ -63,7 +63,8 @@ pub struct Prefs {
     /// Files that have a path are saved by themselves a few seconds after they change (the app's
     /// timer; off: only File ▸ Save writes them).
     pub auto_save: bool,
-    /// The desktop app starts on the Home screen instead of in a new file.
+    /// The desktop app starts on the Home screen instead of reopening the files open when it last
+    /// quit.
     pub start_on_home: bool,
     /// `figcraft://` invite links open this app (`collab.registerLinks`); `None`: on for installed
     /// builds, off for development builds.
@@ -85,6 +86,18 @@ pub struct Prefs {
     /// Recently opened or saved files, newest first (File ▸ Open recent; at most
     /// [`cmd::file::MAX_RECENT`]).
     pub recent_files: Vec<String>,
+    /// The files open when the desktop app last quit, in tab order: the next start opens them again
+    /// ([`Session::reopen_files`](crate::Session::reopen_files)).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub open_files: Vec<String>,
+    /// Which of [`open_files`](Self::open_files) was in front.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub front_file: Option<String>,
+    /// Where each file was left when its tab closed or the app quit, the most recently left first,
+    /// at most [`MAX_FILE_VIEWS`](crate::MAX_FILE_VIEWS): opening it again shows that page at that
+    /// view ([`Session::remember_views`](crate::Session::remember_views)).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub file_views: Vec<crate::FileView>,
     /// The files you put on a server without its key, with their owner tokens (passwords: see
     /// [`online`]), most recently opened first, at most [`online::MAX_ONLINE_FILES`].
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "online::read")]
@@ -109,6 +122,9 @@ pub struct Prefs {
     /// files opened or made later start with them. Missing: the toggle's default.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub view: BTreeMap<String, bool>,
+    /// Design review ignores, by document path: whole rule ids and `rule@layer` entries.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub design_review_ignored: BTreeMap<String, Vec<String>>,
     /// The board canvas's background grid (`board.grid`).
     #[serde(deserialize_with = "crate::board_grid::read")]
     pub board_grid: crate::board_grid::BoardGrid,
@@ -155,6 +171,9 @@ impl Default for Prefs {
             plugin_directory: None,
             publish_server: live::DEFAULT_SERVER.into(),
             recent_files: Vec::new(),
+            open_files: Vec::new(),
+            front_file: None,
+            file_views: Vec::new(),
             online_files: Vec::new(),
             getting_started_dismissed: false,
             link_notice_skipped: false,
@@ -162,6 +181,7 @@ impl Default for Prefs {
             home_sort: "modified".into(),
             home_order: "desc".into(),
             view: BTreeMap::new(),
+            design_review_ignored: BTreeMap::new(),
             board_grid: Default::default(),
             recent_actions: Vec::new(),
             team_libraries: Vec::new(),
@@ -197,6 +217,9 @@ pub struct Clipboard {
     pub images: std::collections::BTreeMap<String, figcraft_doc::ImageData>,
     /// Copied properties (Copy properties / Paste properties).
     pub props: Option<Value>,
+    /// The file the copied properties came from: their style and variable ids name its styles and
+    /// variables, and in another file the same ids can name unrelated ones.
+    pub props_source_doc: u64,
     /// A copied fill or stroke row (`fill.copy`, `stroke.copy`): whether it's a fill, and the paint.
     pub paint: Option<(bool, figcraft_color::Paint)>,
     /// The stroke settings (`weight`, alignment, sides…) copied with a stroke's paint.

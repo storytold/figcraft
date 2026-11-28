@@ -8,7 +8,7 @@ pub(super) fn layers_at(s: &mut Session, p: &Value) -> Result<Value> {
     let zoom = s.ds()?.view.zoom.max(1e-6);
     let sel = s.selection();
     let result = crate::booleans::result_outline(doc, &sel);
-    let opts = figcraft_doc::geometry::HitOpts { locked: true };
+    let opts = figcraft_doc::geometry::HitOpts { locked: true, ..Default::default() };
     let layers: Vec<Value> = figcraft_doc::geometry::layers_at_opts(doc, s.page()?, figcraft_geom::Point::new(x, y), 2.0 / zoom, Some(&result), opts)
         .into_iter()
         .filter_map(|(id, depth)| {
@@ -104,6 +104,11 @@ pub(super) fn select_sibling(s: &mut Session, dir: i64) -> Result<Value> {
         s.set_selection(first.into_iter().collect());
         return Ok(json!({"selection": s.selection()}));
     };
+    // A mind map node's siblings, in the map's order (#2226); every other layer keeps the layer order.
+    if let Some(next) = crate::board::mind_sibling(doc, cur, dir) {
+        s.set_selection(vec![next]);
+        return Ok(json!({"selection": [next]}));
+    }
     let parent = doc.get(cur)?.parent.ok_or_else(|| bad("select.next", "no parent"))?;
     let kids = &doc.get(parent)?.children;
     let idx = kids.iter().position(|c| *c == cur).unwrap_or(0) as i64;
@@ -184,8 +189,19 @@ pub(super) fn nudge(s: &mut Session, p: &Value) -> Result<Value> {
     // Children in an auto layout flow move one place instead (see `al_keys`).
     for i in &ids {
         if crate::al_keys::flowing_parent(doc, *i).is_none() && (dx, dy) != (0.0, 0.0) {
+            // The step is along the canvas axes; the layer's transform is in its parent's space.
+            let (lx, ly) = match doc.node(*i).and_then(|n| n.parent) {
+                Some(par) => {
+                    let inv = doc.world_transform(par).inverse();
+                    let o = inv * figcraft_geom::Point::new(0.0, 0.0);
+                    let q = inv * figcraft_geom::Point::new(dx, dy);
+                    let (lx, ly) = (q.x - o.x, q.y - o.y);
+                    if lx.is_finite() && ly.is_finite() { (lx, ly) } else { (dx, dy) }
+                }
+                None => (dx, dy),
+            };
             let n = doc.get_mut(*i)?;
-            n.transform = Affine::translate((dx, dy)) * n.transform;
+            n.transform = Affine::translate((lx, ly)) * n.transform;
             changed = true;
         }
     }

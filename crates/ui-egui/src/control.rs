@@ -1000,7 +1000,7 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
     use figcraft_engine::keymap::{Context, lookup, normalize};
     // Text editing keys go to the editor (after the shortcuts live while editing).
     if app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
-        if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
+        if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|bd| (m.cmd || m.alt || m.ctrl) && crate::shortcuts::applies(app, bd)) {
             crate::menus::invoke(app, bd.id);
             return Ok(json!({"command": bd.id}));
         }
@@ -1024,7 +1024,7 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
         let r = crate::comments::step(app, ctx, if matches!(key, "ArrowUp" | "Up") { -1 } else { 1 });
         return Ok(json!({"comment": r.and_then(|v| v.get("id").cloned())}));
     }
-    if let Some(bd) = lookup(platform, Context::Canvas, key, m) {
+    if let Some(bd) = lookup(platform, Context::Canvas, key, m).filter(|bd| crate::shortcuts::applies(app, bd)) {
         crate::shortcuts::run_binding(app, bd.id);
         return Ok(json!({"command": bd.id}));
     }
@@ -1469,7 +1469,13 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let layers_generation = app.session.clipboard.layers_generation;
             let agent = p.get("agent").and_then(Value::as_str);
+            let selection_before = app.session.document_selection_revision();
             let r = in_document(app, p, |s| s.execute_as(agent, cmd, &params).map_err(|e| e.to_string()));
+            // Like clicking a tab, explicitly selecting a file moves the presenter out of the foreground.
+            if r.is_ok() && app.session.document_selection_revision() != selection_before {
+                crate::tabs::pause_present(app);
+                app.ui.home = false;
+            }
             app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             app.invalidate_synthetic_copy(layers_generation);
             // Programmatic calls never open dialogs.

@@ -151,8 +151,13 @@ fn near_path(path: &BezPath, p: Point, dist: f64) -> bool {
 /// The innermost visible, unlocked node under `pt` (page coordinates), honouring clip content;
 /// boolean groups are hit where their `result` is.
 pub fn hit_leaf(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult) -> Option<NodeId> {
+    hit_leaf_opts(doc, page, pt, tol, result, HitOpts::default())
+}
+
+/// [`hit_leaf`] with `opts` (a deep pick reaches through unfilled nested frames, see [`HitOpts::deep`]).
+pub fn hit_leaf_opts(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult, opts: HitOpts) -> Option<NodeId> {
     let p = doc.node(page)?;
-    p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, None, HitOpts::default()).filter(|_| !masked_out(doc, p, *c, pt)))
+    p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, None, opts).filter(|_| !masked_out(doc, p, *c, pt)))
 }
 
 /// Whether child `c` of `parent` is masked at `pt`: a visible mask below it (the nearest mask
@@ -175,7 +180,12 @@ fn covers(doc: &Document, id: NodeId, n: &Node, pt: Point, depth: usize) -> bool
 
 /// Like [`hit_leaf`], but only within layer `root` (it included).
 pub fn hit_in(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolResult) -> Option<NodeId> {
-    hit_rec(doc, root, pt, tol, 0, result, None, HitOpts::default())
+    hit_in_opts(doc, root, pt, tol, result, HitOpts::default())
+}
+
+/// [`hit_in`] with `opts` (see [`hit_leaf_opts`]).
+pub fn hit_in_opts(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolResult, opts: HitOpts) -> Option<NodeId> {
+    hit_rec(doc, root, pt, tol, 0, result, None, opts)
 }
 
 /// [`hit_leaf`] (or [`hit_in`] for a `root` that isn't a page) in outline mode: shapes are hit
@@ -210,6 +220,30 @@ pub struct HitOpts {
     /// Reach locked layers (and what a locked frame holds) too. A click, hover or marquee never
     /// does; the Select layer list does.
     pub locked: bool,
+    /// A deep pick (Cmd/Ctrl held): a frame, component or instance nested in another layer is hit
+    /// only where it has a visible fill, not across its whole box (its stroke doesn't count), so
+    /// the pick reaches the layers under an unfilled overlay such as a device chrome instance.
+    /// Boards (top-level frames and frames directly in a section) keep their box, as on a plain
+    /// pick. Observed in the reference app with synthetic files.
+    pub deep: bool,
+}
+
+/// Whether `pt` hits `n` itself for a pick with `opts` ([`hits_node_itself`], but see
+/// [`HitOpts::deep`]).
+fn hits_self(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, outline: bool, opts: HitOpts) -> bool {
+    let see_through = opts.deep
+        && !outline
+        && n.kind.is_frame_like()
+        && !n.is_board_atom()
+        && !is_board(doc, n)
+        && !n.fills.iter().any(|f| f.visible && f.opacity > 0.0);
+    !see_through && hits_node_itself(doc, id, n, pt, tol, outline)
+}
+
+/// Whether `n` sits on the page or directly in a section: a top-level frame, which a pick
+/// treats like an artboard.
+fn is_board(doc: &Document, n: &Node) -> bool {
+    n.parent.and_then(|p| doc.node(p)).is_none_or(|p| p.is_page() || matches!(p.kind, NodeKind::Section { .. }))
 }
 
 fn hit_rec(
@@ -249,7 +283,7 @@ fn hit_rec(
             return Some(h);
         }
     }
-    if in_result == Some(true) || hits_node_itself(doc, id, n, pt, tol, outline) || also.is_some_and(|a| a.bounds) && on_box_edge(doc, id, n, pt, tol)
+    if in_result == Some(true) || hits_self(doc, id, n, pt, tol, outline, opts) || also.is_some_and(|a| a.bounds) && on_box_edge(doc, id, n, pt, tol)
     {
         return Some(id);
     }

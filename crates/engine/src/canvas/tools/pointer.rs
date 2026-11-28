@@ -38,9 +38,32 @@ impl Session {
     /// (its children), or the focus view's frame.
     pub(crate) fn marquee_within(&self, p: Point) -> Result<Option<NodeId>> {
         let (doc, page) = (self.doc()?, self.page()?);
-        let within = frame_at(doc, page, p, &[]).filter(|f| doc.node(*f).is_some_and(|n| n.parent == Some(page)));
-        let within = within.filter(|f| doc.world_bounds(*f).is_some_and(|b| b.contains(p)));
+        let deepest = frame_at(doc, page, p, &[]).filter(|f| doc.world_bounds(*f).is_some_and(|b| b.contains(p)));
+        let mut chain = deepest.map(|f| doc.ancestors(f)).unwrap_or_default();
+        chain.reverse();
+        chain.extend(deepest);
+        let mut within = None;
+        for c in chain.into_iter().filter(|c| *c != page) {
+            let Some(n) = doc.node(c) else { break };
+            match &n.kind {
+                NodeKind::Section { contents_hidden: false } => within = Some(c),
+                k if k.is_frame_like() => {
+                    within = Some(c);
+                    break;
+                }
+                _ => break,
+            }
+        }
         Ok(self.ds()?.focused().or(within))
+    }
+
+    fn marquee_root(&self, within: Option<NodeId>) -> Result<(NodeId, Option<NodeId>)> {
+        let (doc, page) = (self.doc()?, self.page()?);
+        Ok(match within.and_then(|w| doc.node(w)) {
+            Some(n) if matches!(n.kind, NodeKind::Section { .. }) => (n.id, None),
+            Some(n) => (n.parent.unwrap_or(page), Some(n.id)),
+            None => (page, None),
+        })
     }
 
     /// The selection a marquee over page rect `r` makes from `base` (what was selected before):
@@ -51,7 +74,10 @@ impl Session {
         let mut hits = match (deep, focused) {
             (true, _) => figcraft_doc::geometry::marquee_deep(doc, page, r),
             (false, Some(f)) => figcraft_doc::geometry::marquee(doc, page, r, Some(f)),
-            (false, None) => figcraft_doc::geometry::marquee_select(doc, page, r, within),
+            (false, None) => {
+                let (root, start_inside) = self.marquee_root(within)?;
+                figcraft_doc::geometry::marquee_select(doc, root, r, start_inside)
+            }
         };
         if let Some(f) = focused {
             hits.retain(|h| *h != f && doc.is_ancestor(f, *h));
@@ -136,6 +162,11 @@ impl Session {
         }
         let tool = self.acting_tool();
         let edits = matches!(tool, ToolId::Move | ToolId::Scale) && !self.tool.dev_mode;
+        // Presses with another tool don't record the selection: the ones from before them aren't
+        // this double-click's.
+        if ev.kind == PointerKind::Down && !matches!(tool, ToolId::Move | ToolId::Scale) {
+            self.tool.selections_before_last_two_presses = Default::default();
+        }
         if edits && self.origin_pointer(ev)? {
             return Ok(());
         }
@@ -155,6 +186,9 @@ impl Session {
                     }
                     // A click on the canvas deselects a ruler guide (the UI selects guides itself).
                     self.ds_mut()?.guide = None;
+                    let now = self.ds()?.selection.clone();
+                    let [_, last] = std::mem::take(&mut self.tool.selections_before_last_two_presses);
+                    self.tool.selections_before_last_two_presses = [last, Some((ev.p(), now))];
                     self.move_down(ev)
                 }
                 ToolId::Hand => {
@@ -257,7 +291,7 @@ impl Session {
             if let Some(h) = handle_at(&doc, &sel, ev.p(), ev.zoom).filter(|_| !self.tool.dev_mode) {
                 cursor = resize_cursor(&doc, &sel, h);
             } else {
-                let leaf = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+                let leaf = self.hit_pick(&doc, page, ev.p(), ev.tol() * 2.0, ev.cmd);
                 if leaf.and_then(|l| crate::widgets::target_at(&doc, l, ev.p())).is_some() {
                     cursor = Cursor::Pointer;
                 }

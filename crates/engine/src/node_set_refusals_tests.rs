@@ -85,6 +85,42 @@ fn a_font_style_draws_in_the_nearest_face_and_says_so_when_it_differs() {
 }
 
 #[test]
+fn creating_text_in_a_font_style_the_family_lacks_says_so_as_node_set_does() {
+    figcraft_text::scan_system_fonts();
+    // Any installed family with a regular and a bold face and nothing heavier (CI machines differ).
+    let pick = figcraft_text::family_names().into_iter().find_map(|f| {
+        let st = figcraft_text::family_styles(&f);
+        let has = |w: u16| st.iter().any(|x| figcraft_doc::style_weight(x) == w && !x.to_lowercase().contains("italic"));
+        (has(400) && has(700) && !st.iter().any(|x| figcraft_doc::style_weight(x) > 700)).then_some((f, st))
+    });
+    let Some((family, styles)) = pick else { return };
+    let mut s = Session::new();
+    let asked = || json!({"fontFamily": family, "fontStyle": "Black"});
+    // `node.create` warns the same as `node.set` does.
+    let out = ex(&mut s, "node.create", json!({"type": "text", "text": "Hi", "props": asked()}));
+    let w = out["warnings"][0].as_str().unwrap();
+    assert!(w.contains(&family) && w.contains("`Black`") && w.contains("nearest"), "{w}");
+    // `text.create` says so too.
+    let out = ex(&mut s, "text.create", json!({"text": "Hi", "props": asked()}));
+    let w = out["warnings"][0].as_str().unwrap();
+    assert!(w.contains(&family) && w.contains("`Black`") && w.contains("nearest"), "{w}");
+    // So does a `command.batch` step, at the step that creates the text.
+    let out =
+        ex(&mut s, "command.batch", json!({"commands": [{"command": "node.create", "params": {"type": "text", "text": "Hi", "props": asked()}}]}));
+    let w = out[0]["warnings"][0].as_str().unwrap();
+    assert!(w.contains(&family) && w.contains("`Black`") && w.contains("nearest"), "{w}");
+    // A style the family has says nothing, and the result is `{id}` alone as before.
+    let bold = styles.iter().find(|x| figcraft_doc::style_weight(x) == 700).unwrap().clone();
+    let out = ex(&mut s, "node.create", json!({"type": "text", "text": "Hi", "props": {"fontFamily": family, "fontStyle": bold}}));
+    assert!(out.get("warnings").is_none(), "{out}");
+    assert_eq!(out.as_object().unwrap().len(), 1, "{out}");
+    // A layer without text says nothing either.
+    let out = ex(&mut s, "node.create", json!({"type": "rectangle", "props": {"fill": "#FF0000"}}));
+    assert!(out.get("warnings").is_none(), "{out}");
+    assert_eq!(out.as_object().unwrap().len(), 1, "{out}");
+}
+
+#[test]
 fn a_refused_call_changes_nothing() {
     let mut s = Session::new();
     let t = id(&ex(&mut s, "node.create", json!({"type": "text", "text": "Hi"}))["id"]);

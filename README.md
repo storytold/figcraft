@@ -276,7 +276,12 @@ For the web build, install [trunk](https://trunkrs.dev/) and run `cargo xtask wa
 
 New contributors and AI agents: start with [`AGENTS.md`](AGENTS.md), then [`docs/`](docs/).
 
-Installers for macOS (universal, signed and notarized), Windows (x64, x86 and arm64), Linux (AppImage, `.deb`, `.rpm`, Flatpak and tarball), FreeBSD and the web are attached to each [GitHub release](https://github.com/storytold/figcraft/releases). Maintainers: [`docs/releasing.md`](docs/releasing.md) explains how releases are built, signed and published.
+The [latest GitHub release](https://github.com/storytold/figcraft/releases/latest) includes macOS
+(universal, signed and notarized), Windows (x64 and ARM64), Linux (AppImage, Debian, RPM, Flatpak, Arch
+Linux, and tarball), FreeBSD (x86_64 and ARM64), and web builds. For 32-bit Windows,
+[FigCraft v0.16.0](https://github.com/storytold/figcraft/releases/tag/v0.16.0) was the last release
+with both an x86 MSI and portable ZIP. Maintainers can find build, signing, and publication instructions
+in [`docs/releasing.md`](docs/releasing.md).
 
 > [!IMPORTANT]
 > **Status:** FigCraft is in **alpha**: about 49% of the way to replacing proprietary tools for real work, by our own estimate. Nearly all tracked interface design actions in the menu checklist are wired ([`docs/parity-checklist.md`](docs/parity-checklist.md)) and the core editor works end to end, but FigCraft opens `.fig` files only best effort, has only a first preview of multiplayer (live sessions hosted from the app or a self-hosted server, with per-person undo and share links to edit or to view; no accounts, teams or cloud yet), runs its own WebAssembly plugins, and hasn't been checked against real design documents. The honest, area-by-area picture is in the [roadmap](ROADMAP.md) and [`docs/target-app-parity.md`](docs/target-app-parity.md). Expect rough edges and please file issues, or tell us what broke on [Discord](https://discord.gg/artcraft).

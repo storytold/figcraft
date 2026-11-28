@@ -34,12 +34,17 @@ pub(crate) fn panel_module() -> Vec<u8> {
         r#"(module
           (import "figcraft" "call" (func $call (param i32 i32 i32 i32) (result i32)))
           (import "figcraft" "ui_show" (func $ui_show (param i32 i32) (result i32)))
+          (import "figcraft" "reply_read" (func $reply_read (param i32 i32) (result i32)))
+          (import "figcraft" "set_output" (func $set_output (param i32 i32)))
           (memory (export "memory") 1)
           (data (i32.const 1000) "{}") (data (i32.const 100) "shape.rectangle") (data (i32.const 200) "{}")
+          (data (i32.const 49152) "event ")
           (func (export "figcraft_run") (param $n i32) (result i32)
             (i32.store (i32.const 0) (i32.add (i32.load (i32.const 0)) (i32.const 1)))
             (if (i32.eq (i32.load (i32.const 0)) (i32.const 1))
               (then (return (call $ui_show (i32.const 1000) (i32.const {})))))
+            (drop (call $reply_read (i32.const 49158) (local.get $n)))
+            (call $set_output (i32.const 49152) (i32.add (i32.const 6) (local.get $n)))
             (call $call (i32.const 100) (i32.const 15) (i32.const 200) (i32.const {}))))"#,
         spec.replace('"', "\\\""),
         rect.replace('"', "\\\""),
@@ -188,7 +193,12 @@ fn a_slider_calls_the_plugin_back_once_when_let_go() {
 /// keyboard from commits in the frame the button is clicked, and the plugin gets both, in order.
 #[test]
 fn a_tap_on_a_button_keeps_what_was_typed_in_a_field() {
-    let mut u = Ui::new(session());
+    let mut session = session();
+    let open = &mut session.plugins.panels[0];
+    open.panel.controls.retain(|p| matches!(p.name.as_str(), "size" | "go"));
+    open.panel.controls.swap(0, 1);
+    open.values.retain(|name, _| name == "size");
+    let mut u = Ui::new(session);
     u.ctx.enable_accesskit();
     u.frame(vec![]);
     let at = |u: &mut Ui, label: &str| {
@@ -208,4 +218,8 @@ fn a_tap_on_a_button_keeps_what_was_typed_in_a_field() {
     u.frame(vec![]);
     assert_eq!(u.app.session.plugins.panel("org.test.panel").unwrap().values["size"], 33.0, "the field's value arrived");
     assert_eq!(layers(&u), before + 2, "the field's commit and the button each called the plugin");
+    let (message, _) = u.app.ui.toast.as_ref().expect("plugin callback output");
+    let event: Value = serde_json::from_str(message.strip_prefix("event ").expect("recorded event")).unwrap();
+    assert_eq!(event["event"]["control"], "go");
+    assert_eq!(event["values"]["size"], 33.0);
 }
