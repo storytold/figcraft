@@ -41,11 +41,15 @@ fn enter(u: &mut Ui) {
 
 /// The middle of the toggle button named `label`, found in the AccessKit tree.
 fn named_button(u: &mut Ui, label: &str) -> Pos2 {
+    named_control(u, Role::Button, label)
+}
+
+fn named_control(u: &mut Ui, role: Role, label: &str) -> Pos2 {
     u.ctx.enable_accesskit();
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
-    let n = nodes.iter().map(|(_, n)| n).find(|n| n.role() == Role::Button && n.label() == Some(label)).expect(label);
+    let n = nodes.iter().map(|(_, n)| n).find(|n| n.role() == role && (n.label() == Some(label) || n.value() == Some(label))).expect(label);
     let b = n.bounds().expect("bounds");
     pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
 }
@@ -53,6 +57,27 @@ fn named_button(u: &mut Ui, label: &str) -> Pos2 {
 /// Corner field `k` (an index into the radii).
 fn field(u: &Ui, k: usize) -> Rect {
     u.ctx.read_response(Id::unique(("corner", k)).with("field")).expect("corner field shows").rect
+}
+
+#[test]
+fn corner_style_menu_changes_the_outline_without_losing_individual_radii() {
+    use figcraft_doc::geom::CornerStyle;
+    let (mut u, r) = scene();
+    let toggle = named_button(&mut u, "Individual corners");
+    click(&mut u, toggle);
+    for (current, choice, expected) in
+        [("Round", "Chamfered", CornerStyle::Chamfer), ("Chamfered", "Concave", CornerStyle::Concave), ("Concave", "Round", CornerStyle::Round)]
+    {
+        let dropdown = named_control(&mut u, Role::ComboBox, current);
+        click(&mut u, dropdown);
+        let action = named_control(&mut u, Role::MenuItemCheckBox, choice);
+        let history = u.app.session.undo_depth().0;
+        click(&mut u, action);
+        let corners = u.app.session.doc().unwrap().node(r).unwrap().corners;
+        assert_eq!(corners.style, expected);
+        assert_eq!(corners.radii, [30.0, 0.0, 0.0, 30.0]);
+        assert_eq!(u.app.session.undo_depth().0, history + 1);
+    }
 }
 
 /// The iOS button next to Corner smoothing sets 60% in one undo step, as the help page's "click

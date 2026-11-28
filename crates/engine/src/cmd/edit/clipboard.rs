@@ -538,6 +538,9 @@ pub(super) fn copy_props_of(doc: &Document, id: NodeId) -> Value {
     v["strokeStyle"] = json!(n.styles.stroke);
     v["effectStyle"] = json!(n.styles.effect);
     v["boundVariables"] = Value::Object(n.bound.iter().filter(|(f, _)| copied_binding(f)).map(|(f, v)| (f.clone(), json!(v))).collect());
+    if n.kind.has_independent_corners() {
+        v["cornerStyle"] = json!(n.corners.style);
+    }
     if let NodeKind::Text(t) = &n.kind {
         v["textStyle"] = json!(n.styles.text);
         v["fontFamily"] = json!(t.style.font_family);
@@ -558,13 +561,19 @@ pub(super) fn copy_props(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(v)
 }
 
+/// Whether copied property `k` links to a shared style: `fontStyle` and `cornerStyle` are values
+/// (a font's style name; round, chamfer, concave).
+fn is_style_link(k: &str) -> bool {
+    k.ends_with("Style") && !k.starts_with("font") && k != "cornerStyle"
+}
+
 /// Copied properties `props` without their style and variable links, for a paste into another
 /// file: the copied ids name the source file's styles and variables, and the same ids here can
 /// name unrelated ones. The values paste unlinked, and the layer's own links on them go.
 fn without_links(mut props: Value) -> Value {
     if let Some(m) = props.as_object_mut() {
         for (k, v) in m.iter_mut() {
-            if k.ends_with("Style") && !k.starts_with("font") {
+            if is_style_link(k) {
                 *v = Value::Null;
             } else if k == "boundVariables" {
                 *v = json!({});
@@ -591,9 +600,12 @@ pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, prop
     // values it gave are pasted without a link, so the layer's own link goes too.
     let here = |v: &Value| v.as_str().is_none_or(|sid| doc.style(sid).is_some());
     for (k, v) in m.iter_mut() {
-        if k.ends_with("Style") && !k.starts_with("font") && !here(v) {
+        if is_style_link(k) && !here(v) {
             *v = Value::Null;
         }
+    }
+    if !doc.get(id)?.kind.has_independent_corners() {
+        m.remove("cornerStyle");
     }
     if let Some(Value::Object(copied)) = m.get_mut("boundVariables") {
         copied.retain(|_, v| v.as_str().is_some_and(|vid| doc.variables.get_by_id(vid).is_some()));

@@ -37,6 +37,17 @@ fn keys(v: &Value, allowed: &[&str]) {
     }
 }
 
+#[test]
+fn corner_style_is_sparse_and_can_be_requested_explicitly() {
+    let (mut s, frame, text) = tree();
+    let fields = json!({"fields": ["cornerStyle"]});
+    assert!(node(&s, frame, 0, json!({})).get("cornerStyle").is_none());
+    assert_eq!(node(&s, frame, 0, fields.clone())["cornerStyle"], "round");
+    assert!(node(&s, text, 0, fields).get("cornerStyle").is_none());
+    run(&mut s, "node.set", json!({"id": frame, "props": {"cornerStyle": "concave"}}));
+    assert_eq!(node(&s, frame, 0, json!({}))["cornerStyle"], "concave");
+}
+
 fn golden_tree() -> (Session, NodeId) {
     let mut s = Session::new();
     let frame = create(
