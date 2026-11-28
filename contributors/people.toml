@@ -147,3 +147,8 @@ real_name = "Andrej Skvorc"
 
 [people.victorazesc]
 sync_github_name = true
+
+[people.brytoncooper]
+real_name = "Bryton Cooper"
+display_name = "Bryton Cooper"
+sync_github_name = true
