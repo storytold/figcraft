@@ -195,12 +195,28 @@ impl Steps {
 #[derive(Default)]
 pub struct Retained {
     last: Option<Frame>,
+    /// See [`Self::patched`].
+    patched: Option<Vec<[u32; 4]>>,
 }
 
 impl Retained {
     /// Forget the kept image (the next render is full).
     pub fn clear(&mut self) {
         self.last = None;
+        self.patched = None;
+    }
+
+    /// The image kept from the last render.
+    pub fn image(&self) -> Option<&Pixmap> {
+        self.last.as_ref().map(|f| &f.pix)
+    }
+
+    /// Where the last render's image differs from the one before it, when it is that image with
+    /// some areas drawn again in place (`[x, y, width, height]` in its pixels; none for a render
+    /// reused as it was): whoever holds the image before needs only these to have this one.
+    /// `None` after a full render and after a pan, which moves every pixel.
+    pub fn patched(&self) -> Option<&[[u32; 4]]> {
+        self.patched.as_deref()
     }
 
     /// Render `view` of `page`, reusing the previous render where nothing changed. Returns the
@@ -267,6 +283,7 @@ impl Retained {
     /// The previous render patched where it could be (kept, see [`Self::keep`]), or what a full
     /// render of `view` needs.
     fn prepare(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options) -> Option<Prepared> {
+        self.patched = None;
         // A view that can't be put on a pixel grid (non-finite or absurd) draws nothing.
         let Some((snapped, px)) = snap(view) else {
             self.last = None;
@@ -296,9 +313,10 @@ impl Retained {
         {
             let same_doc = Arc::ptr_eq(&last.doc, doc);
             let s = if same_doc { last.sensitive.clone() } else { Arc::new(sensitive(doc)) };
-            if let Some((pix, pixels)) = patch(last, doc, page, &snapped, px, opts, &s) {
+            if let Some((pix, pixels, areas)) = patch(last, doc, page, &snapped, px, opts, &s) {
                 let work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
                 self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                self.patched = areas;
                 return Some(Prepared::Patched(snapped, work));
             }
             sens = Some(s);
@@ -524,8 +542,18 @@ fn moved_points_area(before: &Document, after: &Document, page: NodeId, id: Node
 }
 
 /// The previous frame brought up to date for `doc` at `px`, rendering only what changed; `None`
-/// when a full render is the better (or only correct) choice. Also returns the pixels rendered.
-fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, i64), opts: &Options, s: &Sensitive) -> Option<(Pixmap, u64)> {
+/// when a full render is the better (or only correct) choice. Also returns the pixels rendered,
+/// and the areas they are in when nothing else of the image changed (it didn't move).
+#[allow(clippy::type_complexity)]
+fn patch(
+    last: Frame,
+    doc: &Arc<Document>,
+    page: NodeId,
+    view: &View,
+    px: (i64, i64),
+    opts: &Options,
+    s: &Sensitive,
+) -> Option<(Pixmap, u64, Option<Vec<[u32; 4]>>)> {
     let (w, h) = (i64::from(view.width), i64::from(view.height));
     let (dx, dy) = (px.0.checked_sub(last.px.0)?, px.1.checked_sub(last.px.1)?);
     if dx.abs() >= w || dy.abs() >= h {
@@ -581,7 +609,7 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
     }
     let mut damage: Vec<Px> = damage.iter().filter_map(|d| d.clamp(w, h)).collect();
     if damage.is_empty() && dx == 0 && dy == 0 {
-        return Some((last.pix, 0));
+        return Some((last.pix, 0, Some(Vec::new())));
     }
     // Layers whose look depends on where they are cut are redrawn whole.
     let sensitive: Vec<Px> = s.areas.iter().chain(last.sensitive.areas.iter()).filter_map(|r| to_px(*r, view.scale, px)).collect();
@@ -616,7 +644,10 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
     for d in &damage {
         render_into(FrameRender { doc, page, view, px, opts }, d, margin, &mut pix)?;
     }
-    Some((pix, pixels))
+    let area =
+        |d: &Px| Some([u32::try_from(d.x0).ok()?, u32::try_from(d.y0).ok()?, u32::try_from(d.x1 - d.x0).ok()?, u32::try_from(d.y1 - d.y0).ok()?]);
+    let areas = if dx == 0 && dy == 0 { damage.iter().map(area).collect() } else { None };
+    Some((pix, pixels, areas))
 }
 
 /// Move the image's content by `(-dx, -dy)` pixels in place (what was at `(x, y)` goes to
