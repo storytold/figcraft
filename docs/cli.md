@@ -107,7 +107,8 @@ be open to the public: [server.md](server.md#running-a-public-server)). See [ser
 Pages, node counts, top-level frames (id, type, name, size), style/variable/image counts. Repairs
 of a damaged file and import warnings go to stderr as `note:` lines (`notes` with `--json`). Fonts the
 file names that aren't installed are listed as `missing font` lines (`missingFonts: [{family,
-layers}]` with `--json`); their text renders in a fallback font.
+layers}]` with `--json`); their text renders in a fallback font (a close stand-in for well-known UI
+and code families such as SF Pro or Menlo, see `docs/file-format-parity.md`).
 
 Every subcommand that reads a file also takes the public REST API file JSON (the response of
 `GET /v1/files/:key` or of its nodes endpoint, written to a `.json` file): it is imported on the fly.
