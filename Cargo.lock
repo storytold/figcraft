@@ -2560,6 +2560,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "figcraft-collab-net",
  "figcraft-doc",
  "figcraft-engine",
  "figcraft-format",
