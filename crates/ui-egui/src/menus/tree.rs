@@ -11,8 +11,8 @@ pub(crate) fn submenu<R>(ui: &mut Ui, key: &str, label: &str, t: &Tokens, add: i
 // Which submenu is open: hover intent with a safe triangle.
 //
 // Every menu tree (the main menu, the context menu) keeps, per level, which of its submenus is
-// open. Hovering another row closes the open submenu at once; resting on a submenu row for
-// `HOVER_DELAY` opens it (sweeping across rows doesn't flash every submenu on the way). Except while the
+// open. Hovering a row closes the open submenu at once and opens the row's own submenu on the
+// same frame (as Figma's main menu does, measured; `HOVER_DELAY` is zero). Except while the
 // pointer is on its way from the open submenu's row to the submenu: while each move lands inside
 // the triangle between where it was and the submenu's near edge (it keeps getting nearer), rows
 // it crosses don't take over and the submenu's row stays highlighted. Resting (`AIM_REST`) or
@@ -20,8 +20,10 @@ pub(crate) fn submenu<R>(ui: &mut Ui, key: &str, label: &str, t: &Tokens, add: i
 // last submenu open.
 // Closing a menu tree forgets all of it, so it reopens with no submenu open.
 
-/// How long the pointer stays on a submenu row before its submenu opens.
-pub(crate) const HOVER_DELAY: f64 = 0.15;
+/// How long the pointer stays on a submenu row before its submenu opens. None: Figma's main menu
+/// opens it on the first frame (median 11 ms measured), so the delay is zero; kept as a constant so
+/// the pending-row bookkeeping the aim relies on stays as it was.
+pub(crate) const HOVER_DELAY: f64 = 0.0;
 
 /// How long the pointer may rest inside the safe triangle before the row under it takes over.
 pub(crate) const AIM_REST: f64 = 0.3;
@@ -289,6 +291,7 @@ pub(super) fn submenu_at<R>(ui: &mut Ui, options: SubmenuOptions<'_>, add: impl 
         .fixed_pos(pos)
         .order(egui::Order::Foreground)
         .constrain(constrain || cramped)
+        .constrain_to(if constrain || cramped { screen } else { vertical_bounds(ui.ctx()) })
         .show(ui.ctx(), |ui| menu_frame(ui, t, child, add));
     let panel = shown.response.rect;
     with_level(ui.ctx(), &at, |l| l.panel = Some(panel));
@@ -316,10 +319,62 @@ pub(super) fn menu_frame<R>(ui: &mut Ui, t: &Tokens, at: At, add: impl FnOnce(&m
             ui.set_width(w);
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             let key = at_key(ui);
-            ui.data_mut(|d| d.insert_temp(key, at));
-            add(ui)
+            ui.data_mut(|d| d.insert_temp(key, at.clone()));
+            // Taller than the window (as measured last frame): its rows scroll. Otherwise they
+            // draw straight into the panel, so a menu that fits behaves as it always did.
+            let max_h = (ui.ctx().content_rect().height() - 2.0 * EDGE_MARGIN - 16.0).max(MENU_ROW_H);
+            let height_key = at_key(ui).with("content_h");
+            let last_h = ui.data(|d| d.get_temp::<f32>(height_key)).unwrap_or(0.0);
+            if last_h <= max_h {
+                let top = ui.cursor().min.y;
+                let r = add(ui);
+                let h = ui.min_rect().max.y - top;
+                ui.data_mut(|d| d.insert_temp(height_key, h));
+                if h > max_h {
+                    ui.ctx().request_repaint();
+                }
+                return r;
+            }
+            // The scroll area's ui has its own scope, so it gets the level and width state of this
+            // one, and hands back the width its rows asked for.
+            let outer_w = width_key(ui);
+            let asked = ui.data(|d| d.get_temp::<f32>(outer_w));
+            let shown = egui::ScrollArea::vertical()
+                .max_height(max_h)
+                .auto_shrink([false, true])
+                .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::SCROLL_BAR)
+                .show(ui, |ui| {
+                    let (inner_at, inner_w) = (at_key(ui), width_key(ui));
+                    ui.data_mut(|d| {
+                        d.insert_temp(inner_at, at);
+                        if let Some(a) = asked {
+                            d.insert_temp(inner_w, a);
+                        }
+                    });
+                    let r = add(ui);
+                    (r, ui.data(|d| d.get_temp::<f32>(inner_w)))
+                });
+            ui.data_mut(|d| d.insert_temp(height_key, shown.content_size.y));
+            let (r, wanted) = shown.inner;
+            if let Some(wanted) = wanted.filter(|w| asked.is_none_or(|a| *w > a)) {
+                ui.data_mut(|d| d.insert_temp(outer_w, wanted));
+            }
+            r
         })
         .inner
+}
+
+/// The gap a menu keeps from the window's top and bottom edges.
+pub(super) const EDGE_MARGIN: f32 = 8.0;
+
+/// A menu row's height.
+const MENU_ROW_H: f32 = 28.0;
+
+/// Where a menu may sit: anywhere across, within the window's height less the margins. A menu that
+/// would run past the bottom moves up (never above the top); one taller than that scrolls.
+pub(super) fn vertical_bounds(ctx: &egui::Context) -> Rect {
+    let s = ctx.content_rect();
+    Rect::from_min_max(pos2(-1.0e5, s.min.y + EDGE_MARGIN), pos2(1.0e5, s.max.y - EDGE_MARGIN))
 }
 
 /// A menu's narrowest width.
@@ -340,16 +395,21 @@ fn need_width(ui: &Ui, w: f32) {
 }
 
 pub(crate) fn item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, checked: bool, t: &Tokens) -> bool {
-    indented_item(ui, label, shortcut, enabled, checked, 0.0, t)
+    indented_item(ui, label, shortcut, enabled, checked, false, 0.0, t)
 }
 
-/// A menu row whose label starts `indent` pixels further in (nested layers).
-pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, checked: bool, indent: f32, t: &Tokens) -> bool {
+/// A menu row whose label starts `indent` pixels further in (nested layers); `locked` paints a
+/// padlock in the leading column (a checked row shows the check instead).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, checked: bool, locked: bool, indent: f32, t: &Tokens) -> bool {
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
     a11y::menu_item(&resp, label, shortcut, checked.then_some(true));
     if !enabled {
         a11y::disabled(&resp);
+    }
+    if locked {
+        a11y::describe(&resp, i18n::tr("locked"));
     }
     // The keyboard's item is highlighted like the hovered one.
     a11y::own_focus(&resp);
@@ -360,6 +420,8 @@ pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: b
     let col = if enabled { t.menu_text } else { t.menu_dim };
     if checked {
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(12.0, 12.0)), Icon::Check, col);
+    } else if locked {
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(12.0, 12.0)), Icon::Lock, col);
     }
     let galley = ui.painter().layout_no_wrap(label.to_string(), regular(12.0), col);
     let keys = (!shortcut.is_empty())

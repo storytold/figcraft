@@ -26,7 +26,7 @@ pub(super) fn add(
 }
 
 /// A soft shadow under stickies and stamps.
-fn soft_shadow() -> Effect {
+pub(super) fn soft_shadow() -> Effect {
     Effect {
         kind: EffectKind::DropShadow(Shadow { color: Color::new(0.0, 0.0, 0.0, 0.16), offset: (0.0, 2.0), radius: 6.0, ..Shadow::default() }),
         visible: true,
@@ -57,21 +57,13 @@ pub(crate) fn add_text(doc: &mut Document, parent: NodeId, text: &str, size: f64
     Ok(id)
 }
 
-/// The text size a sticky's note gets: smaller the more it holds (by characters and lines, so
-/// every copy of the file picks the same size whatever fonts it has).
-pub fn sticky_font_size(text: &str) -> f64 {
-    let weight = text.chars().count() + 24 * text.matches('\n').count();
-    match weight {
-        0..=24 => 24.0,
-        25..=64 => 20.0,
-        65..=140 => 16.0,
-        141..=280 => 13.0,
-        _ => 11.0,
-    }
-}
+/// The text size of a new sticky's note, FigJam's "Small" default: 16, measured twice in the web
+/// app on 2026-11-12 from the size field's value (an earlier reading of 18 did not reproduce). It
+/// never changes as the note fills, the note grows taller instead.
+pub const STICKY_TEXT_SIZE: f64 = 16.0;
 
 /// A sticky note's layers: the frame, the note and (when known) its author.
-fn make_sticky(doc: &mut Document, parent: NodeId, at: (f64, f64), text: &str, color: Color, author: &str) -> Result<(NodeId, NodeId)> {
+fn make_sticky(doc: &mut Document, parent: NodeId, at: (f64, f64), text: &str, color: Color, author: &str, size: f64) -> Result<(NodeId, NodeId)> {
     let id = add(doc, parent, NodeKind::Frame, "Sticky", at, (STICKY, STICKY), |n| {
         n.fills = vec![Paint::solid(color)];
         n.corners.radii = [2.0; 4];
@@ -89,7 +81,7 @@ fn make_sticky(doc: &mut Document, parent: NodeId, at: (f64, f64), text: &str, c
         n.board = Some(BoardItem::Sticky { author: author.to_string() });
     })?;
     let inner = STICKY - 2.0 * STICKY_PAD;
-    let note = add_text(doc, id, text, sticky_font_size(text), INK, TextAlignH::Left, inner)?;
+    let note = add_text(doc, id, text, size, INK, TextAlignH::Left, inner)?;
     if !author.is_empty() {
         let a = add_text(doc, id, author, 10.0, AUTHOR_INK, TextAlignH::Left, inner)?;
         if let Some(n) = doc.node_mut(a) {
@@ -111,7 +103,12 @@ pub(super) fn sticky_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let parent = parent_of(cmd, s, p)?;
     let text = string(p, "text").unwrap_or_default();
     let at = (num_or(p, "x", 0.0), num_or(p, "y", 0.0));
-    let (id, note) = make_sticky(s.doc_mut()?, parent, at, &text, color, &author)?;
+    let size = match num(p, "fontSize") {
+        None => s.tool.board.sticky_size,
+        Some(v) if v.is_finite() && (1.0..=1000.0).contains(&v) => v,
+        Some(_) => return Err(bad(cmd, "`fontSize` is from 1 to 1000")),
+    };
+    let (id, note) = make_sticky(s.doc_mut()?, parent, at, &text, color, &author, size)?;
     s.set_selection(vec![id]);
     Ok(json!({"id": id, "text": note}))
 }
@@ -145,14 +142,21 @@ pub(super) fn next_sticky(s: &mut Session, p: &Value) -> Result<Value> {
     let from = id(p, "id")
         .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
         .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
-        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky or a shape first".into()))?;
+        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky, a shape, a code block or a mind map node first".into()))?;
     let n = doc.get(from)?;
+    if let Some(BoardItem::CodeBlock { language }) = n.board {
+        return super::code::next_block(s, from, language, p);
+    }
+    if n.board == Some(BoardItem::MindNode) {
+        // A mind map node gets its next sibling (#2226), as a shape gets the next shape joined to it.
+        return super::mindmap::mind_map_add(s, &json!({"id": from, "relation": "sibling", "edit": boolean(p, "edit").unwrap_or(false)}));
+    }
     if matches!(n.board, Some(BoardItem::Shape { .. })) {
         // A shape gets the next one joined to it, as the "+" beside it makes (#1597).
         return add_connected(s, p);
     }
     if !matches!(n.board, Some(BoardItem::Sticky { .. })) {
-        return Err(bad(cmd, "that isn't a sticky or a shape"));
+        return Err(bad(cmd, "that isn't a sticky, a shape, a code block or a mind map node"));
     }
     let color = n.fills.iter().find_map(Paint::solid_color).unwrap_or(s.tool.board.sticky);
     let parent = n.parent.ok_or_else(|| bad(cmd, "that sticky has no parent"))?;
@@ -164,11 +168,11 @@ pub(super) fn next_sticky(s: &mut Session, p: &Value) -> Result<Value> {
         "above" => (0.0, -(STICKY + STICKY_GAP)),
         other => return Err(bad(cmd, format!("`side` is right, below, left or above, not `{other}`"))),
     };
-    let author = author(s);
+    let (author, size) = (author(s), s.tool.board.sticky_size);
     if editing.is_some() {
         textedit::end(s)?;
     }
-    let (id, note) = make_sticky(s.doc_mut()?, parent, (at.x + dx, at.y + dy), "", color, &author)?;
+    let (id, note) = make_sticky(s.doc_mut()?, parent, (at.x + dx, at.y + dy), "", color, &author, size)?;
     s.set_selection(vec![id]);
     if boolean(p, "edit") == Some(true) {
         // Typing goes on in the new sticky once this step is recorded.
@@ -236,13 +240,13 @@ pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => (to_at, from_side, to_side),
     };
-    let (routing, author, page) = (s.tool.board.routing, author(s), s.page()?);
+    let (routing, author, page, size) = (s.tool.board.routing, author(s), s.page()?, s.tool.board.sticky_size);
     if editing.is_some() {
         textedit::end(s)?;
     }
     let doc = s.doc_mut()?;
     let (id, text) = match shape {
-        None => make_sticky(doc, parent, to_at, "", color, &author)?,
+        None => make_sticky(doc, parent, to_at, "", color, &author, size)?,
         Some(shape) => make_shape(doc, parent, to_at, next, shape, "", color)?,
     };
     let connector = Connector {
@@ -250,6 +254,7 @@ pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
         to: End::Node { node: id, side: to_side, at: None },
         routing,
         path: None,
+        branch: false,
     };
     let line = make(doc, page, connector, CAPS)?;
     s.set_selection(vec![id]);
@@ -376,7 +381,9 @@ pub(super) fn ink_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     require(s, cmd)?;
     let high = boolean(p, "highlighter").unwrap_or(false);
     let color = color_param(cmd, p)?.unwrap_or(if high { s.tool.board.highlighter } else { s.tool.board.marker });
-    let (weight, opacity) = if high { HIGHLIGHTER } else { MARKER };
+    let opacity = if high { HIGHLIGHTER.1 } else { MARKER.1 };
+    let b = &s.tool.board;
+    let weight = super::weight_param(cmd, p)?.unwrap_or(if high { b.highlighter_weight } else { b.marker_weight });
     if get(p, "path").is_none() && get(p, "points").is_none() {
         return Err(bad(cmd, "`path` or `points` is required"));
     }

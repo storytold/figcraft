@@ -20,6 +20,32 @@ pub struct DropSlot {
 /// placed child whose centre is past the pointer, and the line to draw there. Hidden children and
 /// those ignoring auto layout don't take part.
 pub fn auto_layout_slot(doc: &Document, parent: NodeId, p: Point, exclude: &[NodeId]) -> Option<(usize, Option<[f64; 4]>)> {
+    slot_in(doc, parent, p, exclude, None)
+}
+
+/// [`auto_layout_slot`] for layers dragged within their own frame (measured in Figma's web app,
+/// 2026-11-09): the slot follows the leading edge of `moved` in the direction of `delta`. The caller
+/// passes `moved` as the layers' combined start bounds plus the raw (unsnapped) drag, and `delta`
+/// as that same drag on the page; only its sign along the flow axis matters, and a zero delta uses
+/// the low edge. Wrapping layouts keep the pointer rule.
+pub fn auto_layout_slot_within(
+    doc: &Document,
+    parent: NodeId,
+    p: Point,
+    exclude: &[NodeId],
+    moved: figcraft_geom::Rect,
+    delta: Point,
+) -> Option<(usize, Option<[f64; 4]>)> {
+    slot_in(doc, parent, p, exclude, Some((moved, delta)))
+}
+
+fn slot_in(
+    doc: &Document,
+    parent: NodeId,
+    p: Point,
+    exclude: &[NodeId],
+    dragged: Option<(figcraft_geom::Rect, Point)>,
+) -> Option<(usize, Option<[f64; 4]>)> {
     let pn = doc.node(parent)?;
     let layout = pn.layout.as_ref()?;
     let vertical = layout.mode == LayoutMode::Vertical;
@@ -34,11 +60,17 @@ pub fn auto_layout_slot(doc: &Document, parent: NodeId, p: Point, exclude: &[Nod
         let (k, line) = wrap_slot(doc, &flow_ids, p, vertical);
         return Some((index(k), line));
     }
-    let pos = if vertical { p.y } else { p.x };
-    let k = flow_ids
-        .iter()
-        .position(|c| doc.world_bounds(*c).is_some_and(|b| pos < if vertical { b.center().y } else { b.center().x }))
-        .unwrap_or(flow_ids.len());
+    let mid = |c: &NodeId| doc.world_bounds(*c).map(|b| if vertical { b.center().y } else { b.center().x });
+    let k = if let Some((r, d)) = dragged {
+        let (lo, hi, dd) = if vertical { (r.y0, r.y1, d.y) } else { (r.x0, r.x1, d.x) };
+        // Forward: past every sibling whose middle the leading (high) edge has reached; backward: past
+        // every one whose middle lies before the leading (low) edge. A zero delta (no move along the
+        // flow) takes the backward rule, which leaves the layers where they were.
+        flow_ids.iter().position(|c| mid(c).is_some_and(|m| if dd > 0.0 { m > hi } else { m >= lo })).unwrap_or(flow_ids.len())
+    } else {
+        let pos = if vertical { p.y } else { p.x };
+        flow_ids.iter().position(|c| mid(c).is_some_and(|m| pos < m)).unwrap_or(flow_ids.len())
+    };
     let line = flow_ids.get(k).and_then(|c| doc.world_bounds(*c)).map(|b| line_before(b, vertical, 2.0)).or_else(|| {
         flow_ids
             .last()

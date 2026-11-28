@@ -124,7 +124,10 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     }
     // Selection.
     let editing = ds.text_edit.clone();
-    if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() {
+    // While the colour picker is being used on the selection, hide its frame and handles so the
+    // colour being picked shows on the layer itself (a text's coloured selection would hide it
+    // too).
+    if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() && !app.picker_hides_selection(painter.ctx()) {
         size_label = selection_overlay(app, painter, ds, &doc, &sel, zoom);
     }
     if app.session.tool.tool == ToolId::ShapeBuilder
@@ -171,22 +174,27 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     labels
 }
 
+/// The pixel grid's lines: one screen pixel wide, a light grey at a fifth of its strength, so
+/// they darken white and lighten a dark canvas or fill alike. Measured in Figma (2026-11-24):
+/// 242 on white and 78 on a grey of 50, which this grey gives.
+pub(crate) const PIXEL_GRID: Color32 = Color32::from_rgba_unmultiplied_const(190, 190, 190, 51);
+
 /// Pixel grid at high zoom.
 fn pixel_grid(app: &FigApp, painter: &egui::Painter) {
     let r = app.canvas.rect;
     let p0 = app.to_page(r.min);
     let p1 = app.to_page(r.max);
-    let col = Color32::from_black_alpha(18);
+    let line = stroke(PIXEL_GRID, 1.0 / painter.pixels_per_point());
     let mut x = p0.x.floor();
     while x <= p1.x {
-        let s = app.to_screen(x, 0.0).x;
-        painter.line_segment([pos2(s, r.min.y), pos2(s, r.max.y)], stroke(col, 1.0));
+        let s = painter.round_to_pixel_center(app.to_screen(x, 0.0).x);
+        painter.line_segment([pos2(s, r.min.y), pos2(s, r.max.y)], line);
         x += 1.0;
     }
     let mut y = p0.y.floor();
     while y <= p1.y {
-        let s = app.to_screen(0.0, y).y;
-        painter.line_segment([pos2(r.min.x, s), pos2(r.max.x, s)], stroke(col, 1.0));
+        let s = painter.round_to_pixel_center(app.to_screen(0.0, y).y);
+        painter.line_segment([pos2(r.min.x, s), pos2(r.max.x, s)], line);
         y += 1.0;
     }
 }
@@ -209,16 +217,75 @@ fn layout_grids(app: &FigApp, painter: &egui::Painter, doc: &Document, c: NodeId
     }
 }
 
+/// The solid colour of the fill the next typed character gets (the character before the caret,
+/// the first one's at 0, the base style for an empty text): the style's own fills when it has
+/// them, else the layer's. `None` when the topmost visible paint isn't a solid (gradient, image,
+/// no visible fill), so the caller uses [`caret_fallback`]. Opaque on purpose: Figma's caret
+/// is one colour, and the fill's and paint's opacity weren't measured, so it must stay visible.
+fn caret_fill(n: &figcraft_doc::Node, caret: usize) -> Option<figcraft_color::Color> {
+    let t = n.kind.text()?;
+    let style = t.style_at(caret.saturating_sub(1));
+    let paints = style.fills.as_ref().unwrap_or(&n.fills);
+    paints.iter().rev().find(|p| p.visible).and_then(|p| match &p.kind {
+        figcraft_color::PaintKind::Solid { color } => Some(color.with_alpha(1.0)),
+        _ => None,
+    })
+}
+
+/// [`caret_fill`] as a screen colour.
+fn caret_color(ctx: &egui::Context, n: &figcraft_doc::Node, caret: usize) -> Option<Color32> {
+    caret_fill(n, caret).map(|c| doc_c32(ctx, c))
+}
+
+/// The caret of a text without a solid fill (a gradient, an image, no visible fill): black on a
+/// light surface, white on a dark one. The surface is the nearest layer around the text whose
+/// topmost visible fill is a solid at least half opaque as drawn (its colour's alpha times its paint's
+/// opacity times its own and its containers' layer opacity), else the page; a layer whose top fill is a gradient or an
+/// image is passed over. Not the interface's text colour, which is white in the dark theme and
+/// vanishes on the default light page (#2190).
+fn caret_fallback(doc: &Document, id: NodeId) -> Color32 {
+    let chain = doc.ancestors(id);
+    // Each layer's opacity as drawn: its own times every container's above it.
+    let drawn: Vec<f32> = {
+        let mut acc = 1.0f32;
+        let mut out: Vec<f32> = chain
+            .iter()
+            .rev()
+            .map(|a| {
+                acc *= doc.node(*a).map_or(1.0, |n| if n.opacity.is_finite() { n.opacity.clamp(0.0, 1.0) } else { 1.0 });
+                acc
+            })
+            .collect();
+        out.reverse();
+        out
+    };
+    let under = chain.iter().zip(drawn).find_map(|(a, alpha)| {
+        let n = doc.node(*a)?;
+        match &n.kind {
+            NodeKind::Page { background, .. } => Some(*background),
+            _ => n.fills.iter().rev().find(|p| p.visible).and_then(|p| match &p.kind {
+                figcraft_color::PaintKind::Solid { color } if color.a * p.opacity * alpha >= 0.5 => Some(*color),
+                _ => None,
+            }),
+        }
+    });
+    if under.is_some_and(|c| c.is_dark()) { Color32::WHITE } else { Color32::BLACK }
+}
+
 fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Document, te: &figcraft_engine::TextEdit, zoom: f64) {
     let preedit = app.preedit_view();
     let edoc: &Document = preedit.map(|p| &*p.doc).unwrap_or(doc);
     let Some(text) = TextOnScreen::of(edoc, te.id) else { return };
+    // While the colour picker is being used on this text, its frame and coloured selection hide
+    // too: the selection colour tinted the very characters whose colour is being chosen. The
+    // caret stays.
+    let picking = app.picker_hides_selection(painter.ctx());
     let layout = &text.layout;
-    if let Some(q) = node_quad(app, edoc, te.id) {
+    if !picking && let Some(q) = node_quad(app, edoc, te.id) {
         quad(painter, q, stroke(accent(painter), 1.0));
     }
     let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
-    if a != b && preedit.is_none() {
+    if a != b && preedit.is_none() && !picking {
         for q in text.selection(app, a, b) {
             painter.add(Shape::convex_polygon(q.to_vec(), accent(painter).gamma_multiply(0.3), Stroke::NONE));
         }
@@ -242,7 +309,8 @@ fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Do
     let caret = preedit.map(|p| p.cursor).unwrap_or(te.caret);
     let blink = (painter.ctx().input(|i| i.time) * 2.0) as i64 % 2 == 0;
     if blink || a != b {
-        painter.line_segment(text.caret(app, caret, zoom), stroke(t.text, 1.0));
+        let col = edoc.node(te.id).and_then(|n| caret_color(painter.ctx(), n, caret)).unwrap_or_else(|| caret_fallback(edoc, te.id));
+        painter.line_segment(text.caret(app, caret, zoom), stroke(col, 1.0));
     }
     painter.ctx().request_repaint_after(std::time::Duration::from_millis(500));
 }
@@ -345,24 +413,25 @@ fn selection_overlay(
         // Mode: no handles either.
         // Crop mode draws its own marks on the box instead (`handles::crop_marks`).
         let cropping = app.ui.crop.is_some();
+        // A code block keeps only its width: handles on its left and right edges instead of corners.
+        let width_only = figcraft_engine::board::is_one_code_block(doc, sel);
         let handles = if cropping || measuring || app.session.tool.dev_mode || connector.is_some() || geo.locked {
             0
         } else if is_line {
             2
-        } else if tiny {
+        } else if tiny || width_only {
             0
         } else {
             4
         };
-        size_label = transform_box(
-            app,
-            painter,
-            b.map(|p| app.to_screen(p.x, p.y)),
-            col,
-            sel.len() > 1,
-            handles,
-            (!measuring && connector.is_none()).then_some(label),
-        );
+        let q = b.map(|p| app.to_screen(p.x, p.y));
+        size_label = transform_box(app, painter, q, col, sel.len() > 1, handles, (!measuring && connector.is_none()).then_some(label));
+        if width_only && !(cropping || measuring || app.session.tool.dev_mode || geo.locked) {
+            // Edges run top, right, bottom, left from the corners tl, tr, br, bl.
+            for (a, c) in [(q[1], q[2]), (q[3], q[0])] {
+                edge_handle(painter, a, c, col);
+            }
+        }
         // Its path handles, one for each portion that can be dragged.
         let paths = if app.session.tool.dev_mode { Vec::new() } else { figcraft_engine::board::selected_connector_handles(doc, sel, zoom) };
         for (_, at) in paths {
@@ -436,9 +505,9 @@ fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
         let pts: Vec<Pos2> = ov.pen.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
         if app.session.tool.tool == ToolId::Pencil {
             // The stroke it will make, in its colour and weight (at least a point when zoomed out):
-            // white over a dark page or frame, as the stroke will be (#1741).
-            let (default, weight) = figcraft_engine::tools::PENCIL_STROKE;
-            let color = ov.pen_color.unwrap_or(default);
+            // white over a dark page or frame, as the stroke will be (#1741), or the ink chosen (#2395).
+            let weight = app.session.tool.pencil_ink.weight;
+            let color = ov.pen_color.unwrap_or(figcraft_engine::tools::PENCIL_STROKE.0);
             painter.add(Shape::line(pts, stroke(doc_c32(painter.ctx(), color), ((weight * zoom) as f32).max(1.0))));
         } else {
             for [x0, y0, x1, y1] in &ov.pen_handles {
@@ -517,6 +586,14 @@ fn transform_box(
         return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
     }
     None
+}
+
+/// A handle on the middle of the box edge from `a` to `b` on screen: a white bar along it.
+fn edge_handle(painter: &egui::Painter, a: Pos2, b: Pos2, col: Color32) {
+    let along = (b - a).normalized();
+    let (u, n) = (along * 9.0, along.rot90() * 3.0);
+    let c = a + (b - a) / 2.0;
+    painter.add(Shape::convex_polygon(vec![c - u - n, c + u - n, c + u + n, c - u + n], Color32::WHITE, stroke(col, 1.0)));
 }
 
 /// Blue dashed guides showing how a selected layer is pinned within its parent frame, and a short
@@ -645,6 +722,7 @@ fn shape_overlay(app: &FigApp, painter: &egui::Painter, col: Color32) {
         let text = match hint.handle {
             ShapeHandle::Radius { .. } => format!("{} {}", tr("Radius"), hint.value),
             ShapeHandle::Ratio => format!("{} {}%", tr("Ratio"), hint.value),
+            ShapeHandle::Count => format!("{} {}", tr("Count"), hint.value),
         };
         pill(painter, c + vec2(12.0, 12.0), Align2::LEFT_TOP, text, col);
     }
@@ -780,5 +858,101 @@ pub(super) fn accent(p: &egui::Painter) -> Color32 {
 fn pick_outline(app: &FigApp, painter: &egui::Painter, doc: &Document) {
     if let Some(p) = app.picked().filter(|p| doc.node(*p).is_some()) {
         draw_outline(app, painter, doc, p, stroke(crate::handles::PINK, 2.0));
+    }
+}
+
+#[cfg(test)]
+mod caret_tests {
+    use super::*;
+    use figcraft_color::{Color, Paint};
+    use figcraft_doc::{Node, NodeId, NodeKind, StyleRun, TextData};
+
+    fn text(chars: &str, fills: Vec<Paint>) -> Node {
+        let mut n = Node::new(NodeId(1), NodeKind::Text(TextData { characters: chars.into(), ..TextData::default() }), "Text", 100.0, 20.0);
+        n.fills = fills;
+        n
+    }
+
+    fn hex(s: &str) -> Color {
+        Color::from_hex(s).unwrap()
+    }
+
+    #[test]
+    fn red_text_has_a_red_caret() {
+        let n = text("Caret", vec![Paint::solid(hex("#FF0000"))]);
+        assert_eq!(caret_fill(&n, 2), Some(hex("#FF0000")));
+        assert_eq!(caret_color(&egui::Context::default(), &n, 2), Some(Color32::from_rgb(255, 0, 0)));
+    }
+
+    #[test]
+    fn light_grey_text_keeps_its_own_colour_whatever_is_behind_it() {
+        // Inside a #222222 frame: the frame's fill plays no part.
+        let n = text("Caret", vec![Paint::solid(hex("#DDDDDD"))]);
+        assert_eq!(caret_fill(&n, 5), Some(hex("#DDDDDD")));
+        assert_eq!(caret_color(&egui::Context::default(), &n, 0), Some(Color32::from_rgb(0xDD, 0xDD, 0xDD)));
+    }
+
+    #[test]
+    fn the_caret_follows_the_run_of_the_character_before_it() {
+        let mut n = text("ab cd", vec![Paint::solid(hex("#000000"))]);
+        if let Some(t) = n.kind.text_mut() {
+            let mut style = t.style.clone();
+            style.fills = Some(vec![Paint::solid(hex("#FF0000"))]);
+            t.runs.push(StyleRun { start: 3, end: 5, style });
+        }
+        assert_eq!(caret_fill(&n, 2), Some(hex("#000000")), "after a black character");
+        assert_eq!(caret_fill(&n, 4), Some(hex("#FF0000")), "after a red character");
+        assert_eq!(caret_fill(&n, 0), Some(hex("#000000")), "at the start: the first character's");
+    }
+
+    #[test]
+    fn the_caret_is_opaque_whatever_the_fill_opacity() {
+        let mut p = Paint::solid(hex("#336699"));
+        p.opacity = 0.2;
+        assert_eq!(caret_fill(&text("x", vec![p]), 1).map(|c| c.a), Some(1.0));
+    }
+
+    /// #2190: a caret without a solid fill reads on the page: black on the default light page,
+    /// white on a dark one (the interface's text colour was white in the dark theme).
+    #[test]
+    fn without_a_solid_fill_the_caret_contrasts_with_the_page() {
+        let mut s = figcraft_engine::Session::new();
+        let r = s.execute("text.create", &serde_json::json!({"text": "Caret", "x": 0, "y": 0})).unwrap();
+        let id = figcraft_engine::params::id_of(&r["id"]).unwrap();
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "the default light page");
+        s.execute("page.setBackground", &serde_json::json!({"color": "#1E1E1E"})).unwrap();
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::WHITE, "a dark page");
+    }
+
+    /// CodeRabbit on #2163: a dark frame on a light page is the surface under its text.
+    #[test]
+    fn without_a_solid_fill_the_caret_contrasts_with_the_frame_around_it() {
+        let mut s = figcraft_engine::Session::new();
+        let ex = |s: &mut figcraft_engine::Session, c: &str, p: serde_json::Value| s.execute(c, &p).unwrap();
+        let f = ex(&mut s, "frame.create", serde_json::json!({"x": 0, "y": 0, "width": 300, "height": 200}));
+        let f = figcraft_engine::params::id_of(&f["id"]).unwrap();
+        ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#222222"}}));
+        let r = ex(&mut s, "text.create", serde_json::json!({"text": "Caret", "x": 20, "y": 20, "parent": f}));
+        let id = figcraft_engine::params::id_of(&r["id"]).unwrap();
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::WHITE, "inside a dark frame on the light page");
+        ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#F0F0F0"}}));
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "inside a light frame");
+        // A dark frame drawn at 20% opacity shows the light page through it.
+        ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#222222", "opacity": 0.2}}));
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "a faint dark frame on the light page");
+        // The same through the colour's own alpha.
+        ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#22222233", "opacity": 1.0}}));
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "a dark fill at 20% alpha");
+    }
+
+    #[test]
+    fn gradient_or_missing_fills_have_no_fill_colour() {
+        let mut g = Paint::solid(hex("#FF0000"));
+        g.kind = figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, hex("#FF0000")));
+        assert_eq!(caret_fill(&text("Caret", vec![g]), 2), None);
+        assert_eq!(caret_fill(&text("Caret", vec![]), 2), None);
+        let mut hidden = Paint::solid(hex("#FF0000"));
+        hidden.visible = false;
+        assert_eq!(caret_fill(&text("Caret", vec![hidden]), 2), None);
     }
 }

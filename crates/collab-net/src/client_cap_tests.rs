@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use figcraft_collab::message::{Peer, Presence, ServerMsg};
+use figcraft_collab::message::{Access, CatchUp, Peer, Presence, Processed, ServerMsg};
 use figcraft_engine::live::{Event, MAX_PEERS};
 
 use crate::guest::GuestConfig;
@@ -58,4 +58,40 @@ fn joins_past_the_cap_are_left_out_until_someone_leaves() {
     send(ServerMsg::PeerLeft { client_id: 7 });
     send(joined(over));
     assert!(matches!(inbox.drain().as_slice(), [Event::PeerLeft(7), Event::PeerJoined(p)] if p.client_id == over));
+}
+
+#[test]
+fn a_hosts_long_names_and_colours_are_cut_where_they_are_kept() {
+    let inbox = inbox();
+    let cfg = GuestConfig::new(Invite::new("127.0.0.1:47900", "0123456789abcdef", "AbCdEfGhIjKlMnOpQrStUv"), "Ada".into());
+    let resume = Mutex::new(None);
+    let mut seen = Seen::default();
+    let long = "x".repeat(100_000);
+    take(ServerMsg::PeerJoined(Peer { client_id: 1, name: long.clone(), color: long }), &cfg, &inbox, &mut seen, &resume, &|| {});
+    match inbox.drain().as_slice() {
+        [Event::PeerJoined(p)] => assert_eq!((p.name.as_str(), p.color.as_str()), ("x".repeat(256).as_str(), "x".repeat(32).as_str())),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_welcome_handed_to_the_sync_client_carries_the_bounded_roster() {
+    let inbox = inbox();
+    let cfg = GuestConfig::new(Invite::new("127.0.0.1:47900", "0123456789abcdef", "AbCdEfGhIjKlMnOpQrStUv"), "Ada".into());
+    let resume = Mutex::new(None);
+    let long = "y".repeat(100_000);
+    let welcome = ServerMsg::Welcome {
+        session: 1,
+        client_id: 9,
+        seq: 0,
+        catch_up: CatchUp::Snapshot(Vec::new()),
+        processed: Processed::default(),
+        peers: vec![Peer { client_id: 1, name: long.clone(), color: long }],
+        access: Access::default(),
+        secret: 0,
+    };
+    take(welcome, &cfg, &inbox, &mut Seen::default(), &resume, &|| {});
+    let events = inbox.drain();
+    let Some(Event::Sync(ServerMsg::Welcome { peers, .. })) = events.iter().find(|e| matches!(e, Event::Sync(_))) else { panic!("{events:?}") };
+    assert_eq!(peers.first().map(|p| (p.name.chars().count(), p.color.chars().count())), Some((256, 32)));
 }

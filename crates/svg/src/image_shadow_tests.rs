@@ -57,3 +57,13 @@ fn a_transparent_images_inner_shadow_is_an_embedded_render() {
     let svg = export(&d, n);
     assert!(svg.contains("<pattern") && svg.contains("<mask"), "an opaque picture stays vector, shaded from its box: {svg}");
 }
+
+#[test]
+fn paints_of_one_image_embed_its_bytes_once() {
+    let (mut d, n) = scene(false, EffectKind::DropShadow(shadow()));
+    let node = d.get_mut(n).unwrap();
+    node.fills = vec![Paint::image("svg-image-shadow-opaque", ImageScaleMode::Fill); 3];
+    let svg = export(&d, n);
+    assert_eq!(svg.matches("<image id=").count(), 1, "{svg}");
+    assert_eq!(svg.matches("<pattern").count(), 3);
+}

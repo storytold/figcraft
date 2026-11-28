@@ -256,6 +256,29 @@ fn parity() -> bool {
             md.push_str(&format!("- `{m}`\n"));
         }
     }
+    let rows = figcraft_engine::catalog::headless_rows();
+    let ids: Vec<(&str, bool)> = rows.iter().map(|r| (r.id, r.value == "yes")).collect();
+    let errs = figcraft_engine::catalog::headless_errors(figcraft_engine::catalog::HEADLESS, &ids);
+    if !errs.is_empty() {
+        eprintln!("parity: RFC-0052 headless marks in crates/engine/src/catalog.rs:\n  {}", errs.join("\n  "));
+        return false;
+    }
+    let (yes, no, partial, unknown) = figcraft_engine::catalog::headless_counts(&rows);
+    md.push_str(&format!(
+        "\n## Headless\n\n**Headless ([RFC-0052](https://github.com/storytold/craft-contrib/blob/main/rfcs/0052-headless-reach.md)): {yes} yes, {} no (window {}, os {}, engine-gap {}), {partial} partial, {unknown} unknown.**\n\nAn item is `headless: yes` when its id is in the engine registry that `figcraft-cli` and the MCP server load. The UI-layer ids that light up a menu item above don't count. Other values are the hand marks in `HEADLESS` (`crates/engine/src/catalog.rs`), or `unknown`.\n",
+        no.iter().sum::<usize>(),
+        no[0],
+        no[1],
+        no[2]
+    ));
+    let other: Vec<_> = rows.iter().filter(|r| r.value != "yes").collect();
+    if !other.is_empty() {
+        md.push('\n');
+    }
+    for r in other {
+        let reach = r.reach.map(|x| format!(", reach: {x} ({})", r.why)).unwrap_or_default();
+        md.push_str(&format!("- `{}` {}: headless: {}{reach}\n", r.id, r.label, r.value));
+    }
     md.push_str("\nMenu coverage measures breadth only; see docs/target-app-parity.md for depth and fidelity.\n");
     let path = root().join("docs/parity-checklist.md");
     if let Err(e) = std::fs::write(&path, md) {
@@ -264,6 +287,27 @@ fn parity() -> bool {
     }
     eprintln!("parity: {done}/{total} ({pct:.1}%) → docs/parity-checklist.md");
     true
+}
+
+/// Cargo versions require a numeric core and nonempty, ASCII prerelease/build identifiers.
+fn valid_version(v: &str) -> bool {
+    let (without_build, build) = v.split_once('+').map_or((v, None), |(version, build)| (version, Some(build)));
+    let (core, pre) = without_build.split_once('-').map_or((without_build, None), |(core, pre)| (core, Some(pre)));
+    let mut numbers = core.split('.');
+    if !(0..3).all(|_| {
+        numbers.next().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()) && (n.len() == 1 || !n.starts_with('0')) && n.parse::<u64>().is_ok())
+    }) || numbers.next().is_some()
+    {
+        return false;
+    }
+    let identifiers = |s: &str, allow_numeric_leading_zeroes: bool| {
+        s.split('.').all(|id| {
+            !id.is_empty()
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                && (allow_numeric_leading_zeroes || id.len() == 1 || !id.starts_with('0') || !id.bytes().all(|b| b.is_ascii_digit()))
+        })
+    };
+    pre.is_none_or(|p| identifiers(p, false)) && build.is_none_or(|b| identifiers(b, true))
 }
 
 fn version(sub: Option<&str>, value: Option<&str>) -> bool {
@@ -277,9 +321,7 @@ fn version(sub: Option<&str>, value: Option<&str>) -> bool {
         .to_string();
     match (sub, value) {
         (Some("set"), Some(v)) => {
-            let valid =
-                v.split(['-', '+']).next().is_some_and(|core| core.split('.').count() == 3 && core.split('.').all(|p| p.parse::<u64>().is_ok()));
-            if !valid {
+            if !valid_version(v) {
                 eprintln!("version must look like 1.2.3 or 1.2.3-rc.1");
                 return false;
             }
@@ -293,6 +335,52 @@ fn version(sub: Option<&str>, value: Option<&str>) -> bool {
         _ => {
             println!("{cur}");
             true
+        }
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::valid_version;
+
+    #[test]
+    fn accepts_cargo_versions_including_prerelease_and_build_metadata() {
+        for v in [
+            "0.0.0",
+            "1.2.3",
+            "18446744073709551615.0.0",
+            "1.2.3-0",
+            "1.2.3-01a",
+            "1.2.3-alpha-beta.1",
+            "1.2.3-18446744073709551616",
+            "1.2.3+001",
+            "1.2.3-rc.1+build.7",
+        ] {
+            assert!(valid_version(v), "{v}");
+        }
+    }
+
+    #[test]
+    fn rejects_versions_that_would_leave_the_manifest_invalid() {
+        for v in [
+            "",
+            "1.2",
+            "1.2.3.4",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "18446744073709551616.0.0",
+            "1.2.3-",
+            "1.2.3-01",
+            "1.2.3-rc.01",
+            "1.2.3-a..b",
+            "1.2.3-a_b",
+            "1.2.3+",
+            "1.2.3+meta+again",
+            "1.2.3-alpha\"",
+            "1.2.3-alpha\n",
+        ] {
+            assert!(!valid_version(v), "{v:?}");
         }
     }
 }

@@ -453,7 +453,13 @@ fn library_setup(path: &str) -> (Session, DesignSystem, Session, DesignSystem, V
     let lib = crate::library::Cache::default().load(path).unwrap();
     let mut doc = Document::new("Consumer");
     let m = &lib.manifest;
-    doc.libraries_mut().enabled.push(LibraryLink { id: m.id.clone(), name: m.name.clone(), path: path.to_string(), version: m.version });
+    doc.libraries_mut().enabled.push(LibraryLink {
+        id: m.id.clone(),
+        name: m.name.clone(),
+        path: path.to_string(),
+        version: m.version,
+        ..Default::default()
+    });
     let map = crate::library::import(&mut doc, &lib, &ds.assets(), false).unwrap();
     let mut local = ds.remap(&map);
     local.theme = doc.libraries.collections.iter().find(|r| r.key == ds.theme).map(|r| r.local.clone()).unwrap();

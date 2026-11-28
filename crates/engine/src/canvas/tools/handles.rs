@@ -71,8 +71,13 @@ const HANDLE_PX: f64 = 5.0;
 
 const ROTATE_PX: f64 = 18.0;
 
-/// Snap distance in screen pixels.
-pub(crate) const SNAP_PX: f64 = 5.0;
+/// Object snap distance in screen pixels: measured in Figma, where an edge snaps at a gap of 4.4
+/// screen px and not at 4.6, at 100% and at 200% zoom.
+pub(crate) const SNAP_PX: f64 = 4.5;
+
+/// Snap distance in screen pixels for ruler guides and the rotation origin, not measured against
+/// Figma.
+pub(crate) const UNMEASURED_SNAP_PX: f64 = 5.0;
 
 /// Screen pixels the pointer travels after a press before a move or resize starts: a click or a
 /// double-click made with an unsteady hand doesn't drag what it lands on.
@@ -132,6 +137,14 @@ pub fn selection_frame(doc: &Document, sel: &[NodeId]) -> Option<(Affine, f64, f
     Some((rot * Affine::translate((b.x0, b.y0)), b.width(), b.height()))
 }
 
+/// The rotation `ids` share on the page (degrees, counter-clockwise positive), else 0 (the handle
+/// box is page-aligned then). Figma's rotation field shows this page rotation, also for a layer
+/// inside a rotated frame or group, and Shift lands it on multiples of 15 degrees. Axis-aligned
+/// layers give 0, which is the same as 90, 180 and 270 for stepping in 15 degrees.
+pub fn shared_rotation_degrees(doc: &Document, ids: &[NodeId]) -> f64 {
+    shared_rotation(doc, ids).map_or(0.0, |a| -a.to_degrees())
+}
+
 /// The rotation (radians) every layer in `ids` shares, unless it's a multiple of 90 degrees (the
 /// page-aligned box is then the same box). Flipped layers count by their axis, not its direction.
 fn shared_rotation(doc: &Document, ids: &[NodeId]) -> Option<f64> {
@@ -188,7 +201,9 @@ pub fn handle_at(doc: &Document, sel: &[NodeId], p: Point, zoom: f64) -> Option<
     let corners = selection_box(doc, sel)?;
     // Lines (zero height) only get end handles.
     let is_line = sel.len() == 1 && sel.first().and_then(|i| doc.node(*i)).is_some_and(|n| matches!(n.kind, NodeKind::Line));
-    handle_at_corners(&corners, p, zoom, is_line)
+    // A code block keeps only its width: no corners, top or bottom to drag.
+    let width_only = crate::board::is_one_code_block(doc, sel);
+    handles_among(&corners, p, zoom, is_line, &|h| !width_only || matches!(h, Handle::Edge(1 | 3)))
 }
 
 /// Half the side of the square the canvas draws on each corner of the handle box (screen pixels,
@@ -220,6 +235,12 @@ pub fn box_sides_px(corners: &[Point; 4], zoom: f64) -> (f64, f64) {
 /// Which handle of the box with `corners` (tl, tr, br, bl in page coordinates) is under `p`;
 /// `is_line` keeps only the two end handles.
 pub fn handle_at_corners(corners: &[Point; 4], p: Point, zoom: f64, is_line: bool) -> Option<Handle> {
+    handles_among(corners, p, zoom, is_line, &|_| true)
+}
+
+/// [`handle_at_corners`] with only the corners and edges `resizes` allows (the rotation zones stay),
+/// so one left out never hides an allowed one near it.
+fn handles_among(corners: &[Point; 4], p: Point, zoom: f64, is_line: bool, resizes: &dyn Fn(Handle) -> bool) -> Option<Handle> {
     let tol = HANDLE_PX / zoom.max(1e-6);
     // Inside the box, handles reach in at most a quarter of its shorter side, so that a press in
     // the middle of a small layer moves it; outside it they reach as far as ever.
@@ -233,7 +254,7 @@ pub fn handle_at_corners(corners: &[Point; 4], p: Point, zoom: f64, is_line: boo
             .enumerate()
             .filter(|(i, _)| !(is_line && *i >= 2))
             .map(|(i, c)| ((*c - p).hypot(), Handle::Corner(i as u8)))
-            .filter(|(d, _)| *d <= corner_reach),
+            .filter(|(d, h)| *d <= corner_reach && resizes(*h)),
     );
     if corner.is_some() {
         return corner;
@@ -244,7 +265,7 @@ pub fn handle_at_corners(corners: &[Point; 4], p: Point, zoom: f64, is_line: boo
             let (a, b) = (corners.get(i)?, corners.get((i + 1) % 4)?);
             let near = figcraft_geom::kurbo::Line::new(*a, *b).nearest(p, 0.001);
             let d = near.distance_sq.sqrt();
-            (d <= edge_reach && near.t > 0.05 && near.t < 0.95).then_some((d, Handle::Edge(i as u8)))
+            (d <= edge_reach && near.t > 0.05 && near.t < 0.95 && resizes(Handle::Edge(i as u8))).then_some((d, Handle::Edge(i as u8)))
         }));
         if edge.is_some() {
             return edge;
@@ -379,30 +400,22 @@ fn opposite(h: Handle) -> Handle {
 }
 
 /// The Scale tool's factor and pivot (in the box's axes) for dragging `handle` of a `w0`×`h0` box
-/// to `q`. The pivot is the anchor point (`anchor`: column, row), or the opposite handle when the
-/// anchor lies on the side being dragged, or the centre (`from_center`). Corners follow the axis
-/// that moved the most; a negative factor flips. None when the box has no size to scale by.
-pub(crate) fn scale_factor(handle: Handle, q: Point, w0: f64, h0: f64, anchor: (u8, u8), from_center: bool) -> Option<(f64, Point)> {
+/// to `q`. The pivot is the opposite handle's point, or the centre (`from_center`); the origin grid
+/// never decides it (measured in Figma's web app, 2026-11-09). Corners follow the axis that moved
+/// the most; a negative factor flips. None when the box has no size to scale by.
+pub(crate) fn scale_factor(handle: Handle, q: Point, w0: f64, h0: f64, from_center: bool) -> Option<(f64, Point)> {
     const EPS: f64 = 1e-9;
     if !(q.x.is_finite() && q.y.is_finite() && w0.is_finite() && h0.is_finite()) || matches!(handle, Handle::Rotate(_)) {
         return None;
     }
     let h = handle_point(handle, w0, h0);
-    let anchor_pt = anchor_in_box(anchor, w0, h0);
     // The axes the handle moves along.
     let (ax_x, ax_y) = match handle {
         Handle::Edge(0) | Handle::Edge(2) => (false, true),
         Handle::Edge(_) => (true, false),
         _ => (true, true),
     };
-    let on_side = (ax_x && (anchor_pt.x - h.x).abs() < EPS) || (ax_y && (anchor_pt.y - h.y).abs() < EPS);
-    let pivot = if from_center {
-        Point::new(w0 / 2.0, h0 / 2.0)
-    } else if on_side {
-        handle_point(opposite(handle), w0, h0)
-    } else {
-        anchor_pt
-    };
+    let pivot = if from_center { Point::new(w0 / 2.0, h0 / 2.0) } else { handle_point(opposite(handle), w0, h0) };
     let ratio = |on: bool, to: f64, from: f64, p: f64| (on && (from - p).abs() > EPS).then(|| (to - p) / (from - p));
     let kx = ratio(ax_x, q.x, h.x, pivot.x);
     let ky = ratio(ax_y, q.y, h.y, pivot.y);

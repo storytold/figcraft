@@ -1,11 +1,80 @@
 use super::{
-    CodeLang, Color, Ctx, LayoutMode, Node, NodeId, NodeKind, PADDING, drop_shadow, first_fill, indent, literal, named, num, radius, stroke_color,
+    CodeLang, Color, Ctx, Document, GradientKind, ImageScaleMode, LayoutMode, Node, NodeId, NodeKind, PADDING, Paint, PaintKind, drop_shadow,
+    first_fill, gradient_axis, gradient_stops, image_asset, indent, literal, named, native_gradient_kind, num, paints_a_box, pattern_notes, radius,
+    stroke_color, visible_fills,
 };
 
 // ------------------------------------------------------------------ SwiftUI
 
 fn swift_color(c: Color) -> String {
     format!("Color(red: {}, green: {}, blue: {}, opacity: {})", num(f64::from(c.r)), num(f64::from(c.g)), num(f64::from(c.b)), num(f64::from(c.a)))
+}
+
+fn swift_point(p: (f64, f64)) -> String {
+    format!("UnitPoint(x: {}, y: {})", num(p.0), num(p.1))
+}
+
+/// A gradient fill on a layer of `w` x `h` as a SwiftUI gradient.
+fn swift_gradient(g: &figcraft_color::Gradient, w: f64, h: f64, opacity: f32) -> String {
+    let stops = gradient_stops(g, opacity)
+        .into_iter()
+        .map(|(at, c)| format!("Gradient.Stop(color: {}, location: {})", swift_color(c), num(at)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (dx, dy) = gradient_axis(g, w, h);
+    match native_gradient_kind(g) {
+        GradientKind::Linear => format!("LinearGradient(stops: [{stops}], startPoint: {}, endPoint: {})", swift_point(g.from), swift_point(g.to)),
+        GradientKind::Angular => {
+            format!("AngularGradient(stops: [{stops}], center: {}, angle: .degrees({}))", swift_point(g.from), num(dy.atan2(dx).to_degrees()))
+        }
+        _ => format!("RadialGradient(stops: [{stops}], center: {}, startRadius: 0, endRadius: {})", swift_point(g.from), num(dx.hypot(dy))),
+    }
+}
+
+/// One paint (the one at document index `i`) as SwiftUI: a shape style, or for an image a view of
+/// its asset (`true`); `None` for a pattern (see [`pattern_notes`]). Only a solid at index 0 takes
+/// the `fill` variable's name.
+fn swift_paint(doc: &Document, n: &Node, i: usize, p: &Paint) -> Option<(String, bool)> {
+    match &p.kind {
+        PaintKind::Solid { .. } => {
+            let c = swift_color(p.solid_color()?);
+            Some((if i == 0 { named(doc, n, "iOS", &["fill"], c) } else { c }, false))
+        }
+        PaintKind::Gradient(g) => Some((swift_gradient(g, n.width, n.height, p.opacity), false)),
+        PaintKind::Image(img) => {
+            let scale = match img.scale_mode {
+                ImageScaleMode::Fit => ".resizable().scaledToFit()",
+                ImageScaleMode::Tile => ".resizable(resizingMode: .tile)",
+                ImageScaleMode::Fill | ImageScaleMode::Crop => ".resizable().scaledToFill()",
+            };
+            let opacity = if p.opacity < 1.0 { format!(".opacity({})", num(f64::from(p.opacity))) } else { String::new() };
+            Some((format!("Image({}){scale}{opacity}", literal(&image_asset(doc, img).0, false)), true))
+        }
+        PaintKind::Pattern(_) => None,
+    }
+}
+
+/// The modifiers filling a rectangle or ellipse: the bottom paint fills the `shape`, and each paint
+/// above it is a copy of the shape, or an image, laid over it.
+fn swift_shape_fills(doc: &Document, n: &Node, shape: &str) -> Vec<String> {
+    let paints: Vec<(String, bool)> = visible_fills(n).filter_map(|(i, p)| swift_paint(doc, n, i, p)).collect();
+    let mut mods: Vec<String> = Vec::new();
+    // A shape with no fill draws in the foreground colour, so an image at the bottom lies over a clear one.
+    if paints.first().is_some_and(|(_, image)| *image) {
+        mods.push(".fill(Color.clear)".into());
+    }
+    for (c, image) in &paints {
+        mods.push(match (mods.is_empty(), image) {
+            (true, _) => format!(".fill({c})"),
+            (false, true) => format!(".overlay({c})"),
+            (false, false) => format!(".overlay({shape}.fill({c}))"),
+        });
+    }
+    // An image filling the shape is larger than it, so the shape clips what lies over it.
+    if paints.iter().any(|(_, image)| *image) {
+        mods.push(format!(".clipShape({shape})"));
+    }
+    mods
 }
 
 fn swift_weight(w: u16) -> &'static str {
@@ -62,6 +131,9 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
         }
         return;
     }
+    if paints_a_box(n) {
+        out.push_str(&pattern_notes(n, &pad));
+    }
     // A bound variable's iOS code syntax in place of the value.
     let bound = |fields: &[&str], value: String| named(doc, n, "iOS", fields, value);
     let fill = first_fill(n).map(|c| bound(&["fill"], swift_color(c)));
@@ -84,16 +156,12 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
         }
         NodeKind::Ellipse { .. } => {
             out.push_str(&format!("{pad}Ellipse()\n"));
-            if let Some(c) = &fill {
-                mods.push(format!(".fill({c})"));
-            }
+            mods.extend(swift_shape_fills(doc, n, "Ellipse()"));
             mods.push(format!(".frame(width: {w}, height: {h})"));
         }
         NodeKind::Rectangle => {
             out.push_str(&format!("{pad}RoundedRectangle(cornerRadius: {corner})\n"));
-            if let Some(c) = &fill {
-                mods.push(format!(".fill({c})"));
-            }
+            mods.extend(swift_shape_fills(doc, n, &format!("RoundedRectangle(cornerRadius: {corner})")));
             mods.push(format!(".frame(width: {w}, height: {h})"));
         }
         k if k.is_frame_like() || matches!(k, NodeKind::Group) => {
@@ -142,11 +210,15 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
                 }
             }
             mods.push(format!(".frame(width: {w}, height: {h}, alignment: .topLeading)"));
-            if let Some(c) = &fill {
-                mods.push(format!(".background({c})"));
-            }
+            // Each background goes behind the ones before it, so the top fill is written first.
+            let paints: Vec<(String, bool)> = visible_fills(n).rev().filter_map(|(i, p)| swift_paint(doc, n, i, p)).collect();
+            let image = paints.iter().any(|(_, image)| *image);
+            mods.extend(paints.into_iter().map(|(c, _)| format!(".background({c})")));
             if radius(n) > 0.0 {
                 mods.push(format!(".clipShape(RoundedRectangle(cornerRadius: {corner}))"));
+            } else if image {
+                // An image filling the frame is larger than it.
+                mods.push(".clipped()".into());
             }
         }
         _ => {
@@ -155,7 +227,9 @@ fn swift_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String, extra: &[Str
             mods.push(format!(".frame(width: {w}, height: {h})"));
         }
     }
-    if let Some(c) = stroke_color(n) {
+    if !matches!(n.kind, NodeKind::Vector { .. })
+        && let Some(c) = stroke_color(n)
+    {
         mods.push(format!(
             ".overlay(RoundedRectangle(cornerRadius: {corner}).stroke({}, lineWidth: {}))",
             bound(&["stroke"], swift_color(c)),

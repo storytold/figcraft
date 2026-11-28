@@ -16,6 +16,7 @@ mod canvas;
 pub mod catalog;
 pub mod cmd;
 mod content;
+mod design;
 mod dev;
 pub mod events;
 mod extensions;
@@ -62,13 +63,16 @@ pub use content::synthetic_ds;
 pub use content::templates;
 pub use content::textfit;
 pub use dev::annotations;
+pub use dev::asset_handoff;
 pub use dev::code_connect;
 pub use dev::codegen;
 pub use dev::component_codegen;
+pub use dev::design_context;
 pub use dev::dev_measurements;
 pub use dev::dev_resources;
 pub use dev::devcompare;
 pub use dev::devinspect;
+pub use dev::responsive;
 pub use dev::tailwind;
 pub use extensions::plugin_directory;
 pub use extensions::plugins;
@@ -77,6 +81,7 @@ pub use selection::rename;
 pub use selection::selection_colors;
 pub use selection::selection_reorder;
 pub use selection::selection_spacing;
+pub use selection::tidy;
 pub use sharing::agent;
 pub use sharing::background;
 pub use sharing::branches;
@@ -103,13 +108,16 @@ use serde_json::{Value, json};
 mod derived;
 mod doc_state;
 mod error;
+mod file_views;
 mod prefs;
+mod reopen;
 mod session;
 mod view_state;
 
 pub use derived::{changed_nodes, normalize};
 pub use doc_state::{DocState, History, HistoryEntry, Interaction, PREVIEW_READ_ONLY, Preedit, TextEdit, VersionPreview};
 pub use error::{EngineError, Result, bad};
+pub use file_views::{FileView, MAX_FILE_VIEWS, PageView};
 pub use prefs::{Clipboard, DefaultProps, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UI_SCALE_SIZES, UiRequest, clamp_ui_scale};
 pub use session::Forward;
 pub use view_state::ViewState;
@@ -118,6 +126,8 @@ pub use view_state::ViewState;
 pub struct Session {
     pub docs: Vec<DocState>,
     pub active: usize,
+    /// Explicit file-selection revision; command rollback restores it along with the selection.
+    document_selection_revision: u64,
     pub clipboard: Clipboard,
     /// Edit ▸ Set default properties: what new shapes and text drawn with the tools take.
     pub default_props: DefaultProps,
@@ -193,6 +203,8 @@ mod arc_fields_tests;
 #[cfg(test)]
 mod arc_handles_tests;
 #[cfg(test)]
+mod asset_handoff_tests;
+#[cfg(test)]
 mod auto_layout_move_tests;
 #[cfg(test)]
 mod autosave_tests;
@@ -207,11 +219,15 @@ mod batch_undo_snapshot_tests;
 #[cfg(test)]
 mod binding_lists_tests;
 #[cfg(test)]
+mod board_code_tests;
+#[cfg(test)]
 mod board_connected_tests;
 #[cfg(test)]
 mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
+#[cfg(test)]
+mod board_mindmap_tests;
 #[cfg(test)]
 mod board_reshape_tests;
 #[cfg(test)]
@@ -224,6 +240,8 @@ mod board_tests;
 mod board_tools_tests;
 #[cfg(test)]
 mod boolean_cap_tests;
+#[cfg(test)]
+mod boolean_radius_tests;
 #[cfg(test)]
 mod booleans_tests;
 #[cfg(test)]
@@ -279,6 +297,8 @@ mod datafill_tests;
 #[cfg(test)]
 mod default_props_tests;
 #[cfg(test)]
+mod design_context_tests;
+#[cfg(test)]
 mod design_paste_tests;
 #[cfg(test)]
 mod dev_measurements_tests;
@@ -322,6 +342,10 @@ mod export_profile_tests;
 mod extended_chain_tests;
 #[cfg(test)]
 mod eyedropper_create_tests;
+#[cfg(test)]
+mod eyedropper_image_tests;
+#[cfg(test)]
+mod eyedropper_stroke_tests;
 #[cfg(test)]
 mod facilitate_tests;
 #[cfg(test)]
@@ -397,11 +421,15 @@ mod keymap_tests;
 #[cfg(test)]
 mod layout_suggest_tests;
 #[cfg(test)]
+mod library_asset_counts_tests;
+#[cfg(test)]
 mod library_beacon_tests;
 #[cfg(test)]
 mod library_path_tests;
 #[cfg(test)]
 mod library_range_styles_tests;
+#[cfg(test)]
+mod library_style_hops_tests;
 #[cfg(test)]
 mod library_variables_tests;
 #[cfg(test)]
@@ -418,6 +446,12 @@ mod live_share_tests;
 mod live_signal_tests;
 #[cfg(test)]
 mod live_tests;
+#[cfg(test)]
+mod lock_behaviour_tests;
+#[cfg(test)]
+mod locked_ratio_layout_tests;
+#[cfg(test)]
+mod marquee_behaviour_tests;
 #[cfg(test)]
 mod mask_tests;
 #[cfg(test)]
@@ -445,9 +479,13 @@ mod open_issues_tests;
 #[cfg(test)]
 mod outline_options_tests;
 #[cfg(test)]
+mod page_background_variable_tests;
+#[cfg(test)]
 mod page_clipboard_tests;
 #[cfg(test)]
 mod page_copy_navigation_tests;
+#[cfg(test)]
+mod page_opening_tests;
 #[cfg(test)]
 mod page_target_tests;
 #[cfg(test)]
@@ -461,6 +499,10 @@ mod panels_behaviour_tests;
 #[cfg(test)]
 mod paste_missing_image_tests;
 #[cfg(test)]
+mod paste_over_tests;
+#[cfg(test)]
+mod paste_sibling_tests;
+#[cfg(test)]
 mod path_read_caps_tests;
 #[cfg(test)]
 mod pdf_print_tests;
@@ -472,6 +514,8 @@ mod pen_overlay_tests;
 mod pen_undo_tests;
 #[cfg(test)]
 mod pen_vector_edit_tests;
+#[cfg(test)]
+mod pencil_shift_tests;
 #[cfg(test)]
 mod penpot_export_tests;
 #[cfg(test)]
@@ -517,6 +561,10 @@ mod proto_run_tests;
 #[cfg(test)]
 mod proto_tail_tests;
 #[cfg(test)]
+mod reopen_tests;
+#[cfg(test)]
+mod responsive_tests;
+#[cfg(test)]
 mod rest_slot_tests;
 #[cfg(test)]
 mod retained_walk_tests;
@@ -531,11 +579,15 @@ mod save_disk_changes_tests;
 #[cfg(test)]
 mod save_format_tests;
 #[cfg(test)]
+mod scale_bound_values_tests;
+#[cfg(test)]
 mod scale_tool_tests;
 #[cfg(test)]
 mod scaled_instance_tests;
 #[cfg(test)]
 mod section_contents_tests;
+#[cfg(test)]
+mod section_marquee_tests;
 #[cfg(test)]
 mod section_tests;
 #[cfg(test)]
@@ -552,6 +604,8 @@ mod shapebuilder_strokes_tests;
 mod shapebuilder_tests;
 #[cfg(test)]
 mod shapes_behaviour_tests;
+#[cfg(test)]
+mod shift_double_click_tests;
 #[cfg(test)]
 mod shortcut_parity_tests;
 #[cfg(test)]
@@ -591,6 +645,8 @@ mod text_motion_tests;
 #[cfg(test)]
 mod text_style_picker_tests;
 #[cfg(test)]
+mod text_tab_tests;
+#[cfg(test)]
 mod text_tail_tests;
 #[cfg(test)]
 mod text_weight_step_tests;
@@ -598,6 +654,8 @@ mod text_weight_step_tests;
 mod textfit_tests;
 #[cfg(test)]
 mod theme_pages_tests;
+#[cfg(test)]
+mod tidy_tests;
 #[cfg(test)]
 mod tiff_tests;
 #[cfg(test)]
@@ -619,6 +677,8 @@ mod variables_import_shapes_tests;
 #[cfg(test)]
 mod variables_io_tests;
 #[cfg(test)]
+mod variant_shared_props_tests;
+#[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]
 mod vector_behaviour_tests;
@@ -637,6 +697,8 @@ mod version_preview_tests;
 #[cfg(test)]
 mod version_tests;
 #[cfg(test)]
+mod view_autopan_tests;
+#[cfg(test)]
 mod view_behaviour_tests;
 #[cfg(test)]
 mod vote_history_tests;
@@ -653,6 +715,12 @@ mod widget_shapes_tests;
 #[cfg(test)]
 mod widgets_tests;
 
+#[cfg(test)]
+mod export_bounds_tests;
+#[cfg(test)]
+mod page_view_tests;
+#[cfg(test)]
+mod paste_properties_tests;
 #[cfg(test)]
 mod selection_reorder_tests;
 #[cfg(test)]

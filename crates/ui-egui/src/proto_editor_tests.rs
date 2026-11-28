@@ -328,8 +328,8 @@ fn edit_delete_from_the_menu_removes_the_open_interaction_not_the_layer() {
 }
 
 #[test]
-fn escape_closes_prototype_editor_without_deselecting_layer() {
-    let (s, a, _b, btn) = setup();
+fn escape_closes_prototype_editor_and_the_next_deselects() {
+    let (s, _a, _b, btn) = setup();
     let mut u = Ui::new(s);
     u.app.ui.right_tab = crate::RightTab::Prototype;
     u.run("select.set", json!({"ids": [btn]}));
@@ -344,13 +344,9 @@ fn escape_closes_prototype_editor_without_deselecting_layer() {
     assert_eq!(crate::proto_panel::editor(&u.ctx), None);
     assert_eq!(u.app.session.selection(), vec![btn], "layer remains selected");
 
-    // Second Escape steps out to parent frame.
+    // Second Escape clears the selection, not stepping out to the parent frame.
     u.key(pos2(100.0, 100.0), egui::Key::Escape);
-    assert_eq!(u.app.session.selection(), vec![a], "steps out to parent frame");
-
-    // Third Escape deselects all.
-    u.key(pos2(100.0, 100.0), egui::Key::Escape);
-    assert!(u.app.session.selection().is_empty(), "selection cleared on third escape");
+    assert!(u.app.session.selection().is_empty(), "the second Escape deselects");
 }
 
 /// After a click in the Pages list, Delete that removes an interaction ends the list's hold on the

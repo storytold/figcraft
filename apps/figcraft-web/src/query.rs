@@ -22,7 +22,14 @@ pub fn join_link(fragment: &str) -> Option<&str> {
 pub fn page_server(content: &str) -> Option<String> {
     let c = content.trim();
     let scheme = c.starts_with("wss://") || c.starts_with("ws://");
-    (scheme && c.len() <= 512 && !c.contains(|ch: char| ch.is_whitespace() || ch.is_control() || ch == '?' || ch == '#')).then(|| c.to_string())
+    // Invalid metadata must not replace a usable default with an endpoint sharing cannot reach.
+    (scheme
+        && c.len() <= 512
+        && !c.contains(|ch: char| ch.is_whitespace() || ch.is_control() || ch == '?' || ch == '#')
+        // Endpoint parsing strips pasted-link delimiters; metadata must retain its spelling.
+        && !c.ends_with(['<', '>', '"', '\''])
+        && figcraft_collab_net::Endpoint::parse(c).is_ok())
+    .then(|| c.to_string())
 }
 
 /// Whether `search` (`location.search`, with or without its `?`) has a `control` entry (`?control`,

@@ -38,25 +38,58 @@ impl Session {
     /// (its children), or the focus view's frame.
     pub(crate) fn marquee_within(&self, p: Point) -> Result<Option<NodeId>> {
         let (doc, page) = (self.doc()?, self.page()?);
-        let within = frame_at(doc, page, p, &[]).filter(|f| doc.node(*f).is_some_and(|n| n.parent == Some(page)));
-        let within = within.filter(|f| doc.world_bounds(*f).is_some_and(|b| b.contains(p)));
+        let deepest = frame_at(doc, page, p, &[]).filter(|f| doc.world_bounds(*f).is_some_and(|b| b.contains(p)));
+        let mut chain = deepest.map(|f| doc.ancestors(f)).unwrap_or_default();
+        chain.reverse();
+        chain.extend(deepest);
+        let mut within = None;
+        for c in chain.into_iter().filter(|c| *c != page) {
+            let Some(n) = doc.node(c) else { break };
+            match &n.kind {
+                NodeKind::Section { contents_hidden: false } => within = Some(c),
+                k if k.is_frame_like() => {
+                    within = Some(c);
+                    break;
+                }
+                _ => break,
+            }
+        }
         Ok(self.ds()?.focused().or(within))
+    }
+
+    fn marquee_root(&self, within: Option<NodeId>) -> Result<(NodeId, Option<NodeId>)> {
+        let (doc, page) = (self.doc()?, self.page()?);
+        Ok(match within.and_then(|w| doc.node(w)) {
+            Some(n) if matches!(n.kind, NodeKind::Section { .. }) => (n.id, None),
+            Some(n) => (n.parent.unwrap_or(page), Some(n.id)),
+            None => (page, None),
+        })
     }
 
     /// The selection a marquee over page rect `r` makes from `base` (what was selected before):
     /// the layers it touches (`deep`: nested ones too); `additive` (Shift) toggles them.
     pub(crate) fn marquee_selection(&self, r: Rect, within: Option<NodeId>, deep: bool, base: &[NodeId], additive: bool) -> Result<Vec<NodeId>> {
         let (doc, page) = (self.doc()?, self.page()?);
-        let mut hits =
-            if deep { figcraft_doc::geometry::marquee_deep(doc, page, r) } else { figcraft_doc::geometry::marquee_select(doc, page, r, within) };
-        if let Some(f) = self.ds()?.focused() {
+        let focused = self.ds()?.focused();
+        let mut hits = match (deep, focused) {
+            (true, _) => figcraft_doc::geometry::marquee_deep(doc, page, r),
+            (false, Some(f)) => figcraft_doc::geometry::marquee(doc, page, r, Some(f)),
+            (false, None) => {
+                let (root, start_inside) = self.marquee_root(within)?;
+                figcraft_doc::geometry::marquee_select(doc, root, r, start_inside)
+            }
+        };
+        if let Some(f) = focused {
             hits.retain(|h| *h != f && doc.is_ancestor(f, *h));
         }
-        // A marquee over a frame from outside selects the frame only when it covers it fully.
-        if within.is_none() && !deep {
+        // A widget's layers are part of the widget: a marquee from outside never opens one.
+        if !deep {
             hits.retain(|h| {
-                let full = doc.world_bounds(*h).is_some_and(|b| r.contains(b.origin()) && r.contains(Point::new(b.x1, b.y1)));
-                full || !doc.node(*h).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }))
+                doc.node(*h)
+                    .and_then(|n| n.parent)
+                    .filter(|p| Some(*p) != within)
+                    .and_then(|p| doc.node(p))
+                    .is_none_or(|p| !crate::widgets::is_widget(p))
             });
         }
         // Shift toggles: what was selected and is touched again comes out.
@@ -103,7 +136,7 @@ impl Session {
     /// The tool pointer events go to: in Dev Mode every tool but the hand and comments selects.
     fn acting_tool(&self) -> ToolId {
         match self.tool.tool {
-            t if self.tool.dev_mode && !matches!(t, ToolId::Hand | ToolId::Comment) => ToolId::Move,
+            t if self.tool.dev_mode && !t.works_in_dev_mode() => ToolId::Move,
             t => t,
         }
     }
@@ -129,6 +162,11 @@ impl Session {
         }
         let tool = self.acting_tool();
         let edits = matches!(tool, ToolId::Move | ToolId::Scale) && !self.tool.dev_mode;
+        // Presses with another tool don't record the selection: the ones from before them aren't
+        // this double-click's.
+        if ev.kind == PointerKind::Down && !matches!(tool, ToolId::Move | ToolId::Scale) {
+            self.tool.selections_before_last_two_presses = Default::default();
+        }
         if edits && self.origin_pointer(ev)? {
             return Ok(());
         }
@@ -148,6 +186,9 @@ impl Session {
                     }
                     // A click on the canvas deselects a ruler guide (the UI selects guides itself).
                     self.ds_mut()?.guide = None;
+                    let now = self.ds()?.selection.clone();
+                    let [_, last] = std::mem::take(&mut self.tool.selections_before_last_two_presses);
+                    self.tool.selections_before_last_two_presses = [last, Some((ev.p(), now))];
                     self.move_down(ev)
                 }
                 ToolId::Hand => {
@@ -169,6 +210,7 @@ impl Session {
                     self.request_ui("comment.new", json!({"x": ev.x, "y": ev.y}));
                     Ok(())
                 }
+                ToolId::Annotation => self.annotation_down(ev),
                 ToolId::Eyedropper => self.eyedrop(ev),
                 t if t.on_boards() => self.board_down(ev),
                 t if t.draws_shape() => self.draw_down(ev),
@@ -197,6 +239,19 @@ impl Session {
         }
         self.tool.overlay.cursor = Cursor::Move;
         Ok(true)
+    }
+
+    /// The Annotation tool's press: the layer under the pointer is selected and the UI is asked
+    /// for its note (the engine writes nothing; the note is typed in the Inspect tab). A press on
+    /// empty canvas does nothing.
+    fn annotation_down(&mut self, ev: &PointerEvent) -> Result<()> {
+        let ds = self.ds()?;
+        let (doc, page) = (ds.doc.clone(), ds.page);
+        // The same reach as the Move tool's pick (`ev.tol() * 2.0`); never the page itself.
+        let Some(id) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0).filter(|i| doc.node(*i).is_some_and(|n| !n.is_page())) else { return Ok(()) };
+        self.set_selection(vec![id]);
+        self.request_ui("annotation.new", json!({"id": id}));
+        Ok(())
     }
 
     pub(super) fn hover(&mut self, ev: &PointerEvent) -> Result<()> {
@@ -236,7 +291,7 @@ impl Session {
             if let Some(h) = handle_at(&doc, &sel, ev.p(), ev.zoom).filter(|_| !self.tool.dev_mode) {
                 cursor = resize_cursor(&doc, &sel, h);
             } else {
-                let leaf = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+                let leaf = self.hit_pick(&doc, page, ev.p(), ev.tol() * 2.0, ev.cmd);
                 if leaf.and_then(|l| crate::widgets::target_at(&doc, l, ev.p())).is_some() {
                     cursor = Cursor::Pointer;
                 }

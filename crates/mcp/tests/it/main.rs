@@ -8,8 +8,14 @@ mod agent_tasks;
 mod attached;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::disallowed_methods)]
 mod automation_roots;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod code_connect;
 #[allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod common;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod create_warnings;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod export_assets;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod export_hidden_roots;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

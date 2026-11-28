@@ -22,7 +22,11 @@ impl FigApp {
     /// state.
     pub fn new(session: Session, services: Box<dyn Services>) -> Self {
         // The main window's panels open as wide as they were left.
+        // Widths saved under other limits are clamped to the current ones, not rejected; one that
+        // isn't finite falls back to the default.
         let (left_width, right_width) = session.prefs.panel_widths;
+        let within = |w: f32, range: std::ops::RangeInclusive<f32>| if w.is_finite() { w.clamp(*range.start(), *range.end()) } else { PANEL_DEFAULT };
+        let (left_width, right_width) = (within(left_width, LEFT_PANEL), within(right_width, RIGHT_PANEL));
         let pages_height = session.prefs.pages_height;
         Self {
             ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
@@ -59,6 +63,8 @@ impl FigApp {
             ui_frame_stamp: None,
             ime: egui::ime_context::ImeContextTracker::new(),
             updates_rt: updates_ui::Runtime::default(),
+            framework_dialogs: craft_ui::dialog::DialogHost::new(),
+            framework_host: crate::framework::host(),
             #[cfg(test)]
             ime_observations: 0,
         }
@@ -91,17 +97,12 @@ impl FigApp {
         // Screen-reader and bidi language of the UI (fork E17).
         ctx.set_language(i18n::current().map(|l| l.code.to_string()));
         if !self.fonts_installed {
-            // Cmd/Ctrl+= / - / 0 zoom the canvas (view.zoomIn, view.zoomOut, view.zoom100): egui's
-            // own keyboard zoom would scale the whole interface on the same keys.
-            ctx.options_mut(|o| o.zoom_with_keyboard = false);
             // A double-click's window is the platform's (0.5 s, Windows' default), not egui's
             // stricter 0.3 s: a double-click the OS takes must enter a shape's points too.
             ctx.memory_mut(|m| m.options.input_options.max_double_click_delay = 0.5);
             theme::install_fonts(ctx, false, 0);
+            // The runtime lays this frame out again with them (`craft_ui::fonts::load`).
             self.fonts_installed = true;
-            // Installed fonts apply from the next frame; a child window draws on here, so ask for
-            // that frame (the root draws nothing on the frame it installs them).
-            ctx.request_repaint();
         } else if figcraft_text::system_fonts_scanned() {
             // Once the system fonts are indexed: faces for names in scripts the UI fonts lack, and
             // for each CJK script once something shows it.
@@ -116,15 +117,13 @@ impl FigApp {
         }
         // egui's zoom is for the whole app and multiplies each window's own system scale, so the
         // size is the same relative to every screen; the main window, whose size can hold a size
-        // back, sets it. The browser keeps its own zoom. Every window records its own plan (the
-        // Preferences warning and `ui.inspect` read it), from its own size.
+        // back, sets it: the runtime applies the main window's plan as the interface scale
+        // (`FigApp::before_input`). The browser keeps its own zoom. Every window records its own
+        // plan (the Preferences warning and `ui.inspect` read it), from its own size.
         {
             let window_px = ctx.content_rect().size() * ctx.pixels_per_point();
             let size = if cfg!(target_arch = "wasm32") { 1.0 } else { self.session.prefs.ui_scale };
             let plan = ui_scale::plan(size, ctx.native_pixels_per_point(), Some((window_px.x, window_px.y)));
-            if ctx.viewport_id() == egui::ViewportId::ROOT {
-                ctx.set_zoom_factor(plan.zoom);
-            }
             // A size that just changed (a key, Preferences, a command) draws at the new size from
             // the next frame: ask for it rather than wait for the next input.
             if plan != self.ui.ui_scale {
@@ -164,30 +163,18 @@ impl FigApp {
         }
         // Setup once per frame (pass 0), not once per pass and never on a logic-only tick.
         let stamp = (ctx.viewport_id(), ctx.cumulative_frame_nr());
-        let first = !self.fonts_installed;
         if ctx.current_pass_index() == 0 && self.ui_frame_stamp != Some(stamp) {
             self.ui_frame_stamp = Some(stamp);
             self.frame_stats.record(&ctx);
             self.ui_setup(&ctx);
-        }
-        if first && self.fonts_installed {
-            // New fonts apply from the next frame; draw nothing until then. Anything taken into
-            // this frame's (undrawn) input waits for the first drawn frame.
-            ctx.request_repaint();
-            if let Some(events) = self.applied_input.take() {
-                self.push_control_input(events);
-            }
-            self.input_acks.append(&mut self.applied_acks);
-            self.applied_frame = None;
-            self.control_synthetic = false;
-            // The next (drawn) frame ticks for itself in a direct harness.
-            self.logic_ticked = false;
-            self.observe_ime(&ctx, false);
-            return;
+            // The root `Ui` copied the style before the setup set this frame's theme: this pass
+            // draws with the theme it just set.
+            ui.set_style(ctx.global_style());
         }
         windows::begin(self, &ctx);
         let (files, prefs) = (self.session.docs.len(), self.session.prefs.clone());
         self.frame(ui);
+        windows::quit_key(&ctx);
         windows::settle(self, &ctx, files);
         if self.session.prefs != prefs {
             // This window too: a preference set during the frame (the interface size, the theme)
@@ -218,6 +205,9 @@ impl FigApp {
     /// One frame of the window drawing now.
     pub(crate) fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // Before anything reads the keys: the window's Escape, which the runtime routes to no
+        // component while nothing has the keyboard, reaches FigCraft's handlers through egui.
+        crate::framework::return_window_escape(&ctx);
         // Bind this input batch before controls or pointer input can replace its composing
         // target/caret. Outgoing IME receipts run after mutation and cannot authorize it.
         let ime_input = shortcuts::ImeInputBaseline::capture(self);
@@ -259,7 +249,7 @@ impl FigApp {
             dialogs::keys(self, &ctx);
             present::show(self, ui);
             dialogs::show(self, &ctx);
-            updates_ui::show(self, &ctx);
+            updates_ui::show(self, ui);
             // What went wrong while presenting (a widget's plugin failing) shows over it.
             self.toast_ui(&ctx);
             windows::requests(self, &ctx);
@@ -268,13 +258,19 @@ impl FigApp {
             return;
         }
         if !self.has_files() || self.ui.home {
+            let docs = &self.session.docs;
+            self.canvas.drop_closed(|uid| docs.iter().any(|d| d.uid == uid));
             home::show(self, ui);
             // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
             // (cleared after the home widgets, which may have just asked for it).
             self.ui.shortcuts_panel = false;
+            // The keymap runs with the canvas; here the one shortcut that still applies is read directly.
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
+                self.run("app.preferences", serde_json::json!({}));
+            }
             dialogs::keys(self, &ctx);
             dialogs::show(self, &ctx);
-            updates_ui::show(self, &ctx);
+            updates_ui::show(self, ui);
             self.toast_ui(&ctx);
             windows::requests(self, &ctx);
             shortcuts::clear_field_save_marker(&ctx);
@@ -296,6 +292,10 @@ impl FigApp {
         self.ui.narrow = narrow;
         // A narrow window shows the right panel when its button asks for it, a board's too.
         let right_open = (self.right_panel_shown(hidden) && !narrow && !right_minimized) || mobile == Some(MobilePanel::Right);
+        // A field left for the canvas commits as the panels draw, before the canvas takes the press.
+        canvas::release_fields_for_press(&ctx);
+        // A highlighted fill, stroke or effect row goes with the panel it's in, before it draws.
+        crate::property_rows::reconcile(self, &ctx, right_open);
         // A right-to-left UI language mirrors the window: the "left" rail and panel go on the
         // right, the "right" (Design) panel on the left. Their ids and widths stay as they are.
         let mirrored = self.ui.mirrored;
@@ -367,6 +367,12 @@ impl FigApp {
             let worker = self.worker.take();
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
             canvas::show(self, ui, &mut worker);
+            // The strip the floating bottom toolbar covers, for Zoom to selection (0 when it's hidden).
+            let inset =
+                if !hidden && mobile.is_none() { f64::from(self.canvas.rect.max.y - toolbar::pill_rect(self.canvas.rect, 0.0).min.y) } else { 0.0 };
+            if let Ok(ds) = self.session.ds_mut() {
+                ds.view.bottom_inset = inset;
+            }
             self.worker = Some(worker);
             if !hidden && mobile.is_none() {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
@@ -413,7 +419,7 @@ impl FigApp {
         self.end_unwanted_text_preview(&ctx);
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);
-        updates_ui::show(self, &ctx);
+        updates_ui::show(self, ui);
         // A scrub that changed speed (the pointer moved up or down) says so at the bottom.
         if let Some(notice) = ctx.data_mut(|d| d.remove_temp::<&'static str>(widgets::scrub_notice_id())) {
             self.toast(i18n::tr(notice));

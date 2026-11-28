@@ -91,6 +91,10 @@ pub enum NodeKind {
         flows: Vec<crate::proto::Flow>,
         #[serde(default)]
         prototype: crate::proto::PrototypeSettings,
+        /// The page chosen to open the file on for everyone (`page.setOpening`; at most one page):
+        /// saving writes it as the document's `current_page` instead of the page the saver was viewing.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        opening: bool,
     },
     Frame,
     Group,
@@ -246,6 +250,15 @@ pub struct CodeLink {
     pub name: String,
     /// The snippet with `{property}` and `{property ? "a" : "b"}` placeholders.
     pub template: String,
+    /// Where the code component lives, relative to the code repository.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// What a property's design values are called in code: property → design value → code value.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, BTreeMap<String, String>>,
+    /// Notes for whoever uses the component.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
 }
 
 /// A dev resource: a link for developers attached to a layer. The URL is data only: it is shown
@@ -395,7 +408,8 @@ impl NodeKind {
         )
     }
 
-    /// Kinds whose corners can be rounded from the panel.
+    /// Kinds whose corners can be rounded from the panel. A boolean group has one radius for every
+    /// sharp corner of its result.
     pub fn has_corner_radius(&self) -> bool {
         matches!(
             self,
@@ -408,16 +422,19 @@ impl NodeKind {
                 | NodeKind::Star { .. }
                 | NodeKind::Vector { .. }
                 | NodeKind::Section { .. }
+                | NodeKind::BooleanOp { .. }
         )
     }
 
-    /// Kinds with a radius per corner (the others round every corner alike).
+    /// Kinds with a radius per corner (the others, boolean groups included, round every corner alike).
     pub fn has_independent_corners(&self) -> bool {
-        self.has_corner_radius() && !matches!(self, NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. })
+        self.has_corner_radius()
+            && !matches!(self, NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. } | NodeKind::BooleanOp { .. })
     }
 
     /// Kinds whose rounded corners are drawn with corner smoothing: a vector only when its network
-    /// has a closed region (an open path's rounded points are drawn without it).
+    /// has a closed region (an open path's rounded points are drawn without it). A boolean group's
+    /// smoothing applies to its result's corners between straight edges.
     pub fn has_corner_smoothing(&self) -> bool {
         match self {
             NodeKind::Vector { network } => !network.regions.is_empty(),
@@ -511,6 +528,10 @@ pub struct Node {
     /// Explicit variable modes (collection → mode) set on this container.
     #[serde(default, skip_serializing_if = "is_default")]
     pub var_modes: BTreeMap<CollectionId, ModeId>,
+    /// An instance's scale factor (the Scale tool): the variables bound on its layers draw at their
+    /// value times this, and times the factors of the instances around it. 1 on everything else.
+    #[serde(default = "one64", skip_serializing_if = "is_one64")]
+    pub scale_factor: f64,
     /// In a boolean group: how this operand combines with the operands below it (`None`: the
     /// group's operation). Ignored for the bottom operand and outside boolean groups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -571,6 +592,9 @@ pub(crate) fn yes() -> bool {
 fn one() -> f32 {
     1.0
 }
+fn one64() -> f64 {
+    1.0
+}
 fn pass() -> BlendMode {
     BlendMode::PassThrough
 }
@@ -587,6 +611,9 @@ pub(crate) fn is_default<T: Default + PartialEq>(v: &T) -> bool {
 }
 fn is_yes(v: &bool) -> bool {
     *v == yes()
+}
+fn is_one64(v: &f64) -> bool {
+    *v == 1.0
 }
 fn is_one(v: &f32) -> bool {
     *v == one()
@@ -730,6 +757,7 @@ impl Node {
             styles: StyleRefs::default(),
             bound: BTreeMap::new(),
             var_modes: BTreeMap::new(),
+            scale_factor: 1.0,
             bool_op: None,
             constrain_proportions: false,
             source: None,

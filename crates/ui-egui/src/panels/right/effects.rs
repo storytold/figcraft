@@ -1,9 +1,10 @@
-use super::menu::{context_popup, menu_check, menu_item, menu_popup, row, row_context_menu, row_rect};
+use super::menu::{context_popup, menu_check, menu_item, menu_popup, row, row_context_menu, row_rect, row_target};
 use super::{
     Blur, BlurType, Document, Effect, EffectKind, FieldEdit, FigApp, Glass, GridAlign, GridKind, Icon, Id, LayoutGrid, Lead, ListDrag,
     MAX_BLUR_RADIUS, NodeId, Noise, NoiseMode, Paint, Sense, Shadow, StyleSlot, Texture, Ui, VariableType, common, icons, json, move_flags,
     moved_index, remove_flags, removed_index, style_picker, tr, trf, trn, vec2, widgets,
 };
+use crate::property_rows::PropertyKind;
 
 /// Draw the effect list with add/style/type/toggle/remove/reorder, open settings, and keep an
 /// open picker and settings flags aligned when rows move or are removed.
@@ -29,9 +30,12 @@ pub(super) fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
     let Some(list) = list else { return };
     let mut drag = ListDrag::new(ui, "effects");
     let mut removed = None;
+    let selected_row = crate::theme::Tokens::get(ui.ctx()).selected_row;
     for (i, e) in list.iter().enumerate().rev() {
         let mut open = effect_open(ui.ctx(), i);
-        let header = row_rect(ui, 32.0, |ui| {
+        // A click on the row's background highlights it for Cmd/Ctrl+C (`property_rows`).
+        let highlight = crate::property_rows::fill(app, PropertyKind::Effect, i, selected_row);
+        let header = row_target(ui, 32.0, highlight, |ui| {
             if icons::button(ui, Icon::Effects, 24.0, open, tr("Effect settings")).clicked() {
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(Id::unique((FX_OPEN, i)), open));
@@ -63,10 +67,12 @@ pub(super) fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
                 removed = Some(i);
             }
         });
+        crate::property_rows::row(app, &header, PropertyKind::Effect, i, &ids);
+        let header = header.rect;
         let can_paste = app.session.clipboard.effect.is_some();
         row_context_menu(ui, header, Id::unique(("effect_menu", i))).show(|ui| {
             if menu_item(ui, tr("Copy effect"), "") {
-                app.run("effect.copy", json!({"ids": ids, "index": i}));
+                crate::property_rows::copy(app, PropertyKind::Effect, i, &ids);
                 ui.close();
             }
             if can_paste && menu_item(ui, tr("Paste effect"), "") {
@@ -77,10 +83,13 @@ pub(super) fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
         if open {
             effect_settings(app, ui, &ids, i, e);
         }
-        drag.row(ui, i, header, header.with_max_y(ui.cursor().min.y.max(header.max.y)), || tr(e.label()).to_string());
+        if drag.row_clicked(ui, i, header, header.with_max_y(ui.cursor().min.y.max(header.max.y)), || tr(e.label()).to_string()) {
+            crate::property_rows::click(app, PropertyKind::Effect, i, &ids, header);
+        }
     }
     if let Some((from, to)) = drag.finish(ui) {
         app.run("effect.move", json!({"ids": ids, "from": from, "to": to}));
+        crate::property_rows::follow(app, PropertyKind::Effect, from, Some(to));
         move_flags(ui, FX_OPEN, list.len(), from, to);
         if let Some(crate::colorpicker::PickerTarget::Effect { index, .. }) = &mut app.ui.picker {
             *index = moved_index(*index, from, to);
@@ -88,6 +97,7 @@ pub(super) fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
     }
     // Open settings and an open colour picker stay with their effects, or go with theirs.
     if let Some(i) = removed {
+        crate::property_rows::follow(app, PropertyKind::Effect, i, None);
         remove_flags(ui, FX_OPEN, list.len(), i);
         if let Some(crate::colorpicker::PickerTarget::Effect { index, .. }) = &mut app.ui.picker {
             match removed_index(*index, i) {

@@ -39,3 +39,23 @@ image is not kept in this repo. License: see `LICENSE.txt`.
 
 Replace `figcraft.svg` (and `figcraft-small.svg`), then run `cargo xtask icon`. It needs `resvg`
 (`cargo install resvg`).
+
+## Nightly icons
+
+The Nightly build ships the same chameleon on a deeper field (`#019668`), so the two icons are
+told apart at 16 px without a badge, crescent or letter. Nothing is upscaled: `figcraft-1024.png`
+is the only input, each frame is an area average of it, and only the field's contribution to each
+pixel moves (ink, paper, shading and alpha are untouched).
+
+- `figcraft-nightly.png`: the 512 px frame the Linux packages use.
+- `figcraft-nightly-<size>.png` (16–1024): the frames; `packaging/macos/nightly.sh` copies the
+  committed `figcraft-nightly.icns` into the bundle instead of building one on the runner.
+- `figcraft-nightly.ico`: 32bpp DIB frames for 16–128 px and a PNG frame for 256; embedded in the
+  Nightly `.exe` by `apps/figcraft/build.rs`.
+- `figcraft-nightly.icns`: PNG slots for 16–1024, including the @2x ones.
+- `nightly-provenance.json`: the input and output hashes, the palette, the method and the
+  generator's own hash.
+
+Regenerate with `python3 packaging/nightly-icons.py` (no image tool needed); `--check` reports
+whether the committed files still match. `packaging/nightly-icon-tests.py` checks both containers,
+the PNG CRCs and the provenance record.

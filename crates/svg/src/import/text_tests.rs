@@ -30,3 +30,11 @@ fn css_system_font_names_keep_their_name_where_the_system_font_is() {
     assert_eq!(family(&named(&["-apple-system", "BlinkMacSystemFont", "system-ui", "sans-serif"]), &elsewhere), "Inter");
     assert_eq!(family(&named(&["-apple-system"]), &elsewhere), "-apple-system", "nothing installed: the first name it gives");
 }
+
+#[test]
+fn char_index_counts_the_characters_before_a_byte_offset() {
+    let t = "aé😀b";
+    let ci = super::char_index(t, [0, 1, 3, 7, 8, 2, 4, 99]);
+    assert_eq!([ci(0), ci(1), ci(3), ci(7), ci(8)], [0, 1, 2, 3, 4]);
+    assert_eq!([ci(2), ci(4), ci(99)], [4, 4, 4], "inside a character or past the end: all of them");
+}

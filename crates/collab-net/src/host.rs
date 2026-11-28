@@ -84,6 +84,16 @@ impl Host {
         if cfg.view_token.as_deref().is_some_and(|v| same_secret(v, &cfg.token)) {
             return Err(io::Error::other("the view-only secret is the same as the edit secret"));
         }
+        // The file's review settings stay inside the limits this build keeps: clients apply every
+        // arriving value against them, so a file past them (written by an older or looser build)
+        // would break everyone who joins. The host trims them first (`design.configure`).
+        let over = cfg.doc.design_review.over_limits();
+        if !over.is_empty() {
+            let list = over.iter().map(|(what, have, max)| format!("{have} {what} (this build keeps at most {max})")).collect::<Vec<_>>().join(", ");
+            return Err(io::Error::other(format!(
+                "this file can't be shared: its design review settings hold {list}; trim them with design.configure (or reset the settings), then share again"
+            )));
+        }
         let listener = match TcpListener::bind(cfg.addr) {
             Ok(l) => l,
             Err(e) if e.kind() == io::ErrorKind::AddrInUse && cfg.any_port_if_taken => TcpListener::bind(SocketAddr::new(cfg.addr.ip(), 0))?,
@@ -109,6 +119,7 @@ impl Host {
         for o in outs {
             match o {
                 Outgoing::To(id, w @ ServerMsg::Welcome { .. }) if id == me => inbox.push(Event::Sync(w)),
+                Outgoing::To(id, b @ ServerMsg::Branches(_)) if id == me => inbox.push(Event::Sync(b)),
                 Outgoing::To(id, ref m @ ServerMsg::Signal { .. }) if id == me => to_local(&inbox, me, m),
                 _ => {}
             }
