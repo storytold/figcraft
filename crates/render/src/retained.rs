@@ -8,11 +8,11 @@
 
 use std::sync::Arc;
 
-use figcraft_doc::{Document, EffectKind, NodeId, NodeKind};
+use figcraft_doc::{Document, Effect, EffectKind, NodeId, NodeKind};
 use figcraft_geom::Rect;
 use tiny_skia::Pixmap;
 
-use crate::{Options, View, draw, render_view};
+use crate::{Options, View, draw};
 
 /// What a render had to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,23 +70,58 @@ struct Sensitive {
 
 /// Grain effects (noise, texture) work on their layer's pixels, which end where a render cuts the
 /// layer (texture scatters pixels from across the cut): grainy layers are redrawn whole.
-fn sensitive(doc: &Document) -> Sensitive {
-    let noisy = doc.nodes().filter(|n| n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::Noise(_) | EffectKind::Texture(_))));
-    let pattern_sources = doc
-        .nodes()
-        .flat_map(|n| n.fills.iter().chain(&n.strokes))
-        .filter_map(|p| match &p.kind {
-            figcraft_color::PaintKind::Pattern(pt) => Some(NodeId(pt.source)),
-            _ => None,
-        })
-        .collect();
-    Sensitive { areas: noisy.filter_map(|n| draw::paint_bounds(doc, n.id)).collect(), backdrop_blur: crate::max_backdrop_blur(doc), pattern_sources }
+///
+/// Only what `page` draws counts: its layers, and the pattern sources they fill with wherever those
+/// are (and the sources those fill with in turn), whose edits show on the page and whose backdrop
+/// blurs count too. A source's grain is drawn in its cells, not where the source lies, so only the
+/// page's own grainy layers give areas. One walk down the page rather than passes over every page
+/// of the file: in a large file those passes took most of an edit's frame, and a blur on another
+/// page widened every pan's strips and every band's overlap.
+fn sensitive(doc: &Document, page: NodeId) -> Sensitive {
+    let mut noisy: Vec<(NodeId, Rect)> = Vec::new();
+    let mut backdrop_blur = 0.0f64;
+    let mut pattern_sources = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    // A tree visits each node once (a source on the page twice); child lists repeated in a
+    // hostile file are cut off rather than walked in full.
+    let mut left = doc.node_count().saturating_mul(2).saturating_add(8);
+    // Each node with whether it is drawn where it lies on the page (a source's layers are drawn
+    // in its cells).
+    let mut stack = vec![(page, true)];
+    while let Some((id, on_page)) = stack.pop() {
+        let Some(budget) = left.checked_sub(1) else { break };
+        left = budget;
+        let Some(n) = doc.node(id) else { continue };
+        if on_page
+            && n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::Noise(_) | EffectKind::Texture(_)))
+            && let Some(r) = draw::paint_bounds(doc, id)
+        {
+            noisy.push((id, r));
+        }
+        backdrop_blur = n.effects.iter().map(Effect::backdrop_radius).fold(backdrop_blur, f64::max);
+        for p in n.fills.iter().chain(&n.strokes) {
+            if let figcraft_color::PaintKind::Pattern(pt) = &p.kind {
+                let src = NodeId(pt.source);
+                if seen.insert(src) {
+                    pattern_sources.push(src);
+                    // A page as a source draws nothing.
+                    if doc.node(src).is_some_and(|s| !s.is_page()) {
+                        stack.push((src, false));
+                    }
+                }
+            }
+        }
+        stack.extend(n.children.iter().map(|c| (*c, on_page)));
+    }
+    // In id order, as a pass over the file found them.
+    noisy.sort_by_key(|(id, _)| *id);
+    Sensitive { areas: noisy.into_iter().map(|(_, r)| r).collect(), backdrop_blur, pattern_sources }
 }
 
 /// [`sensitive`] for the large-file timings: how many areas it found.
 #[cfg(test)]
-pub(crate) fn bench_scan(doc: &Document, _page: NodeId) -> usize {
-    sensitive(doc).areas.len()
+pub(crate) fn bench_scan(doc: &Document, page: NodeId) -> usize {
+    sensitive(doc, page).areas.len()
 }
 
 /// Whether `id` is a pattern source or inside one in `doc`.
@@ -138,8 +173,8 @@ enum Prepared {
     /// The previous render patched (or reused as is), now kept.
     Patched(View, Work),
     /// Only a full render will do: the snapped view, its top-left device pixel, the font
-    /// generation and what [`sensitive`] found when the previous render's document was checked.
-    Full { snapped: View, px: (i64, i64), fonts: u64, sensitive: Option<Arc<Sensitive>> },
+    /// generation and what [`sensitive`] finds on the page.
+    Full { snapped: View, px: (i64, i64), fonts: u64, sensitive: Arc<Sensitive> },
 }
 
 /// What [`Retained::begin`] did.
@@ -159,7 +194,7 @@ pub struct Steps {
     px: (i64, i64),
     fonts: u64,
     opts: Options,
-    sensitive: Option<Arc<Sensitive>>,
+    sensitive: Arc<Sensitive>,
     pix: Pixmap,
     /// The first row not drawn yet.
     next: u32,
@@ -231,9 +266,8 @@ impl Retained {
         match self.prepare(doc, page, view, opts)? {
             Prepared::Patched(snapped, work) => Some((snapped, &self.last.as_ref()?.pix, work)),
             Prepared::Full { snapped, px, fonts, sensitive } => {
-                let pix = render_view(doc, page, &snapped, opts)?;
-                let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
-                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                let pix = crate::render_view_with(doc, page, &snapped, opts, sensitive.backdrop_blur)?;
+                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, sensitive);
                 Some((snapped, &frame.pix, Work::Full))
             }
         }
@@ -248,13 +282,12 @@ impl Retained {
             Prepared::Full { snapped, px, fonts, sensitive } => {
                 // Bands at least twice what they overlap (each draws its overlap again both ways),
                 // so a background blur reaching past `band_h` makes the bands taller.
-                let overlap = crate::band_overlap(doc, &snapped, u32::MAX).map(|o| o.min(snapped.height));
+                let overlap = crate::overlap_for(sensitive.backdrop_blur, &snapped, u32::MAX).map(|o| o.min(snapped.height));
                 let band_h = band_h.max(1).max(overlap.unwrap_or(0).saturating_mul(2));
                 // A blur that can't be measured: one piece.
                 let Some(overlap) = overlap else {
-                    let pix = render_view(doc, page, &snapped, opts)?;
-                    let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
-                    let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                    let pix = crate::render_view_with(doc, page, &snapped, opts, sensitive.backdrop_blur)?;
+                    let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, sensitive);
                     return Some(Begun::Done(snapped, &frame.pix, Work::Full));
                 };
                 let pix = crate::new_pixmap(snapped.width, snapped.height)?;
@@ -281,8 +314,7 @@ impl Retained {
     /// Keep the image `steps` drew (all its bands: see [`Steps::step`]) as a full render.
     pub fn finish(&mut self, steps: Steps) -> (View, &Pixmap) {
         let Steps { doc, page, view, px, fonts, opts, sensitive, pix, .. } = steps;
-        let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(&doc)));
-        let frame = self.keep(&doc, page, (&view, px, fonts), &opts, pix, s);
+        let frame = self.keep(&doc, page, (&view, px, fonts), &opts, pix, sensitive);
         (view, &frame.pix)
     }
 
@@ -296,8 +328,12 @@ impl Retained {
             return None;
         };
         let fonts = figcraft_text::layout_generation();
-        let mut sens = None;
-        if let Some(last) = self.last.take()
+        let last = self.last.take();
+        // What the previous render found on the page holds while the document, the page and the
+        // fonts (text's ink bounds) stay the same: a zoom works none of it out again.
+        let kept = last.as_ref().filter(|l| Arc::ptr_eq(&l.doc, doc) && l.page == page && l.fonts == fonts).map(|l| l.sensitive.clone());
+        let s = kept.unwrap_or_else(|| Arc::new(sensitive(doc, page)));
+        if let Some(last) = last
             && last.page == page
             && last.outline == opts.outline_mode
             && last.outline_extras == opts.outline
@@ -316,18 +352,14 @@ impl Retained {
             && last.fonts == fonts
             // Images are decoded into the file's colour space: a new profile redraws everything.
             && last.doc.color_profile == doc.color_profile
+            && let Some((pix, pixels, areas)) = patch(last, doc, page, &snapped, px, opts, &s)
         {
-            let same_doc = Arc::ptr_eq(&last.doc, doc);
-            let s = if same_doc { last.sensitive.clone() } else { Arc::new(sensitive(doc)) };
-            if let Some((pix, pixels, areas)) = patch(last, doc, page, &snapped, px, opts, &s) {
-                let work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
-                self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
-                self.patched = areas;
-                return Some(Prepared::Patched(snapped, work));
-            }
-            sens = Some(s);
+            let work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
+            self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+            self.patched = areas;
+            return Some(Prepared::Patched(snapped, work));
         }
-        Some(Prepared::Full { snapped, px, fonts, sensitive: sens })
+        Some(Prepared::Full { snapped, px, fonts, sensitive: s })
     }
 
     /// Keep `pix`, the render of `at`: the snapped view, its top-left device pixel and the font
@@ -648,7 +680,7 @@ fn patch(
     let mut pix = last.pix;
     shift(&mut pix, dx, dy)?;
     for d in &damage {
-        render_into(FrameRender { doc, page, view, px, opts }, d, margin, &mut pix)?;
+        render_into(FrameRender { doc, page, view, px, opts, backdrop: s.backdrop_blur }, d, margin, &mut pix)?;
     }
     let area =
         |d: &Px| Some([u32::try_from(d.x0).ok()?, u32::try_from(d.y0).ok()?, u32::try_from(d.x1 - d.x0).ok()?, u32::try_from(d.y1 - d.y0).ok()?]);
@@ -712,13 +744,15 @@ struct FrameRender<'a> {
     view: &'a View,
     px: (i64, i64),
     opts: &'a Options,
+    /// The largest backdrop radius on the page.
+    backdrop: f64,
 }
 
 /// Render the frame pixels `d` (with `margin` more around, discarded) into `pix`. The margin stops
 /// at the frame's edge: background blurs and glass read what is drawn under them, and a full
 /// render's backdrops end where the frame does.
 fn render_into(frame: FrameRender<'_>, d: &Px, margin: i64, pix: &mut Pixmap) -> Option<()> {
-    let FrameRender { doc, page, view, px, opts } = frame;
+    let FrameRender { doc, page, view, px, opts, backdrop } = frame;
     let s = view.scale;
     let (w, h) = (i64::from(pix.width()), i64::from(pix.height()));
     let (ox, oy) = ((d.x0 - margin).max(0), (d.y0 - margin).max(0));
@@ -726,7 +760,7 @@ fn render_into(frame: FrameRender<'_>, d: &Px, margin: i64, pix: &mut Pixmap) ->
     let (rw, rh) = (u32::try_from(ex - ox).ok()?, u32::try_from(ey - oy).ok()?);
     // The same pixel grid as the frame: origin (px + offset) / scale.
     let sub = View { origin: ((px.0 + ox) as f64 / s, (px.1 + oy) as f64 / s), scale: s, width: rw, height: rh };
-    let part = crate::render_part(doc, page, &sub, opts)?;
+    let part = crate::render_part_with(doc, page, &sub, opts, backdrop)?;
     // The rows of `d` in `part`, straight into their place (a copy of the part and a draw of the
     // copy took longer than rendering a simple part).
     let (skip_x, skip_y) = (usize::try_from(d.x0 - ox).ok()?, usize::try_from(d.y0 - oy).ok()?);

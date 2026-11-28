@@ -195,3 +195,77 @@ fn large_doc_timings() {
     row("zoom (400%)", &|f| zooms(f, 4.0));
     row("pan 60 px", &pans);
 }
+
+/// The cards with, on the page shown, a grainy card, a layer filled with a pattern whose source
+/// lies on another page, a background blur and a glass pane.
+fn mixed() -> File {
+    let mut f = file(Scene::BlurHere);
+    let d = &mut f.doc;
+    let other = d.pages[3];
+    let source = d.create(other, NodeKind::Frame, "Source", 0.0, 0.0, 30.0, 30.0).unwrap();
+    d.get_mut(source).unwrap().fills = vec![Paint::solid(Color::from_hex("E03030").unwrap())];
+    let dot = d.create(source, NodeKind::Rectangle, "Dot", 8.0, 8.0, 12.0, 12.0).unwrap();
+    d.get_mut(dot).unwrap().fills = vec![Paint::solid(Color::from_hex("2040E0").unwrap())];
+    let filled = d.create(f.page, NodeKind::Rectangle, "Filled", 1300.0, 1500.0, 300.0, 200.0).unwrap();
+    let pt = figcraft_color::PatternPaint::new(source.0);
+    d.get_mut(filled).unwrap().fills = vec![Paint { kind: figcraft_color::PaintKind::Pattern(pt), ..Paint::solid(Color::BLACK) }];
+    let grainy = d.create(f.page, NodeKind::Rectangle, "Grain", 1500.0, 1150.0, 200.0, 120.0).unwrap();
+    let n = d.get_mut(grainy).unwrap();
+    n.fills = vec![Paint::solid(Color::from_hex("20C060").unwrap())];
+    n.effects = vec![Effect {
+        kind: EffectKind::Noise(figcraft_doc::Noise { size: 0.5, density: 0.4, color: Color::BLACK, ..Default::default() }),
+        visible: true,
+    }];
+    f
+}
+
+/// Prints a digest of every frame of a run of pans, edits and zooms through `Retained`, to tell
+/// that two builds draw the same pixels: run in release on each and compare.
+#[test]
+#[ignore = "digests: run in release with --ignored --nocapture on two builds and compare"]
+fn large_doc_digests() {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let scenes = [
+        ("cards", file(Scene::Cards)),
+        ("blur here", file(Scene::BlurHere)),
+        ("blur elsewhere", file(Scene::BlurElsewhere)),
+        ("flat", file(Scene::Flat)),
+        ("mixed", mixed()),
+    ];
+    let mut all = DefaultHasher::new();
+    for (name, f) in &scenes {
+        let mut r = Retained::default();
+        let mut doc = Arc::new(f.doc.clone());
+        let mut frames = Vec::new();
+        let mut at = (1000.0, 1000.0);
+        let mut scale = 1.0;
+        let steps = ["pan", "pan", "edit", "edit", "zoom 1.37", "pan", "edit", "zoom 4", "pan", "edit", "zoom 0.5", "pan"];
+        let mut draw = |r: &mut Retained, doc: &Arc<Document>, at: (f64, f64), scale: f64, frames: &mut Vec<String>| {
+            let (_, pix, work) = r.render(doc, f.page, &view(at, scale), &opts()).unwrap();
+            let mut h = DefaultHasher::new();
+            pix.data().hash(&mut h);
+            let w = match work {
+                Work::Full => "F",
+                Work::Partial { .. } => "P",
+                Work::Reused => "R",
+            };
+            frames.push(format!("{w}{:04x}", h.finish() & 0xffff));
+            pix.data().hash(&mut all);
+        };
+        draw(&mut r, &doc, at, scale, &mut frames);
+        for s in steps {
+            match s {
+                "pan" => at = (at.0 + 60.0 / scale, at.1 + 24.0 / scale),
+                "edit" => {
+                    let mut next = (*doc).clone();
+                    nudge(&mut next, f.target);
+                    doc = Arc::new(next);
+                }
+                z => scale = z.trim_start_matches("zoom ").parse().unwrap(),
+            }
+            draw(&mut r, &doc, at, scale, &mut frames);
+        }
+        println!("{name}: {}", frames.join(" "));
+    }
+    println!("all: {:016x}", all.finish());
+}
