@@ -116,11 +116,15 @@ fn encode(doc: &Document, pix: &figcraft_render::Pixmap, e: &str) -> CliResult<V
 /// Write `doc` to `out`, choosing the format by extension.
 pub fn write_doc(doc: &Document, page: NodeId, out: &str, io: &mut Io) -> CliResult<()> {
     let e = ext(out);
-    let bytes = match e.as_str() {
-        "figcraft" => {
-            let thumb = figcraft_engine::cmd::file::thumbnail(doc);
-            figcraft_format::save_bytes(doc, thumb.as_deref()).map_err(|e| CliError::Failed(e.to_string()))?
+    if e == "figcraft" {
+        if let Some(dir) = Path::new(out).parent().filter(|d| !d.as_os_str().is_empty()) {
+            figcraft_engine::file_access::create_dir_all(dir).map_err(|e| CliError::Failed(e.to_string()))?;
         }
+        let thumb = figcraft_engine::cmd::file::thumbnail(doc);
+        figcraft_engine::file_access::save_native_file(out, doc, thumb.as_deref(), &[], &[], &[]).map_err(|e| CliError::Failed(e.to_string()))?;
+        return Ok(());
+    }
+    let bytes = match e.as_str() {
         "json" => {
             let v = figcraft_format::to_json(doc).map_err(|e| CliError::Failed(e.to_string()))?;
             serde_json::to_vec_pretty(&v).map_err(|e| CliError::Failed(e.to_string()))?

@@ -612,7 +612,13 @@ pub(super) fn paint_paste(s: &mut Session, p: &Value, fills: bool) -> Result<Val
             // can be taken too — images are usually keyed by their hash, so the copied key often
             // is that hash — and then a numbered variant of it. Image keys become archive member
             // names, which keep only letters and digits, so the number is appended plainly.
-            let base = if doc.images.get(&copied).is_some_and(|existing| existing != &d) { figcraft_format::image_hash(&d.bytes) } else { copied };
+            let base = if doc.images.get(&copied).is_some_and(|existing| existing != &d)
+                && let Some(raw) = d.bytes()
+            {
+                figcraft_format::image_hash(&raw)
+            } else {
+                copied
+            };
             let mut key = base.clone();
             let mut n = 0u32;
             while doc.images.get(&key).is_some_and(|existing| existing != &d) {

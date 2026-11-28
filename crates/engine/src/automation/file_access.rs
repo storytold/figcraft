@@ -567,6 +567,66 @@ pub fn read_dir(path: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
     Ok(std::fs::read_dir(&dir).map_err(io(path))?.flatten().map(|e| e.path()).collect())
 }
 
+/// Open a regular file at `path` for reading after checking automation roots and size cap `max`,
+/// returning the resolved path, open file handle, and byte length (#1114, #1313).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_capped(path: impl AsRef<Path>, max: u64) -> Result<(PathBuf, std::fs::File, u64)> {
+    let path = path.as_ref();
+    let p = allow(path, Access::Read)?;
+    let refuse = |why: String| EngineError::Other(format!("{}: {why}", path.display()));
+    let meta = std::fs::metadata(&p).map_err(io(path))?;
+    if meta.is_dir() {
+        return Err(refuse("is a folder, not a file".into()));
+    }
+    if !meta.is_file() {
+        return Err(refuse("isn't a regular file (a device or a pipe?), so it isn't read".into()));
+    }
+    if meta.len() > max {
+        return Err(refuse(format!("is {}, more than the {} allowed here", size(meta.len()), size(max))));
+    }
+    let f = std::fs::File::open(&p).map_err(io(path))?;
+    let meta = f.metadata().map_err(io(path))?;
+    if !meta.is_file() {
+        return Err(refuse("isn't a regular file (a device or a pipe?), so it isn't read".into()));
+    }
+    if meta.len() > max {
+        return Err(refuse(format!("is {}, more than the {} allowed here", size(meta.len()), size(max))));
+    }
+    Ok((p, f, meta.len()))
+}
+
+/// If `path` is a native `.figcraft` ZIP archive on disk, open it directly through the seekable
+/// lazy-image reader without copying the whole file into memory (#1313). Returns `Ok(None)` if
+/// the file is not a native `.figcraft` ZIP (e.g. bare JSON, `.fig`, `.sketch`), leaving the
+/// caller to fall back to the byte-buffer loader.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_native_file(path: impl AsRef<Path>, max: u64) -> Result<Option<figcraft_format::Loaded>> {
+    let (resolved, mut file, len) = open_capped(path, max)?;
+    if !figcraft_format::is_native_archive_file(&mut file).map_err(|e| EngineError::Other(e.to_string()))? {
+        return Ok(None);
+    }
+    figcraft_format::load_file_from(&resolved, file, len, figcraft_format::DEFAULT_ENCODED_CACHE_BYTES)
+        .map(Some)
+        .map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// Stream a `.figcraft` archive with history and branches directly to `path` through a sibling
+/// staging file and atomic rename, enforcing automation write roots (#1313). Returns bytes written.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_native_file(
+    path: impl AsRef<Path>,
+    doc: &figcraft_doc::Document,
+    thumbnail_png: Option<&[u8]>,
+    versions: &[figcraft_format::Version],
+    branches: &[figcraft_format::Branch],
+    extra_stores: &[Arc<dyn figcraft_doc::ImageLoader>],
+) -> Result<u64> {
+    let path = path.as_ref();
+    let dest = allow(path, Access::Write)?;
+    figcraft_format::save_file_with_history(doc, &dest, thumbnail_png, versions, branches, extra_stores)
+        .map_err(|e| EngineError::Other(e.to_string()))
+}
+
 /// Write `bytes` to `path` through a uniquely named staging file and one atomic rename (see
 /// [`figcraft_format::write_file_atomic`]).
 pub fn write(path: impl AsRef<Path>, bytes: &[u8]) -> Result<()> {

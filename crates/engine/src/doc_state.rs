@@ -207,6 +207,73 @@ impl DocState {
         self.images_left_in_file.as_ref().filter(|(file, _)| file_access::same_file(file, path)).map(|(_, count)| *count)
     }
 
+    /// Before replacing `path` on disk with a newly streamed archive holding `live_keys`, pin
+    /// (materialize into memory) any lazy image held in undo/redo/saved/preview snapshots whose
+    /// backing store points to `path` and is absent from `live_keys`, and return all matching
+    /// backing stores so their open file handles can be released across the atomic rename (#1313).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pin_lazy_images_before_replace(
+        &mut self,
+        path: &str,
+        live_keys: &BTreeSet<String>,
+    ) -> crate::Result<Vec<Arc<dyn figcraft_doc::ImageLoader>>> {
+        let mut seen = BTreeSet::new();
+        let mut stores = Vec::new();
+        let mut pinned_cache: BTreeMap<String, figcraft_doc::ImageData> = BTreeMap::new();
+        let mut pin_doc = |doc_arc: &mut Arc<Document>| -> crate::Result<()> {
+            let mut to_pin: Vec<(String, figcraft_doc::ImageData)> = Vec::new();
+            for (k, img) in &doc_arc.images {
+                if let Some(loader) = img.loader()
+                    && let Some(src) = loader.source_path()
+                    && file_access::same_file(src, path)
+                {
+                    if seen.insert(loader.store_id()) {
+                        stores.push(Arc::clone(loader));
+                    }
+                    if !live_keys.contains(k) {
+                        let pinned = if let Some(cached) = pinned_cache.get(k) {
+                            cached.clone()
+                        } else {
+                            let materialized = img.materialize().ok_or_else(|| {
+                                crate::EngineError::Other(format!("failed to read image '{k}' from '{path}' to preserve undo history before saving"))
+                            })?;
+                            pinned_cache.insert(k.clone(), materialized.clone());
+                            materialized
+                        };
+                        to_pin.push((k.clone(), pinned));
+                    }
+                }
+            }
+            if !to_pin.is_empty() {
+                let doc_mut = Arc::make_mut(doc_arc);
+                for (k, pinned) in to_pin {
+                    doc_mut.images.insert(k, pinned);
+                }
+            }
+            Ok(())
+        };
+        pin_doc(&mut self.saved_doc)?;
+        if let Some(c) = self.checkpoint.as_mut() {
+            pin_doc(c)?;
+        }
+        for e in &mut self.history.undo {
+            pin_doc(&mut e.doc)?;
+        }
+        for e in &mut self.history.redo {
+            pin_doc(&mut e.doc)?;
+        }
+        if let Some(i) = self.interaction.as_mut() {
+            pin_doc(&mut i.doc)?;
+        }
+        if let Some(p) = self.preview.as_mut() {
+            pin_doc(&mut p.doc)?;
+        }
+        if let Some(t) = self.text_preview.as_mut() {
+            pin_doc(t)?;
+        }
+        Ok(stores)
+    }
+
     /// The selected ruler guide (its owner and index): it counts while no layer is selected and it
     /// is still there on this page.
     pub fn selected_guide(&self) -> Option<(NodeId, usize)> {

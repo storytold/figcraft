@@ -73,6 +73,18 @@ pub fn load_bytes(bytes: &[u8], name_hint: &str) -> Result<(Document, Vec<String
 /// [`load`] with the version history, also telling whether the file was REST API file JSON. A REST
 /// import reads its variables from `variables`, else from a variables JSON next to the file.
 pub fn load_path(path: &str, variables: Option<&Value>) -> Result<(figcraft_format::Loaded, bool)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if ext(path) == "figcraft"
+        && let Some(mut loaded) = crate::file_access::load_native_file(path, MAX_DOCUMENT_FILE)?
+    {
+        if loaded.doc.name.is_empty() || loaded.doc.name == "Untitled" {
+            loaded.doc.name = file_stem(path);
+        }
+        let notes = crate::components::break_component_cycles(&mut loaded.doc);
+        loaded.issues.extend(notes);
+        crate::library::resolve_links(&mut loaded.doc, path);
+        return Ok((loaded, false));
+    }
     let bytes = read(path)?;
     let sibling = if variables.is_none() { sibling_variables(path) } else { None };
     let (mut loaded, rest) = load_with(&bytes, path, variables.or(sibling.as_ref()), &rest_images(path))?;

@@ -595,7 +595,7 @@ fn rich_text_pastes_its_runs_and_drops_a_link_to_a_style_this_file_lacks() {
 #[test]
 fn copied_characters_bring_the_image_their_fill_uses_into_another_file() {
     let (mut source, id) = setup("ab");
-    let data = figcraft_doc::ImageData { bytes: std::sync::Arc::new(vec![1, 2, 3]), width: 2, height: 2 };
+    let data = figcraft_doc::ImageData::new(std::sync::Arc::new(vec![1, 2, 3]), 2, 2);
     {
         let doc = source.doc_mut().unwrap();
         doc.images.insert("pic".into(), data.clone());

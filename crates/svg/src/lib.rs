@@ -269,13 +269,14 @@ impl W<'_> {
                     None => {
                         let iid = self.id("image");
                         // Formats SVG viewers don't show (TIFF, BMP) go in as PNG.
+                        let raw = data.bytes()?;
                         let png;
-                        let (mime, bytes) = match sniff_mime(&data.bytes) {
+                        let (mime, bytes) = match sniff_mime(&raw) {
                             "application/octet-stream" => {
-                                png = figcraft_render::images::decode(&data.bytes).and_then(|p| figcraft_render::encode_png(&p).ok())?;
+                                png = figcraft_render::images::decode(&raw).and_then(|p| figcraft_render::encode_png(&p).ok())?;
                                 ("image/png", png.as_slice())
                             }
-                            m => (m, data.bytes.as_slice()),
+                            m => (m, raw.as_slice()),
                         };
                         let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
                         self.defs

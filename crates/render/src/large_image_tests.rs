@@ -29,7 +29,7 @@ fn doc(tag: &str) -> (Document, NodeId, [String; 2]) {
     let page = d.first_page().unwrap();
     let keys = [format!("{tag}-a"), format!("{tag}-b")];
     for (i, key) in (0u32..).zip(&keys) {
-        d.images.insert(key.clone(), ImageData { bytes: Arc::new(stripes(i)), width: W, height: H });
+        d.images.insert(key.clone(), ImageData::new(Arc::new(stripes(i)), W, H));
         let r = d.create(page, NodeKind::Rectangle, "Image", 0.0, f64::from(i * 2 * H), f64::from(W), f64::from(H)).unwrap();
         d.get_mut(r).unwrap().fills = vec![Paint::image(key, ImageScaleMode::Fill)];
     }

@@ -265,7 +265,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// same grey picture), so nobody can swap the picture under a key someone else added.
 fn image_for(held: Option<&ImageData>, key: &str, value: &Json) -> Result<ImageData, Error> {
     let img = image_of(key, value)?;
-    if held.is_some_and(|old| old.bytes != img.bytes) {
+    if held.is_some_and(|old| old.bytes() != img.bytes()) {
         return Err(Error::Invalid(format!("image: {key} already holds other bytes")));
     }
     Ok(img)
@@ -273,7 +273,8 @@ fn image_for(held: Option<&ImageData>, key: &str, value: &Json) -> Result<ImageD
 
 /// The JSON value an image entry carries: its size and its encoded bytes in base64.
 fn image_json(img: &ImageData) -> Result<Json, Error> {
-    Json::of(&ImageValue { width: img.width, height: img.height, bytes: base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice()) })
+    let bytes = img.bytes().ok_or_else(|| Error::Invalid("image bytes unavailable".into()))?;
+    Json::of(&ImageValue { width: img.width, height: img.height, bytes: base64::engine::general_purpose::STANDARD.encode(bytes.as_slice()) })
 }
 
 /// The image a change carries, validated as a collaborator's claim (an invalid entry
@@ -304,7 +305,7 @@ pub(crate) fn validate_image_raw_within(key: &str, width: u32, height: u32, byte
     if ImageData::claims_content_hash(key) && key != sha256_hex(&bytes) {
         return Err(Error::Invalid(format!("image: the bytes aren't what their key {key} hashes to")));
     }
-    Ok(ImageData { bytes: Arc::new(bytes), width, height })
+    Ok(ImageData::new(Arc::new(bytes), width, height))
 }
 
 /// Validate base64-encoded image bytes and dimensions under [`ImageData::MAX_BYTES`].
@@ -420,14 +421,7 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
     COLLECTIONS.diff(a, b, out)?;
     VARIABLES.diff(a, b, out)?;
     diff_map(&a.dev_snapshots, &b.dev_snapshots, |x, y| Arc::ptr_eq(x, y) || x == y, |k| Entry::DevSnapshot(*k), Json::of, out)?;
-    diff_map(
-        &a.images,
-        &b.images,
-        |x, y| x.width == y.width && x.height == y.height && (Arc::ptr_eq(&x.bytes, &y.bytes) || x.bytes == y.bytes),
-        |k| Entry::Image(k.clone()),
-        image_json,
-        out,
-    )?;
+    diff_map(&a.images, &b.images, |x, y| x == y, |k| Entry::Image(k.clone()), image_json, out)?;
     diff_map(&a.votes, &b.votes, |x, y| x == y, |k| Entry::Ballot(k.clone()), Json::of, out)
 }
 

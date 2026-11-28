@@ -174,8 +174,8 @@ fn corrupt_hash_image_matches_legacy_join_parity() {
     let page = doc.first_page().unwrap();
     doc.create(page, NodeKind::Rectangle, "Box", 0.0, 0.0, 40.0, 40.0).unwrap();
     let bad_key = "0".repeat(64);
-    doc.images.insert(bad_key.clone(), ImageData { bytes: Arc::new(b"not-matching-sha256".to_vec()), width: 10, height: 10 });
-    doc.images.insert("svg_icon_1".into(), ImageData { bytes: Arc::new(b"valid-bytes".to_vec()), width: 16, height: 16 });
+    doc.images.insert(bad_key.clone(), ImageData::new(Arc::new(b"not-matching-sha256".to_vec()), 10, 10));
+    doc.images.insert("svg_icon_1".into(), ImageData::new(Arc::new(b"valid-bytes".to_vec()), 16, 16));
     doc.take_dirty();
 
     let mut srv = Server::new(doc, "tok", Limits::default());
@@ -306,7 +306,7 @@ fn full_metadata_and_design_review_roundtrip_matches_legacy_json() {
     doc.vote_history.push(VoteRecord { vote, ballots: doc.votes.clone(), names: BTreeMap::new(), ended: 1_700_000_000 });
     doc.libraries = Arc::new(Libraries::default());
     doc.image_presets.push(ImagePreset { name: "Warm".into(), filters: Default::default() });
-    doc.images.insert("logo_1".into(), ImageData { bytes: Arc::new(b"png-bytes".to_vec()), width: 32, height: 32 });
+    doc.images.insert("logo_1".into(), ImageData::new(Arc::new(b"png-bytes".to_vec()), 32, 32));
     doc.design_review = DesignReview { radii: vec![4.0; figcraft_doc::MAX_RADII + 10], ..DesignReview::default() };
     doc.take_dirty();
 

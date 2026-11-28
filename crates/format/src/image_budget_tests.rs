@@ -58,7 +58,7 @@ fn images_exactly_within_the_budget_all_load() {
 fn images_past_the_byte_budget_are_left_out_and_reported() {
     let (bytes, hashes, total) = file_with_images(3);
     let loaded = load_within(&bytes, ImageBudget { images: 100, bytes: total - 1 }).unwrap();
-    let held: u64 = loaded.doc.images.values().map(|i| i.bytes.len() as u64).sum();
+    let held: u64 = loaded.doc.images.values().map(|i| i.byte_len()).sum();
     assert!(held < total, "{held} bytes held");
     assert_eq!(loaded.doc.images.len(), 2);
     let lost: Vec<&String> = hashes.iter().filter(|h| !loaded.doc.images.contains_key(*h)).collect();

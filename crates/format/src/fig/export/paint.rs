@@ -108,13 +108,23 @@ impl<'d> Exporter<'d> {
             Some(h) => h.clone(),
             None => {
                 let h = match self.doc.images.get(key) {
-                    Some(img) if img.bytes.len() as u64 <= MAX_IMAGE => {
-                        let h = sha1_hex(&img.bytes);
-                        if !self.files.iter().any(|(x, _)| *x == h) {
-                            self.files.push((h.clone(), img.bytes.clone()));
+                    Some(img) if img.byte_len() <= MAX_IMAGE => match img.bytes() {
+                        Some(bytes) if bytes.len() as u64 <= MAX_IMAGE => {
+                            let h = sha1_hex(&bytes);
+                            if !self.files.iter().any(|(x, _)| *x == h) {
+                                self.files.push((h.clone(), bytes));
+                            }
+                            Some(h)
                         }
-                        Some(h)
-                    }
+                        Some(_) => {
+                            self.warn("images larger than 256 MB were left out");
+                            None
+                        }
+                        None => {
+                            self.warn("image fills whose image isn't in the document were written without one");
+                            None
+                        }
+                    },
                     Some(_) => {
                         self.warn("images larger than 256 MB were left out");
                         None

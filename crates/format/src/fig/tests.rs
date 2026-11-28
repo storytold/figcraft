@@ -877,10 +877,10 @@ mod image_budget {
         z.finish().unwrap().into_inner()
     }
 
-    fn bytes(doc: &Document, index: usize) -> &[u8] {
+    fn bytes(doc: &Document, index: usize) -> Vec<u8> {
         let node = named(doc, &format!("Image {index}"));
         let figcraft_doc::color::PaintKind::Image(fill) = &node.fills[0].kind else { panic!("not an image fill") };
-        &doc.images[&fill.image].bytes
+        doc.images[&fill.image].bytes().unwrap().to_vec()
     }
 
     fn budget_warnings(warnings: &[String]) -> Vec<&str> {
@@ -1047,7 +1047,7 @@ mod image_budget {
             let (doc, warnings) = import_with_image_limit(bytes, "Images", 0).unwrap();
             let photo = named(&doc, "Photo");
             let figcraft_doc::color::PaintKind::Image(fill) = &photo.fills[0].kind else { panic!("not an image fill") };
-            assert_eq!(*doc.images[&fill.image].bytes, png());
+            assert_eq!(doc.images[&fill.image].bytes().as_deref().map(Vec::as_slice), Some(png().as_slice()));
             assert!(!warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
             assert_eq!(budget_warnings(&warnings).len(), usize::from(bytes.starts_with(b"PK")), "{warnings:?}");
         }
@@ -1062,7 +1062,9 @@ mod image_budget {
         assert!(doc.images.values().all(|img| (img.width, img.height) == (2, 1)));
         assert!(warnings.is_empty(), "{warnings:?}");
         let (doc, warnings) = import(&fixture(), "Fixture").unwrap();
-        assert!(doc.images.values().any(|img| *img.bytes == png() && (img.width, img.height) == (2, 1)));
+        assert!(
+            doc.images.values().any(|img| img.bytes().as_deref().map(Vec::as_slice) == Some(png().as_slice()) && (img.width, img.height) == (2, 1))
+        );
         assert!(budget_warnings(&warnings).is_empty(), "{warnings:?}");
     }
 }

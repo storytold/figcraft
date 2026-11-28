@@ -311,7 +311,8 @@ pub fn profile_name(hash: &str, data: Option<&ImageData>) -> Option<String> {
     if let Some(n) = profile_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(hash) {
         return n.clone();
     }
-    let name = crate::image_profile::Source::of(&data?.bytes).name;
+    let bytes = data?.bytes()?;
+    let name = crate::image_profile::Source::of(&bytes).name;
     let mut c = profile_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if c.len() > 256 {
         c.clear();
@@ -385,7 +386,8 @@ fn get_within(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, prof
     if let Some(p) = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return Some(p);
     }
-    let (mut p, srgb) = decode_within(&data?.bytes, profile, MAX_SIDE, MAX_DECODED_BYTES)?;
+    let bytes = data?.bytes()?;
+    let (mut p, srgb) = decode_within(&bytes, profile, MAX_SIDE, MAX_DECODED_BYTES)?;
     // Images with their own profile are in `profile` already (sRGB → sRGB is the identity).
     finish(&mut p, filters, if srgb { profile } else { ColorProfile::Srgb });
     // A copy averages the finished pixels, as drawing the image smaller does: adjustments clamp,
@@ -501,7 +503,8 @@ pub fn animation(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, p
     if let Some(a) = anim_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return a.clone();
     }
-    let a = decode_frames(&data?.bytes).map(|frames| {
+    let bytes = data?.bytes()?;
+    let a = decode_frames(&bytes).map(|frames| {
         let mut end = 0.0;
         let (frames, ends) = frames
             .into_iter()

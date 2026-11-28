@@ -108,7 +108,7 @@ fn a_copied_image_fill_brings_its_image_to_another_file() {
     let mut s = Session::new();
     let a = rect(&mut s);
     ex(&mut s, "fill.add", json!({"ids": [a], "paint": {"type": "image", "image": "img-key"}}));
-    let data = figcraft_doc::ImageData { bytes: std::sync::Arc::new(vec![1, 2, 3]), width: 2, height: 2 };
+    let data = figcraft_doc::ImageData::new(std::sync::Arc::new(vec![1, 2, 3]), 2, 2);
     s.doc_mut().unwrap().images.insert("img-key".into(), data.clone());
     ex(&mut s, "fill.copy", json!({"id": a, "index": 1}));
     // Another file has no image under that key: the copy brings the data with it.
@@ -124,8 +124,8 @@ fn a_copied_image_fill_brings_its_image_to_another_file() {
 fn a_copied_image_key_taken_in_another_file_gets_the_copied_data() {
     let mut s = Session::new();
     let a = rect(&mut s);
-    let copied = figcraft_doc::ImageData { bytes: std::sync::Arc::new(vec![1, 2, 3]), width: 2, height: 2 };
-    let taken = figcraft_doc::ImageData { bytes: std::sync::Arc::new(vec![9, 9, 9]), width: 3, height: 3 };
+    let copied = figcraft_doc::ImageData::new(std::sync::Arc::new(vec![1, 2, 3]), 2, 2);
+    let taken = figcraft_doc::ImageData::new(std::sync::Arc::new(vec![9, 9, 9]), 3, 3);
     ex(&mut s, "fill.add", json!({"ids": [a], "paint": {"type": "image", "image": "img-key"}}));
     s.doc_mut().unwrap().images.insert("img-key".into(), copied.clone());
     ex(&mut s, "fill.copy", json!({"id": a, "index": 1}));
@@ -148,8 +148,8 @@ fn a_copied_image_whose_hash_key_is_also_taken_gets_a_free_key() {
     let mut s = Session::new();
     let a = rect(&mut s);
     let bytes = vec![1, 2, 3];
-    let copied = figcraft_doc::ImageData { bytes: std::sync::Arc::new(bytes.clone()), width: 2, height: 2 };
-    let taken = figcraft_doc::ImageData { bytes: std::sync::Arc::new(vec![9, 9, 9]), width: 3, height: 3 };
+    let copied = figcraft_doc::ImageData::new(std::sync::Arc::new(bytes.clone()), 2, 2);
+    let taken = figcraft_doc::ImageData::new(std::sync::Arc::new(vec![9, 9, 9]), 3, 3);
     // Images are usually keyed by their content hash: here the copied key is that hash, and the
     // other file already uses it for other data, so the replacement key is taken as well.
     let hash = figcraft_format::image_hash(&bytes);
@@ -179,7 +179,7 @@ fn a_copied_image_whose_hash_key_is_also_taken_gets_a_free_key() {
     let figcraft_color::PaintKind::Image(img) = &saved.node(b).unwrap().fills[0].kind else { panic!("the pasted fill is an image") };
     assert_eq!(img.image, key, "the reloaded paint keeps its key");
     // A reopened image's size is read from its pixels on demand, so only its bytes are compared.
-    assert_eq!(saved.images.get(&key).map(|i| i.bytes.as_slice()), Some(copied.bytes.as_slice()), "the copied image survives the reload");
+    assert_eq!(saved.images.get(&key).and_then(|i| i.bytes()), copied.bytes(), "the copied image survives the reload");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

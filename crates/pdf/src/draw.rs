@@ -499,8 +499,10 @@ impl<'a> Exporter<'a> {
             let (pw, ph) = (pm.width(), pm.height());
             // Unadjusted RGB images embed their original bytes (JPEG stays JPEG).
             let original = data.filter(|_| img.filters.is_identity() && ink == Ink::Rgb).and_then(|d| {
-                let bytes = krilla::Data::from(d.bytes.clone());
-                match sniff(&d.bytes) {
+                let raw = d.bytes()?;
+                let kind = sniff(&raw);
+                let bytes = krilla::Data::from(raw);
+                match kind {
                     Sniffed::Png => Image::from_png(bytes, true).ok(),
                     Sniffed::Jpeg => Image::from_jpeg(bytes, true).ok(),
                     Sniffed::Gif => Image::from_gif(bytes, true).ok(),

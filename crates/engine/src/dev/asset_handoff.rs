@@ -87,12 +87,22 @@ fn add(files: &mut BTreeMap<String, File>, mut file: File) {
     }
 }
 
-/// The image `key` of `doc` as a file to hand over: its data, content hash and extension, or why it
-/// can't be handed over.
-pub(crate) fn image_file<'a>(doc: &'a Document, key: &str) -> std::result::Result<(&'a ImageData, String, &'static str), &'static str> {
-    let data = doc.images.get(key).filter(|d| !d.bytes.is_empty()).ok_or("the file doesn't hold this image")?;
-    let ext = image_kind(&data.bytes).ok_or("not an image format a project can use as it is")?;
-    Ok((data, figcraft_format::image_hash(&data.bytes), ext))
+/// An image ready for dev handoff: its metadata, encoded bytes, content hash, and file extension.
+pub(crate) struct HandedImage<'a> {
+    pub(crate) data: &'a ImageData,
+    pub(crate) bytes: Arc<Vec<u8>>,
+    pub(crate) hash: String,
+    pub(crate) ext: &'static str,
+}
+
+/// The image `key` of `doc` as a file to hand over: its data, bytes, content hash and extension,
+/// or why it can't be handed over.
+pub(crate) fn image_file<'a>(doc: &'a Document, key: &str) -> std::result::Result<HandedImage<'a>, &'static str> {
+    let data = doc.images.get(key).ok_or("the file doesn't hold this image")?;
+    let bytes = data.bytes().filter(|b| !b.is_empty()).ok_or("the file doesn't hold this image")?;
+    let ext = image_kind(&bytes).ok_or("not an image format a project can use as it is")?;
+    let hash = figcraft_format::image_hash(&bytes);
+    Ok(HandedImage { data, bytes, hash, ext })
 }
 
 /// The name a handed-over file goes by, before its extension: the start of its content `hash`.
@@ -105,22 +115,22 @@ fn image_files(doc: &Document, id: NodeId, files: &mut BTreeMap<String, File>, s
     let Some(n) = doc.node(id) else { return };
     for p in n.fills.iter().chain(&n.strokes).filter(|p| p.visible) {
         let PaintKind::Image(paint) = &p.kind else { continue };
-        let (data, hash, ext) = match image_file(doc, &paint.image) {
+        let handed = match image_file(doc, &paint.image) {
             Ok(file) => file,
             Err(why) => {
                 skipped.push(json!({"id": id, "name": n.name, "image": paint.image, "why": why}));
                 continue;
             }
         };
-        let name = format!("{}.{ext}", file_stem(&hash));
+        let name = format!("{}.{}", file_stem(&handed.hash), handed.ext);
         let adjusted = adjustments(p).map(|changes| json!({"id": id, "changes": changes}));
         let file = File {
             name,
-            hash,
-            bytes: data.bytes.clone(),
+            hash: handed.hash,
+            bytes: handed.bytes,
             source: "original",
-            format: ext.to_string(),
-            size: Some((data.width, data.height)),
+            format: handed.ext.to_string(),
+            size: Some((handed.data.width, handed.data.height)),
             layers: vec![json!({"id": id, "name": n.name})],
             adjustments: adjusted.into_iter().collect(),
         };

@@ -48,7 +48,7 @@ fn fills(data: &str) -> Vec<(Paint, Vec<u8>)> {
         .into_iter()
         .map(|p| {
             let PaintKind::Image(ip) = &p.kind else { panic!("not an image fill: {p:?}") };
-            let bytes = d.images.get(&ip.image).unwrap().bytes.to_vec();
+            let bytes = d.images.get(&ip.image).unwrap().bytes().unwrap().to_vec();
             (p, bytes)
         })
         .collect()
