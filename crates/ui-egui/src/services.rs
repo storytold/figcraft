@@ -1,4 +1,5 @@
 use super::{Arc, FigApp, Future, PathBuf, Pin, Session, Value, Wake, i18n, json};
+use figcraft_engine::cmd::file::FileSnapshot;
 
 pub const MAX_CLIPBOARD_PNG_BYTES: usize = 256 * 1024 * 1024;
 
@@ -23,6 +24,14 @@ pub trait Services {
     /// Hand `bytes` over as a download named `name`; false when nothing was delivered.
     fn download(&mut self, _name: &str, _bytes: &[u8]) -> bool {
         false
+    }
+    /// Hand a document's own file over (Save and Save As where the platform saves by downloads),
+    /// as [`download`](Self::download) does. `file` is the document as handed over, for a platform
+    /// whose host says only later whether it stored the file ([`Delivery::Pending`]); it then
+    /// calls [`FigApp::document_stored`](crate::FigApp::document_stored) with it, or
+    /// [`FigApp::document_not_stored`](crate::FigApp::document_not_stored).
+    fn deliver_document(&mut self, name: &str, bytes: &[u8], _file: FileSnapshot) -> Delivery {
+        if self.download(name, bytes) { Delivery::Saved } else { Delivery::Refused }
     }
     /// The document file a host page opened, where the app runs inside one (the browser's host
     /// mode): a Save of that document keeps this name instead of the document's own.
@@ -97,6 +106,18 @@ pub trait Services {
     fn ask_for_local_fonts(&mut self) {}
 }
 
+/// How handing a document's own file over went ([`Services::deliver_document`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// The file arrived: the document is saved.
+    Saved,
+    /// The file is on its way to a host that answers once it stored it or couldn't: the document
+    /// keeps its unsaved changes until then.
+    Pending,
+    /// Nothing was delivered.
+    Refused,
+}
+
 pub type DialogFuture = Pin<Box<dyn Future<Output = Option<PathBuf>>>>;
 
 /// A picked file's name and contents ([`Services::pick_open_contents`]); `None` when the picker
@@ -136,6 +157,18 @@ impl Picked {
 /// What the user is told about a file whose contents couldn't be read.
 pub fn unreadable(name: &str) -> String {
     i18n::trf("Couldn't read {name}.", &[("name", &name)])
+}
+
+/// Why a document handed to a page hosting the browser build counts as not saved when the page
+/// never answered: it waited `secs` seconds.
+pub fn save_unconfirmed(secs: usize) -> String {
+    i18n::trn("the page hosting FigCraft didn't confirm it within {n} seconds", secs, &[])
+}
+
+/// Why a document handed to a page hosting the browser build counts as not saved when the page
+/// sent another file to open before answering.
+pub fn save_forgotten_on_open() -> String {
+    i18n::tr("the page hosting FigCraft opened another file before confirming it").to_string()
 }
 
 /// What the page says once the browser build stopped on an internal error (in the browser a panic

@@ -137,7 +137,7 @@ fn region_paints_participate_in_colors_images_and_pattern_remapping() {
         figcraft_color::Paint::image("region-image", figcraft_color::ImageScaleMode::Fill),
         figcraft_color::Paint::pattern(source.0),
     ]);
-    let vector = d.create(group, NodeKind::Vector { network }, "Vector", 0.0, 0.0, 20.0, 20.0).unwrap();
+    let vector = d.create(group, NodeKind::Vector { network: network.into() }, "Vector", 0.0, 0.0, 20.0, 20.0).unwrap();
     assert!(used_images(&d).contains("region-image"));
     let dup = d.duplicate_into(group, p, None).unwrap();
     let copied_children = d.node(dup).unwrap().children.clone();
@@ -306,12 +306,26 @@ fn collections_and_modes_resolve_stored_ids_never_by_name() {
 }
 
 #[test]
+fn corner_style_roundtrips_and_old_radii_default_to_round() {
+    use figcraft_geom::CornerStyle;
+    let legacy = serde_json::json!({"radii": [2.0, 4.0, 6.0, 8.0], "smoothing": 0.4});
+    let mut corners: crate::Corners = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(corners.style, CornerStyle::Round);
+    assert_eq!(serde_json::to_value(corners).unwrap(), legacy);
+    for style in [CornerStyle::Chamfer, CornerStyle::Concave] {
+        corners.style = style;
+        let saved = serde_json::to_value(corners).unwrap();
+        assert_eq!(serde_json::from_value::<crate::Corners>(saved).unwrap(), corners);
+    }
+}
+
+#[test]
 fn serde_roundtrip_and_repair() {
     let mut d = Document::new("x");
     let p = page(&d);
     let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
     d.get_mut(f).unwrap().layout = Some(AutoLayout::default());
-    d.create(f, NodeKind::Text(TextData::new("Hi")), "Hi", 0.0, 0.0, 10.0, 10.0).unwrap();
+    d.create(f, NodeKind::Text(TextData::new("Hi").into()), "Hi", 0.0, 0.0, 10.0, 10.0).unwrap();
     d.create(f, NodeKind::Star { count: 5, inner_ratio: 0.4 }, "S", 0.0, 0.0, 10.0, 10.0).unwrap();
     let j = serde_json::to_string(&d).unwrap();
     let back: Document = serde_json::from_str(&j).unwrap();
@@ -576,12 +590,12 @@ fn hit_test_even_odd_vector_hole_misses() {
     };
     let mut d = Document::new("x");
     let p = page(&d);
-    let eo = d.create(p, NodeKind::Vector { network: ring(WindingRule::EvenOdd) }, "V", 0.0, 0.0, 200.0, 200.0).unwrap();
+    let eo = d.create(p, NodeKind::Vector { network: ring(WindingRule::EvenOdd).into() }, "V", 0.0, 0.0, 200.0, 200.0).unwrap();
     assert_eq!(d.hit_test(p, Point::new(20.0, 100.0), 0.0, None), Some(eo));
     assert_eq!(d.hit_test(p, Point::new(100.0, 100.0), 0.0, None), None, "the hole is not filled");
     let mut d = Document::new("x");
     let p = page(&d);
-    let nz = d.create(p, NodeKind::Vector { network: ring(WindingRule::NonZero) }, "V", 0.0, 0.0, 200.0, 200.0).unwrap();
+    let nz = d.create(p, NodeKind::Vector { network: ring(WindingRule::NonZero).into() }, "V", 0.0, 0.0, 200.0, 200.0).unwrap();
     assert_eq!(d.hit_test(p, Point::new(100.0, 100.0), 0.0, None), Some(nz));
 }
 
@@ -832,7 +846,7 @@ fn clicks_on_a_smoothed_vector_corner_follow_the_drawn_fill() {
     let smoothed = net.rounded_smoothed(1.0).unwrap();
     let mut d = Document::new("x");
     let p = page(&d);
-    let v = d.create(p, NodeKind::Vector { network: net.clone() }, "V", 0.0, 0.0, 1000.0, 1000.0).unwrap();
+    let v = d.create(p, NodeKind::Vector { network: net.clone().into() }, "V", 0.0, 0.0, 1000.0, 1000.0).unwrap();
     let n = d.node_mut(v).unwrap();
     n.corners.smoothing = 1.0;
     n.strokes.clear();

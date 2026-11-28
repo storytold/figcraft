@@ -40,6 +40,7 @@ pub enum Access {
 pub struct Roots {
     read: Vec<PathBuf>,
     write: Vec<PathBuf>,
+    allowed_servers: Vec<String>,
 }
 
 impl Roots {
@@ -55,7 +56,18 @@ impl Roots {
                 })
                 .collect::<std::result::Result<Vec<_>, String>>()
         };
-        Ok(Self { read: resolve("--automation-read-root", read)?, write: resolve("--automation-write-root", write)? })
+        Ok(Self { read: resolve("--automation-read-root", read)?, write: resolve("--automation-write-root", write)?, allowed_servers: Vec::new() })
+    }
+
+    /// Also allow headless collaboration joins to explicitly approved servers.
+    pub fn with_allowed_servers(mut self, servers: Vec<String>) -> Self {
+        self.allowed_servers = servers;
+        self
+    }
+
+    /// Servers an automation session may join through its collaboration link.
+    pub fn allowed_servers(&self) -> &[String] {
+        &self.allowed_servers
     }
 
     /// The resolved path to use for `access` to `path`, or why it is refused.
@@ -91,7 +103,11 @@ impl Roots {
     /// The folders as JSON, resolved: `{read: [every folder that may be read], write: [the write roots]}`.
     pub fn to_json(&self) -> serde_json::Value {
         let list = |v: &[PathBuf]| v.iter().map(|p| shown(p)).collect::<Vec<_>>();
-        serde_json::json!({"read": list(&[self.read.as_slice(), self.write.as_slice()].concat()), "write": list(&self.write)})
+        serde_json::json!({
+            "read": list(&[self.read.as_slice(), self.write.as_slice()].concat()),
+            "write": list(&self.write),
+            "allowedServers": self.allowed_servers
+        })
     }
 }
 

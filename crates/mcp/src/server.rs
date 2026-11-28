@@ -56,7 +56,7 @@ with severities; design.fix repairs the fixable ones as one undo step; design.ru
 presets; design.configure {preset, grid, radii, brand, disabled} sets the file's design system, and \
 design.assert {failOn, minScore} is a read-only CI gate. \
 Resources: figcraft://document, figcraft://node/{id}, figcraft://command/{id}, figcraft://comments. \
-prompts/list has workflows, including fix_comments and design_review.";
+prompts/list has workflows, including fix_comments, design_review and implement_design (build the selected design in a codebase).";
 
 /// An MCP server bound to one backend.
 pub struct Server {
@@ -241,7 +241,12 @@ impl Server {
     fn roots_note(&self) -> String {
         let Some(r) = &self.roots else { return String::new() };
         let j = r.to_json();
-        format!(" Files: only these folders may be read: {}; written: {} (any other path is refused).", j["read"], j["write"])
+        let files = format!(" Files: only these folders may be read: {}; written: {} (any other path is refused).", j["read"], j["write"]);
+        if r.allowed_servers().is_empty() {
+            files
+        } else {
+            format!("{files} Collaboration: may join only links on {}; other network requests are refused.", j["allowedServers"])
+        }
     }
 
     fn notification(&mut self, method: &str) {

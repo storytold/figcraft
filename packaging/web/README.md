@@ -125,9 +125,10 @@ unsaved changes. Two opt-in transports carry the same messages:
 |---|---|---|
 | `figcraft:ready` | app → page | `version`, `appVersion`: the app is running and listening; send a file now |
 | `figcraft:open` | page → app | `name`, `bytes` (an `ArrayBuffer` or `Uint8Array`): open like File › Open (a payload over the browser open limit of 512 MB is refused; anything malformed is ignored) |
-| `figcraft:save` | app → page | `name`, `saveAs`, `bytes` (a transferred `ArrayBuffer`): every file the app would otherwise download. The page stores it and reports failures itself. `saveAs` says whether the file becomes the document's file: `false` after Save of the file the page sent, under its own name; `true` for a document file (`.figcraft`, `.json`) under a name the page didn't send — Save As, or a Save of a document the page never sent — after which the next Save carries that name with `false`; `false` for copies and exports that don't become the document (rendered images, SVG, PDF, `.fig` copies, the variables exports) |
+| `figcraft:save` | app → page | `name`, `saveAs`, `bytes` (a transferred `ArrayBuffer`), and `id` for a document save to a page that confirms saves (below): every file the app would otherwise download. The page stores it and reports failures itself. `saveAs` says whether the file becomes the document's file: `false` after Save of the file the page sent, under its own name; `true` for a document file (`.figcraft`, `.json`) under a name the page didn't send — Save As, or a Save of a document the page never sent — after which the next Save carries that name with `false`; `false` for copies and exports that don't become the document (rendered images, SVG, PDF, `.fig` copies, the variables exports) |
+| `figcraft:saved` | page → app | `id`: the page stored the `figcraft:save` that carried this `id` (only with confirmed saves) |
 | `figcraft:dirty` | app → page | `dirty`: unsaved changes appeared or went away |
-| `figcraft:failed` | app → page | `error`: the app couldn't start (no WebGPU or WebGL2, for example) |
+| `figcraft:failed` | app → page | `error`, and `id` for a save the page didn't confirm in time: the app couldn't start (no WebGPU or WebGL2, for example), or that save counts as not stored |
 
 Files reach the page through the app's download service, the path this web build saves by: Save As
 (and a Save of a document with no file yet), the `.fig` copy, the export panel and its dialog,
@@ -137,6 +138,28 @@ mode each arrives as `figcraft:save` instead of a download.
 In host mode the app starts with no document (the home screen), so the page sends the file to edit
 and guards leaving the page while changes are unsaved. `&author=` on the URL names the user for
 comments and board notes.
+
+### Confirmed saves
+
+By default a file counts as saved as soon as the app posts it, so a page that fails to store it
+must say so itself. A page that wants the app to wait opts in with `&save=managed` on the URL (or
+`data-save="managed"` on the canvas in same-document mode). Then:
+
+- Each Save and Save As of the document carries an `id` (`save-1`, `save-2`, …, never reused on a
+  page). The document keeps its unsaved changes (`figcraft:dirty` stays `true`) until the page
+  answers `figcraft:saved` with that `id`. Edits made while the save was on its way stay unsaved
+  after the answer: the document is saved as of the file the page stored.
+- A Save As (`saveAs: true`) becomes the document's file only once confirmed, so a Save after a
+  failed Save As is still `saveAs: true`.
+- One save waits at a time. A newer save replaces it, and a `figcraft:saved` for any other `id` (an
+  older save, a repeat) is ignored. A `figcraft:open` forgets the save still waiting: the user is told it wasn't saved, and the document it was for keeps its unsaved changes.
+- A save the page doesn't confirm within 30 seconds counts as not stored: the user is told, and the
+  page gets `figcraft:failed` with that `id`.
+- Copies and exports (images, SVG, PDF, `.fig` copies, the variables exports) carry no `id` and
+  `saveAs: false`, and count as delivered once posted, as before.
+
+There is no message yet for a page to refuse a save with a reason; until the shared contract has
+one, a page that can't store a file leaves it unconfirmed and the save fails at the timeout.
 
 ### Same-document host mode
 
@@ -203,7 +226,7 @@ The messages and both transports are the shared contract of [`craft-web-host`](h
 
 - **Who is trusted.** In page host mode the page and FigCraft share one document, so any script on the page can drive the app: open files in it and receive what it saves. Use this mode only for a page you control. The iframe mode (`?host=parent`) answers only the parent window, on the page's own origin.
 - **Files from the host are untrusted input.** An opened file goes through the same reading as one picked with File ▸ Open or dropped on the window, with the same format limits; before it is copied into the app's memory, its size is checked against the host open limit (512 MB) and a larger file is refused, and a name is cut to 255 characters.
-- **The event and message names are the interface.** `figcraft:ready`, `figcraft:open`, `figcraft:save`, `figcraft:dirty` and `figcraft:failed`, and the fields they carry (the same as the `?host=parent` messages), stay stable; changing one is a breaking change.
+- **The event and message names are the interface.** `figcraft:ready`, `figcraft:open`, `figcraft:save`, `figcraft:saved`, `figcraft:dirty` and `figcraft:failed`, and the fields they carry (the same as the `?host=parent` messages), stay stable; changing one is a breaking change.
 
 ## Renderer selection and fallback flags
 

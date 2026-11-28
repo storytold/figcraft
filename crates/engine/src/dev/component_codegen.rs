@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::codegen::{
-    CodeLang, Ctx, FLUTTER_IMPORT, Markup, Names, Place, arkui, class_name, compose, flutter, flutter_indent, indent, literal, swift,
+    CodeLang, Ctx, FLUTTER_IMPORT, Markup, Names, Place, arkui, class_name, compose, flutter, flutter_indent, indent, literal, swift, uno,
 };
 use crate::components::{prop_default_value, slot_edited, slots_of, variant_options, variant_props, variant_set};
 use crate::params::{id_of, string, targets};
@@ -119,7 +119,8 @@ pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     if let Some(code) = crate::code_connect::link(doc, id, lang).and_then(|l| crate::code_connect::connected_code(doc, id, lang, l)) {
         return code;
     }
-    let comp = main_of(doc, id).and_then(|m| describe(doc, m));
+    // Uno C# Markup writes the layer tree only (instances and components are walked as frames).
+    let comp = main_of(doc, id).and_then(|m| describe(doc, m)).filter(|_| lang != CodeLang::Uno);
     let code = match (&n.kind, comp) {
         (NodeKind::Instance { .. }, Some(c)) => {
             let call = usage(doc, id, lang, 0).unwrap_or_default();
@@ -155,6 +156,7 @@ pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
                 flutter(&Ctx::new(doc, id), id, 0, &mut out, Place::Flow);
                 out
             }
+            CodeLang::Uno => uno(doc, id),
             _ => {
                 let mut out = String::new();
                 compose(&Ctx::new(doc, id), id, 0, &mut out);

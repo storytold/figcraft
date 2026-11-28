@@ -2,8 +2,8 @@
 
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{
-    AutoLayout, BoolOp, Corners, Document, LayoutMode, Node, NodeId, NodeKind, Region, RegionPaintSpace, Segment, Sizing, StrokeAlign, StrokeJoin,
-    StrokeProps, VectorNetwork, WindingRule, proto,
+    AutoLayout, BoolOp, Corners, Document, LayoutMode, MainAlign, Node, NodeId, NodeKind, Region, RegionPaintSpace, Segment, Sizing, StrokeAlign,
+    StrokeJoin, StrokeProps, VectorNetwork, WindingRule, proto,
 };
 use figcraft_geom::{Affine, BezPath, Rect, Shape};
 use serde_json::{Value, json};
@@ -445,7 +445,7 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
     net.translate(-bb.x0, -bb.y0);
     let vid = doc.alloc_id();
     let name = first.as_ref().map(|f| f.name.clone()).unwrap_or_else(|| "Vector".into());
-    let mut v = Node::new(vid, NodeKind::Vector { network: net }, name, bb.width(), bb.height());
+    let mut v = Node::new(vid, NodeKind::Vector { network: net.into() }, name, bb.width(), bb.height());
     v.transform = Affine::translate((bb.x0, bb.y0));
     if let Some(f) = first {
         v.fills = output_fills;
@@ -620,7 +620,7 @@ fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let parent = n.parent.ok_or_else(|| bad("vector.outlineStroke", "page"))?;
         let idx = doc.index_in_parent(i);
         let vid = doc.alloc_id();
-        let mut v = Node::new(vid, NodeKind::Vector { network: net }, n.name.clone(), bb.width(), bb.height());
+        let mut v = Node::new(vid, NodeKind::Vector { network: net.into() }, n.name.clone(), bb.width(), bb.height());
         v.transform = n.transform * Affine::translate((bb.x0, bb.y0));
         // The stroke's paints (and its colour style) fill the outline.
         v.fills = n.strokes.clone();
@@ -698,6 +698,78 @@ fn sort_layout_children(doc: &Document, kids: &mut [NodeId], vertical: bool) {
     }
 }
 
+/// What "Add auto layout" settled on for one frame, beyond the layout itself.
+struct AddPlan {
+    layout: AutoLayout,
+    /// Width stays fixed (Figma fixes it in a vertical flow and with an Auto gap); otherwise it hugs.
+    fixed_width: bool,
+    /// A converted frame in a vertical flow shrinks to its content plus padding.
+    set_width: Option<f64>,
+    /// A wrap of one layer: the frame grows by this much around the layer and stays put on the canvas.
+    grow: f64,
+}
+
+/// The layout "Add auto layout" gives a frame (measured in Figma's web app with synthetic
+/// rectangles, 2026-11-09): height hugs; the width is fixed in a vertical flow and with an Auto
+/// gap (main align Space between: two children, a gap at least the narrower child, and for a
+/// converted frame equal left and right offsets), and hugs otherwise; a converted frame takes its
+/// left and top offsets as padding, a wrap of several layers has none, a wrap of one layer pads 10.
+fn add_layout(doc: &Document, frame: NodeId, new_wrap: bool, group: bool, dir: Option<&str>) -> AddPlan {
+    let wrapped = new_wrap || group;
+    let flow = figcraft_layout::flow_children(doc, frame);
+    let mut al = infer_layout(doc, frame);
+    let mut plan = AddPlan { layout: AutoLayout::default(), fixed_width: false, set_width: None, grow: 0.0 };
+    if let Some(d) = dir {
+        al.mode = match d.to_ascii_lowercase().as_str() {
+            "vertical" | "column" => LayoutMode::Vertical,
+            "grid" => LayoutMode::Grid,
+            _ => LayoutMode::Horizontal,
+        };
+    }
+    let Some(f) = doc.node(frame) else {
+        plan.layout = al;
+        return plan;
+    };
+    if flow.is_empty() || (!wrapped && flow.len() == 1) {
+        plan.layout = al;
+        return plan;
+    }
+    if new_wrap && flow.len() == 1 {
+        al.padding = [10.0; 4];
+        al.gap = 10.0;
+        plan.grow = 10.0;
+        plan.layout = al;
+        return plan;
+    }
+    let mut boxes: Vec<Rect> =
+        flow.iter().filter_map(|c| doc.node(*c)).map(|c| figcraft_geom::transform_rect_bbox(c.transform, c.local_rect())).collect();
+    let vertical = al.mode == LayoutMode::Vertical;
+    boxes.sort_by(|a, b| if vertical { a.y0.total_cmp(&b.y0) } else { a.x0.total_cmp(&b.x0) });
+    let gaps: Vec<f64> =
+        boxes.windows(2).filter_map(|w| Some(if vertical { w.get(1)?.y0 - w.first()?.y1 } else { w.get(1)?.x0 - w.first()?.x1 })).collect();
+    al.gap = if gaps.is_empty() { 10.0 } else { (gaps.iter().sum::<f64>() / gaps.len() as f64).max(0.0).round() };
+    let all = boxes.iter().copied().reduce(|a, b| a.union(b)).unwrap_or_default();
+    let (left, top) = (all.x0.max(0.0).round(), all.y0.max(0.0).round());
+    al.padding = if wrapped { [0.0; 4] } else { [top, left, top, left] };
+    let content_w = all.x1 - all.x0;
+    if vertical {
+        plan.fixed_width = true;
+        if !wrapped {
+            plan.set_width = Some(content_w + 2.0 * left);
+        }
+    } else if al.mode == LayoutMode::Horizontal && boxes.len() == 2 {
+        let narrower = boxes.iter().map(Rect::width).fold(f64::MAX, f64::min);
+        let gap = gaps.first().copied().unwrap_or(0.0);
+        let centred = wrapped || ((all.x0) - (f.width - all.x1)).abs() <= 0.5;
+        if gap > 0.0 && gap >= narrower && centred {
+            al.main_align = MainAlign::SpaceBetween;
+            plan.fixed_width = true;
+        }
+    }
+    plan.layout = al;
+    plan
+}
+
 /// Add inferred auto layout to existing frames or one group converted in place; wrap other
 /// selections. Preserve mask boundaries and a converted group's Fill sizing in its parent.
 fn layout_add(s: &mut Session, p: &Value) -> Result<Value> {
@@ -725,28 +797,32 @@ fn layout_add(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let doc = s.doc_mut()?;
     for f in &targets {
-        let mut al = infer_layout(doc, *f);
-        if let Some(d) = &dir {
-            al.mode = match d.to_ascii_lowercase().as_str() {
-                "vertical" | "column" => LayoutMode::Vertical,
-                "grid" => LayoutMode::Grid,
-                _ => LayoutMode::Horizontal,
-            };
-        }
+        let plan = add_layout(doc, *f, !in_place, single_group, dir.as_deref());
+        let al = plan.layout;
         let mut kids = doc.get(*f)?.children.clone();
         sort_layout_children(doc, &mut kids, al.mode == LayoutMode::Vertical);
         let empty = doc.node(*f).is_some_and(|n| n.children.iter().filter_map(|c| doc.node(*c)).all(|c| !c.visible || c.child_layout.absolute));
         let n = doc.get_mut(*f)?;
         n.children = kids;
         n.layout = Some(al);
+        if single_group {
+            n.fills.clear();
+            n.clip = false;
+        }
+        if plan.grow > 0.0 {
+            n.transform = Affine::translate((-plan.grow, -plan.grow)) * n.transform;
+        }
         if !in_place || !empty {
             // A frame wrapped around the selection hugs it; an existing frame with no flow
             // children keeps its size instead of collapsing to its padding.
             if !single_group || n.child_layout.sizing_h != Sizing::Fill {
-                n.child_layout.sizing_h = Sizing::Hug;
+                n.child_layout.sizing_h = if plan.fixed_width { Sizing::Fixed } else { Sizing::Hug };
             }
             if !single_group || n.child_layout.sizing_v != Sizing::Fill {
                 n.child_layout.sizing_v = Sizing::Hug;
+            }
+            if let Some(w) = plan.set_width {
+                n.width = w;
             }
         }
     }
@@ -856,7 +932,7 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
                 net = VectorNetwork::from_path(&simplified);
                 net.regions.clear();
             }
-            *network = net;
+            *network = net.into();
         }
     }
     ok()
@@ -888,7 +964,7 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
             let bounds = result.bounding_box();
             result.apply_affine(Affine::translate((-bounds.x0, -bounds.y0)));
             let node = doc.get_mut(i)?;
-            node.kind = NodeKind::Vector { network: VectorNetwork::from_path(&result) };
+            node.kind = NodeKind::Vector { network: VectorNetwork::from_path(&result).into() };
             node.transform *= Affine::translate((bounds.x0, bounds.y0));
             node.width = bounds.width();
             node.height = bounds.height();
@@ -908,7 +984,7 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
             let bb = res.bounding_box();
             res.apply_affine(Affine::translate((-bb.x0, -bb.y0)));
             let nm = doc.get_mut(i)?;
-            nm.kind = NodeKind::Vector { network: VectorNetwork::from_path(&res) };
+            nm.kind = NodeKind::Vector { network: VectorNetwork::from_path(&res).into() };
             nm.transform *= Affine::translate((bb.x0, bb.y0));
             nm.width = bb.width();
             nm.height = bb.height();
@@ -959,14 +1035,14 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let Some(bb) = net.bounds() else {
             let nm = doc.get_mut(i)?;
-            nm.kind = NodeKind::Vector { network: net };
+            nm.kind = NodeKind::Vector { network: net.into() };
             nm.width = 0.0;
             nm.height = 0.0;
             continue;
         };
         net.translate(-bb.x0, -bb.y0);
         let nm = doc.get_mut(i)?;
-        nm.kind = NodeKind::Vector { network: net };
+        nm.kind = NodeKind::Vector { network: net.into() };
         nm.transform *= Affine::translate((bb.x0, bb.y0));
         nm.width = bb.width();
         nm.height = bb.height();

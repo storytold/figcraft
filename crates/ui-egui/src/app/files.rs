@@ -1,7 +1,9 @@
 use super::{
-    AUTO_SAVE_RETRY_SECS, AUTO_SAVE_SECS, AUTOSAVE_SECS, Arc, DialogFuture, FigApp, OPEN_EXTENSIONS, OsStr, Path, PathBuf, PendingDialog, PickFuture,
-    Picked, Poll, RepaintWaker, Services, TaskContext, Value, Waker, dialogs, i18n, json, repaint_in, windows,
+    AUTO_SAVE_RETRY_SECS, AUTO_SAVE_SECS, AUTOSAVE_SECS, Arc, DialogFuture, FigApp, OsStr, Path, PathBuf, PendingDialog, PickFuture, Picked, Poll,
+    RepaintWaker, Services, TaskContext, Value, Waker, dialogs, i18n, json, repaint_in, windows,
 };
+use crate::Delivery;
+use figcraft_engine::cmd::file::FileSnapshot;
 
 impl FigApp {
     pub fn save_as_dialog(&mut self) {
@@ -39,14 +41,50 @@ impl FigApp {
     }
 
     /// Save by handing the file over as a download. `keep`: the name a Save of a host-opened
-    /// document keeps; `None` is a Save As, under the document's own name.
+    /// document keeps; `None` is a Save As, under the document's own name. A host that confirms
+    /// what it stores leaves the file unsaved until it answers ([`Delivery::Pending`]).
     fn save_download(&mut self, keep: Option<&str>) {
-        if let Some(r) = self.run("file.saveAs", json!({"data": true}))
-            && self.download(keep.unwrap_or_else(|| r["name"].as_str().unwrap_or_default()), &r)
-        {
-            self.run("file.markSaved", json!({}));
-            dialogs::file_saved(self, &r);
+        let Some(r) = self.run("file.saveAs", json!({"data": true})) else { return };
+        let name = keep.unwrap_or_else(|| r["name"].as_str().unwrap_or_default()).to_string();
+        match self.deliver_document(&name, &r) {
+            Delivery::Saved => {
+                self.run("file.markSaved", json!({}));
+                dialogs::file_saved(self, &r);
+            }
+            Delivery::Pending => self.toast(i18n::trf("Saving {name}…", &[("name", &name)])),
+            Delivery::Refused => {}
         }
+    }
+
+    /// [`download`](Self::download) for the document's own file (`file.saveAs {data: true}`'s
+    /// result), through [`Services::deliver_document`] with the file as it is now.
+    fn deliver_document(&mut self, name: &str, result: &Value) -> Delivery {
+        use base64::Engine as _;
+        let bytes = result["data"].as_str().and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok());
+        let file = self.session.docs.get(figcraft_engine::branches::file_tab(&self.session)).map(FileSnapshot::of);
+        let delivery = match (bytes, file) {
+            (Some(bytes), Some(file)) => self.services.deliver_document(name, &bytes, file),
+            _ => Delivery::Refused,
+        };
+        if delivery == Delivery::Refused {
+            self.toast(i18n::trf("Couldn't download {name}", &[("name", &name)]));
+        }
+        delivery
+    }
+
+    /// The host stored the document file handed over as `file` under `name`
+    /// ([`Delivery::Pending`]): the document is saved as of then, and edits made since stay
+    /// unsaved. Nothing changes for a tab closed, saved or reverted meanwhile.
+    pub fn document_stored(&mut self, name: &str, file: FileSnapshot) {
+        if file.delivered(&mut self.session) {
+            self.toast(i18n::trf("Saved {name}", &[("name", &name)]));
+        }
+    }
+
+    /// The host didn't store the document file handed over under `name` ([`Delivery::Pending`]),
+    /// for the reason `why`: the document keeps its unsaved changes, and the user is told.
+    pub fn document_not_stored(&mut self, name: &str, why: &str) {
+        self.show_error(i18n::trf("{name} wasn't saved: {why}", &[("name", &name), ("why", &why)]));
     }
 
     pub fn save(&mut self) {
@@ -73,7 +111,7 @@ impl FigApp {
 
     pub fn open_dialog(&mut self) {
         // Opening needs no file in front: it goes ahead even if that file closed meanwhile.
-        self.pick_file(i18n::tr("Open"), OPEN_EXTENSIONS, false, |app, file| {
+        self.pick_file(i18n::tr("Open"), &super::open_extensions(), false, |app, file| {
             if app.run_user("file.open", file).is_some() {
                 app.ui.home = false;
             }
@@ -86,8 +124,10 @@ impl FigApp {
         } else {
             &["penpot", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig", "jam", "sketch"]
         };
+        // Camera raw files place as the image they develop to.
+        let exts: Vec<&str> = exts.iter().chain(figcraft_format::raw::EXTENSIONS.iter()).copied().collect();
         let title = if place { i18n::tr("Place image") } else { i18n::tr("Import") };
-        self.pick_file(title, exts, true, |app, file| {
+        self.pick_file(title, &exts, true, |app, file| {
             app.run_user("file.import", file);
         });
     }

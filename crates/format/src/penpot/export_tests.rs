@@ -18,7 +18,7 @@ fn entries(bytes: &[u8]) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_owned();
+        let name = f.name().expect("ZIP member name").into_owned();
         if name.ends_with(".json") {
             let mut text = String::new();
             f.read_to_string(&mut text).unwrap();
@@ -153,7 +153,7 @@ fn rectangles_ellipses_and_paths_keep_their_geometry() {
     add(&mut doc, p, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Circle", 0.0, 0.0, 30.0, 20.0);
     add(&mut doc, p, NodeKind::Star { count: 5, inner_ratio: 0.4 }, "Star", 200.0, 0.0, 50.0, 50.0);
     let network = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(40.0, 0.0), Point::new(40.0, 30.0)], false);
-    let line = add(&mut doc, p, NodeKind::Vector { network }, "Open", 300.0, 0.0, 40.0, 30.0);
+    let line = add(&mut doc, p, NodeKind::Vector { network: network.into() }, "Open", 300.0, 0.0, 40.0, 30.0);
     doc.node_mut(line).unwrap().strokes = vec![Paint::solid(Color::BLACK)];
 
     let (back, e, _) = roundtrip(&doc);
@@ -185,7 +185,7 @@ fn stroked_closed_vectors_are_written_with_their_corner_smoothing() {
     for v in &mut network.vertices {
         v.radius = 20.0;
     }
-    let id = add(&mut doc, p, NodeKind::Vector { network }, "Smoothed", 0.0, 0.0, 100.0, 100.0);
+    let id = add(&mut doc, p, NodeKind::Vector { network: network.into() }, "Smoothed", 0.0, 0.0, 100.0, 100.0);
     {
         let n = doc.node_mut(id).unwrap();
         n.fills = vec![Paint::solid(Color::BLACK)];
@@ -266,7 +266,7 @@ fn open_path_caps_and_dotted_strokes_survive() {
     let mut doc = Document::new("Caps");
     let p = page(&doc);
     let network = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(50.0, 0.0)], false);
-    let id = add(&mut doc, p, NodeKind::Vector { network }, "Arrow", 0.0, 0.0, 50.0, 1.0);
+    let id = add(&mut doc, p, NodeKind::Vector { network: network.into() }, "Arrow", 0.0, 0.0, 50.0, 1.0);
     {
         let n = doc.node_mut(id).unwrap();
         n.strokes = vec![Paint::solid(Color::BLACK)];
@@ -398,7 +398,7 @@ fn edited_text_is_rebuilt_with_runs_and_styles() {
     bold.font_style = "Bold Italic".into();
     bold.fills = Some(vec![Paint::solid(Color::from_hex("#ff0000").unwrap())]);
     text.runs.push(StyleRun { start: 6, end: 10, style: bold });
-    let id = add(&mut doc, p, NodeKind::Text(text), "Copy", 0.0, 0.0, 200.0, 60.0);
+    let id = add(&mut doc, p, NodeKind::Text(text.into()), "Copy", 0.0, 0.0, 200.0, 60.0);
     doc.node_mut(id).unwrap().fills = vec![Paint::solid(Color::from_hex("#333333").unwrap())];
 
     let (back, e, _) = roundtrip(&doc);
@@ -684,7 +684,7 @@ fn imported_penpot_tokens_are_written_back_verbatim() {
     doc.node_mut(p).unwrap().plugin_data.insert("penpot.fp.tokens".into(), fp);
     let (bytes, warnings) = export(&doc).unwrap();
     let mut z = zip::ZipArchive::new(Cursor::new(&bytes[..])).unwrap();
-    let path = z.file_names().find(|n| n.ends_with("tokens.json")).unwrap().to_owned();
+    let path = z.file_names().map(|name| name.expect("ZIP member name")).find(|n| n.ends_with("tokens.json")).unwrap().into_owned();
     let mut text = String::new();
     z.by_name(&path).unwrap().read_to_string(&mut text).unwrap();
     assert_eq!(text, source);
@@ -1033,7 +1033,7 @@ fn shared_writer_keeps_manifest_first_and_deflated_members() {
     let doc = Document::new("Shared container");
     let (bytes, _) = export(&doc).unwrap();
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
-    assert_eq!(zip.by_index(0).unwrap().name(), "manifest.json");
+    assert_eq!(zip.by_index(0).unwrap().name().expect("ZIP member name"), "manifest.json");
     for index in 0..zip.len() {
         assert_eq!(zip.by_index(index).unwrap().compression(), zip::CompressionMethod::Deflated);
     }

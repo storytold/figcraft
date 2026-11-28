@@ -295,6 +295,9 @@ pub struct Presenter {
     /// The part of the presented frame in view, drawn at device scale over the (capped) whole-frame
     /// texture; `bounds` is the page area it covers.
     detail: Option<(NodeId, FrameTex)>,
+    /// The page area in view and the pixel scale it was drawn at last frame: a change is motion,
+    /// which the detail waits out.
+    last_view: Option<(figcraft_geom::Rect, f64)>,
     /// Small current-screen preview in the full-window bar, cached until its content changes.
     bar_thumb: Option<(NodeId, usize, egui::TextureHandle)>,
     arrived: f64,
@@ -382,6 +385,7 @@ impl Presenter {
             temp: None,
             textures: HashMap::new(),
             detail: None,
+            last_view: None,
             bar_thumb: None,
             arrived: -1.0,
             delays_fired: HashSet::new(),

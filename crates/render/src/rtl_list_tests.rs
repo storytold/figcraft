@@ -17,7 +17,7 @@ fn doc() -> (Document, NodeId, TextData) {
     td.auto_resize = TextAutoResize::Height;
     let mut d = Document::new("rtl");
     let p = d.first_page().unwrap();
-    let id = d.create(p, NodeKind::Text(td.clone()), "T", 0.0, 0.0, W, 40.0).unwrap();
+    let id = d.create(p, NodeKind::Text(td.clone().into()), "T", 0.0, 0.0, W, 40.0).unwrap();
     (d, id, td)
 }
 

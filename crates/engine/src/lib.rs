@@ -298,6 +298,8 @@ mod datafill_tests;
 #[cfg(test)]
 mod default_props_tests;
 #[cfg(test)]
+mod delivered_save_tests;
+#[cfg(test)]
 mod design_context_tests;
 #[cfg(test)]
 mod design_paste_tests;
@@ -415,6 +417,8 @@ mod interaction_rollback_tests;
 mod invite_links_tests;
 #[cfg(test)]
 mod jam_open_tests;
+#[cfg(test)]
+mod join_bench_tests;
 #[cfg(test)]
 mod jpg_export_tests;
 #[cfg(test)]
@@ -562,6 +566,8 @@ mod proto_run_tests;
 #[cfg(test)]
 mod proto_tail_tests;
 #[cfg(test)]
+mod raw_tests;
+#[cfg(test)]
 mod reopen_tests;
 #[cfg(test)]
 mod responsive_tests;
@@ -663,6 +669,8 @@ mod tiff_tests;
 mod transform_behaviour_tests;
 #[cfg(test)]
 mod unknown_params_tests;
+#[cfg(test)]
+mod uno_codegen_tests;
 #[cfg(test)]
 mod variable_props_tests;
 #[cfg(test)]

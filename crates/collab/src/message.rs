@@ -44,9 +44,14 @@ pub const BRANCHES: &str = "branches";
 /// (older ones couldn't decode the variant at all).
 pub const DESIGN_REVIEW: &str = "design-review";
 
+/// The word a client puts in its [`Hello::client_version`] when it reads
+/// [`CatchUp::DeltaSnapshot`]: a server sends a direct value-checked mirror-delta + vector-dedup
+/// compressed snapshot instead of `Vec<Change>` (#1819, #2041).
+pub const DELTA_SNAPSHOT: &str = "delta-snapshot";
+
 /// The `client_version` this build announces: its version, then what it reads beyond the protocol.
 pub fn client_version() -> String {
-    format!("{} {SIGNALS} {HOSTING} {COMMENTS} {PACKED} {DESIGN_REVIEW} {BRANCHES}", env!("CARGO_PKG_VERSION"))
+    format!("{} {SIGNALS} {HOSTING} {COMMENTS} {PACKED} {DESIGN_REVIEW} {BRANCHES} {DELTA_SNAPSHOT}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Whether `client_version` announces `word`.
@@ -82,6 +87,11 @@ pub fn reads_design_review(client_version: &str) -> bool {
 /// A [`Hello::client_version`] that announces [`BRANCHES`].
 pub fn reads_branches(client_version: &str) -> bool {
     announces(client_version, BRANCHES)
+}
+
+/// A [`Hello::client_version`] that announces [`DELTA_SNAPSHOT`].
+pub fn reads_delta_snapshot(client_version: &str) -> bool {
+    announces(client_version, DELTA_SNAPSHOT)
 }
 
 /// Join a file's session.
@@ -353,6 +363,10 @@ pub enum CatchUp {
     /// [`PACKED`]: a document's changes shrink several times over. The client reads it with
     /// [`unpack`] before anything else sees the welcome.
     Packed(Vec<u8>),
+    /// A direct compressed mirror-delta & vector-deduplicated snapshot
+    /// ([`crate::delta_snapshot`]), for a client whose hello announced [`DELTA_SNAPSHOT`].
+    /// Appended last so earlier postcard discriminants remain unchanged.
+    DeltaSnapshot(Vec<u8>),
 }
 
 /// Opens a connection that manages a server's files (instead of [`Hello`]): the server's admin
@@ -1175,19 +1189,26 @@ pub fn pack(msg: &mut ServerMsg) -> Result<(), Error> {
 /// past `max_bytes` (untrusted input: the limit an unpacked welcome would have had to fit).
 /// Anything else is left as it is.
 pub fn unpack(msg: &mut ServerMsg, max_bytes: usize) -> Result<(), Error> {
-    if let ServerMsg::Welcome { catch_up, .. } = msg
-        && let CatchUp::Packed(packed) = catch_up
-    {
-        let mut raw = Vec::new();
-        let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX).saturating_add(1);
-        flate2::read::DeflateDecoder::new(packed.as_slice())
-            .take(limit)
-            .read_to_end(&mut raw)
-            .map_err(|e| Error::Decode(format!("packed document: {e}")))?;
-        if raw.len() > max_bytes {
-            return Err(Error::TooLarge(max_bytes));
+    if let ServerMsg::Welcome { catch_up, .. } = msg {
+        match catch_up {
+            CatchUp::Packed(packed) => {
+                let _reading = crate::heap::reading();
+                let mut raw = Vec::new();
+                let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX).saturating_add(1);
+                flate2::read::DeflateDecoder::new(packed.as_slice())
+                    .take(limit)
+                    .read_to_end(&mut raw)
+                    .map_err(|e| Error::Decode(format!("packed document: {e}")))?;
+                if raw.len() > max_bytes {
+                    return Err(Error::TooLarge(max_bytes));
+                }
+                *catch_up = CatchUp::Snapshot(from_postcard(&raw)?);
+            }
+            CatchUp::DeltaSnapshot(bytes) => {
+                crate::delta_snapshot::check_header_limit(bytes, max_bytes)?;
+            }
+            CatchUp::Snapshot(_) | CatchUp::Delta(_) => {}
         }
-        *catch_up = CatchUp::Snapshot(from_postcard(&raw)?);
     }
     Ok(())
 }

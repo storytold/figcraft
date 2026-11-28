@@ -527,6 +527,20 @@ fn a_view_a_rounding_error_past_the_frame_keeps_its_detail() {
     assert_eq!(again, first, "the same view reuses its detail instead of rendering a new one");
 }
 
+/// A change of scale (a zoom, a resize, a move to another display) is motion too (#2187): the frame
+/// it happens in renders no detail, and once the view is still a detail for it is rendered.
+#[test]
+fn a_change_of_scale_renders_the_detail_once_the_view_is_still() {
+    let mut ui = tall_hidpi(16_384);
+    let tex_id = |ui: &Ui| ui.app.ui.present.as_ref().and_then(|p| p.detail.as_ref().map(|(_, d)| d.tex.id()));
+    let first = tex_id(&ui).expect("a detail is drawn");
+    ui.hidpi = Some((3.0, 16_384));
+    ui.frames(1, Vec::new);
+    assert_eq!(tex_id(&ui), Some(first), "the frame the scale changes renders no detail");
+    ui.frames(2, Vec::new);
+    assert_ne!(tex_id(&ui), Some(first), "once still, a detail at the new scale");
+}
+
 /// While the view moves, the detail is drawn only while it covers the whole view: past its edge
 /// the capped whole-frame texture shows alone, so no sharp/soft boundary crosses the view, and
 /// once the view settles a detail for it is rendered.

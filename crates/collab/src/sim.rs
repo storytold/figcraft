@@ -291,7 +291,9 @@ impl Sim {
         let ClientMsg::Hello(hello) = hello else { return Err(Error::Protocol("hello".into())) };
         let seen = self.clients.get(i).map_or(0, Client::seq);
         let (id, out) = self.server.join(hello).map_err(|m| Error::Protocol(format!("{m:?}")))?;
-        if out.iter().any(|o| matches!(o, Outgoing::To(to, ServerMsg::Welcome { catch_up: crate::CatchUp::Snapshot(_), .. }) if *to == id)) {
+        if out.iter().any(|o| {
+            matches!(o, Outgoing::To(to, ServerMsg::Welcome { catch_up: crate::CatchUp::Snapshot(_) | crate::CatchUp::DeltaSnapshot(_), .. }) if *to == id)
+        }) {
             self.snapshots += 1;
             if let Some(g) = self.gaps.get_mut(i) {
                 g.push((seen, self.server.seq()));

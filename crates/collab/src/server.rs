@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::change::{Change, Entry, Family, Prop, Target};
 use crate::message::{
     Accepted, Access, BranchEvent, BranchReq, BranchStatus, CatchUp, ClientMsg, Hello, MAX_SHARED_BRANCHES, PROTOCOL, Peer, Presence, Processed,
-    Resume, ServerMsg, SharedBranch, Signal, reads_branches, reads_comments, reads_design_review, reads_signals,
+    Resume, ServerMsg, SharedBranch, Signal, reads_branches, reads_comments, reads_delta_snapshot, reads_design_review, reads_signals,
 };
 use crate::replica::{Mode, Replica, create_change};
 use crate::{Error, Limits, diff, docprops, same_secret};
@@ -126,6 +126,9 @@ pub struct Server {
     /// resuming client other bytes under a key it holds): every resuming client catches up with
     /// the snapshot, not the log.
     resync: bool,
+    /// Cached compressed [`CatchUp::DeltaSnapshot`] for `self.seq`, so repeated joins of large
+    /// files pay ~0 ms server CPU while no edit has arrived (#1819).
+    delta_cache: Option<(u64, Vec<u8>)>,
 }
 
 /// The most client ids a session remembers for reconnecting (the oldest disconnected ones go
@@ -188,6 +191,7 @@ impl Server {
             design_review: BTreeSet::new(),
             spotlight: None,
             resync: false,
+            delta_cache: None,
         }
     }
 
@@ -210,7 +214,7 @@ impl Server {
     /// reconnect with their ids). A log that doesn't lead up to the sequence number is dropped
     /// (clients then catch up with a snapshot).
     pub fn restore(state: SessionState, token: impl Into<String>, limits: Limits) -> Result<Server, Error> {
-        let (replica, left_out, review_clamped) = Replica::from_snapshot_leaving_out(&state.snapshot)?;
+        let (replica, left_out, review_clamped) = Replica::from_snapshot_leaving_out(state.snapshot)?;
         let mut server = Server::new(replica.document().clone(), token, limits);
         server.state = replica;
         server.session = state.session;
@@ -417,9 +421,20 @@ impl Server {
         // The log holds every batch after `floor`.
         let floor = self.log.front().map_or(self.seq, |a| a.seq.saturating_sub(1));
         let reads_design_review = reads_design_review(&hello.client_version);
+        let reads_delta = reads_delta_snapshot(&hello.client_version);
         let catch_up = match resume {
             Some(r) if !self.resync && r.seq <= self.seq && r.seq >= floor => {
                 CatchUp::Delta(self.log.iter().filter(|a| a.seq > r.seq).cloned().collect())
+            }
+            // Only send the cached delta snapshot to peers that also read `design-review`, since
+            // the compressed payload carries the document's review config without per-peer filtering,
+            // and only when the document fits within the client decoder's default node cap.
+            // If delta encoding fails (e.g. materialized budget exceeded), fall back to `Snapshot`.
+            _ if reads_delta && reads_design_review && self.state.document().node_count() <= Limits::default().max_nodes => {
+                match self.cached_delta_snapshot() {
+                    Ok(bytes) => CatchUp::DeltaSnapshot(bytes),
+                    Err(_) => CatchUp::Snapshot(self.state.snapshot().map_err(|e| refuse(&e.to_string()))?),
+                }
             }
             _ => CatchUp::Snapshot(self.state.snapshot().map_err(|e| refuse(&e.to_string()))?),
         };
@@ -686,7 +701,25 @@ impl Server {
         }
         self.state = next;
         self.seq += 1;
+        self.delta_cache = None;
         Ok(())
+    }
+
+    /// Return the cached compressed delta snapshot for `self.seq`, building it once on cache miss.
+    /// Snapshots larger than 16 MiB compressed (e.g. files with large embedded images) are still
+    /// sent, but are not pinned in `self.delta_cache` so room memory stays bounded.
+    fn cached_delta_snapshot(&mut self) -> Result<Vec<u8>, Error> {
+        const MAX_DELTA_CACHE_BYTES: usize = 16 << 20;
+        if let Some((seq, bytes)) = &self.delta_cache
+            && *seq == self.seq
+        {
+            return Ok(bytes.clone());
+        }
+        let bytes = crate::delta_snapshot::encode_delta_snapshot(&self.state)?;
+        if bytes.len() <= MAX_DELTA_CACHE_BYTES {
+            self.delta_cache = Some((self.seq, bytes.clone()));
+        }
+        Ok(bytes)
     }
 
     /// The document-level entries (styles, variables, collections, comments) a batch adds or

@@ -277,46 +277,54 @@ fn a_failed_accept_waits_before_the_next() {
     assert_eq!(waits, 3, "one wait per failed accept");
 }
 
+/// With every slot taken, a new client gets the slot of the connection idle longest, never one
+/// whose request the UI is running (#1110), and finished slots are reused.
 #[test]
-fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
+fn connection_limit_frees_the_longest_idle_slot_and_reuses_finished_ones() {
     let pending = queue();
     let ctx = context();
+    let budget = Arc::new(AtomicUsize::new(0));
     let mut workers = Vec::new();
     let mut clients = Vec::new();
+    let spawn = |server, workers: &mut Vec<Worker>| {
+        let events = Arc::new(figcraft_engine::events::EventLog::default());
+        spawn_connection(server, pending.clone(), ctx.clone(), events, &budget, workers, Duration::from_secs(5));
+    };
     for _ in 0..MAX_CONNECTIONS {
         let (client, server) = pair();
-        spawn_connection(
-            server,
-            pending.clone(),
-            ctx.clone(),
-            Arc::new(figcraft_engine::events::EventLog::default()),
-            &mut workers,
-            Duration::from_secs(5),
-        );
+        spawn(server, &mut workers);
         clients.push(client);
+        // Each idle from its own moment.
+        std::thread::sleep(Duration::from_millis(2));
     }
     assert_eq!(workers.len(), MAX_CONNECTIONS);
-    let (mut extra, server) = pair();
-    spawn_connection(
-        server,
-        pending.clone(),
-        ctx.clone(),
-        Arc::new(figcraft_engine::events::EventLog::default()),
-        &mut workers,
-        Duration::from_secs(5),
-    );
-    assert_eq!(extra.read(&mut [0]).unwrap(), 0);
-    assert_eq!(workers.len(), MAX_CONNECTIONS);
-    for client in clients {
-        client.shutdown(Shutdown::Both).unwrap();
-    }
+    // The oldest connection waits for the UI: it is busy, not idle.
+    clients[0].write_all(b"{\"id\":1,\"method\":\"ui.inspect\"}\n").unwrap();
     let start = Instant::now();
-    while workers.iter().any(|worker| !worker.is_finished()) {
+    while pending.lock().unwrap().is_empty() {
         assert!(start.elapsed() < Duration::from_secs(5));
         std::thread::sleep(Duration::from_millis(1));
     }
+    let (mut extra, server) = pair();
+    spawn(server, &mut workers);
+    assert_eq!(workers.len(), MAX_CONNECTIONS);
+    assert_eq!(clients[1].read(&mut [0]).unwrap(), 0, "the connection idle longest was closed");
+    extra.write_all(b"invalid\n").unwrap();
+    assert_eq!(reply(&mut BufReader::new(extra.try_clone().unwrap()))["ok"], false, "the new client is served");
+    assert!(pending.lock().unwrap().len() == 1, "the busy request is still queued");
+    pending.lock().unwrap().clear();
+    for client in clients.iter().skip(2) {
+        client.shutdown(Shutdown::Both).unwrap();
+    }
+    let _ = clients[0].shutdown(Shutdown::Both);
+    // The busy worker waits out its request's 5 s timeout before it sees the shutdown.
+    let start = Instant::now();
+    while workers.iter().any(|worker| !worker.thread.is_finished()) {
+        assert!(start.elapsed() < Duration::from_secs(15));
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let (mut client, server) = pair();
-    spawn_connection(server, pending, ctx, Arc::new(figcraft_engine::events::EventLog::default()), &mut workers, Duration::from_secs(5));
+    spawn(server, &mut workers);
     assert_eq!(workers.len(), 1);
     client.write_all(b"invalid\n").unwrap();
     assert_eq!(reply(&mut BufReader::new(client.try_clone().unwrap()))["ok"], false);
@@ -325,7 +333,26 @@ fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
     // returns Ok. Closing the client is what the worker is waiting for, so the result is moot:
     // the other shutdowns in this file run while the peer is still open and stay checked.
     let _ = client.shutdown(Shutdown::Both);
-    workers.pop().unwrap().join().unwrap();
+    workers.pop().unwrap().thread.join().unwrap();
+}
+
+/// Lines are counted against one budget shared by every connection while they are held (#1111):
+/// a line past it is refused before it is read whole, and a line answered gives its bytes back.
+#[test]
+fn lines_past_the_shared_budget_are_refused_and_given_back_when_done() {
+    let frame = b"{\"id\":1,\"method\":\"ui.inspect\"}\n".to_vec();
+    let nearly_full = AtomicUsize::new(MAX_IN_FLIGHT - 4);
+    let mut line = Vec::new();
+    assert!(matches!(read_line(&mut std::io::Cursor::new(frame.clone()), &mut line, &nearly_full).unwrap(), Line::Busy));
+    assert_eq!(nearly_full.load(Ordering::SeqCst), MAX_IN_FLIGHT - 4, "nothing kept from the refused line");
+    let budget = AtomicUsize::new(0);
+    let mut line = Vec::new();
+    {
+        let Line::Read(_held) = read_line(&mut std::io::Cursor::new(frame.clone()), &mut line, &budget).unwrap() else { panic!("read") };
+        assert_eq!(line, frame);
+        assert!(budget.load(Ordering::SeqCst) >= frame.len(), "held while it is served");
+    }
+    assert_eq!(budget.load(Ordering::SeqCst), 0, "given back");
 }
 
 #[test]
@@ -358,7 +385,8 @@ fn events_poll_is_answered_without_the_ui_queue() {
     let log = Arc::new(figcraft_engine::events::EventLog::default());
     log.push("comment.added", "Doc", None, json!({"commentId": 7}));
     let l = log.clone();
-    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5)));
+    let worker =
+        std::thread::spawn(move || serve_with_events(server, q, context(), l, &AtomicUsize::new(0), &Mutex::new(None), Duration::from_secs(5)));
     client.write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"after\":0,\"timeoutMs\":0}}\n").unwrap();
     let mut reader = BufReader::new(client);
     let r = reply(&mut reader);
@@ -484,7 +512,8 @@ fn events_poll_rejects_an_unknown_topic_without_the_ui_queue() {
     let q = pending.clone();
     let log = Arc::new(figcraft_engine::events::EventLog::default());
     let l = log.clone();
-    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5)));
+    let worker =
+        std::thread::spawn(move || serve_with_events(server, q, context(), l, &AtomicUsize::new(0), &Mutex::new(None), Duration::from_secs(5)));
     let mut reader = BufReader::new(client);
     reader.get_mut().write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"topics\":[\"nope\"],\"timeoutMs\":0}}\n").unwrap();
     let r = reply(&mut reader);
@@ -503,7 +532,8 @@ fn events_poll_reports_reset_for_a_cursor_ahead_of_the_log() {
     log.push("comment.added", "Doc", None, json!({"commentId": 1}));
     let q = queue();
     let l = log.clone();
-    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5)));
+    let worker =
+        std::thread::spawn(move || serve_with_events(server, q, context(), l, &AtomicUsize::new(0), &Mutex::new(None), Duration::from_secs(5)));
     let mut reader = BufReader::new(client);
     reader.get_mut().write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"after\":2,\"timeoutMs\":0}}\n").unwrap();
     let r = reply(&mut reader);

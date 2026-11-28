@@ -85,7 +85,7 @@ pub(super) fn make(doc: &mut Document, page: NodeId, c: Connector, caps: (Stroke
     if pts.windows(2).all(|w| w.first() == w.get(1)) {
         return Err(bad(cmd, "the ends are in the same place"));
     }
-    let id = add(doc, page, NodeKind::Vector { network: VectorNetwork::default() }, "Connector", (0.0, 0.0), (0.0, 0.0), |n| {
+    let id = add(doc, page, NodeKind::Vector { network: VectorNetwork::default().into() }, "Connector", (0.0, 0.0), (0.0, 0.0), |n| {
         n.fills.clear();
         n.strokes = vec![Paint::solid(LINE)];
         n.stroke.weight = LINE_WEIGHT;

@@ -3,7 +3,7 @@
 //! variants already (it used to put a set inside a set), and Add variant on a main component that
 //! isn't in a set yet making it one.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::Session;
 use crate::cmd::component::{can_add_variant, can_combine_variants};
@@ -176,4 +176,29 @@ fn add_variant_on_a_lone_component_in_auto_layout_keeps_its_place() {
     assert_eq!(kids(&s, row), vec![first, set, last], "the set takes the component's place in the row");
     assert_eq!(kids(&s, set).len(), 2);
     healthy(&s);
+}
+
+/// #2182: a set without auto layout keeps its size when a variant grows past it (it is sized only
+/// when variants are combined or added) and clips it. `node.set` says so in `warnings`; with auto
+/// layout on the set, it grows and there is nothing to say.
+#[test]
+fn a_variant_grown_past_its_clipping_set_is_warned_about() {
+    let mut s = Session::new();
+    let a = component(&mut s, "State=Default", 0.0);
+    let b = component(&mut s, "State=Hover", 200.0);
+    let set = idv(&ex(&mut s, "component.combineVariants", json!({"ids": [a, b]})));
+    let warns = |v: Value, id: NodeId| {
+        v["warnings"].as_array().is_some_and(|w| w.iter().any(|w| w.as_str().is_some_and(|w| w.starts_with(&format!("{id} ")))))
+    };
+    let height = |s: &Session| node(s, set).height;
+    let before = height(&s);
+    let grown = s.execute("node.set", &json!({"id": a, "props": {"height": before * 3.0}})).unwrap();
+    assert_eq!(height(&s), before, "the set keeps its size");
+    assert!(warns(grown, a), "the clipped variant is named");
+    // Inside the set: nothing to say.
+    assert!(!warns(s.execute("node.set", &json!({"id": a, "props": {"height": 40}})).unwrap(), a));
+    // With auto layout the set grows with it.
+    ex(&mut s, "layout.add", json!({"ids": [set], "direction": "horizontal"}));
+    let grown = s.execute("node.set", &json!({"id": a, "props": {"height": before * 3.0}})).unwrap();
+    assert!(height(&s) > before && !warns(grown, a));
 }

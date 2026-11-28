@@ -124,7 +124,7 @@ fn load_any(
             font_notes.append(&mut notes); // Show missing-font details first in the UI toast.
             Ok((figcraft_format::Loaded { issues: font_notes, ..doc.into() }, true))
         }
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" => {
+        e if matches!(e, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff") || figcraft_format::raw::is_extension(e) => {
             let mut doc = Document::new(file_stem(name_hint));
             let page = doc.first_page().ok_or(EngineError::NoDocument)?;
             let (hash, w, h) = crate::cmd::create::add_readable_image(&mut doc, bytes.to_vec()).map_err(EngineError::Other)?;
@@ -787,7 +787,7 @@ mod penpot_font_warning_tests {
         let mut doc = Document::new("External font refs");
         let page = doc.first_page().unwrap();
         let text = TextData::new("Playball");
-        let id = doc.create(page, NodeKind::Text(text), "Custom caption", 0., 0., 120., 30.).unwrap();
+        let id = doc.create(page, NodeKind::Text(text.into()), "Custom caption", 0., 0., 120., 30.).unwrap();
         doc.node_mut(id).unwrap().plugin_data.insert(
             "penpot.customFontRefs".into(),
             r#"[{"id":"custom-123abc","family":"Playball","variants":[{"weight":400,"italic":false}]}]"#.into(),
@@ -805,7 +805,7 @@ mod penpot_font_warning_tests {
         let page = doc.first_page().unwrap();
         let mut text = TextData::new("hello world");
         text.style.font_family = "Rare Licensed Family".into();
-        doc.create(page, NodeKind::Text(text), "Headline", 0.0, 0.0, 200.0, 30.0).unwrap();
+        doc.create(page, NodeKind::Text(text.into()), "Headline", 0.0, 0.0, 200.0, 30.0).unwrap();
         let warnings = missing_penpot_font_warnings(&doc, &["Inter".into(), "Source Sans Pro".into()]);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Rare Licensed Family"));
@@ -830,7 +830,7 @@ mod penpot_font_warning_tests {
         let mut run = t.style.clone();
         run.font_family = "Available Font".into();
         t.runs.push(StyleRun { start: 0, end: 2, style: run });
-        doc.create(page, NodeKind::Text(t), "Full run", 0.0, 0.0, 100.0, 30.0).unwrap();
+        doc.create(page, NodeKind::Text(t.into()), "Full run", 0.0, 0.0, 100.0, 30.0).unwrap();
         assert!(missing_penpot_font_warnings(&doc, &["Available Font".into()]).is_empty());
     }
 }
@@ -875,7 +875,7 @@ mod penpot_svg_v10_tests {
         let mut run = t.style.clone();
         run.font_family = "Run Font".into();
         t.runs = (0..50_000).map(|_| StyleRun { start: 0, end: 100_000, style: run.clone() }).collect();
-        doc.create(page, NodeKind::Text(t), "Long", 0.0, 0.0, 100.0, 30.0).unwrap();
+        doc.create(page, NodeKind::Text(t.into()), "Long", 0.0, 0.0, 100.0, 30.0).unwrap();
         let report = font_report_with_families(&doc, &[]);
         assert_eq!(report["fonts"].as_array().map(Vec::len), Some(1), "{report}");
         assert_eq!(report["fonts"][0]["family"], "Run Font");
@@ -921,7 +921,7 @@ mod penpot_svg_v10_tests {
         let page = doc.first_page().unwrap();
         let mut text = TextData::new("Example");
         text.style.font_family = "Definitely Never Installed V10 Font Q7".into();
-        doc.create(page, NodeKind::Text(text), "Caption", 0.0, 0.0, 100.0, 24.0).unwrap();
+        doc.create(page, NodeKind::Text(text.into()), "Caption", 0.0, 0.0, 100.0, 24.0).unwrap();
         let report = font_report_with_families(&doc, &["Inter".into()]);
         assert_eq!(report["missing"], 1);
         assert_eq!(report["fonts"][0]["family"], "Definitely Never Installed V10 Font Q7");

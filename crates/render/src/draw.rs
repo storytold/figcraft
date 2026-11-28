@@ -153,8 +153,12 @@ fn pixels_when_magnified(prep: Prepared, device_scale: f64) -> Prepared {
 
 fn fill_with(pix: &mut Pixmap, path: &tiny_skia::Path, paints: &[Paint], w: f64, h: f64, xf: Affine, rule: FillRule, ctx: &Ctx, mask: Option<&Mask>) {
     let scale = xf.determinant().abs().sqrt();
+    // An image picks its copy by the direction shown the most device pixels (a layer can be squeezed).
+    let [a, b, c, d, ..] = xf.as_coeffs();
+    let stretch = crate::paint::max_stretch(a, b, c, d);
     for p in paints {
-        let Some(prep) = prepare_at(p, w, h, scale, ctx.doc, ctx.time, ctx.preview) else { continue };
+        let k = if matches!(p.kind, PaintKind::Image(_)) { stretch } else { scale };
+        let Some(prep) = prepare_at(p, w, h, k, ctx.doc, ctx.time, ctx.preview) else { continue };
         let prep = if ctx.magnified_image_pixels && matches!(p.kind, PaintKind::Image(_)) { pixels_when_magnified(prep, scale) } else { prep };
         let paint = tiny_skia::Paint { shader: prep.shader(), anti_alias: true, blend_mode: ts_blend(p.blend), ..Default::default() };
         if p.blend == BlendMode::PlusDarker {
@@ -196,14 +200,16 @@ pub(crate) fn hash_path(p: &BezPath, h: &mut impl Hasher) {
 fn side_strokes(n: &Node) -> Option<Arc<BezPath>> {
     let props = &n.stroke;
     let sides = props.sides?;
-    if !matches!(n.kind, NodeKind::Rectangle | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. }) {
+    if !n.kind.has_independent_corners() {
         return None;
     }
     let c = &n.corners;
     Some(Arc::new(if c.uniform() == Some(0.0) {
         figcraft_pathops::rect_side_strokes(n.width, n.height, sides, props.align)
-    } else {
+    } else if c.style.is_round() {
         figcraft_pathops::rounded_side_strokes(n.width, n.height, c.radii, c.smoothing, sides, props.align)
+    } else {
+        cut_side_strokes(n, &figcraft_doc::geometry::shape_path(n)?, sides)
     }))
 }
 
@@ -235,7 +241,7 @@ fn ring(n: &Node, inset: f64) -> Option<BezPath> {
         | NodeKind::ComponentSet { .. }
         | NodeKind::Instance { .. }
         | NodeKind::Section { .. }
-            if n.corners.smoothing == 0.0 =>
+            if n.corners.style.is_round() && n.corners.smoothing == 0.0 =>
         {
             let radii = n.corners.radii.map(|r| if r > 0.0 { (r - inset).max(0.0) } else { 0.0 });
             let mut p = figcraft_geom::rounded_rect(ww, hh, radii, 0.0);
@@ -247,6 +253,35 @@ fn ring(n: &Node, inset: f64) -> Option<BezPath> {
         }
         _ => None,
     }
+}
+
+/// Stroke each side at its own weight, meeting its neighbours on the corner bisectors.
+fn cut_side_strokes(n: &Node, path: &BezPath, sides: [f64; 4]) -> BezPath {
+    let band = |weight| figcraft_pathops::stroke_outline(path, &figcraft_doc::StrokeProps { weight, sides: None, ..n.stroke.clone() }, true);
+    if sides.iter().all(|w| *w == sides[0]) {
+        return band(sides[0]);
+    }
+    let (w, h) = (n.width, n.height);
+    let mid = w.min(h) / 2.0;
+    let inner = [(mid, mid), (w - mid, mid), (w - mid, h - mid), (mid, h - mid)];
+    let mut out = BezPath::new();
+    for (i, weight) in sides.into_iter().enumerate().filter(|(_, weight)| *weight > 0.0) {
+        let stroke = band(weight);
+        let b = stroke.bounding_box();
+        let pad = 1.0 + (-b.x0).max(-b.y0).max(b.x1 - w).max(b.y1 - h).max(0.0);
+        let outer = [(-pad, -pad), (w + pad, -pad), (w + pad, h + pad), (-pad, h + pad)];
+        let next = (i + 1) % 4;
+        let mut side = BezPath::new();
+        side.move_to(outer[i]);
+        side.line_to(outer[next]);
+        side.line_to(inner[next]);
+        side.line_to(inner[i]);
+        side.close_path();
+        if let Ok(part) = figcraft_pathops::boolean_step(&stroke, &side, figcraft_doc::BoolOp::Intersect) {
+            out.extend(part.elements().iter().copied());
+        }
+    }
+    out
 }
 
 /// The stroke area of a node in local coordinates.
