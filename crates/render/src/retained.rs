@@ -83,6 +83,12 @@ fn sensitive(doc: &Document) -> Sensitive {
     Sensitive { areas: noisy.filter_map(|n| draw::paint_bounds(doc, n.id)).collect(), backdrop_blur: crate::max_backdrop_blur(doc), pattern_sources }
 }
 
+/// [`sensitive`] for the large-file timings: how many areas it found.
+#[cfg(test)]
+pub(crate) fn bench_scan(doc: &Document, _page: NodeId) -> usize {
+    sensitive(doc).areas.len()
+}
+
 /// Whether `id` is a pattern source or inside one in `doc`.
 fn in_pattern_source(doc: &Document, s: &Sensitive, id: NodeId) -> bool {
     s.pattern_sources.iter().any(|src| *src == id || doc.is_ancestor(*src, id))

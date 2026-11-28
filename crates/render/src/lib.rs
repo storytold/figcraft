@@ -705,6 +705,8 @@ mod join_tests;
 #[cfg(test)]
 mod jpeg_sampling_tests;
 #[cfg(test)]
+mod large_doc_bench_tests;
+#[cfg(test)]
 mod large_image_tests;
 #[cfg(test)]
 mod lod_tests;
