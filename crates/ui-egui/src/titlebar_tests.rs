@@ -24,7 +24,7 @@ impl Ui {
     fn new(title_bar: TitleBar) -> Self {
         let mut app = FigApp::new(Session::new(), Box::new(NoServices));
         app.ui.title_bar = title_bar;
-        let mut u = Self { ctx: egui::Context::default(), app, time: 0.0, maximized: false, modifiers: egui::Modifiers::NONE };
+        let mut u = Self { ctx: crate::framework::headless_context(), app, time: 0.0, maximized: false, modifiers: egui::Modifiers::NONE };
         for _ in 0..3 {
             u.frame(vec![]);
         }
@@ -38,6 +38,7 @@ impl Ui {
         let mut input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)), time: Some(self.time), events, ..Default::default() };
         input.viewports.entry(ViewportId::ROOT).or_default().maximized = Some(self.maximized);
         let app = &mut self.app;
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();
         out.viewport_output.get(&ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default()

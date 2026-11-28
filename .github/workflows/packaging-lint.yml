@@ -24,6 +24,24 @@ jobs:
     with:
       extra-checks-script: packaging/check-app-specific.sh
 
+  freebsd-layout:
+    # The FreeBSD package layout, with stub binaries standing in for the build: RFC-0018 rule 1.9
+    # puts figcraft-cli's man pages and its bash, zsh and fish completions in it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: FreeBSD package layout (dry run)
+        run: |
+          CARGO_TARGET_DIR="$RUNNER_TEMP/figcraft-target" bash packaging/freebsd/package.sh --dry-run
+          listing="$(tar -tzf "$RUNNER_TEMP"/figcraft-target/freebsd-package/figcraft-*-freebsd-x86_64.tar.gz)"
+          for f in man/man1/figcraft-cli.1 share/bash-completion/completions/figcraft-cli \
+            share/zsh/site-functions/_figcraft-cli share/fish/vendor_completions.d/figcraft-cli.fish; do
+            grep -q "/$f$" <<<"$listing" || { echo "::error::$f is missing from the FreeBSD package"; exit 1; }
+          done
+
   windows-install-policy:
     timeout-minutes: 10
     name: Windows installation policy (no app build)

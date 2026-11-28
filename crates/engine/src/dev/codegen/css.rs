@@ -126,6 +126,16 @@ pub(super) fn css(doc: &Document, id: NodeId) -> String {
 /// The CSS declarations for `n`'s own look and size, one per line; `hug` leaves out the width
 /// and/or height (they follow the content). Bound variables become `var(--name, value)`.
 pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bool)) -> String {
+    css_decls_impl(doc, n, t, hug, false)
+}
+
+/// The declarations around an embedded vector image: its SVG owns shadows and layer blur, so
+/// only the markup wrapper omits those. Standalone CSS and ordinary shapes keep them.
+pub(crate) fn css_decls_for_markup(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bool)) -> String {
+    css_decls_impl(doc, n, t, hug, true)
+}
+
+fn css_decls_impl(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bool), vector_svg: bool) -> String {
     let px = |v: f64| format!("{}px", num(v));
     let mut out = String::new();
     let mut put = |key: &str, value: String| out.push_str(&format!("{key}: {value};\n"));
@@ -188,7 +198,12 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
         // One `background` with every visible fill as a layer, top first (a document's fills run
         // bottom to top, as the renderer paints them). CSS allows a plain colour only as the last
         // layer, so a solid above another fill becomes a one-colour gradient.
-        let visible: Vec<(usize, &figcraft_color::Paint)> = n.fills.iter().enumerate().filter(|(_, p)| p.visible).collect();
+        let visible: Vec<(usize, &figcraft_color::Paint)> = if matches!(n.kind, NodeKind::Vector { .. }) {
+            // The SVG carries the path's fills; an image's box must not get a rectangular one.
+            Vec::new()
+        } else {
+            n.fills.iter().enumerate().filter(|(_, p)| p.visible).collect()
+        };
         let layers: Vec<String> = visible
             .iter()
             .enumerate()
@@ -217,7 +232,7 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
     for (key, value) in css_borders(doc, n, t) {
         put(&key, value);
     }
-    effect_decls(n, &mut put);
+    effect_decls(n, &mut put, vector_svg && matches!(n.kind, NodeKind::Vector { .. }));
     if let NodeKind::Text(tx) = &n.kind {
         text_decls(doc, n, tx, t, &mut put);
     }
@@ -274,12 +289,14 @@ fn layout_decls(doc: &Document, n: &Node, l: &figcraft_doc::AutoLayout, t: &mut 
     }
 }
 
-/// Shadows and blurs of `n`.
-fn effect_decls(n: &Node, put: &mut impl FnMut(&str, String)) {
+/// Shadows and blurs of `n`. `svg_owned` leaves shadows and layer blur to the embedded SVG;
+/// backdrop filters stay in CSS because the self-contained asset has no outer page behind it.
+fn effect_decls(n: &Node, put: &mut impl FnMut(&str, String), svg_owned: bool) {
     let shadows: Vec<String> = n
         .effects
         .iter()
         .filter(|e| e.visible)
+        .filter(|e| !(svg_owned && matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_))))
         .filter_map(|e| match &e.kind {
             EffectKind::DropShadow(s) => {
                 Some(format!("{}px {}px {}px {}px {}", num(s.offset.0), num(s.offset.1), num(s.radius), num(s.spread), s.color.to_css()))
@@ -296,7 +313,7 @@ fn effect_decls(n: &Node, put: &mut impl FnMut(&str, String)) {
     for e in n.effects.iter().filter(|e| e.visible) {
         match e.kind {
             // CSS blurs are uniform: a progressive blur has no CSS equivalent and is left out.
-            EffectKind::LayerBlur(ref b) if !b.is_progressive() => put("filter", format!("blur({}px)", num(b.radius / 2.0))),
+            EffectKind::LayerBlur(ref b) if !svg_owned && !b.is_progressive() => put("filter", format!("blur({}px)", num(b.radius / 2.0))),
             EffectKind::BackgroundBlur(ref b) if !b.is_progressive() => put("backdrop-filter", format!("blur({}px)", num(b.radius / 2.0))),
             // CSS has no refraction: the frost is the nearest.
             EffectKind::Glass(ref g) => put("backdrop-filter", format!("blur({}px)", num(g.sanitized().frost / 2.0))),
@@ -374,6 +391,11 @@ fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tok
         TextDecoration::None => {}
         TextDecoration::Underline => put("text-decoration", "underline".into()),
         TextDecoration::Strikethrough => put("text-decoration", "line-through".into()),
+    }
+    match tx.position_of(s) {
+        figcraft_doc::TextPosition::None => {}
+        figcraft_doc::TextPosition::Superscript => put("vertical-align", "super".into()),
+        figcraft_doc::TextPosition::Subscript => put("vertical-align", "sub".into()),
     }
     decoration_decls(s, put);
     if tx.leading_trim == figcraft_doc::LeadingTrim::CapHeight {

@@ -24,6 +24,7 @@ use instance::{detach, make_slot, push_changes, remove_slot, reset_instance, res
 pub(crate) use instance::{swap_at, swap_instance};
 use props::{add_prop, bind_prop, delete_prop, edit_prop, set_props};
 pub(crate) use props::{apply_prop_bindings, check_prop_binding, describe_props};
+pub(crate) use variants::fit_set;
 use variants::{add_variant, combine, create_set};
 pub use variants::{can_add_variant, can_combine_variants, can_create_set};
 

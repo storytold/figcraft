@@ -122,6 +122,22 @@ fn one_interaction(trigger: Value, transition: Value, ms: u32) -> (Harness, Node
 }
 
 #[test]
+fn arrow_key_triggers_override_default_frame_navigation() {
+    // Skipping a frame distinguishes the configured action from default frame navigation.
+    for (name, key) in [("ArrowRight", Key::ArrowRight), ("ArrowLeft", Key::ArrowLeft), ("ArrowUp", Key::ArrowUp), ("ArrowDown", Key::ArrowDown)] {
+        let mut s = Session::new();
+        let a = frame(&mut s, "A", 0.0, 300.0, 400.0);
+        frame(&mut s, "B", 400.0, 300.0, 400.0);
+        let c = frame(&mut s, "C", 800.0, 300.0, 400.0);
+        on(&mut s, a, json!({"type": "keyPress", "key": name}), json!({"type": "navigate", "dest": c}), json!({"type": "instant"}), 0);
+        let mut u = Harness::new(s);
+        u.run("proto.present", json!({"start": a}));
+        u.key(pos2(720.0, 470.0), key);
+        assert_eq!(presenter(&u)["current"], json!(c), "{name}");
+    }
+}
+
+#[test]
 fn triggers_fire_on_their_gesture() {
     let instant = json!({"type": "instant"});
     let push_left = json!({"type": "push", "direction": "left"});

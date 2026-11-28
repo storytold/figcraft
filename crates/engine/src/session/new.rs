@@ -13,6 +13,7 @@ impl Session {
         Self {
             docs: Vec::new(),
             active: 0,
+            document_selection_revision: 0,
             clipboard: Clipboard::default(),
             default_props: Default::default(),
             prefs: Prefs::default(),

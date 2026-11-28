@@ -5,9 +5,20 @@ use super::{DocState, Document, EngineError, NodeId, Result, Session, Value, jso
 pub struct Forward {
     target: u64,
     shown: Option<u64>,
+    selection_revision: u64,
 }
 
 impl Session {
+    /// Explicit file or prototype selection keeps the selected tab in front after a targeted call.
+    pub(super) fn command_shows_document(command: &str) -> bool {
+        matches!(command, "file.new" | "file.open" | "doc.switch" | "doc.nextTab" | "doc.previousTab" | "proto.present" | "proto.preview")
+    }
+
+    /// Lets the UI distinguish explicit file selection from temporary request routing.
+    pub fn document_selection_revision(&self) -> u64 {
+        self.document_selection_revision
+    }
+
     /// The uid of open file `target`: its `id` (from `doc.list` or `document.inspect`) or its path.
     pub fn document_uid(&self, target: &Value) -> Result<u64> {
         let found = match target {
@@ -28,13 +39,14 @@ impl Session {
         if let Some(i) = self.docs.iter().position(|d| d.uid == uid) {
             self.active = i;
         }
-        Ok(Forward { target: uid, shown })
+        Ok(Forward { target: uid, shown, selection_revision: self.document_selection_revision })
     }
 
     /// Bring back the tab that was in front before [`Session::bring_forward`], unless the request
     /// itself moved the front to another open file (`file.open`, `doc.switch`…), as it would have.
     pub fn put_back(&mut self, f: Forward) {
-        let moved = self.docs.iter().any(|d| d.uid == f.target) && self.ds().ok().map(|d| d.uid) != Some(f.target);
+        let selected = self.document_selection_revision != f.selection_revision;
+        let moved = selected || (self.docs.iter().any(|d| d.uid == f.target) && self.ds().ok().map(|d| d.uid) != Some(f.target));
         if let Some(i) = f.shown.and_then(|u| self.docs.iter().position(|d| d.uid == u)).filter(|_| !moved) {
             self.active = i;
         }

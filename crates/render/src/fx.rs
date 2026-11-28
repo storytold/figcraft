@@ -242,6 +242,90 @@ pub fn tint(p: &mut Pixmap, color: [f32; 4]) {
     }
 }
 
+/// What [`tint`] makes of each alpha: the premultiplied pixel of `color` at that coverage.
+pub fn tints(color: [f32; 4]) -> [[u8; 4]; 256] {
+    let [r, g, b, a] = color;
+    let mut out = [[0u8; 4]; 256];
+    for (i, px) in out.iter_mut().enumerate() {
+        let alpha = i as f32 / 255.0 * a;
+        let q = |c: f32| (c * alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+        *px = [q(r), q(g), q(b), (alpha * 255.0).round().clamp(0.0, 255.0) as u8];
+    }
+    out
+}
+
+/// `dst` from the alpha of `src`, tinted (see [`tints`]): `dst`'s pixel (0, 0) is `src`'s pixel
+/// `at`; past `src`'s edges is empty.
+pub fn copy_alpha(src: &Pixmap, dst: &mut Pixmap, at: (i32, i32), tints: &[[u8; 4]; 256]) {
+    let (sw, sh, dw) = (i64::from(src.width()), i64::from(src.height()), dst.width() as usize);
+    let s = src.data().as_chunks::<4>().0;
+    for (y, row) in dst.data_mut().as_chunks_mut::<4>().0.chunks_mut(dw.max(1)).enumerate() {
+        let sy = y as i64 + i64::from(at.1);
+        for (x, px) in row.iter_mut().enumerate() {
+            let sx = x as i64 + i64::from(at.0);
+            let a = if (0..sw).contains(&sx) && (0..sh).contains(&sy) { s.get((sy * sw + sx) as usize).map_or(0, |p| p[3]) } else { 0 };
+            *px = tints.get(usize::from(a)).copied().unwrap_or_default();
+        }
+    }
+}
+
+/// Steps between two samples of [`enlarge_alpha`] (a power of two: weights are whole numbers).
+const LERP_STEPS: i64 = 256;
+
+/// Where on a line of `len` samples position `at` lies: the sample before it and how far on to
+/// the next it is, in [`LERP_STEPS`]; `None` further than a sample past either end.
+fn lerp_at(at: f64, len: usize) -> Option<(i64, u32)> {
+    // Rounded to a step first: positions a float's noise apart then weigh the same.
+    let steps = (at * LERP_STEPS as f64).round();
+    if !(steps.is_finite() && steps >= -(LERP_STEPS as f64) && steps <= (len as f64) * LERP_STEPS as f64) {
+        return None;
+    }
+    let steps = steps as i64;
+    Some((steps.div_euclid(LERP_STEPS), steps.rem_euclid(LERP_STEPS) as u32))
+}
+
+/// `dst` from the alpha of `src` drawn larger, between its samples (bilinear), tinted (see
+/// [`tints`]): `dst`'s pixel (0, 0) lies at position `at` among `src`'s pixel centres and each
+/// pixel on is `step` of a `src` pixel further. Past `src`'s edges is empty.
+pub fn enlarge_alpha(src: &Pixmap, dst: &mut Pixmap, at: (f64, f64), step: f64, tints: &[[u8; 4]; 256]) {
+    let (sw, sh, dw) = (src.width() as usize, src.height() as usize, dst.width() as usize);
+    if sw == 0 || sh == 0 || dw == 0 {
+        return;
+    }
+    let s = src.data().as_chunks::<4>().0;
+    let cols: Vec<Option<(i64, u32)>> = (0..dw).map(|x| lerp_at(at.0 + x as f64 * step, sw)).collect();
+    // One row of `src` between its samples, for every column of `dst`, in 1/256ths of 255.
+    let line = |y: i64, out: &mut [u32]| {
+        let row = usize::try_from(y).ok().filter(|y| *y < sh).and_then(|y| s.get(y * sw..(y + 1) * sw));
+        let a = |x: i64| row.and_then(|r| usize::try_from(x).ok().and_then(|x| r.get(x))).map_or(0, |p| u32::from(p[3]));
+        for (o, c) in out.iter_mut().zip(&cols) {
+            *o = c.map_or(0, |(x, t)| a(x) * (LERP_STEPS as u32 - t) + a(x + 1) * t);
+        }
+    };
+    let (mut top, mut bottom) = (vec![0u32; dw], vec![0u32; dw]);
+    let mut held: Option<i64> = None;
+    for (y, row) in dst.data_mut().as_chunks_mut::<4>().0.chunks_mut(dw).enumerate() {
+        let Some((sy, t)) = lerp_at(at.1 + y as f64 * step, sh) else {
+            row.fill([0; 4]);
+            continue;
+        };
+        if held != Some(sy) {
+            if held == Some(sy - 1) {
+                std::mem::swap(&mut top, &mut bottom);
+            } else {
+                line(sy, &mut top);
+            }
+            line(sy + 1, &mut bottom);
+            held = Some(sy);
+        }
+        let half = (LERP_STEPS * LERP_STEPS / 2) as u32;
+        for ((px, a), b) in row.iter_mut().zip(&top).zip(&bottom) {
+            let v = (a * (LERP_STEPS as u32 - t) + b * t + half) / (LERP_STEPS * LERP_STEPS) as u32;
+            *px = tints.get(v.min(255) as usize).copied().unwrap_or_default();
+        }
+    }
+}
+
 /// Invert the alpha (premultiplied white with alpha 1-a): used for inner shadows.
 pub fn invert_alpha(p: &mut Pixmap) {
     for px in p.data_mut().as_chunks_mut::<4>().0 {
@@ -257,6 +341,22 @@ pub fn mask_by(p: &mut Pixmap, m: &Pixmap, invert: bool) {
         let ma = if invert { 255 - ma } else { ma };
         for c in px.iter_mut() {
             *c = ((u32::from(*c) * ma + 127) / 255) as u8;
+        }
+    }
+}
+
+/// Hide the drop shadow `p` behind a layer that covers `cover` and draws `over` (alpha, times
+/// `opacity`) on top of it, all the same size: a pixel keeps the part of the shadow outside the
+/// cover, scaled up by what the layer lets through there. The layer's own pixel already shows its
+/// share of a pixel along its edge, so cutting that share from the shadow as well would count the
+/// edge twice: a light line where the edge lies over the shadow.
+pub fn hide_behind(p: &mut Pixmap, cover: &Pixmap, over: &Pixmap, opacity: f32) {
+    let alpha = |px: &[u8]| f32::from(px.get(3).copied().unwrap_or(0)) / 255.0;
+    for ((px, c), o) in p.data_mut().as_chunks_mut::<4>().0.iter_mut().zip(cover.data().chunks_exact(4)).zip(over.data().chunks_exact(4)) {
+        let through = 1.0 - alpha(o) * opacity;
+        let keep = if through > 0.0 { ((1.0 - alpha(c)) / through).min(1.0) } else { 0.0 };
+        for v in px.iter_mut() {
+            *v = (f32::from(*v) * keep).round() as u8;
         }
     }
 }

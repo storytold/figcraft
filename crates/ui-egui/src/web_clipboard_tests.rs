@@ -38,7 +38,7 @@ impl Page {
         let mut s = Session::new();
         let r = s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
         s.execute("select.set", &json!({"ids": [r["id"]]})).unwrap();
-        let ctx = egui::Context::default();
+        let ctx = crate::framework::headless_context();
         let app = FigApp::new(s, Box::new(Browser(ctx.clone())));
         let mut p = Self { ctx, app, time: 0.0, clipboard: "text copied in another app".into() };
         for _ in 0..3 {
@@ -59,6 +59,7 @@ impl Page {
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
         let app = &mut self.app;
         let mut then = Some(then);
+        app.before_input(&self.ctx);
         let mut out = self.ctx.run_ui(input, |ui| {
             app.ui(ui);
             if let Some(f) = then.take() {
@@ -219,7 +220,7 @@ fn copy_as_png_puts_an_image_on_the_clipboard() {
 
 #[test]
 fn a_mismatched_image_buffer_is_dropped() {
-    let ctx = egui::Context::default();
+    let ctx = crate::framework::headless_context();
     for (w, h, rgba) in [(4, 4, &[0u8; 10][..]), (u32::MAX, u32::MAX, &[][..])] {
         let mut out = ctx.run_ui(RawInput::default(), |ui| egui_copy_png(ui.ctx(), w, h, rgba));
         out.textures_delta.clear();
@@ -252,7 +253,7 @@ fn a_paste_event_its_own_text_never_triggers_the_synchronous_text_read() {
     let mut s = Session::new();
     s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
     let mut p = Page {
-        ctx: egui::Context::default(),
+        ctx: crate::framework::headless_context(),
         app: FigApp::new(s, Box::new(CountingReads { reads: reads.clone() })),
         time: 0.0,
         clipboard: String::new(),

@@ -21,8 +21,8 @@ figcraft-collab-net = { workspace = true }
 figcraft-text = { workspace = true }
 # The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
 # The page command API (storytold/craft-libs#413): the request plumbing behind window.figcraft.
-craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "ea9407b3500488bd8af71eb0f1b950306315bf7e", version = "0.1.0" }
-craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "ea9407b3500488bd8af71eb0f1b950306315bf7e", version = "0.1.0" }
+craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
+craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
 base64 = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }

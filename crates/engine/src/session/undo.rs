@@ -22,6 +22,8 @@ struct GroupCheckpoint {
     journal_len: usize,
     /// Live events buffered before the group: a failed one drops only its own.
     pending_events: usize,
+    ui_requests: usize,
+    document_selection_revision: u64,
     last_command: Option<(String, Value)>,
 }
 
@@ -341,6 +343,8 @@ impl Session {
             active: self.active,
             journal_len: self.journal.len(),
             pending_events: self.pending_events.len(),
+            ui_requests: self.ui_requests.len(),
+            document_selection_revision: self.document_selection_revision,
             last_command: self.last_command.clone(),
         };
         // The steps inside are dropped again below, so they mustn't push the oldest ones out.
@@ -381,6 +385,9 @@ impl Session {
         self.active = before.active;
         self.journal.truncate(before.journal_len);
         self.pending_events.truncate(before.pending_events);
+        // UI requests are deferred group effects, just like collaboration events.
+        self.ui_requests.truncate(before.ui_requests);
+        self.document_selection_revision = before.document_selection_revision;
         if restore_last_command {
             self.last_command = before.last_command;
         }
