@@ -196,6 +196,41 @@ mod tests {
         assert!(out.len() < 3 * bomb.len(), "{}", out.len());
     }
 
+    /// Every tool and result field the instructions and prompts name exists: an agent told to call a
+    /// renamed tool, or to read a field that was renamed, follows a workflow that points at nothing.
+    #[test]
+    fn the_tools_and_fields_the_instructions_and_prompts_name_exist() {
+        let tools = crate::tool_definitions();
+        // Every name a tool's or command's documentation gives: its fields and arguments.
+        let documented: String = tools
+            .iter()
+            .map(Value::to_string)
+            .chain(figcraft_engine::all_commands().iter().map(|c| format!("{} {}", c.id, c.params)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let words: std::collections::HashSet<&str> =
+            documented.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.')).map(|w| w.trim_matches('.')).collect();
+        let tool_names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        let prompt_names: Vec<&str> = PROMPTS.iter().map(|p| p.name).collect();
+        let texts = std::iter::once((crate::INSTRUCTIONS, &[][..])).chain(PROMPTS.iter().map(|p| (p.template, p.args)));
+        let (mut tools_named, mut fields_named) = (0, 0);
+        for (text, args) in texts {
+            for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).filter(|w| w.contains('_')) {
+                tools_named += 1;
+                let known = tool_names.contains(&word) || prompt_names.contains(&word) || args.iter().any(|a| a.name == word);
+                assert!(known, "`{word}` is neither a tool, a prompt nor one of the prompt's arguments");
+            }
+            for quoted in text.split('`').skip(1).step_by(2) {
+                if quoted.is_empty() || !quoted.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+                    continue;
+                }
+                fields_named += 1;
+                assert!(words.contains(quoted), "`{quoted}` is in no tool's or command's documentation");
+            }
+        }
+        assert!(tools_named > 10 && fields_named > 3, "the check found the names ({tools_named}, {fields_named})");
+    }
+
     /// Every command the server's instructions and the prompts name exists: an agent told to run a
     /// renamed or misspelt one gets an error instead of the workflow.
     #[test]
