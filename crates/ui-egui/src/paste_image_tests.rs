@@ -206,7 +206,7 @@ fn a_copied_image_file_pastes_its_contents_even_when_the_clipboard_offers_a_file
     let doc = w.app.session.doc().unwrap();
     assert_eq!(w.named("Pasted image"), 1);
     let stored = doc.images.values().next().expect("an image on the canvas");
-    assert_eq!(stored.bytes.as_slice(), std::fs::read(file).unwrap());
+    assert_eq!(stored.bytes().as_deref().map(Vec::as_slice), Some(std::fs::read(file).unwrap().as_slice()));
 }
 
 #[test]

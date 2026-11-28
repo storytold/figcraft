@@ -73,7 +73,7 @@ fn an_image_that_hashes_to_its_key_applies() {
     apply_doc(&mut doc, &put(&sha256_hex(bytes), 2, 1, bytes)).expect("an honest image must apply unchanged");
     let img = doc.images.get(&sha256_hex(bytes)).expect("the image is stored");
     assert_eq!((img.width, img.height), (2, 1));
-    assert_eq!(img.bytes.as_slice(), bytes);
+    assert_eq!(img.bytes().as_deref().map(Vec::as_slice), Some(bytes));
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn an_image_cannot_be_replaced_under_its_key() {
     let mut doc = Document::new("t");
     apply_doc(&mut doc, &put("img1", 2, 1, b"the first bytes")).unwrap();
     assert!(apply_doc(&mut doc, &put("img1", 2, 1, b"other bytes")).is_err(), "replaced under the same key");
-    assert_eq!(doc.images.get("img1").map(|i| i.bytes.as_slice()), Some(b"the first bytes".as_slice()));
+    assert_eq!(doc.images.get("img1").and_then(|i| i.bytes()).as_deref().map(Vec::as_slice), Some(b"the first bytes".as_slice()));
     apply_doc(&mut doc, &put("img1", 2, 1, b"the first bytes")).expect("the same image again is fine (undo, redo)");
 }
 
@@ -210,7 +210,11 @@ fn a_restart_replays_past_a_logged_image_replacement() {
         r.replay(j).expect("the log replays");
     }
     assert_eq!(r.seq(), 3, "every batch counts");
-    assert_eq!(r.document().images.get("img1").map(|i| i.bytes.as_slice()), Some(b"the first bytes".as_slice()), "the replacement is left out");
+    assert_eq!(
+        r.document().images.get("img1").and_then(|i| i.bytes()).as_deref().map(Vec::as_slice),
+        Some(b"the first bytes".as_slice()),
+        "the replacement is left out"
+    );
     assert!(r.document().images.contains_key(&sha256_hex(good)), "the edit after it is kept");
 }
 
@@ -233,7 +237,7 @@ fn an_image_in_use_cannot_be_removed() {
     let remove = Change::Remove { entry: Entry::Image("img1".into()) };
     assert!(apply_doc(&mut doc, &remove).is_err(), "removed while a layer shows it");
     assert!(apply_doc(&mut doc, &put("img1", 2, 1, b"other bytes")).is_err());
-    assert_eq!(doc.images.get("img1").map(|i| i.bytes.as_slice()), Some(b"the first bytes".as_slice()));
+    assert_eq!(doc.images.get("img1").and_then(|i| i.bytes()).as_deref().map(Vec::as_slice), Some(b"the first bytes".as_slice()));
 }
 
 /// A batch that first stops using an image, then removes it (the order a diff makes), applies.

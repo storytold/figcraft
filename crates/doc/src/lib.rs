@@ -19,6 +19,7 @@ pub mod facilitation;
 pub mod geometry;
 pub mod handoff;
 pub mod ids;
+mod image_data;
 pub mod library;
 pub mod node;
 pub mod props;
@@ -41,6 +42,7 @@ pub use facilitation::*;
 pub use figcraft_color as color;
 pub use figcraft_geom as geom;
 pub use handoff::*;
+pub use image_data::{ImageData, ImageLoader};
 pub use library::*;
 pub use node::*;
 pub use props::*;
@@ -164,34 +166,6 @@ impl IdAlloc {
             self.next = next;
         }
         id
-    }
-}
-
-/// Raw image bytes (encoded PNG/JPEG/…) kept by content hash.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ImageData {
-    pub bytes: Arc<Vec<u8>>,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl ImageData {
-    /// Largest encoded image a document takes from outside: an image member of a `.fig` or
-    /// `.sketch` file, an image file a REST import reads, an image entry from a live session.
-    pub const MAX_BYTES: u64 = 256 * 1024 * 1024;
-
-    /// Whether `key` claims to be a content hash: 64 hex digits, the shape of the sha256 hex
-    /// `figcraft_format::image_hash` makes. Bytes stored under such a key must hash to it.
-    pub fn claims_content_hash(key: &str) -> bool {
-        key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit())
-    }
-
-    /// Whether `key` can name an image: 1–128 ASCII letters, digits, `-` and `_` (content hashes,
-    /// the svg importer's FNV keys, the REST importer's `rest-image-missing` placeholder). A key
-    /// becomes an archive member name (`images/<key>`) when the file is saved, so only these are
-    /// read back from a file or taken from a collaborator: never `/`, `.` or other path text.
-    pub fn is_valid_key(key: &str) -> bool {
-        (1..=128).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     }
 }
 

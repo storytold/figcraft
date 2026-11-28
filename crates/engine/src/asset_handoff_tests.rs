@@ -141,7 +141,7 @@ fn an_image_the_file_lacks_is_skipped_with_a_reason() {
     let id = place(&mut s, &image_bytes(image::ImageFormat::Png, 8));
     let doc = s.doc_mut().unwrap();
     let key = doc.images.keys().next().unwrap().clone();
-    doc.images.insert(key, figcraft_doc::ImageData { bytes: Arc::new(vec![]), width: 0, height: 0 });
+    doc.images.insert(key, figcraft_doc::ImageData::new(Arc::new(vec![]), 0, 0));
     let v = export(&mut s, json!({"ids": [id]}));
     assert!(assets(&v).is_empty());
     assert_eq!(v["skipped"][0]["id"], id);

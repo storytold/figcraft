@@ -168,7 +168,7 @@ fn image_bombs_are_refused() {
     bitmap["_class"] = json!("bitmap");
     bitmap["image"] = json!({"_class": "MSJSONFileReference", "_ref_class": "MSImageData", "_ref": "images/bomb.png"});
     let (doc, _) = open_with(vec![artboard("A", "Board", 0.0, 0.0, 100.0, 100.0, vec![bitmap])], &[("images/bomb.png", &png)]);
-    let total: usize = doc.images.values().map(|i| i.bytes.len()).sum();
+    let total: usize = doc.images.values().map(|i| i.byte_len() as usize).sum();
     assert!(total < 1024 * 1024, "{total} image bytes kept");
 }
 

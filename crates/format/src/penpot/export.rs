@@ -895,17 +895,16 @@ impl<'a> Exporter<'a> {
     fn image_fill(&mut self, hash: &str, keep_aspect: bool) -> Option<Value> {
         if !self.media.contains_key(hash) {
             let data = self.doc.images.get(hash)?;
-            let (mtype, ext, bytes) = match craft_image_codecs::detect(&data.bytes) {
-                Some(craft_image_codecs::Format::Png) => ("image/png", "png", data.bytes.to_vec()),
-                Some(craft_image_codecs::Format::Jpeg) => ("image/jpeg", "jpg", data.bytes.to_vec()),
-                Some(craft_image_codecs::Format::WebP) => ("image/webp", "webp", data.bytes.to_vec()),
-                Some(craft_image_codecs::Format::Gif) => ("image/gif", "gif", data.bytes.to_vec()),
+            let raw = data.bytes()?;
+            let (mtype, ext, bytes) = match craft_image_codecs::detect(&raw) {
+                Some(craft_image_codecs::Format::Png) => ("image/png", "png", raw.to_vec()),
+                Some(craft_image_codecs::Format::Jpeg) => ("image/jpeg", "jpg", raw.to_vec()),
+                Some(craft_image_codecs::Format::WebP) => ("image/webp", "webp", raw.to_vec()),
+                Some(craft_image_codecs::Format::Gif) => ("image/gif", "gif", raw.to_vec()),
                 _ => {
-                    let decoded = craft_image_codecs::decode_with(
-                        &data.bytes,
-                        &craft_image_codecs::DecodeOptions { keep_orientation: true, ..Default::default() },
-                    )
-                    .ok()?;
+                    let decoded =
+                        craft_image_codecs::decode_with(&raw, &craft_image_codecs::DecodeOptions { keep_orientation: true, ..Default::default() })
+                            .ok()?;
                     let rgba = decoded.converted(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
                     let png =
                         craft_image_codecs::encode(&rgba, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).ok()?;

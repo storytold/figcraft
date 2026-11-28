@@ -191,19 +191,38 @@ fn save_to(s: &mut Session, path: Option<String>) -> Result<Value> {
     {
         Arc::make_mut(&mut snapshot.doc).name = file_stem(path);
     }
-    let bytes = snapshot.encode_at(path.as_deref().or(snapshot.path.as_deref()))?;
     let Some(path) = path else {
+        let bytes = snapshot.encode_at(snapshot.path.as_deref())?;
         // The download can still be refused: the caller marks the file saved once it was delivered.
         let name = format!("{}.figcraft", ds.doc.name);
         return Ok(json!({"name": name, "bytes": bytes.len(), "data": base64::engine::general_purpose::STANDARD.encode(&bytes)}));
     };
-    write(&path, &bytes)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let bytes_len = {
+        let mut doc_to_save = (*snapshot.doc).clone();
+        let opening =
+            doc_to_save.pages.iter().copied().find(|&p| matches!(doc_to_save.get(p).map(|n| &n.kind), Ok(NodeKind::Page { opening: true, .. })));
+        doc_to_save.current_page = Some(opening.unwrap_or(snapshot.page));
+        crate::library::relate_links(&mut doc_to_save, &path);
+        let thumb = thumbnail(&doc_to_save);
+        let live_keys = figcraft_format::collect_live_image_keys(&doc_to_save, &snapshot.versions, &snapshot.branches);
+        let extra_stores = ds.pin_lazy_images_before_replace(&path, &live_keys);
+        let written =
+            crate::file_access::save_native_file(&path, &doc_to_save, thumb.as_deref(), &snapshot.versions, &snapshot.branches, &extra_stores)?;
+        usize::try_from(written).unwrap_or(usize::MAX)
+    };
+    #[cfg(target_arch = "wasm32")]
+    let bytes_len = {
+        let bytes = snapshot.encode_at(Some(&path))?;
+        write(&path, &bytes)?;
+        bytes.len()
+    };
     ds.doc = snapshot.doc;
     ds.path = Some(path.clone());
     ds.note_on_disk();
     mark_saved(s, &json!({}))?;
     remember(s, &path);
-    Ok(json!({"path": path, "bytes": bytes.len()}))
+    Ok(json!({"path": path, "bytes": bytes_len}))
 }
 
 /// The file of the active tab (with its branch tabs) now matches what was written or delivered.

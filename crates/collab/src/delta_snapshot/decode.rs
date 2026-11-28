@@ -416,7 +416,7 @@ fn apply_meta(doc: &mut Document, mut meta: WireMeta) {
         let Ok(img) = validate_image_base64(&wi.key, wi.width, wi.height, &wi.bytes) else {
             continue;
         };
-        if doc.images.get(&wi.key).is_some_and(|old| old.bytes != img.bytes) {
+        if doc.images.get(&wi.key).is_some_and(|old| old.bytes() != img.bytes()) {
             continue;
         }
         doc.images.insert(wi.key, img);

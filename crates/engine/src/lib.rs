@@ -422,6 +422,8 @@ mod keymap_tests;
 #[cfg(test)]
 mod layout_suggest_tests;
 #[cfg(test)]
+mod lazy_image_save_tests;
+#[cfg(test)]
 mod library_asset_counts_tests;
 #[cfg(test)]
 mod library_beacon_tests;

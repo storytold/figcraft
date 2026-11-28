@@ -76,7 +76,7 @@ fn colour_at(s: &Session, id: figcraft_doc::NodeId, x: u32, y: u32) -> [i32; 3] 
         figcraft_color::PaintKind::Image(paint) => paint.image.clone(),
         other => panic!("not an image fill: {other:?}"),
     };
-    let picture = image::load_from_memory(&doc.images[&hash].bytes).unwrap().to_rgb8();
+    let picture = image::load_from_memory(&doc.images[&hash].bytes().unwrap()).unwrap().to_rgb8();
     let mut sum = [0i32; 3];
     for dy in 0..5 {
         for dx in 0..5 {

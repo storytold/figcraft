@@ -23,7 +23,7 @@ fn checkerboard_doc() -> (Document, NodeId, NodeId) {
     }
     let mut d = Document::new("downscaled");
     let page = d.first_page().unwrap();
-    d.images.insert("fine".into(), ImageData { bytes: Arc::new(encode_png(&img).unwrap()), width: SIDE, height: SIDE });
+    d.images.insert("fine".into(), ImageData::new(Arc::new(encode_png(&img).unwrap()), SIDE, SIDE));
     let r = d.create(page, NodeKind::Rectangle, "Image", 0.0, 0.0, f64::from(SIDE), f64::from(SIDE)).unwrap();
     d.get_mut(r).unwrap().fills = vec![Paint::image("fine", ImageScaleMode::Fill)];
     (d, page, r)
@@ -94,7 +94,7 @@ fn image_doc(key: &str, img: &Pixmap, mode: ImageScaleMode) -> (Document, NodeId
     let (w, h) = (img.width(), img.height());
     let mut d = Document::new("downscaled");
     let page = d.first_page().unwrap();
-    d.images.insert(key.into(), ImageData { bytes: Arc::new(encode_png(img).unwrap()), width: w, height: h });
+    d.images.insert(key.into(), ImageData::new(Arc::new(encode_png(img).unwrap()), w, h));
     let r = d.create(page, NodeKind::Rectangle, "Image", 0.0, 0.0, f64::from(w), f64::from(h)).unwrap();
     d.get_mut(r).unwrap().fills = vec![Paint::image(key, mode)];
     (d, page)

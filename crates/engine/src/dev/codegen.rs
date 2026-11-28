@@ -373,7 +373,7 @@ fn visible_fills(n: &Node) -> impl DoubleEndedIterator<Item = (usize, &Paint)> {
 /// hold the picture, as CSS writes it.
 fn image_asset(doc: &Document, image: &ImagePaint) -> (String, &'static str) {
     crate::asset_handoff::image_file(doc, &image.image)
-        .map_or_else(|_| ("image".to_string(), "png"), |(_, hash, ext)| (crate::asset_handoff::file_stem(&hash).to_string(), ext))
+        .map_or_else(|_| ("image".to_string(), "png"), |h| (crate::asset_handoff::file_stem(&h.hash).to_string(), h.ext))
 }
 
 /// A `//` line at `pad` for each visible pattern fill: a pattern's cells are layers, which no native
@@ -1209,7 +1209,7 @@ mod tests {
     fn photo_under_overlay(s: &mut Session, kind: &str, mode: figcraft_color::ImageScaleMode) -> (NodeId, String) {
         let bytes = b"\x89PNG\r\n\x1a\nphoto".to_vec();
         let hash = figcraft_format::image_hash(&bytes);
-        let data = figcraft_doc::ImageData { bytes: std::sync::Arc::new(bytes), width: 4, height: 3 };
+        let data = figcraft_doc::ImageData::new(std::sync::Arc::new(bytes), 4, 3);
         s.doc_mut().unwrap().images.insert(hash.clone(), data);
         let mut overlay = figcraft_color::Paint::solid(Color::BLACK);
         overlay.opacity = 0.5;

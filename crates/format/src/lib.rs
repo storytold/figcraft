@@ -18,16 +18,24 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod fig;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod image_store;
 pub mod jpeg;
 pub mod library;
 pub mod penpot;
 pub mod raw;
 pub mod rest;
 pub mod sketch;
+#[cfg(not(target_arch = "wasm32"))]
+mod streaming_save;
 pub mod thumbnail;
 
 pub use density::{pixel_density, placed_size};
+#[cfg(not(target_arch = "wasm32"))]
+pub use image_store::{DEFAULT_ENCODED_CACHE_BYTES, ZipImageStore};
 pub use library::{is_valid_library_id, read_library, read_library_within};
+#[cfg(not(target_arch = "wasm32"))]
+pub use streaming_save::{collect_live_image_keys, save_file_with_history};
 
 mod density;
 
@@ -65,11 +73,11 @@ pub struct Version {
     pub time: u64,
     /// Saved automatically (a checkpoint) rather than by the user.
     pub auto: bool,
-    snapshot: Snapshot,
+    pub(crate) snapshot: Snapshot,
 }
 
 #[derive(Clone, Debug)]
-enum Snapshot {
+pub(crate) enum Snapshot {
     /// Saved in this session (or already read).
     Doc(Arc<Document>),
     /// As read from a file: its `document.json`-style JSON, parsed on first use, and the images
@@ -181,7 +189,7 @@ pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32
     let bytes = developed_if_raw(bytes)?;
     let (w, h) = stored_dimensions(&bytes).map_err(|e| FormatError::Corrupt(format!("unsupported image: {e}")))?;
     let hash = image_hash(&bytes);
-    doc.images.insert(hash.clone(), ImageData { bytes: Arc::new(bytes), width: w, height: h });
+    doc.images.insert(hash.clone(), ImageData::new(Arc::new(bytes), w, h));
     Ok((hash, w, h))
 }
 
@@ -202,13 +210,13 @@ fn developed_if_raw(bytes: Vec<u8>) -> Result<Vec<u8>, FormatError> {
 /// Image bytes with their pixel size (0×0 when they can't be decoded).
 pub(crate) fn image_data(data: Vec<u8>) -> ImageData {
     let (w, h) = stored_dimensions(&data).unwrap_or((0, 0));
-    ImageData { bytes: Arc::new(data), width: w, height: h }
+    ImageData::new(Arc::new(data), w, h)
 }
 
 /// The image hashes a `document.json` lists in its `imageIndex` (`None` without one).
 type ImageIndex = Option<BTreeSet<String>>;
 
-fn native_image_index(doc: &Document) -> Vec<craft_figcraft_format::ImageIndexEntry> {
+pub(crate) fn native_image_index(doc: &Document) -> Vec<craft_figcraft_format::ImageIndexEntry> {
     doc.images
         .iter()
         .map(|(hash, image)| craft_figcraft_format::ImageIndexEntry { hash: hash.clone(), width: image.width, height: image.height })
@@ -221,7 +229,7 @@ fn native_image_index(doc: &Document) -> Vec<craft_figcraft_format::ImageIndexEn
 struct Finite<S>(S);
 
 /// Serializes a value through a [`Finite`] adapter around the serializer it is written with.
-struct FiniteValue<'a, T: ?Sized>(&'a T);
+pub(crate) struct FiniteValue<'a, T: ?Sized>(pub(crate) &'a T);
 
 impl<T: ?Sized + Serialize> Serialize for FiniteValue<'_, T> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -490,7 +498,8 @@ pub fn save_bytes_with_history(
     let branch_images = branches.iter().flat_map(|b| [&b.base.images, &b.head.images].into_iter().chain(b.versions.iter().map(Version::images)));
     for (hash, img) in std::iter::once(&doc.images).chain(versions.iter().map(Version::images)).chain(branch_images).flatten() {
         if written.insert(hash) {
-            put(&mut z, &format!("images/{hash}"), stored, img.bytes.as_slice())?;
+            let bytes = img.bytes().ok_or_else(|| FormatError::Io(format!("images/{hash}: image data unavailable in backing archive")))?;
+            put(&mut z, &format!("images/{hash}"), stored, bytes.as_slice())?;
         }
     }
     if let Some(t) = thumbnail_png {
@@ -867,11 +876,11 @@ fn read_branches(
     out
 }
 
-/// Save atomically: write a staging file next to `path`, then rename over it.
+/// Save atomically: stream to a sibling staging file next to `path`, then rename over it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_file(doc: &Document, path: &std::path::Path, thumbnail_png: Option<&[u8]>) -> Result<(), FormatError> {
-    let bytes = save_bytes(doc, thumbnail_png)?;
-    write_file_atomic(path, &bytes).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))
+    save_file_with_history(doc, path, thumbnail_png, &[], &[], &[])?;
+    Ok(())
 }
 
 /// Write `bytes` to `path` through a staging file and one atomic rename, so a reader of `path`
@@ -921,10 +930,127 @@ pub fn write_file_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Resul
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "no free staging name next to the file"))
 }
 
+/// Extract `(hash -> (width, height))` from the `imageIndex` array in `document.json` without
+/// deserializing the rest of the document.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_file(path: &std::path::Path) -> Result<(Document, Vec<String>), FormatError> {
-    let mut file = std::fs::File::open(path).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
+fn read_image_index_dims(text: &str) -> BTreeMap<String, (u32, u32)> {
+    #[derive(Deserialize)]
+    struct Entry {
+        #[serde(default)]
+        hash: String,
+        #[serde(default)]
+        width: u32,
+        #[serde(default)]
+        height: u32,
+    }
+    struct MapVisitor;
+    impl<'de> serde::de::Visitor<'de> for MapVisitor {
+        type Value = BTreeMap<String, (u32, u32)>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a FigCraft document object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut m: A) -> Result<Self::Value, A::Error> {
+            let mut dims = BTreeMap::new();
+            while let Some(k) = m.next_key::<String>()? {
+                if k == "imageIndex" {
+                    if let Ok(entries) = m.next_value::<Vec<Entry>>() {
+                        for e in entries {
+                            if !e.hash.is_empty() {
+                                dims.insert(e.hash, (e.width, e.height));
+                            }
+                        }
+                    }
+                } else {
+                    m.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
+            Ok(dims)
+        }
+    }
+    struct OnlyDims(BTreeMap<String, (u32, u32)>);
+    impl<'de> Deserialize<'de> for OnlyDims {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_map(MapVisitor).map(Self)
+        }
+    }
+    serde_json::from_str::<OnlyDims>(text).map(|d| d.0).unwrap_or_default()
+}
+
+/// Lightweight `NativeArchive` adapter around an owned `zip::ZipArchive<File>` so the metadata
+/// pass can share the same open file handle that is then handed to [`ZipImageStore`].
+#[cfg(not(target_arch = "wasm32"))]
+struct LocalZipArchive(zip::ZipArchive<std::fs::File>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl craft_figcraft_format::NativeArchive for LocalZipArchive {
+    fn contains(&self, name: &str) -> bool {
+        self.0.index_for_name(name).is_some()
+    }
+    fn names(&self) -> Vec<String> {
+        self.0.file_names().map(str::to_owned).collect()
+    }
+    fn declared_size(&mut self, name: &str) -> Option<u64> {
+        self.0.index_for_name(name).and_then(|i| self.0.by_index_raw(i).ok().map(|f| f.size()))
+    }
+    fn compressed_size(&mut self, name: &str) -> Option<u64> {
+        self.0.index_for_name(name).and_then(|i| self.0.by_index_raw(i).ok().map(|f| f.compressed_size()))
+    }
+    fn read_member(&mut self, name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, craft_zip::Error> {
+        let Some(index) = self.0.index_for_name(name) else {
+            return Ok(None);
+        };
+        let file = self.0.by_index(index).map_err(|e| craft_zip::Error::Entry { name: name.to_owned(), msg: e.to_string() })?;
+        if file.size() > max_bytes {
+            return Err(craft_zip::Error::EntryTooLarge { name: name.to_owned(), limit: max_bytes });
+        }
+        let mut bytes = Vec::new();
+        file.take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|e| craft_zip::Error::Entry { name: name.to_owned(), msg: e.to_string() })?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(craft_zip::Error::EntryTooLarge { name: name.to_owned(), limit: max_bytes });
+        }
+        Ok(Some(bytes))
+    }
+}
+
+/// Whether `file` is a native `.figcraft` ZIP archive (contains `document.json` and is not a
+/// `.fig` or `.sketch` ZIP). Rewinds `file` to the start before returning.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_native_archive_file(file: &mut std::fs::File) -> Result<bool, FormatError> {
+    file.seek(SeekFrom::Start(0)).map_err(io_err)?;
+    let mut magic = [0u8; 4];
+    let n = file.read(&mut magic).map_err(io_err)?;
+    file.seek(SeekFrom::Start(0)).map_err(io_err)?;
+    if n < 4 || &magic != b"PK\x03\x04" {
+        return Ok(false);
+    }
+    let is_native = match zip::ZipArchive::new(&mut *file) {
+        Ok(archive) => {
+            archive.index_for_name("document.json").is_some()
+                && archive.index_for_name("canvas.fig").is_none()
+                && archive.index_for_name("meta.json").is_none()
+        }
+        Err(_) => false,
+    };
+    file.seek(SeekFrom::Start(0)).map_err(io_err)?;
+    Ok(is_native)
+}
+
+/// Read a `.figcraft` file from disk, indexing all `images/` members lazily through a bounded
+/// encoded-byte LRU cache so archives with >4 GiB of images open without dropping images or
+/// loading them all into memory (#1313).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_file_with_versions(path: &std::path::Path) -> Result<Loaded, FormatError> {
+    let file = std::fs::File::open(path).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
     let archive_len = file.metadata().map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?.len();
+    load_file_from(path, file, archive_len, DEFAULT_ENCODED_CACHE_BYTES)
+}
+
+/// [`load_file_with_versions`] from an already-opened file handle with a custom encoded-byte
+/// LRU cache budget.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_file_from(path: &std::path::Path, mut file: std::fs::File, archive_len: u64, cache_bytes: u64) -> Result<Loaded, FormatError> {
     let mut first = None;
     let mut chunk = [0u8; 8192];
     loop {
@@ -941,11 +1067,108 @@ pub fn load_file(path: &std::path::Path) -> Result<(Document, Vec<String>), Form
     if first == Some(b'{') {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
-        return load_bytes(&bytes);
+        return load_bytes_with_versions(&bytes);
     }
-    let mut archive = craft_figcraft_format::SeekArchive::open(file, u64::MAX).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-    let loaded = load_archive(&mut archive, IMAGE_BUDGET, MAX_UNPACKED, archive_len)?;
-    Ok((loaded.doc, loaded.issues))
+    let archive = zip::ZipArchive::new(file).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let z = LocalZipArchive(archive);
+    load_archive_lazy(path, z, MAX_UNPACKED, archive_len, cache_bytes)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_archive_lazy(path: &std::path::Path, mut z: LocalZipArchive, total: u64, archive_len: u64, cache_bytes: u64) -> Result<Loaded, FormatError> {
+    use craft_figcraft_format::NativeArchive as _;
+
+    let packed = z.compressed_size("document.json").unwrap_or(0);
+    let limit = document_limit(packed, archive_len);
+    let mut unpacked = Unpacked::new(total);
+    let text = String::from_utf8(unpacked.read(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let (mut doc, mut issues, own_images) = parse_json(&text)?;
+    let index_dims = read_image_index_dims(&text);
+
+    // Collect image member metadata (names + declared sizes) before handing the archive to ZipImageStore.
+    let mut member_entries: Vec<(String, u64)> = Vec::new();
+    let mut unread: Vec<(String, FormatError)> = Vec::new();
+    let mut hashes: Vec<String> =
+        z.names().into_iter().filter_map(|n| n.strip_prefix("images/").map(str::to_owned)).filter(|h| !h.is_empty()).collect();
+    hashes.sort_by_key(|h| !own_images.as_ref().is_some_and(|o| o.contains(h)));
+    for hash in hashes {
+        if !ImageData::is_valid_key(&hash) {
+            unread.push((hash, FormatError::Corrupt("its name isn't a valid image hash".to_string())));
+            continue;
+        }
+        let name = format!("images/{hash}");
+        let declared = z.declared_size(&name).unwrap_or(0);
+        if declared > MAX_MEMBER {
+            unread.push((hash, FormatError::Corrupt(format!("{name} is too large"))));
+            continue;
+        }
+        member_entries.push((hash, declared));
+    }
+
+    // Read library, version history, and branches while the archive is still in `z`.
+    let placeholder_keys: BTreeMap<String, ImageData> =
+        member_entries.iter().map(|(h, _)| (h.clone(), ImageData::new(Arc::new(Vec::new()), 0, 0))).collect();
+    match library::read(&mut z, &placeholder_keys, &mut unpacked) {
+        Ok(lib) => doc.published = lib.map(Arc::new),
+        Err(e) => issues.push(format!("the published library was skipped: {e}")),
+    }
+
+    let mut ver_budget = MAX_VERSION_BYTES;
+    let mut versions = read_versions(&mut z, "versions", &placeholder_keys, &mut issues, &mut ver_budget, &mut unpacked);
+    let mut branches = read_branches(&mut z, &placeholder_keys, &mut issues, &mut unpacked);
+
+    // Hand the already-open ZipArchive<File> straight to ZipImageStore (zero double open, no TOCTOU).
+    let store: Arc<dyn figcraft_doc::ImageLoader> = ZipImageStore::new(path.to_path_buf(), z.0, cache_bytes);
+
+    let mut images: BTreeMap<String, ImageData> = BTreeMap::new();
+    for (hash, declared) in member_entries {
+        let (w, h) = match index_dims.get(&hash).copied() {
+            Some(dims) => dims,
+            None => store.load(&hash).and_then(|b| stored_dimensions(&b).ok()).unwrap_or((0, 0)),
+        };
+        images.insert(hash.clone(), ImageData::lazy(hash, declared, w, h, Arc::clone(&store)));
+    }
+    let empty_past = BTreeSet::new();
+    report_lost_images(&mut issues, &unread, &empty_past, own_images.as_ref(), &images);
+
+    // Replace placeholder image entries in versions and branches with the real lazy ImageData handles.
+    let rebind_map = |map: &mut BTreeMap<String, ImageData>| {
+        for (h, slot) in map.iter_mut() {
+            if let Some(real) = images.get(h) {
+                *slot = real.clone();
+            }
+        }
+    };
+    for v in &mut versions {
+        if let Snapshot::Stored { images: v_imgs, .. } = &mut v.snapshot {
+            rebind_map(v_imgs);
+        }
+    }
+    for b in &mut branches {
+        rebind_map(&mut Arc::make_mut(&mut b.base).images);
+        rebind_map(&mut Arc::make_mut(&mut b.head).images);
+        for v in &mut b.versions {
+            if let Snapshot::Stored { images: v_imgs, .. } = &mut v.snapshot {
+                rebind_map(v_imgs);
+            }
+        }
+    }
+
+    let branch_images =
+        branches.iter().flat_map(|b| b.base.images.keys().chain(b.head.images.keys()).chain(b.versions.iter().flat_map(|v| v.images().keys())));
+    let history_only: BTreeSet<&String> = versions
+        .iter()
+        .flat_map(|v| v.images().keys())
+        .chain(branch_images)
+        .filter(|h| own_images.as_ref().is_some_and(|o| !o.contains(*h)))
+        .collect();
+    doc.images = images.into_iter().filter(|(h, _)| !history_only.contains(h)).collect();
+    Ok(Loaded { doc, issues, versions, branches, images_past_budget: 0 })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_file(path: &std::path::Path) -> Result<(Document, Vec<String>), FormatError> {
+    load_file_with_versions(path).map(|l| (l.doc, l.issues))
 }
 
 #[cfg(test)]
@@ -960,6 +1183,8 @@ mod image_tests;
 mod jpeg_tests;
 #[cfg(test)]
 mod large_tests;
+#[cfg(test)]
+mod lazy_image_tests;
 #[cfg(test)]
 mod staging_tests;
 #[cfg(test)]

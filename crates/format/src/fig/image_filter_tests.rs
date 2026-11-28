@@ -78,7 +78,7 @@ fn image_filters_import_from_current_container_and_skip_ambiguous_data() {
     assert!((get("Negative tint").filters.contrast + 0.3).abs() < 1e-6);
     assert_eq!(get("Neutral").filters, Default::default());
     assert_eq!(get("Explicit neutral").filters, Default::default());
-    assert_eq!(doc.images.get(&current.image).map(|image| image.bytes.as_slice()), Some(png().as_slice()));
+    assert_eq!(doc.images.get(&current.image).and_then(|image| image.bytes()).as_deref().map(Vec::as_slice), Some(png().as_slice()));
     assert!(warnings.iter().any(|w| w.contains("legacy image filter container is unsupported")), "{warnings:?}");
     assert!(warnings.iter().any(|w| w.contains("both filter containers are present")), "{warnings:?}");
     for field in ["brightness", "detail", "vignette", "mystery"] {

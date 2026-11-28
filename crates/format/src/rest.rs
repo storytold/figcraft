@@ -1068,9 +1068,7 @@ impl<'a> Ctx<'a> {
                 if !self.doc.images.contains_key(&key)
                     && let Some(png) = missing_image_placeholder()
                 {
-                    self.doc
-                        .images
-                        .insert(key.clone(), ImageData { bytes: Arc::new(png.to_vec()), width: PLACEHOLDER_SIDE, height: PLACEHOLDER_SIDE });
+                    self.doc.images.insert(key.clone(), ImageData::new(Arc::new(png.to_vec()), PLACEHOLDER_SIDE, PLACEHOLDER_SIDE));
                 }
                 key
             }
@@ -1596,7 +1594,7 @@ pub fn missing_image_placeholder() -> Option<&'static [u8]> {
 
 /// `data` is the placeholder an import stored for an image it didn't have.
 pub fn is_missing_image(data: &ImageData) -> bool {
-    missing_image_placeholder().is_some_and(|png| data.bytes.as_slice() == png)
+    missing_image_placeholder().is_some_and(|png| data.byte_len() == png.len() as u64 && data.bytes().is_some_and(|b| b.as_slice() == png))
 }
 
 /// The most a sweep may fall short of a turn and still be read as a whole one (radians, about

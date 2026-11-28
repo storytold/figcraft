@@ -36,7 +36,7 @@ pub fn is_valid_library_id(id: &str) -> bool {
     native::is_valid_id(id)
 }
 
-fn to_native_manifest(m: &LibraryManifest) -> native::Manifest {
+pub(crate) fn to_native_manifest(m: &LibraryManifest) -> native::Manifest {
     native::Manifest {
         id: m.id.clone(),
         name: m.name.clone(),
@@ -106,7 +106,9 @@ fn from_native_manifest(m: native::Manifest) -> LibraryManifest {
 /// Write the published library's entries. `written` are the images already in `images/`.
 pub(crate) fn write(z: &mut craft_figcraft_format::ArchiveWriter, lib: &PublishedLibrary, written: &BTreeSet<&String>) -> Result<(), FormatError> {
     let already_written = written.iter().map(|hash| (*hash).clone()).collect();
-    let images = lib.doc.images.iter().map(|(hash, image)| (hash.as_str(), image.bytes.as_slice()));
+    let materialized: Vec<(&str, Arc<Vec<u8>>)> =
+        lib.doc.images.iter().filter_map(|(hash, image)| image.bytes().map(|b| (hash.as_str(), b))).collect();
+    let images = materialized.iter().map(|(hash, bytes)| (*hash, bytes.as_slice()));
     native::write_members(
         z,
         &to_native_manifest(&lib.manifest),

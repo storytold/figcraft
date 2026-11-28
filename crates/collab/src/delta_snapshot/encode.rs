@@ -195,11 +195,14 @@ fn build_meta(doc: &Document) -> WireMeta {
     let images = doc
         .images
         .iter()
-        .map(|(key, img)| WireImage {
-            key: key.clone(),
-            width: img.width,
-            height: img.height,
-            bytes: base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice()),
+        .filter_map(|(key, img)| {
+            let bytes = img.bytes()?;
+            Some(WireImage {
+                key: key.clone(),
+                width: img.width,
+                height: img.height,
+                bytes: base64::engine::general_purpose::STANDARD.encode(bytes.as_slice()),
+            })
         })
         .collect();
     WireMeta {

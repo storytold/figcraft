@@ -4838,7 +4838,7 @@ mod tests {
             let PaintKind::Image(image) = &layer.fills[0].kind else {
                 panic!("expected an image fill for {name}");
             };
-            assert_eq!(doc.images[&image.image].bytes.as_slice(), bytes.as_slice(), "{name} should use its own file's image");
+            assert_eq!(doc.images[&image.image].bytes().unwrap().as_slice(), bytes.as_slice(), "{name} should use its own file's image");
         }
     }
 

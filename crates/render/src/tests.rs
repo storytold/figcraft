@@ -76,10 +76,7 @@ fn region_paint_space_preserves_gradient_image_and_pattern_placement() {
     for (i, pixel) in image.pixels_mut().iter_mut().enumerate() {
         *pixel = tiny_skia::PremultipliedColorU8::from_rgba((i % 8 * 30) as u8, (i / 8 * 60) as u8, 30, 255).unwrap();
     }
-    d.images.insert(
-        "region-frame-image".into(),
-        figcraft_doc::ImageData { bytes: std::sync::Arc::new(encode_png(&image).unwrap()), width: 8, height: 4 },
-    );
+    d.images.insert("region-frame-image".into(), figcraft_doc::ImageData::new(std::sync::Arc::new(encode_png(&image).unwrap()), 8, 4));
     let mut pattern = PatternPaint::new(tile.0);
     pattern.spacing = (3.0, 4.0);
     let paints = [
@@ -517,7 +514,7 @@ fn images_are_managed_into_the_file_profile() {
     let (mut d, _, r) = doc_with_rect(Color::WHITE);
     let mut red = Pixmap::new(4, 4).unwrap();
     red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
-    d.images.insert("red".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(encode_png(&red).unwrap()), width: 4, height: 4 });
+    d.images.insert("red".into(), figcraft_doc::ImageData::new(std::sync::Arc::new(encode_png(&red).unwrap()), 4, 4));
     d.get_mut(r).unwrap().fills = vec![Paint::image("red", ImageScaleMode::Fill)];
     let center = |d: &Document| {
         let pix = render_node(d, r, 1.0).unwrap();

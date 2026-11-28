@@ -141,7 +141,7 @@ fn a_path_like_rest_image_ref_never_names_an_archive_member() {
 #[test]
 fn an_image_keyed_with_dashes_comes_back_after_a_save() {
     let mut d = Document::new("t");
-    d.images.insert("rest-image-missing".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(png()), width: 2, height: 2 });
+    d.images.insert("rest-image-missing".into(), figcraft_doc::ImageData::new(std::sync::Arc::new(png()), 2, 2));
     let loaded = load_bytes_with_versions(&save_bytes(&d, None).unwrap()).unwrap();
     assert!(loaded.doc.images.contains_key("rest-image-missing"), "{:?}", loaded.issues);
 }
