@@ -125,6 +125,10 @@ pub struct ExportArgs {
     /// (exact) or dropped without notes (ignore)
     #[arg(long, value_name = "bestEffort|exact|ignore", value_parser = vd_compat, default_value = "bestEffort")]
     pub vd_compat: VdCompat,
+    /// Write nothing and fail (exit 1, listing why) when the export would leave out or change
+    /// content. For fig, penpot and xml, the formats that report what they can't hold
+    #[arg(long)]
+    pub strict: bool,
     #[command(flatten)]
     pub roots: RootArgs,
 }
@@ -157,6 +161,10 @@ pub struct ConvertArgs {
     /// Allow OUT to be the file IN, replacing it
     #[arg(long)]
     pub in_place: bool,
+    /// Write nothing and fail (exit 1, listing why) when OUT would leave out or change content.
+    /// For .fig and .penpot, which report what they can't hold, and .figcraft, which holds everything
+    #[arg(long)]
+    pub strict: bool,
     #[command(flatten)]
     pub roots: RootArgs,
 }
@@ -197,6 +205,10 @@ pub struct RunArgs {
     /// Allow --out to be the --in file, replacing it
     #[arg(long, requires_all = ["input", "out"])]
     pub in_place: bool,
+    /// Write nothing and fail (exit 1, listing why) when --out would leave out or change content.
+    /// For .fig and .penpot, which report what they can't hold, and .figcraft, which holds everything
+    #[arg(long, requires = "out")]
+    pub strict: bool,
     #[command(flatten)]
     pub roots: RootArgs,
 }
