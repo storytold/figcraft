@@ -2716,6 +2716,7 @@ dependencies = [
  "log",
  "proptest",
  "rustls",
+ "rustls-native-certs",
  "rustls-pki-types",
  "serde_json",
  "tungstenite",

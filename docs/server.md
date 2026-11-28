@@ -454,12 +454,15 @@ gives people `wss://` links (and browsers the `wss://` they need on an `https://
   so the proxy's access logs don't record them.
 
 The desktop app, `figcraft-cli` (and so agents through MCP) and the browser build all open
-`wss://` links. The desktop app and the CLI check the certificate against Mozilla's list of root
-authorities built into them (not the operating system's store), so a certificate from a public
-authority such as Let's Encrypt just works. For a certificate from a private authority (or a
-self-signed one, such as Caddy's `tls internal`), set the environment variable `FIGCRAFT_CA_FILE`
-to that authority's certificate (a PEM file) before starting the app: it is trusted in addition
-to the built-in list. There is no way to skip the check: a certificate that has expired, is for
+`wss://` links. The desktop app and the CLI check the certificate against a list of public root
+authorities built into them and the authorities the operating system trusts (its certificate
+store), so a
+certificate from a public authority such as Let's Encrypt just works, and so does one from a
+private authority once it is added to the computer's trusted certificates. Without that (or for a
+self-signed certificate, such as Caddy's `tls internal`), set the environment variable
+`FIGCRAFT_CA_FILE` to that authority's certificate (a PEM file) before starting the app: it is
+trusted in addition to the others. `FIGCRAFT_NO_SYSTEM_ROOTS=1` leaves the operating system's
+store out. There is no way to skip the check: a certificate that has expired, is for
 another name or comes from an unknown authority is refused, and the app says which.
 
 ## Running a public server
