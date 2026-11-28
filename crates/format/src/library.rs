@@ -106,8 +106,14 @@ fn from_native_manifest(m: native::Manifest) -> LibraryManifest {
 /// Write the published library's entries. `written` are the images already in `images/`.
 pub(crate) fn write(z: &mut craft_figcraft_format::ArchiveWriter, lib: &PublishedLibrary, written: &BTreeSet<&String>) -> Result<(), FormatError> {
     let already_written = written.iter().map(|hash| (*hash).clone()).collect();
-    let materialized: Vec<(&str, Arc<Vec<u8>>)> =
-        lib.doc.images.iter().filter_map(|(hash, image)| image.bytes().map(|b| (hash.as_str(), b))).collect();
+    let mut materialized: Vec<(&str, Arc<Vec<u8>>)> = Vec::with_capacity(lib.doc.images.len());
+    for (hash, image) in &lib.doc.images {
+        if written.contains(hash) {
+            continue;
+        }
+        let bytes = image.bytes().ok_or_else(|| FormatError::Io(format!("library/images/{hash}: image data unavailable in backing archive")))?;
+        materialized.push((hash.as_str(), bytes));
+    }
     let images = materialized.iter().map(|(hash, bytes)| (*hash, bytes.as_slice()));
     native::write_members(
         z,

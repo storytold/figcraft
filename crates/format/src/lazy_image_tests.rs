@@ -219,6 +219,69 @@ fn streaming_save_in_place_reuses_lazy_store_without_polluting_lru_cache() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn lazy_reads_and_save_as_survive_external_atomic_replace_and_delete() {
+    let dir = temp_dir("ext-replace");
+    let path = dir.join("doc.figcraft");
+
+    let mut orig = Document::new("Original");
+    let raw_orig = png(11, 22, 33);
+    let (hash_orig, _, _) = add_image(&mut orig, raw_orig.clone()).unwrap();
+    save_file(&orig, &path, None).unwrap();
+
+    // Open lazily — ZipImageStore holds an open File handle to the original inode.
+    let loaded = load_file_with_versions(&path).unwrap();
+    assert!(loaded.doc.images[&hash_orig].is_lazy());
+
+    // Another app atomically replaces `path` with a completely different archive.
+    let mut other = Document::new("ReplacedByOtherApp");
+    let raw_other = png(220, 40, 60);
+    let _ = add_image(&mut other, raw_other).unwrap();
+    let replacement = dir.join("replacement.figcraft");
+    save_file(&other, &replacement, None).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+
+    // The already-open document still reads its original image cleanly from the held fd.
+    assert_eq!(loaded.doc.images[&hash_orig].bytes().as_deref().map(Vec::as_slice), Some(raw_orig.as_slice()));
+
+    // Even if another app deletes `path` altogether, Save As streams all original bytes intact.
+    std::fs::remove_file(&path).unwrap();
+    let saved_as = dir.join("rescued.figcraft");
+    save_file(&loaded.doc, &saved_as, None).unwrap();
+    let reopened = load_file_with_versions(&saved_as).unwrap();
+    assert_eq!(reopened.doc.images[&hash_orig].bytes().as_deref().map(Vec::as_slice), Some(raw_orig.as_slice()));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn corrupted_backing_file_rejected_by_content_hash() {
+    let dir = temp_dir("corrupt-hash");
+    let path = dir.join("doc.figcraft");
+
+    let mut doc = Document::new("HashCheck");
+    let raw_good = png(30, 60, 90);
+    let (hash, _, _) = add_image(&mut doc, raw_good.clone()).unwrap();
+    save_file(&doc, &path, None).unwrap();
+
+    let loaded = load_file_with_versions(&path).unwrap();
+    let loader = loaded.doc.images[&hash].loader().expect("lazy loader");
+
+    // Simulate an in-place rewrite putting different bytes under the same SHA-256 key.
+    let mut bad_doc = Document::new("Tampered");
+    let raw_bad = png(255, 0, 0);
+    bad_doc.images.insert(hash.clone(), ImageData::new(Arc::new(raw_bad), 4, 3));
+    let tampered = save_bytes(&bad_doc, None).unwrap();
+    loader.release_backing_handle();
+    std::fs::write(&path, &tampered).unwrap();
+
+    // Content-hash verification rejects the mismatched bytes instead of returning corrupted pixels.
+    assert!(loaded.doc.images[&hash].bytes().is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 #[ignore]
 fn bench_lazy_large_archive() {

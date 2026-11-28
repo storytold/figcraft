@@ -40,7 +40,9 @@ pub use streaming_save::{collect_live_image_keys, save_file_with_history};
 mod density;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use figcraft_doc::{Document, ImageData};
@@ -1051,6 +1053,7 @@ pub fn load_file_with_versions(path: &std::path::Path) -> Result<Loaded, FormatE
 /// LRU cache budget.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_file_from(path: &std::path::Path, mut file: std::fs::File, archive_len: u64, cache_bytes: u64) -> Result<Loaded, FormatError> {
+    file.seek(SeekFrom::Start(0)).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
     let mut first = None;
     let mut chunk = [0u8; 8192];
     loop {
@@ -1091,9 +1094,15 @@ fn load_archive_lazy(path: &std::path::Path, mut z: LocalZipArchive, total: u64,
     let mut hashes: Vec<String> =
         z.names().into_iter().filter_map(|n| n.strip_prefix("images/").map(str::to_owned)).filter(|h| !h.is_empty()).collect();
     hashes.sort_by_key(|h| !own_images.as_ref().is_some_and(|o| o.contains(h)));
+    let mut past_budget: BTreeSet<String> = BTreeSet::new();
     for hash in hashes {
         if !ImageData::is_valid_key(&hash) {
             unread.push((hash, FormatError::Corrupt("its name isn't a valid image hash".to_string())));
+            continue;
+        }
+        if member_entries.len() >= IMAGE_BUDGET.images {
+            past_budget.insert(hash.clone());
+            unread.push((hash, FormatError::Corrupt(format!("the file has more than {} images", IMAGE_BUDGET.images))));
             continue;
         }
         let name = format!("images/{hash}");
@@ -1128,8 +1137,8 @@ fn load_archive_lazy(path: &std::path::Path, mut z: LocalZipArchive, total: u64,
         };
         images.insert(hash.clone(), ImageData::lazy(hash, declared, w, h, Arc::clone(&store)));
     }
-    let empty_past = BTreeSet::new();
-    report_lost_images(&mut issues, &unread, &empty_past, own_images.as_ref(), &images);
+    let images_past_budget = past_budget.len();
+    report_lost_images(&mut issues, &unread, &past_budget, own_images.as_ref(), &images);
 
     // Replace placeholder image entries in versions and branches with the real lazy ImageData handles.
     let rebind_map = |map: &mut BTreeMap<String, ImageData>| {
@@ -1163,7 +1172,7 @@ fn load_archive_lazy(path: &std::path::Path, mut z: LocalZipArchive, total: u64,
         .filter(|h| own_images.as_ref().is_some_and(|o| !o.contains(*h)))
         .collect();
     doc.images = images.into_iter().filter(|(h, _)| !history_only.contains(h)).collect();
-    Ok(Loaded { doc, issues, versions, branches, images_past_budget: 0 })
+    Ok(Loaded { doc, issues, versions, branches, images_past_budget })
 }
 
 #[cfg(not(target_arch = "wasm32"))]

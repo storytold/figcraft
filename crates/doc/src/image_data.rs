@@ -62,11 +62,8 @@ impl PartialEq for ImageData {
         }
         match (&self.source, &other.source) {
             (ImageSource::InMemory(a), ImageSource::InMemory(b)) => Arc::ptr_eq(a, b) || a == b,
-            (ImageSource::Lazy { key: ka, byte_len: la, loader: sa }, ImageSource::Lazy { key: kb, byte_len: lb, loader: sb }) => {
+            (ImageSource::Lazy { key: ka, loader: sa, .. }, ImageSource::Lazy { key: kb, loader: sb, .. }) => {
                 if sa.store_id() == sb.store_id() && ka == kb {
-                    return true;
-                }
-                if la == lb && Self::claims_content_hash(ka) && ka == kb {
                     return true;
                 }
                 sa.load(ka) == sb.load(kb)

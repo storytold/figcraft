@@ -62,6 +62,9 @@ impl EncodedLru {
     pub(crate) fn insert(&mut self, key: String, data: Arc<Vec<u8>>) {
         let size = data.len() as u64;
         self.remove(&key);
+        if size > self.max_bytes {
+            return;
+        }
         while !self.entries.is_empty() && (self.bytes.saturating_add(size) > self.max_bytes || self.entries.len() >= MAX_ENCODED_CACHE_ENTRIES) {
             let Some(oldest) = self.entries.iter().min_by_key(|(_, (_, used))| *used).map(|(k, _)| k.clone()) else {
                 break;
@@ -77,6 +80,11 @@ impl EncodedLru {
         if let Some((data, _)) = self.entries.remove(key) {
             self.bytes = self.bytes.saturating_sub(data.len() as u64);
         }
+    }
+
+    fn retain_content_addressed(&mut self) {
+        self.entries.retain(|k, _| ImageData::claims_content_hash(k));
+        self.bytes = self.entries.values().map(|(d, _)| d.len() as u64).sum();
     }
 
     #[cfg(test)]
@@ -277,6 +285,7 @@ impl ImageLoader for ZipImageStore {
         inner.archive = None;
         match std::fs::rename(staging, dest) {
             Ok(()) => {
+                inner.lru.retain_content_addressed();
                 inner.archive = StoreInner::open_archive(dest).ok();
                 Ok(())
             }

@@ -121,7 +121,7 @@ pub fn encode_delta_snapshot(replica: &Replica) -> Result<Vec<u8>, Error> {
         seen.insert(id, node);
     }
 
-    let meta = build_meta(doc);
+    let meta = build_meta(doc)?;
     let est_materialized = estimate_decode_charge(&meta, &interner.table, &records);
     let wire = DeltaWireRef { meta: &meta, vectors: &interner.table, records: &records };
     let (out, written) = compress_wire(&wire)?;
@@ -190,22 +190,19 @@ fn encode_one_node(node: &Node, pos: String, seen: &HashMap<NodeId, &Node>, inte
     Ok(WireRecord::Full { pos, node: Box::new(stripped), vref })
 }
 
-fn build_meta(doc: &Document) -> WireMeta {
+fn build_meta(doc: &Document) -> Result<WireMeta, Error> {
     use base64::Engine as _;
-    let images = doc
-        .images
-        .iter()
-        .filter_map(|(key, img)| {
-            let bytes = img.bytes()?;
-            Some(WireImage {
-                key: key.clone(),
-                width: img.width,
-                height: img.height,
-                bytes: base64::engine::general_purpose::STANDARD.encode(bytes.as_slice()),
-            })
-        })
-        .collect();
-    WireMeta {
+    let mut images = Vec::with_capacity(doc.images.len());
+    for (key, img) in &doc.images {
+        let bytes = img.bytes().ok_or_else(|| Error::Encode(format!("missing image bytes for '{key}'")))?;
+        images.push(WireImage {
+            key: key.clone(),
+            width: img.width,
+            height: img.height,
+            bytes: base64::engine::general_purpose::STANDARD.encode(bytes.as_slice()),
+        });
+    }
+    Ok(WireMeta {
         name: doc.name.clone(),
         kind: doc.kind,
         styles: doc.styles.clone(),
@@ -224,7 +221,7 @@ fn build_meta(doc: &Document) -> WireMeta {
         votes: doc.votes.clone(),
         vote_history: doc.vote_history.clone(),
         images,
-    }
+    })
 }
 
 struct CountingWriter<W> {

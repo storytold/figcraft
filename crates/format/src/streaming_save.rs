@@ -279,7 +279,10 @@ pub fn save_file_with_history(
         for other in others {
             other.reopen_backing_file(path);
         }
-        swapped.map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
+        if let Err(e) = swapped {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(FormatError::Io(format!("{}: {e}", path.display())));
+        }
     } else if let Err(e) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
         return Err(FormatError::Io(format!("{}: {e}", path.display())));

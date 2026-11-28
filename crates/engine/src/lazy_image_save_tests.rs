@@ -98,3 +98,42 @@ fn streaming_open_and_save_respect_automation_roots() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn in_place_save_aborts_if_undo_only_lazy_image_cannot_be_pinned() {
+    let dir = std::env::temp_dir().join(format!("figcraft-engine-lazy-pin-fail-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pin-fail.figcraft");
+    let path_str = path.to_string_lossy().to_string();
+
+    let mut init_doc = figcraft_doc::Document::new("PinFail");
+    let bytes_a = png(10, 20, 30);
+    let bytes_b = png(200, 100, 50);
+    let (hash_a, _, _) = figcraft_format::add_image(&mut init_doc, bytes_a).unwrap();
+    let (hash_b, _, _) = figcraft_format::add_image(&mut init_doc, bytes_b).unwrap();
+    figcraft_format::save_file(&init_doc, &path, None).unwrap();
+
+    let mut s = Session::empty();
+    s.execute("file.open", &json!({"path": path_str})).unwrap();
+
+    let loader = Arc::clone(s.doc().unwrap().images[&hash_b].loader().expect("lazy loader"));
+    let before = s.ds().unwrap().doc.clone();
+    let page = s.ds().unwrap().page;
+    s.ds_mut().unwrap().history.undo.push(crate::HistoryEntry { label: "remove image".into(), doc: before, selection: Vec::new(), page });
+    Arc::make_mut(&mut s.ds_mut().unwrap().doc).images.remove(&hash_b);
+
+    // Simulate backing file overwritten with corrupted bytes so `hash_b` can no longer be materialized.
+    loader.release_backing_handle();
+    let sentinel = b"not a zip archive".to_vec();
+    std::fs::write(&path, &sentinel).unwrap();
+
+    // Even with `overwrite: true` (bypassing external-modification check), save aborts cleanly before
+    // replacing the file because undo image `hash_b` could not be read.
+    let err = s.execute("file.save", &json!({"overwrite": true})).unwrap_err();
+    assert!(err.to_string().contains(&hash_b), "unexpected error: {err}");
+    assert_eq!(std::fs::read(&path).unwrap(), sentinel);
+    assert!(s.doc().unwrap().images.contains_key(&hash_a));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

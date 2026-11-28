@@ -206,7 +206,7 @@ fn save_to(s: &mut Session, path: Option<String>) -> Result<Value> {
         crate::library::relate_links(&mut doc_to_save, &path);
         let thumb = thumbnail(&doc_to_save);
         let live_keys = figcraft_format::collect_live_image_keys(&doc_to_save, &snapshot.versions, &snapshot.branches);
-        let extra_stores = ds.pin_lazy_images_before_replace(&path, &live_keys);
+        let extra_stores = ds.pin_lazy_images_before_replace(&path, &live_keys)?;
         let written =
             crate::file_access::save_native_file(&path, &doc_to_save, thumb.as_deref(), &snapshot.versions, &snapshot.branches, &extra_stores)?;
         usize::try_from(written).unwrap_or(usize::MAX)
