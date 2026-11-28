@@ -269,10 +269,11 @@ fn the_ink_tools_show_a_dot_in_the_inks_colour_and_width() {
     // Drawn: the ink's dot, a white ring outside it and a dark ring outside that.
     let at = pos2(50.0, 40.0);
     let ctx = egui::Context::default();
-    let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
         let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("dot_test"));
         crate::cursors::paint(&ui.ctx().layer_painter(layer), at, Glyph::Dot { color, radius: 5.0 });
     });
+    out.textures_delta.clear();
     let circles: Vec<_> = out
         .shapes
         .iter()
