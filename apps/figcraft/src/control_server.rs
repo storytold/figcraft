@@ -210,7 +210,7 @@ fn read_line<'a>(reader: &mut impl BufRead, line: &mut Vec<u8>, budget: &'a Atom
             Some(i) if i < room => (i + 1, true),
             _ => (buf.len().min(room), false),
         };
-        if budget.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| used.checked_add(take).filter(|t| *t <= MAX_IN_FLIGHT)).is_err() {
+        if budget.try_update(Ordering::SeqCst, Ordering::SeqCst, |used| used.checked_add(take).filter(|t| *t <= MAX_IN_FLIGHT)).is_err() {
             return Ok(Line::Busy);
         }
         held.bytes += take;
