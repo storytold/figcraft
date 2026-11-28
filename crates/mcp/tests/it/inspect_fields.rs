@@ -35,7 +35,7 @@ fn compact_keys(node: &Value, outline: bool) {
 fn tool_schemas_describe_compact_inspection_options() {
     let mut c = Client::new();
     let tools = c.rpc("tools/list", json!({}));
-    for name in ["inspect_document", "get_node"] {
+    for name in ["inspect_document", "get_node", "create_node", "set_properties"] {
         let tool = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == name).unwrap();
         let props = &tool["inputSchema"]["properties"];
         assert_eq!(props["fields"]["type"], "array");
@@ -191,6 +191,61 @@ fn compact_examples_run_verbatim_from_the_docs() {
         let request: Value = serde_json::from_str(line).unwrap();
         h.call(request["method"].as_str().unwrap(), request["params"].clone()).unwrap();
     }
+}
+
+/// The mutation tools return the layers they touched; with `fields` or `outline` that echo is cut
+/// down to what the agent asked for, and without them it stays complete.
+#[test]
+fn mutation_results_take_fields_and_outline() {
+    let mut c = Client::new();
+    let card = json!({"type": "frame", "name": "Card", "width": 280, "height": 160, "props": {"fill": "#F0F0F0", "cornerRadius": 12}});
+    let full = c.ok("create_node", card.clone());
+    let mut args = card.clone();
+    args["fields"] = json!(["name"]);
+    let picked = c.ok("create_node", args);
+    compact_keys(&picked["node"], false);
+    assert_eq!(picked["node"]["name"], "Card");
+    assert!(picked.to_string().len() < full.to_string().len(), "{picked} vs {full}");
+    let mut args = card;
+    args["outline"] = json!(true);
+    let outlined = c.ok("create_node", args);
+    compact_keys(&outlined["node"], true);
+    assert_eq!(outlined["node"]["type"], full["node"]["type"]);
+
+    let ids = json!([full["id"], picked["id"], outlined["id"]]);
+    let set = c.ok("set_properties", json!({"ids": ids, "props": {"opacity": 0.5}}));
+    let slim = c.ok("set_properties", json!({"ids": ids, "props": {"opacity": 0.4}, "fields": ["opacity"]}));
+    let (set, slim) = (set["nodes"].as_array().unwrap(), slim["nodes"].as_array().unwrap());
+    assert_eq!(slim.len(), set.len(), "every layer is still reported");
+    for (whole, cut) in set.iter().zip(slim) {
+        assert_eq!(cut["id"], whole["id"]);
+        assert!(cut["opacity"].as_f64().is_some_and(|o| (o - 0.4).abs() < 1e-6), "{cut}");
+        assert!(cut.as_object().unwrap().len() < whole.as_object().unwrap().len(), "{cut} vs {whole}");
+    }
+    let outlined = c.ok("set_properties", json!({"ids": ids, "props": {"opacity": 1}, "outline": true}));
+    for node in outlined["nodes"].as_array().unwrap() {
+        compact_keys(node, true);
+    }
+}
+
+/// A bad option is caught before the edit runs: the call fails and the document is as it was.
+#[test]
+fn a_bad_option_on_a_mutation_changes_nothing() {
+    let mut c = Client::new();
+    let id = c.create(json!({"type": "rectangle", "name": "Keep"}));
+    let before = c.doc();
+    for bad in [json!({"fields": ["Name"]}), json!({"outline": true, "fields": []}), json!({"outline": "yes"})] {
+        let mut create = json!({"type": "ellipse", "name": "Extra"});
+        let mut set = json!({"ids": [id], "props": {"name": "Changed"}});
+        for (k, v) in bad.as_object().unwrap() {
+            create[k] = v.clone();
+            set[k] = v.clone();
+        }
+        assert!(!c.err("create_node", create).is_empty());
+        assert!(!c.err("set_properties", set).is_empty());
+    }
+    let after = c.doc();
+    assert_eq!(after["pages"], before["pages"], "a rejected call left the layers as they were");
 }
 
 #[test]

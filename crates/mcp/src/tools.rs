@@ -195,7 +195,7 @@ fn tools() -> Vec<Value> {
         tool(
             "create_node",
             "Create layer",
-            "Create a layer (engine `node.create`) and return its id and inspected properties. Coordinates are page units, y down; x/y are relative to the parent frame (the page when there is none, so then they are page coordinates; groups don't count). Inside an auto-layout frame the position is decided by the layout. The new layer becomes the selection. `warnings` reports a fontStyle that draws in another face.",
+            "Create a layer (engine `node.create`) and return its id and inspected properties. Coordinates are page units, y down; x/y are relative to the parent frame (the page when there is none, so then they are page coordinates; groups don't count). Inside an auto-layout frame the position is decided by the layout. The new layer becomes the selection. `warnings` reports a fontStyle that draws in another face. `fields` / `outline` shrink the returned layer as they do for get_node; the layer is created either way.",
             obj(
                 json!({
                     "type": {"type": "string", "enum": ["frame", "rectangle", "ellipse", "polygon", "star", "line", "arrow", "text", "vector", "section", "component", "slice"], "description": "Layer type"},
@@ -212,6 +212,8 @@ fn tools() -> Vec<Value> {
                     "closed": boolean("For type vector: close the path"),
                     "select": boolean("Select the new layer (default true)"),
                     "props": {"type": "object", "description": "Any set_properties keys applied at creation, e.g. {\"fill\":\"#3366FF\",\"cornerRadius\":12,\"fontSize\":24,\"layout\":\"vertical\",\"gap\":8,\"padding\":16}"},
+                    "fields": fields_schema(),
+                    "outline": outline_schema(),
                 }),
                 &["type"],
             ),
@@ -220,9 +222,14 @@ fn tools() -> Vec<Value> {
         tool(
             "set_properties",
             "Set properties",
-            "Set properties on one or more layers as one undo step (engine `node.set`). Keys: name, visible, locked, opacity (0-1), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), absoluteRotation (degrees on the page), fill (colour) / fills (array of paints: \"#hex\" or {\"type\":\"solid\",\"color\":\"#hex\"} or {\"type\":\"linearGradient\",\"stops\":[\"#hex\",\"#hex\"]} or stops [{\"position\":0..1,\"color\":\"#hex\"}], optional from/to handles in the unit box; radialGradient too), stroke / strokes, strokeWeight, strokeAlign (inside|center|outside), cornerRadius (n or [tl,tr,br,bl]), effects (array, e.g. {\"type\":\"dropShadow\",\"color\":\"#00000040\",\"offset\":[0,4],\"radius\":8}), clip, layout (null|horizontal|vertical|grid), gap, padding (n or [t,r,b,l]), mainAlign (min|center|max|spaceBetween|spaceAround|spaceEvenly), crossAlign, wrap, contentAlign (auto|spaceBetween: wrapped lines), sizingH / sizingV (fixed|hug|fill), constraints {horizontal, vertical}, characters, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing, textAlign, textAutoResize. Auto layout keys (gap, padding, mainAlign, crossAlign, wrap, …) apply to frames, components and instances only: other layers among the ids are skipped and named in `warnings`, and with none that can take them the call is an error. A fontStyle draws in the family's nearest face; `warnings` says when that face has another weight or slant than the name asks for. Run list_commands with filter \"node.set\" for the full list. Unknown keys are an error. Returns the updated layers.",
+            "Set properties on one or more layers as one undo step (engine `node.set`). Keys: name, visible, locked, opacity (0-1), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), absoluteRotation (degrees on the page), fill (colour) / fills (array of paints: \"#hex\" or {\"type\":\"solid\",\"color\":\"#hex\"} or {\"type\":\"linearGradient\",\"stops\":[\"#hex\",\"#hex\"]} or stops [{\"position\":0..1,\"color\":\"#hex\"}], optional from/to handles in the unit box; radialGradient too), stroke / strokes, strokeWeight, strokeAlign (inside|center|outside), cornerRadius (n or [tl,tr,br,bl]), effects (array, e.g. {\"type\":\"dropShadow\",\"color\":\"#00000040\",\"offset\":[0,4],\"radius\":8}), clip, layout (null|horizontal|vertical|grid), gap, padding (n or [t,r,b,l]), mainAlign (min|center|max|spaceBetween|spaceAround|spaceEvenly), crossAlign, wrap, contentAlign (auto|spaceBetween: wrapped lines), sizingH / sizingV (fixed|hug|fill), constraints {horizontal, vertical}, characters, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing, textAlign, textAutoResize. Auto layout keys (gap, padding, mainAlign, crossAlign, wrap, …) apply to frames, components and instances only: other layers among the ids are skipped and named in `warnings`, and with none that can take them the call is an error. A fontStyle draws in the family's nearest face; `warnings` says when that face has another weight or slant than the name asks for. Run list_commands with filter \"node.set\" for the full list. Unknown keys are an error. Returns the updated layers (up to 20); `fields` / `outline` shrink them as they do for get_node.",
             obj(
-                json!({"ids": ids_schema("Layer ids (default: the selection)"), "props": {"type": "object", "description": "Property values to set"}}),
+                json!({
+                    "ids": ids_schema("Layer ids (default: the selection)"),
+                    "props": {"type": "object", "description": "Property values to set"},
+                    "fields": fields_schema(),
+                    "outline": outline_schema(),
+                }),
                 &["props"],
             ),
             false,
@@ -836,6 +843,8 @@ fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult
     {
         return Err("`props` must be an object".into());
     }
+    // Checked before the layer is made, so a bad option changes nothing.
+    let options = inspection_options(a)?;
     let mut params = Map::new();
     for k in ["type", "x", "y", "width", "height", "parent", "index", "name", "text", "path", "points", "closed", "props", "select"] {
         if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
@@ -848,7 +857,7 @@ fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult
     let r = exec(b, "node.create", Value::Object(params))?;
     let id = r.get("id").cloned().ok_or("node.create returned no id")?;
     let warnings = r.get("warnings").cloned();
-    let node = b.call("node.get", json!({"id": id, "depth": 0}))?;
+    let node = node_at(b, id_arg(&id)?, 0, &options)?.0;
     let mut out = json!({"id": id, "node": node});
     if let Some(w) = warnings {
         out["warnings"] = w;
@@ -863,6 +872,8 @@ fn set_properties(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolRes
     };
     let mut props = props;
     normalize_props(&mut props);
+    // Checked before anything is set, so a bad option changes nothing.
+    let options = inspection_options(a)?;
     let mut params = json!({"props": props});
     let ids = ids_arg(a, "ids")?;
     if let Some(ids) = &ids {
@@ -881,7 +892,7 @@ fn set_properties(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolRes
             .map(|a| a.iter().filter_map(Value::as_u64).collect())
             .unwrap_or_default(),
     };
-    let nodes: Vec<Value> = ids.iter().take(20).filter_map(|i| b.call("node.get", json!({"id": i, "depth": 0})).ok()).collect();
+    let nodes: Vec<Value> = ids.iter().take(20).filter_map(|&i| node_at(b, i, 0, &options).ok().map(|(v, _)| v)).collect();
     let mut out = json!({"ok": true, "nodes": nodes});
     if let Some(w) = warnings {
         out["warnings"] = w;
