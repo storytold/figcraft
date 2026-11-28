@@ -72,17 +72,28 @@ fn the_context_menu_offers_go_to_main_for_an_instance() {
     assert!(!has_text(&shapes, "Create component"), "not offered for an instance");
 }
 
+/// Press Cmd/Ctrl+L on the canvas.
+fn cmd_l(u: &mut Ui) {
+    let held = egui::Modifiers { command: true, mac_cmd: cfg!(target_os = "macos"), ctrl: !cfg!(target_os = "macos"), ..egui::Modifiers::NONE };
+    let l = |pressed| egui::Event::Key { key: egui::Key::L, physical_key: Some(egui::Key::L), pressed, repeat: false, modifiers: held };
+    u.frame_with(vec![l(true), l(false)], held);
+}
+
+/// With nothing selected, Cmd/Ctrl+L copies the link of the page shown (#2507), not of a layer.
 #[test]
-fn copying_a_link_with_nothing_selected_copies_nothing() {
+fn cmd_l_with_nothing_selected_copies_the_pages_link() {
     let mut s = Session::new();
-    s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 200})).unwrap();
+    let frame = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 200})).unwrap());
     s.execute("select.none", &json!({})).unwrap();
+    let page = s.page().unwrap();
     let copied = Arc::new(Mutex::new(Vec::new()));
     let mut u = Ui::new(s);
     u.app.services = Box::new(Copied(copied.clone()));
-    crate::menus::invoke(&mut u.app, "edit.copyLink");
-    assert!(copied.lock().unwrap().is_empty(), "no link to node 0");
-    assert!(u.app.ui.toast.is_none());
+    u.frame(vec![]);
+    cmd_l(&mut u);
+    assert_ne!(page, frame);
+    assert_eq!(*copied.lock().unwrap(), [format!("figcraft://node/{}", page.0)]);
+    assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Link copied"));
 }
 
 /// With a section selected, a right-click on either frame inside it links that frame, not the
@@ -236,8 +247,6 @@ fn cmd_l_copies_the_link_of_the_selected_frame() {
     let mut u = Ui::new(s);
     u.app.services = Box::new(Copied(copied.clone()));
     u.frame(vec![]);
-    let held = egui::Modifiers { command: true, mac_cmd: cfg!(target_os = "macos"), ctrl: !cfg!(target_os = "macos"), ..egui::Modifiers::NONE };
-    let l = |pressed| egui::Event::Key { key: egui::Key::L, physical_key: Some(egui::Key::L), pressed, repeat: false, modifiers: held };
-    u.frame_with(vec![l(true), l(false)], held);
+    cmd_l(&mut u);
     assert_eq!(copied.lock().unwrap().last().cloned(), Some(format!("figcraft://node/{}", frame.0)));
 }
