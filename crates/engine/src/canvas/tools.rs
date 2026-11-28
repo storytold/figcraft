@@ -70,10 +70,11 @@ pub enum ToolId {
     Eraser,
     Stamp,
     MindMap,
+    CodeBlock,
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 28] = [
+    pub const ALL: [ToolId; 29] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -102,6 +103,7 @@ impl ToolId {
         ToolId::Eraser,
         ToolId::Stamp,
         ToolId::MindMap,
+        ToolId::CodeBlock,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -133,6 +135,7 @@ impl ToolId {
             ToolId::Eraser => "eraser",
             ToolId::Stamp => "stamp",
             ToolId::MindMap => "mindMap",
+            ToolId::CodeBlock => "codeBlock",
         }
     }
     /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
@@ -173,6 +176,7 @@ impl ToolId {
             ToolId::Eraser => "Eraser",
             ToolId::Stamp => "Stamp",
             ToolId::MindMap => "Mind map",
+            ToolId::CodeBlock => "Code block",
         }
     }
 
@@ -188,6 +192,7 @@ impl ToolId {
                 | ToolId::Eraser
                 | ToolId::Stamp
                 | ToolId::MindMap
+                | ToolId::CodeBlock
         )
     }
     /// The tool's key (from [`crate::keymap`]; empty when it has none).

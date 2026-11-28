@@ -658,7 +658,8 @@ one undo step and returns the ids it made:
 - Tools for `pointer`: `tool.sticky {color?}`, `tool.shape {shape?}`, `tool.connector {style?: straight|elbow|curved}`
   (drag from one object to another), `tool.marker {color?}`, `tool.highlighter {color?}`,
   `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`, `tool.mindMap` (a click places a mind map, the first node's text starting
-  there, and types in it); Text and Section are the usual tools.
+  there, and types in it), `tool.codeBlock` (a click places a code block centred there and types in
+  it); Text and Section are the usual tools.
 
 ```json
 {"command": "file.newBoard", "params": {"name": "Retro"}}
@@ -746,7 +747,7 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   (`Shift+Cmd+\`) switch the right panel's tab or hide the left sidebar in the app (no-ops headless).
 - `doc.nextTab` / `doc.previousTab` (`Ctrl+Tab` / `Ctrl+Shift+Tab`): the next or previous open file.
 - Board tools (boards only): `tool.sticky` (`Q`), `tool.shape` (`B`), `tool.connector` (`X`),
-  `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), and
+  `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), `tool.codeBlock` (`` ` ``), and
   `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky; on a mind map node it
   makes the node's next sibling) and `board.mindMapAdd` (`Cmd/Ctrl+Enter` on a mind map node, also
   while typing in one). Keys no design-file shortcut uses; on a design file they refuse.
