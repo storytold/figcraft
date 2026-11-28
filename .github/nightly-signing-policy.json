@@ -83,7 +83,9 @@
     }
   },
   "max_artifact_bytes": 2147483648,
-  "automatic_signer_actors": [],
+  "automatic_signer_actors": [
+    "github-actions[bot]"
+  ],
   "platforms": {
     "windows-x86_64": {
       "unsigned_artifact_name": "nightly-unsigned-windows-x86_64",

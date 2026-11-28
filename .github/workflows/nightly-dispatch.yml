@@ -1,0 +1,71 @@
+name: Dispatch release-ref nightly
+
+# Transport only, never authorization. No checkout, payload parsing or release environment.
+on:
+  workflow_run:
+    workflows: [FigCraft unsigned nightly]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  dispatch:
+    if: >-
+      github.repository == 'storytold/figcraft' &&
+      github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch only the exact completed producer run and attempt
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json
+          import os
+          import urllib.request
+
+          def require(value, message):
+              if not value:
+                  raise RuntimeError(message)
+
+          # These filters reduce noise; the protected signer-branch validator repeats admission
+          # against authenticated API metadata and required attestation/quality evidence.
+          require(os.environ.get('GITHUB_REPOSITORY') == 'storytold/figcraft', 'wrong repository')
+          require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_run', 'wrong event')
+          with open(os.environ['GITHUB_EVENT_PATH'], encoding='utf-8') as stream:
+              event = json.load(stream)
+          require(event.get('action') == 'completed', 'producer is not complete')
+          require(event.get('repository', {}).get('full_name') == 'storytold/figcraft', 'wrong event repository')
+          producer = event.get('workflow_run', {})
+          require(producer.get('head_repository', {}).get('full_name') == 'storytold/figcraft', 'foreign producer')
+          require(producer.get('path') == '.github/workflows/nightly.yml', 'wrong producer path')
+          require(producer.get('head_branch') == 'main', 'wrong producer branch')
+          require(producer.get('status') == 'completed' and producer.get('conclusion') == 'success', 'producer did not succeed')
+          # First scheduled attempt only; reviewed manual/re-run authority belongs to release policy.
+          require(producer.get('event') == 'schedule', 'not an automatic scheduled producer')
+          run_id, attempt = producer.get('id'), producer.get('run_attempt')
+          require(type(run_id) is int and run_id > 0, 'invalid producer run id')
+          require(type(attempt) is int and attempt == 1, 'invalid automatic producer attempt')
+          body = json.dumps({'ref': 'refs/heads/nightly-signer', 'inputs': {
+              'producer_run_id': str(run_id), 'producer_run_attempt': str(attempt)
+          }}).encode('utf-8')
+          request = urllib.request.Request(
+              'https://api.github.com/repos/storytold/figcraft/actions/workflows/nightly-sign.yml/dispatches',
+              data=body, method='POST', headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'User-Agent': 'figcraft-nightly-dispatch'
+              })
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  raise RuntimeError('dispatch redirects are forbidden')
+          # One bounded request, no retry: duplicate transport is not publication authority.
+          with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
+              require(response.status == 204, 'dispatch was not accepted')
+          print('Dispatched producer run/attempt to the release-ref validator; not a signing result.')

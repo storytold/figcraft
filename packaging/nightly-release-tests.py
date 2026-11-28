@@ -201,15 +201,21 @@ class TrustedSourcePreparation(unittest.TestCase):
                     (indicator, expression), = job_conditions(jobs)
                     self.assertFalse(indicator == ">-" and " ".join(expression.split()) == expected)
 
-    def test_no_nightly_schedule_is_registered(self):
-        for name, event in (("nightly.yml", "workflow_dispatch"),
-                            ("nightly-sign.yml", "workflow_dispatch")):
+    def test_nightly_triggers_match_reviewed_schedule_and_dispatch(self):
+        expected = (
+            ("nightly.yml", ["  schedule:", "  workflow_dispatch:"]),
+            ("nightly-sign.yml", ["  workflow_dispatch:"]),
+            ("nightly-dispatch.yml", ["  workflow_run:"]),
+        )
+        for name, expected_triggers in expected:
             source = (ROOT / ".github/workflows" / name).read_text()
             events = source.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
             triggers = [line for line in events.splitlines() if line.startswith("  ")
                         and not line.startswith("   ") and line.strip() and not line.lstrip().startswith("#")]
             with self.subTest(workflow=name):
-                self.assertEqual(triggers, [f"  {event}:"], "schedule/activation needs explicit review")
+                self.assertEqual(triggers, expected_triggers, "schedule/activation needs explicit review")
+        nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
+        self.assertEqual(re.findall(r"(?m)^    - cron: '([^']+)'$", nightly), ["30 2 * * *"])
 
     def test_signer_serialization_contract_is_enforced(self):
         assert_nightly_serialization((ROOT / ".github/workflows/nightly-sign.yml").read_text())
@@ -230,7 +236,7 @@ class TrustedSourcePreparation(unittest.TestCase):
                 assert_nightly_serialization(source.replace(old, new))
 
     def test_no_cache_actions_or_cache_setup_options_in_app_trusted_closure(self):
-        for name in ("nightly.yml", "nightly-sign.yml"):
+        for name in ("nightly.yml", "nightly-sign.yml", "nightly-dispatch.yml"):
             source = (ROOT / ".github/workflows" / name).read_text()
             executable = "\n".join(line for line in source.splitlines()
                                    if not line.lstrip().startswith("#"))
@@ -328,6 +334,7 @@ class NightlyEnabledCallers(unittest.TestCase):
                        "github.event_name == 'workflow_dispatch')",
         "nightly-sign.yml": "github.repository == 'storytold/figcraft' && github.event_name == 'workflow_dispatch' && "
                             "github.ref == 'refs/heads/nightly-signer' && github.ref_type == 'branch'",
+        "nightly-dispatch.yml": "github.repository == 'storytold/figcraft' && github.event_name == 'workflow_run'",
     }
 
     def test_enabled_jobs_keep_exact_context_guards(self):
@@ -344,7 +351,8 @@ class NightlyEnabledCallers(unittest.TestCase):
         source = (ROOT / ".github/workflows/nightly.yml").read_text()
         policy = json.loads(INSTALLED_POLICY.read_text())
         self.assertEqual(reviewed_manual_actors(source, policy), RELEASE_MANAGERS)
-        self.assertEqual(policy["automatic_signer_actors"], [], "no automatic signer without a schedule")
+        self.assertEqual(policy["automatic_signer_actors"], ["github-actions[bot]"],
+                         "automatic signer is limited to github-actions[bot]")
 
     def test_an_actor_outside_the_release_managers_is_refused(self):
         source = (ROOT / ".github/workflows/nightly.yml").read_text()
@@ -770,9 +778,24 @@ class NightlySignerBranchTrustClosure(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/" + SIGNER_BRANCH + "'", guard)
         self.assertNotIn("refs/heads/release", sign, "the signer no longer runs on the stable branch")
         self.assertEqual(re.findall(r"(?m)^      app-name: (\S+)$", sign), ["figcraft"], "the shared signer needs the reviewed registry app")
-        # This app ships no completion dispatcher yet: that workflow forwards scheduled producers
-        # only, and no schedule is approved. Adding it is part of a reviewed cadence change.
-        self.assertFalse(DISPATCHER.exists(), "a completion dispatcher needs its own reviewed activation")
+        self.assertTrue(DISPATCHER.exists(), "automated scheduled cadence requires the completion dispatcher")
+        dispatcher = DISPATCHER.read_text()
+        nightly_name = re.findall(r"(?m)^name: (.+)$", (ROOT / ".github/workflows/nightly.yml").read_text())
+        self.assertEqual(nightly_name, ["FigCraft unsigned nightly"])
+        self.assertIn(f"    workflows: [{nightly_name[0]}]\n", dispatcher)
+        self.assertIn("    types: [completed]\n", dispatcher)
+        self.assertIn("    branches: [main]\n", dispatcher)
+        self.assertIn("\npermissions: {}\n", dispatcher)
+        self.assertNotIn("false &&", dispatcher, "dispatcher must be active once automated schedule is enabled")
+        self.assertNotRegex(dispatcher, r"(?im)^\s*(?:uses|environment|secrets):")
+        scripts = inline_scripts(DISPATCHER)
+        self.assertEqual(len(scripts), 1)
+        compile(scripts[0], str(DISPATCHER), "exec")
+        self.assertIn("'ref': 'refs/heads/" + SIGNER_BRANCH + "'", scripts[0])
+        self.assertIn("https://api.github.com/repos/storytold/figcraft/actions/workflows/nightly-sign.yml/dispatches",
+                      scripts[0])
+        self.assertIn("producer.get('event') == 'schedule'", scripts[0])
+        self.assertIn("attempt == 1", scripts[0])
         self.assertEqual(json.loads(INSTALLED_POLICY.read_text())["release_branch"], SIGNER_BRANCH)
         self.assertFalse((ROOT / "docs/nightly-signing-policy.example.json").exists(),
                          "a policy example must then name the signer branch")
