@@ -1,8 +1,8 @@
 use super::common::{export_setting, layout_grid, outlined, prop_type, variant_pairs};
 use super::{
     AUX, AutoLayout, BoolOp, Bound, ContentAlign, CrossAlign, Exporter, Fields, HConstraint, Kv, LAYERS, LayoutMode, MAX_DEPTH, MainAlign, MaskType,
-    Node, NodeId, NodeKind, STASH, Sizing, TextData, TextStyle, VConstraint, WindingRule, arr, b, blend_name, color, e, fl, grid_sizing, guid, int,
-    matrix, o, position, root_fields, s, u, xy,
+    Node, NodeId, NodeKind, STASH, Sizing, VConstraint, WindingRule, arr, b, blend_name, color, e, fl, grid_sizing, guid, int, matrix, o, position,
+    root_fields, s, u, xy,
 };
 
 impl<'d> Exporter<'d> {
@@ -219,7 +219,13 @@ impl<'d> Exporter<'d> {
         // Text whose own style sets fills paints with them (the layer's fills only show through
         // runs); a variable bound to the layer's fill colours the layer's.
         let fills = match &n.kind {
-            NodeKind::Text(TextData { style: TextStyle { fills: Some(own), .. }, .. }) => self.paints(own, true, &Bound::default()),
+            NodeKind::Text(t) if t.style.fills.is_some() => {
+                if let Some(own) = &t.style.fills {
+                    self.paints(own, true, &Bound::default())
+                } else {
+                    self.paints(&n.fills, true, &bound)
+                }
+            }
             _ => self.paints(&n.fills, true, &bound),
         };
         let strokes = self.paints(&n.strokes, false, &bound);

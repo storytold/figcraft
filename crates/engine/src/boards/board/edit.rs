@@ -178,7 +178,7 @@ fn reshape(doc: &mut Document, id: NodeId, new: BoardShape) -> Result<()> {
     if let Some(o) = doc.get(id)?.children.first().copied()
         && let Some(on) = doc.node_mut(o)
     {
-        on.kind = NodeKind::Vector { network: VectorNetwork::from_path(&new.path(w, h)) };
+        on.kind = NodeKind::Vector { network: VectorNetwork::from_path(&new.path(w, h)).into() };
         (on.width, on.height, on.transform) = (w, h, Affine::IDENTITY);
     }
     Ok(())

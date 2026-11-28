@@ -182,7 +182,7 @@ fn encode_one_node(node: &Node, pos: String, seen: &HashMap<NodeId, &Node>, inte
     let vref = match &mut stripped.kind {
         NodeKind::Vector { network } if !network.vertices.is_empty() || !network.segments.is_empty() || !network.regions.is_empty() => {
             let idx = interner.intern(network)?;
-            *network = VectorNetwork::default();
+            *network = figcraft_doc::Shared::default();
             Some(idx)
         }
         _ => None,

@@ -13,7 +13,7 @@ fn colourful() -> (Document, NodeId) {
     let mut d = Document::new("c");
     let p = d.first_page().unwrap();
     let r = d.create(p, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
-    let t = d.create(p, NodeKind::Text(TextData::default()), "T", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let t = d.create(p, NodeKind::Text(TextData::default().into()), "T", 0.0, 0.0, 10.0, 10.0).unwrap();
     {
         let n = d.node_mut(r).unwrap();
         n.fills = vec![Paint::solid(RED)];

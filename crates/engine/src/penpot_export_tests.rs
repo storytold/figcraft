@@ -98,7 +98,7 @@ fn missing_provider_fonts_stay_offline_and_text_stays_editable() {
     let page = source.first_page().unwrap();
     let mut text = figcraft_doc::TextData::new("Offline text");
     text.style.font_family = "FigCraft Missing Provider Q7".into();
-    source.create(page, NodeKind::Text(text), "Label", 0.0, 0.0, 200.0, 30.0).unwrap();
+    source.create(page, NodeKind::Text(text.into()), "Label", 0.0, 0.0, 200.0, 30.0).unwrap();
     let bytes = figcraft_format::penpot::export(&source).unwrap().0;
     let data = base64::engine::general_purpose::STANDARD.encode(bytes);
     for command in ["file.open", "file.import"] {

@@ -1271,7 +1271,7 @@ fn set_path(cmd: &str, doc: &mut Document, id: NodeId, v: &Value, props: &Map<St
     let shape = super::create::path_network(cmd, d, size("width", "w")?, size("height", "h")?)?;
     let n = doc.get_mut(id)?;
     if let NodeKind::Vector { network } = &mut n.kind {
-        *network = shape.network;
+        *network = (shape.network).into();
     }
     n.width = shape.width;
     n.height = shape.height;

@@ -272,7 +272,7 @@ mod tests {
         let id = doc.alloc_id();
         let mut td = TextData::new("Hello world");
         td.restyle(6, 11, |s| s.font_size = 40.0);
-        doc.insert(Node::new(id, NodeKind::Text(td), "t", 10.0, 10.0), page, None).unwrap();
+        doc.insert(Node::new(id, NodeKind::Text(td.into()), "t", 10.0, 10.0), page, None).unwrap();
         assert_eq!(target_styles(&doc, &[id], Some((id, 0, 5))).len(), 1);
         assert_eq!(target_styles(&doc, &[id], Some((id, 4, 8))).len(), 2);
         assert_eq!(target_styles(&doc, &[id], Some((id, 3, 3))).len(), 2);

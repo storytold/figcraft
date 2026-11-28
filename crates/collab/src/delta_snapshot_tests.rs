@@ -77,9 +77,9 @@ pub(crate) fn design_system_doc(num_instances: usize) -> (Document, NodeId, Vec<
     let mut main_children = Vec::new();
     for i in 0..6 {
         let kind = match i {
-            0 | 1 => NodeKind::Text(TextData::new(format!("Title {i}"))),
-            2 => NodeKind::Vector { network: icon_a.clone() },
-            3 => NodeKind::Vector { network: icon_b.clone() },
+            0 | 1 => NodeKind::Text(TextData::new(format!("Title {i}")).into()),
+            2 => NodeKind::Vector { network: icon_a.clone().into() },
+            3 => NodeKind::Vector { network: icon_b.clone().into() },
             _ => NodeKind::Rectangle,
         };
         let cid = doc.create(comp, kind, &format!("Part {i}"), i as f64 * 24.0, 8.0, 32.0, 32.0).unwrap();

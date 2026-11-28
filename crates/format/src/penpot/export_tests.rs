@@ -153,7 +153,7 @@ fn rectangles_ellipses_and_paths_keep_their_geometry() {
     add(&mut doc, p, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Circle", 0.0, 0.0, 30.0, 20.0);
     add(&mut doc, p, NodeKind::Star { count: 5, inner_ratio: 0.4 }, "Star", 200.0, 0.0, 50.0, 50.0);
     let network = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(40.0, 0.0), Point::new(40.0, 30.0)], false);
-    let line = add(&mut doc, p, NodeKind::Vector { network }, "Open", 300.0, 0.0, 40.0, 30.0);
+    let line = add(&mut doc, p, NodeKind::Vector { network: network.into() }, "Open", 300.0, 0.0, 40.0, 30.0);
     doc.node_mut(line).unwrap().strokes = vec![Paint::solid(Color::BLACK)];
 
     let (back, e, _) = roundtrip(&doc);
@@ -185,7 +185,7 @@ fn stroked_closed_vectors_are_written_with_their_corner_smoothing() {
     for v in &mut network.vertices {
         v.radius = 20.0;
     }
-    let id = add(&mut doc, p, NodeKind::Vector { network }, "Smoothed", 0.0, 0.0, 100.0, 100.0);
+    let id = add(&mut doc, p, NodeKind::Vector { network: network.into() }, "Smoothed", 0.0, 0.0, 100.0, 100.0);
     {
         let n = doc.node_mut(id).unwrap();
         n.fills = vec![Paint::solid(Color::BLACK)];
@@ -266,7 +266,7 @@ fn open_path_caps_and_dotted_strokes_survive() {
     let mut doc = Document::new("Caps");
     let p = page(&doc);
     let network = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(50.0, 0.0)], false);
-    let id = add(&mut doc, p, NodeKind::Vector { network }, "Arrow", 0.0, 0.0, 50.0, 1.0);
+    let id = add(&mut doc, p, NodeKind::Vector { network: network.into() }, "Arrow", 0.0, 0.0, 50.0, 1.0);
     {
         let n = doc.node_mut(id).unwrap();
         n.strokes = vec![Paint::solid(Color::BLACK)];
@@ -398,7 +398,7 @@ fn edited_text_is_rebuilt_with_runs_and_styles() {
     bold.font_style = "Bold Italic".into();
     bold.fills = Some(vec![Paint::solid(Color::from_hex("#ff0000").unwrap())]);
     text.runs.push(StyleRun { start: 6, end: 10, style: bold });
-    let id = add(&mut doc, p, NodeKind::Text(text), "Copy", 0.0, 0.0, 200.0, 60.0);
+    let id = add(&mut doc, p, NodeKind::Text(text.into()), "Copy", 0.0, 0.0, 200.0, 60.0);
     doc.node_mut(id).unwrap().fills = vec![Paint::solid(Color::from_hex("#333333").unwrap())];
 
     let (back, e, _) = roundtrip(&doc);

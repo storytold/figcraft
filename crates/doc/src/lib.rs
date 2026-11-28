@@ -23,6 +23,7 @@ pub mod library;
 pub mod node;
 pub mod props;
 pub mod proto;
+pub mod shared;
 pub mod styles;
 pub mod text;
 pub mod vector;
@@ -43,6 +44,7 @@ pub use handoff::*;
 pub use library::*;
 pub use node::*;
 pub use props::*;
+pub use shared::Shared;
 pub use styles::*;
 pub use text::*;
 pub use vector::*;
@@ -978,7 +980,14 @@ impl Document {
                     pt.source = m.0;
                 }
             }
-            if let NodeKind::Vector { network } = &mut c.kind {
+            if let NodeKind::Vector { network } = &mut c.kind
+                && network
+                    .regions
+                    .iter()
+                    .filter_map(|r| r.fills.as_deref())
+                    .flatten()
+                    .any(|p| matches!(&p.kind, figcraft_color::PaintKind::Pattern(pt) if map.contains_key(&NodeId(pt.source))))
+            {
                 for p in network.regions.iter_mut().filter_map(|r| r.fills.as_mut()).flatten() {
                     if let figcraft_color::PaintKind::Pattern(pt) = &mut p.kind
                         && let Some(m) = map.get(&NodeId(pt.source))
@@ -1378,6 +1387,8 @@ mod proto_expr_parse_tests;
 mod proto_expr_tests;
 #[cfg(test)]
 mod proto_overlay_anchor_tests;
+#[cfg(test)]
+mod shared_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
