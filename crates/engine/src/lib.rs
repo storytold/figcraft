@@ -298,6 +298,8 @@ mod datafill_tests;
 #[cfg(test)]
 mod default_props_tests;
 #[cfg(test)]
+mod delivered_save_tests;
+#[cfg(test)]
 mod design_context_tests;
 #[cfg(test)]
 mod design_paste_tests;
@@ -415,6 +417,8 @@ mod interaction_rollback_tests;
 mod invite_links_tests;
 #[cfg(test)]
 mod jam_open_tests;
+#[cfg(test)]
+mod join_bench_tests;
 #[cfg(test)]
 mod jpg_export_tests;
 #[cfg(test)]

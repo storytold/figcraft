@@ -819,7 +819,7 @@ fn a_boolean_groups_corner_radius_round_trips() {
     doc.create(g, NodeKind::Rectangle, "A", 0.0, 0.0, 200.0, 100.0).unwrap();
     doc.create(g, NodeKind::Rectangle, "B", 150.0, 0.0, 100.0, 200.0).unwrap();
     doc.fit_to_children(g).unwrap();
-    doc.get_mut(g).unwrap().corners = Corners { radii: [20.0; 4], smoothing: 0.6 };
+    doc.get_mut(g).unwrap().corners = Corners { radii: [20.0; 4], smoothing: 0.6, ..Corners::default() };
     let (back, _) = round_trip(&doc, "boolean radius");
     let n = back.nodes().find(|n| matches!(n.kind, NodeKind::BooleanOp { .. })).unwrap();
     assert!(n.corners.radii.iter().all(|r| (r - 20.0).abs() < 1e-4), "{:?}", n.corners);
@@ -1380,7 +1380,8 @@ fn images_are_named_by_the_sha1_of_their_bytes() {
     assert_eq!(export::sha1_hex(&vec![b'a'; 1_000_000]), "34aa973cd4c4daa4f61eeb2bdbad27316534016f");
     let (bytes, _) = export(&generate(3), None).unwrap();
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
-    let names: Vec<String> = z.file_names().filter(|n| n.starts_with("images/")).map(str::to_string).collect();
+    let names: Vec<String> =
+        z.file_names().map(|name| name.expect("ZIP member name")).filter(|n| n.starts_with("images/")).map(std::borrow::Cow::into_owned).collect();
     assert!(!names.is_empty());
     for name in names {
         let data = crate::read_member(&mut z, &name, 1 << 26).unwrap();

@@ -21,13 +21,14 @@
 //!   `http://` on a trusted network to reach plain `ws://` hosts on other machines.
 //! - host mode: `?host=parent` (a same-origin page embedding FigCraft in an `<iframe>`) or
 //!   `data-host="page"` on the canvas (the page's own document) hands the page the app's files
-//!   instead of downloading them and reports unsaved changes (`host`);
+//!   instead of downloading them and reports unsaved changes (`host`); with `?save=managed` (or
+//!   `data-save="managed"`) a document save waits for the page's confirmation (`host_saves`);
 //!
 //! URL query flags: `?webgl` forces the WebGL2 backend instead of WebGPU; `?control` installs
 //! `window.figcraft`, the page's control channel (`api.rs`), which is off without it; `?host=parent`
 //! (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the document to open
 //! and stores what FigCraft saves. `&author=` names the user for comments and board notes in either
-//! host mode.
+//! host mode, and `&save=managed` makes document saves wait for the host's `saved`.
 //!
 //! URL fragment: `#join=<invite link or join code>` joins that live session once the page has
 //! loaded, so a bookmark opens a shared file. `join` takes the rest of the fragment: put it last.
@@ -38,6 +39,8 @@
 mod api;
 #[cfg(target_arch = "wasm32")]
 mod host;
+#[cfg(any(target_arch = "wasm32", test))]
+mod host_saves;
 #[cfg(any(target_arch = "wasm32", test))]
 mod hostmode;
 #[cfg(any(target_arch = "wasm32", test))]

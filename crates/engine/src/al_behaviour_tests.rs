@@ -125,6 +125,34 @@ fn fill_along_a_hugging_parent_notes_that_the_width_is_fixed() {
     assert_eq!(s.message, None);
 }
 
+/// #2178: through the API, the sizing an edit changes on another layer comes back in `warnings`
+/// (the canvas shows it as a notice), naming that layer; an edit that changes no other layer's
+/// sizing has none.
+#[test]
+fn node_set_warns_about_the_other_layers_it_turns_fixed() {
+    let mut s = Session::new();
+    let root = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));
+    let menu = rect(&mut s, root, 200.0, 100.0, "#222222");
+    let content = rect(&mut s, root, 600.0, 900.0, "#FFFFFF");
+    let warnings = |v: Value| v["warnings"].as_array().cloned().unwrap_or_default();
+    let names = |w: &[Value], n: NodeId, key: &str| w.iter().any(|w| w.as_str().is_some_and(|w| w.starts_with(&format!("{n} ")) && w.contains(key)));
+
+    let w = warnings(s.execute("node.set", &json!({"id": menu, "props": {"sizingV": "fill"}})).unwrap());
+    assert!(w.is_empty(), "a non-Fill sibling is left, the root keeps hugging: {w:?}");
+    let w = warnings(s.execute("node.set", &json!({"id": content, "props": {"sizingV": "fill"}})).unwrap());
+    assert_eq!(sizing(&s, root).1, Sizing::Fixed);
+    assert!(names(&w, root, "sizingV"), "the root turned Fixed: {w:?}");
+    assert!(!names(&w, content, "sizingV"), "not the layer edited: {w:?}");
+
+    // Along the row: the menu filling its width turns the root's width Fixed; hugging it again
+    // turns the menu's width Fixed.
+    let w = warnings(s.execute("node.set", &json!({"id": menu, "props": {"sizingH": "fill"}})).unwrap());
+    assert!(names(&w, root, "sizingH"), "{w:?}");
+    let w = warnings(s.execute("node.set", &json!({"id": root, "props": {"sizingH": "hug"}})).unwrap());
+    assert_eq!(sizing(&s, menu).0, Sizing::Fixed);
+    assert!(names(&w, menu, "sizingH") && !names(&w, root, "sizingH"), "the child that filled it: {w:?}");
+}
+
 #[test]
 fn hugging_a_row_notes_the_child_that_filled_its_width_turned_fixed() {
     let mut s = Session::new();

@@ -169,7 +169,7 @@ fn a_snapshot_holding_an_image_the_checks_refuse_still_opens_without_it() {
     let mut snapshot = crate::Replica::new(crate::sim_tests::base()).snapshot().unwrap();
     let (key, bytes) = forged();
     snapshot.push(put(&key, 2, 1, bytes));
-    let r = crate::Replica::from_snapshot(&snapshot).expect("the snapshot opens");
+    let r = crate::Replica::from_snapshot(snapshot).expect("the snapshot opens");
     assert!(!r.document().images.contains_key(&key));
 }
 
@@ -254,5 +254,5 @@ fn a_snapshot_with_a_broken_layer_change_still_fails_to_open() {
     // A property of a layer that isn't there: an error when applied (unlike deleting it).
     let missing = figcraft_doc::NodeId(u64::MAX);
     snapshot.push(Change::Set { id: missing, prop: crate::change::Prop::Name, value: Json(json!("x")) });
-    assert!(crate::Replica::from_snapshot(&snapshot).is_err());
+    assert!(crate::Replica::from_snapshot(snapshot).is_err());
 }

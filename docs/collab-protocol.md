@@ -799,7 +799,8 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   plain `ws://` endpoint at `/`, `figcraft://join?server=<ws(s)://host[:port][/path]>&file=…&token=…`
   for any endpoint (TLS, a path behind a proxy), or `ws(s)://…?file=…&token=…`. The desktop app,
   `figcraft-cli` and the browser all open `wss://`: natively through rustls (ring, Mozilla's root
-  certificates compiled in, plus any authority in the PEM file `FIGCRAFT_CA_FILE` names), always
+  certificates compiled in, the operating system's certificate store unless
+  `FIGCRAFT_NO_SYSTEM_ROOTS` is set, plus any authority in the PEM file `FIGCRAFT_CA_FILE` names), always
   verifying the certificate; the browser through its own WebSocket.
 - **Managing files.** A connection that opens with `Manage {key}` instead of `Hello` sends
   `Admin` requests: publish a document (its snapshot) as a new file, which returns an edit link

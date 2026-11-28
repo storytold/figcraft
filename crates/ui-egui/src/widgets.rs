@@ -154,6 +154,17 @@ pub fn scrub_notice_id() -> Id {
     Id::unique("scrub_speed_notice")
 }
 
+/// Where a scrub notes the last frame it moved a value in ([`scrubbing`]).
+fn scrubbing_id() -> Id {
+    Id::unique("scrubbing_frame")
+}
+
+/// Whether a field is being scrubbed, this frame or the last (the panels may draw before or after
+/// the canvas): the canvas hides the selection's frame meanwhile, so the value shows on the layer.
+pub(crate) fn scrubbing(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(scrubbing_id())).is_some_and(|f| f + 1 >= ctx.cumulative_frame_nr())
+}
+
 /// The value a scrub that began at `from` and has moved `amount` (see [`scrub_amount`]) shows:
 /// whole steps of `quantum` away from where it began.
 pub fn scrubbed(from: f64, amount: f64, quantum: f64) -> f64 {
@@ -193,6 +204,8 @@ pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, st
         let (speed, notice) = scrub_speed(rise);
         // The frame the button goes up moves nothing: the scrub ends where the last one left it.
         if response.dragged() {
+            let frame = ui.ctx().cumulative_frame_nr();
+            ui.data_mut(|d| d.insert_temp(scrubbing_id(), frame));
             amount += scrub_amount(dx, step, shift, alt) * speed;
             // A change of speed is said once (not the usual speed a scrub starts at).
             if notice != last_speed && !(last_speed.is_empty() && speed == 1.0) {
