@@ -14,7 +14,7 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
         | NodeKind::Component { .. }
         | NodeKind::ComponentSet { .. }
         | NodeKind::Instance { .. }
-        | NodeKind::Section { .. } => figcraft_geom::rounded_rect(w, h, c.radii, c.smoothing),
+        | NodeKind::Section { .. } => figcraft_geom::styled_rect(w, h, c.radii, c.smoothing, c.style),
         NodeKind::Slice => figcraft_geom::rounded_rect(w, h, [0.0; 4], 0.0),
         NodeKind::Ellipse { start, sweep, inner } => figcraft_geom::ellipse(w, h, *start, *sweep, *inner),
         NodeKind::Polygon { count } => figcraft_geom::smoothed_polygon(&figcraft_geom::polygon_points(w, h, *count), c.radii[0], c.smoothing),
@@ -84,6 +84,7 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
         }
         NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Section { .. } => {
             n.local_rect().inflate(tol_l, tol_l).contains(lp)
+                && (n.corners.style.is_round() || shape_path(n).is_some_and(|path| path.contains(lp) || (tol_l > 0.0 && near_path(&path, lp, tol_l))))
         }
         NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) => {
             let drawn = drawn_network(network, n.corners.smoothing);

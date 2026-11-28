@@ -4,7 +4,15 @@
 //! first, on Windows too. A Vulkan driver that faults there takes the app down as the window opens:
 //! an access violation inside the vendor's driver, which no guard of ours can catch (seen on a laptop
 //! with two AMD GPUs whose drivers were years apart). Direct3D 12 is part of Windows, so on Windows
-//! wgpu is offered Direct3D 12, and OpenGL for hardware without a Direct3D 12 driver.
+//! wgpu is offered Direct3D 12 alone at first.
+//!
+//! Not OpenGL beside it: wgpu's OpenGL backend on Windows makes a hidden window on a thread of its
+//! own that handles no window messages, as soon as the instance is created, whichever backend then
+//! draws. Windows hands an input language change (Alt+Shift or Win+Space to a Russian layout,
+//! #2264) to every thread of the app with a window, so the main window waited on that hidden one
+//! and the app hung. Direct3D 12 always lists its software adapter (WARP), so a GPU with no
+//! Direct3D 12 driver (Intel Haswell, which wgpu leaves out of Direct3D 12, and older ones) now
+//! draws on WARP rather than on its OpenGL driver.
 //!
 //! Two shader compilers lost the device before the window opened ("Parent device is lost", #965,
 //! #1438), both on wgpu's indirect-call validation shaders, which wgpu compiles with every device:
@@ -14,10 +22,12 @@
 //! out: FigCraft draws nothing indirectly, so they would check nothing.
 //!
 //! When the graphics still fail before the window's first frame, the app starts again with the
-//! next of its [`attempts`]: on Windows Vulkan, then OpenGL; elsewhere OpenGL; and last the first
+//! next of its [`attempts`]: on Windows Vulkan, then OpenGL; elsewhere OpenGL; then the first
 //! backends again with lower requirements on the power-saving GPU (macOS has no OpenGL in wgpu, so
-//! that is its only other try). The attempts are a fixed list, so this ends; the message the last
-//! one shows names what was tried.
+//! that is its only other try); and on Windows last OpenGL with lower requirements, each on its own
+//! so that OpenGL starts only when Direct3D 12 failed. An OpenGL start on Windows can still hang on
+//! an input language change. The attempts are a fixed list, so this ends; the message the last one
+//! shows names what was tried.
 //!
 //! `WGPU_BACKEND` (`dx12`, `vulkan`, `gl`, `metal`) still names the backend on every system, and
 //! is then the one attempt. `WGPU_DX12_COMPILER` and `WGPU_VALIDATION_INDIRECT_CALL` still choose
@@ -36,8 +46,9 @@ pub const ATTEMPT_ENV: &str = "FIGCRAFT_GRAPHICS_ATTEMPT";
 /// begins once the first was presented.
 pub const STARTUP_FRAMES: u64 = 2;
 
-/// Direct3D 12, then OpenGL: wgpu ranks a hardware GPU on either ahead of Direct3D's software one.
-const WINDOWS: Backends = Backends::DX12.union(Backends::GL);
+/// Direct3D 12 alone: an OpenGL instance beside it hangs the window on an input language change
+/// (see the module docs).
+const WINDOWS: Backends = Backends::DX12;
 
 /// The graphics APIs by name, in the order the startup message lists them.
 const NAMES: [(Backends, &str); 4] =
@@ -54,7 +65,8 @@ pub struct Attempt {
 
 /// The ways to start, in order: only `WGPU_BACKEND`'s backends (`requested`) when it is set;
 /// otherwise [`WINDOWS`] on Windows, else eframe's `defaults`, then Vulkan on Windows, OpenGL
-/// except on macOS, and those first backends again with lower requirements.
+/// except on macOS, those first backends again with lower requirements, and on Windows OpenGL with
+/// lower requirements.
 pub fn attempts(requested: Option<Backends>, windows: bool, macos: bool, defaults: Backends) -> Vec<Attempt> {
     let normal = |backends| Attempt { backends, lower: false };
     if let Some(requested) = requested {
@@ -69,6 +81,9 @@ pub fn attempts(requested: Option<Backends>, windows: bool, macos: bool, default
         list.push(normal(Backends::GL));
     }
     list.push(Attempt { backends: first, lower: true });
+    if windows {
+        list.push(Attempt { backends: Backends::GL, lower: true });
+    }
     list
 }
 

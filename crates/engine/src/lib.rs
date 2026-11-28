@@ -416,6 +416,8 @@ mod invite_links_tests;
 #[cfg(test)]
 mod jam_open_tests;
 #[cfg(test)]
+mod join_bench_tests;
+#[cfg(test)]
 mod jpg_export_tests;
 #[cfg(test)]
 mod keymap_tests;

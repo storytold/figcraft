@@ -18,7 +18,7 @@ fn a_boards_kind_and_its_objects_metadata_sync() {
     // A joiner's copy, built from the snapshot, is a board with the sticky's metadata.
     let snap = host.snapshot().unwrap();
     assert!(snap.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::Kind, .. })));
-    let joiner = Replica::from_snapshot(&snap).unwrap();
+    let joiner = Replica::from_snapshot(snap).unwrap();
     assert_eq!(joiner.document().kind, FileKind::Board);
     assert_eq!(joiner.document().node(a).unwrap().board, host.document().node(a).unwrap().board);
     // Re-attaching a connector's end is one property write, the same after the wire.
