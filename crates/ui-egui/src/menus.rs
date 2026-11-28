@@ -69,6 +69,14 @@ pub fn record_recent(app: &mut FigApp, key: &str) {
     r.truncate(figcraft_engine::MAX_RECENT_ACTIONS);
 }
 
+/// Put `id`'s link (`figcraft://node/<id>`) on the clipboard and say so. It goes through the
+/// control-channel fence (`clipboard_set_text`): a synthetic gesture never replaces the user's
+/// clipboard.
+pub(crate) fn copy_link(app: &mut FigApp, id: figcraft_doc::NodeId) {
+    app.clipboard_set_text(&format!("figcraft://node/{}", id.0));
+    app.toast(tr("Link copied"));
+}
+
 /// Run a menu, shortcut or palette action by id: actions that need the UI (dialogs, panels, the
 /// clipboard) are handled here, the rest go to the engine.
 pub fn invoke(app: &mut FigApp, id: &str) {
@@ -150,11 +158,9 @@ pub fn invoke(app: &mut FigApp, id: &str) {
             app.toast(tr("Copied as text"));
         }
         "edit.copyLink" => {
-            // Only a selected layer has a link, and the copy goes through the control-channel fence
-            // (`clipboard_set_text`): a synthetic gesture never replaces the user's clipboard.
-            if let Some(id) = app.session.selection().first() {
-                app.clipboard_set_text(&format!("figcraft://node/{}", id.0));
-                app.toast(tr("Link copied"));
+            // The selected layer's link, else the page's (#2507).
+            if let Some(id) = app.session.selection().first().copied().or_else(|| app.session.page().ok()) {
+                copy_link(app, id);
             }
         }
         "edit.findReplace" => app.ui.find = Some((String::new(), String::new())),

@@ -43,3 +43,5 @@ craft-font-catalog = { workspace = true }
 zip = { workspace = true }
 wat = { workspace = true }
 image = { workspace = true }
+# Writes the DNG files the camera raw tests open.
+craft-raw = { workspace = true }

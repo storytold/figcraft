@@ -14,7 +14,8 @@ use figcraft_doc::{PrintSettings, VdCompat};
 ///
 /// Files: .figcraft (native), .penpot (Penpot 2.x), .json (FigCraft or REST API file JSON), .fig
 /// (best effort; `info` lists what wasn't imported), .sketch (Sketch 48 or newer, best effort),
-/// .svg, .png/.jpg/.webp/.gif/.bmp (open as an image layer).
+/// .svg, .png/.jpg/.webp/.gif/.bmp (open as an image layer), camera raw files such as .rw2, .cr2,
+/// .cr3, .nef, .arw, .raf, .orf and .dng (developed as shot into an image layer).
 #[derive(Parser)]
 #[command(
     name = "figcraft-cli",
@@ -225,6 +226,9 @@ pub struct McpArgs {
     /// How long the attached app may take over each request, in seconds (1–600; default 60)
     #[arg(long, value_name = "SECONDS", requires = "attach", value_parser = clap::value_parser!(u64).range(1..=600))]
     pub timeout: Option<u64>,
+    /// Allow a confined headless MCP session to join collaboration links from this server (repeatable)
+    #[arg(long = "automation-allow-server", value_name = "URL", conflicts_with = "attach")]
+    pub automation_allow_servers: Vec<String>,
     #[command(flatten)]
     pub roots: RootArgs,
 }
@@ -570,6 +574,7 @@ mod tests {
             (&["mcp", "--attach", "7979", "--timeout", "601"], ValueValidation),
             (&["mcp", "--timeout", "300"], MissingRequiredArgument),
             (&["mcp", "--attach", "7979", "--automation-read-root", "."], ArgumentConflict),
+            (&["mcp", "--attach", "7979", "--automation-allow-server", "wss://figcraft.example.com/"], ArgumentConflict),
             (&["mcp", "--automation-write-root"], InvalidValue),
             (&["mcp", "stray"], UnknownArgument),
             (&["convert", "a"], MissingRequiredArgument),
@@ -603,12 +608,30 @@ mod tests {
             assert_eq!(e.as_ref().map(clap::Error::kind), Some(ErrorKind::DisplayHelp), "{args:?}");
             assert_eq!(e.map(|e| e.exit_code()), Some(0), "{args:?}");
         }
+
         // The help is the subcommand's, even after a mistake.
         let help = try_parse(&["plugin", "publish", "--bogus", "--help"]).err().map(|e| e.to_string()).unwrap_or_default();
         assert!(help.contains("Usage: figcraft-cli plugin publish"), "{help}");
         // After `--`, `-h` is a file name.
         let Command::Info(a) = ok(&["info", "--", "-h"]) else { panic!("info") };
         assert_eq!(a.file, "-h");
+    }
+
+    #[test]
+    fn mcp_accepts_repeated_server_allowlists() {
+        let Command::Mcp(a) = ok(&[
+            "mcp",
+            "--automation-read-root",
+            "in",
+            "--automation-write-root",
+            "out",
+            "--automation-allow-server",
+            "wss://figcraft.example.com/",
+            "--automation-allow-server=wss://team.example.com/design/",
+        ]) else {
+            panic!("mcp")
+        };
+        assert_eq!(a.automation_allow_servers, ["wss://figcraft.example.com/", "wss://team.example.com/design/"]);
     }
 
     /// Every subcommand's help renders and documents each of its options.

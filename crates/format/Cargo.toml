@@ -28,3 +28,7 @@ craft-figcraft-format = { workspace = true }
 craft-figma-rest = { workspace = true }
 craft-jpeg = { workspace = true }
 craft-image-codecs = { workspace = true }
+craft-raw = { workspace = true }
+craft-develop = { workspace = true }
+craft-color-transform = { workspace = true }
+craft-geom = { workspace = true }

@@ -34,7 +34,7 @@ pub(crate) fn two_region_vector(s: &mut Session) -> NodeId {
         square(&mut n, 60.0, 60.0, 80.0);
         n.regions =
             vec![Region { loops: vec![vec![0, 1, 2, 3]], ..Default::default() }, Region { loops: vec![vec![4, 5, 6, 7]], ..Default::default() }];
-        node.kind = NodeKind::Vector { network: n };
+        node.kind = NodeKind::Vector { network: n.into() };
         node.transform = figcraft_geom::Affine::IDENTITY;
         node.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE)];
         figcraft_engine::vectoredit::refit(doc, id).unwrap();

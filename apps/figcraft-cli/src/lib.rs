@@ -76,6 +76,12 @@ pub type CliResult<T> = Result<T, CliError>;
 
 fn dispatch(cli: Cli, io: &mut Io) -> CliResult<i32> {
     check(&cli.command)?;
+    // Headless MCP is always confined (AGENTS.md: agent entry points refuse to start without both
+    // roots); checked before the fonts are scanned, so a usage error comes back at once.
+    let mcp_roots = match &cli.command {
+        Command::Mcp(a) if a.attach.is_none() => Some(mcp_roots(&a.roots, &a.automation_allow_servers)?),
+        _ => None,
+    };
     if !cli.no_system_fonts {
         // Text lays out with the installed fonts, like the desktop app, so headless renders and
         // auto layout sizes match what users see.
@@ -99,7 +105,7 @@ fn dispatch(cli: Cli, io: &mut Io) -> CliResult<i32> {
             Ok(0)
         }
         // `--attach` conflicts with the roots: the app runs the commands, only its own roots can confine them.
-        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, roots_of(&a.roots)?, io),
+        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, mcp_roots, io),
         Command::Plugin { command: PluginCommand::Publish(a) } => publish_plugin(&a.folder, &a.server, a.key.as_deref(), io),
         Command::Connect { command: ConnectCommand::Publish(a) } => {
             confined(&a.roots, || files::connect_publish(&a.file, &a.mappings, a.dry_run, io))
@@ -180,6 +186,29 @@ fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine
     Ok(0)
 }
 
+/// The roots a headless MCP session is confined to: both kinds are required, and the servers in
+/// `allowed_servers` (ws:// or wss:// addresses without a query or key) are the only ones
+/// `collab.join` may reach.
+fn mcp_roots(roots: &RootArgs, allowed_servers: &[String]) -> CliResult<figcraft_engine::file_access::Roots> {
+    if roots.automation_read_root.is_empty() || roots.automation_write_root.is_empty() {
+        return Err(CliError::Usage("headless mcp requires both --automation-read-root and --automation-write-root".into()));
+    }
+    let roots = figcraft_engine::file_access::Roots::new(&roots.automation_read_root, &roots.automation_write_root).map_err(CliError::Failed)?;
+    let mut servers = Vec::with_capacity(allowed_servers.len());
+    for server in allowed_servers {
+        if server.contains('?') {
+            return Err(CliError::Usage("--automation-allow-server must not contain a query or key".into()));
+        }
+        let (endpoint, query) = figcraft_collab_net::Endpoint::parse(server)
+            .map_err(|_| CliError::Usage("--automation-allow-server must be a ws:// or wss:// server URL".into()))?;
+        if !query.is_empty() {
+            return Err(CliError::Usage("--automation-allow-server must not contain a query or key".into()));
+        }
+        servers.push(endpoint.url());
+    }
+    Ok(roots.with_allowed_servers(servers))
+}
+
 /// What the arguments can't say alone: an output that would replace its input needs `--in-place`.
 fn check(command: &Command) -> CliResult<()> {
     let refuse = |flag: &str, path: &str, input: &str, allowed: bool| -> CliResult<()> {
@@ -253,5 +282,35 @@ where
             errln!(io, "error: {}", files::plain(&e.to_string()));
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod mcp_roots_tests {
+    use super::{CliError, mcp_roots};
+    use crate::args::RootArgs;
+
+    #[test]
+    fn headless_mcp_requires_both_roots_and_allowlist_cannot_carry_a_key() {
+        let server = "wss://figcraft.example.com/".to_string();
+        let no_roots = RootArgs { automation_read_root: Vec::new(), automation_write_root: Vec::new() };
+        assert!(matches!(mcp_roots(&no_roots, &[]), Err(CliError::Usage(_))));
+        assert!(matches!(mcp_roots(&no_roots, std::slice::from_ref(&server)), Err(CliError::Usage(_))));
+
+        let path = std::env::temp_dir().join(format!("figcraft-cli-roots-{}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        let root = path.to_string_lossy().into_owned();
+        let read_only = RootArgs { automation_read_root: vec![root.clone()], automation_write_root: Vec::new() };
+        assert!(matches!(mcp_roots(&read_only, &[]), Err(CliError::Usage(_))));
+        let roots = RootArgs { automation_read_root: Vec::new(), automation_write_root: vec![path.to_string_lossy().into_owned()] };
+        assert!(matches!(mcp_roots(&roots, &[]), Err(CliError::Usage(_))));
+
+        let roots = RootArgs { automation_read_root: vec![root.clone()], automation_write_root: vec![root] };
+        let allowed = mcp_roots(&roots, &[server]).unwrap();
+        assert_eq!(allowed.allowed_servers(), ["wss://figcraft.example.com:443/"]);
+
+        let with_key = "wss://figcraft.example.com/?key=secret".to_string();
+        assert!(matches!(mcp_roots(&roots, &[with_key]), Err(CliError::Usage(message)) if !message.contains("secret")));
+        let _ = std::fs::remove_dir_all(path);
     }
 }

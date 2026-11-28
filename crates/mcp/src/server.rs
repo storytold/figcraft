@@ -241,7 +241,12 @@ impl Server {
     fn roots_note(&self) -> String {
         let Some(r) = &self.roots else { return String::new() };
         let j = r.to_json();
-        format!(" Files: only these folders may be read: {}; written: {} (any other path is refused).", j["read"], j["write"])
+        let files = format!(" Files: only these folders may be read: {}; written: {} (any other path is refused).", j["read"], j["write"]);
+        if r.allowed_servers().is_empty() {
+            files
+        } else {
+            format!("{files} Collaboration: may join only links on {}; other network requests are refused.", j["allowedServers"])
+        }
     }
 
     fn notification(&mut self, method: &str) {

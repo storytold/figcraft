@@ -50,7 +50,7 @@ pub(super) fn outlined(n: &Node) -> Option<(Node, String)> {
         r.winding = WindingRule::NonZero;
     }
     let mut v = n.clone();
-    v.kind = NodeKind::Vector { network };
+    v.kind = NodeKind::Vector { network: network.into() };
     v.fills = std::mem::take(&mut v.strokes);
     v.stroke = Default::default();
     v.styles.fill = v.styles.stroke.take();
@@ -277,7 +277,8 @@ pub(super) fn prop_type(d: &PropDef) -> Option<&'static str> {
         PropDef::Boolean { .. } => Some("BOOL"),
         PropDef::Text { .. } => Some("TEXT"),
         PropDef::InstanceSwap { .. } => Some("INSTANCE_SWAP"),
-        PropDef::Variant { .. } | PropDef::Slot { .. } => None,
+        PropDef::Slot { .. } => Some("SLOT"),
+        PropDef::Variant { .. } => None,
     }
 }
 

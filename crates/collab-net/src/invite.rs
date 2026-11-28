@@ -84,6 +84,15 @@ impl Endpoint {
         }
     }
 
+    /// Whether this endpoint is within an explicitly allowed server origin and path prefix.
+    pub fn is_within(&self, allowed: &Endpoint) -> bool {
+        self.secure == allowed.secure
+            && self.host.eq_ignore_ascii_case(&allowed.host)
+            && safe_path(&self.path)
+            && safe_path(&allowed.path)
+            && (allowed.path == "/" || self.path.starts_with(&allowed.path))
+    }
+
     /// Read `ws(s)://host[:port][/path][?query]` (a missing port is the scheme's: 80 or 443): the
     /// endpoint and the query's decoded pairs. Errors say what's wrong without echoing `url`.
     pub fn parse(url: &str) -> Result<(Endpoint, Vec<(String, String)>), String> {
@@ -259,6 +268,10 @@ fn valid_host(s: &str) -> bool {
 /// A path of unreserved characters and slashes, starting with `/`.
 fn valid_path(p: &str) -> bool {
     p.starts_with('/') && p.len() <= 256 && p.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~'))
+}
+
+fn safe_path(p: &str) -> bool {
+    !p.split('/').any(|part| matches!(part, "." | ".."))
 }
 
 /// `%XX` escapes decoded (UTF-8); `None` for broken escapes.

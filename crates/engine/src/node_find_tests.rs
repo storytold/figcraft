@@ -20,8 +20,8 @@ fn node_find_filters_are_literal_case_insensitive_and_anded() {
     let mut s = Session::new();
     let page = s.page().unwrap();
     let frame = add(&mut s, page, NodeKind::Frame, "CAFÉ [Card]");
-    let title = add(&mut s, frame, NodeKind::Text(TextData::new("HÉLLO 世界")), "Café Title");
-    let other = add(&mut s, frame, NodeKind::Text(TextData::new("Other")), "Title");
+    let title = add(&mut s, frame, NodeKind::Text(TextData::new("HÉLLO 世界").into()), "Café Title");
+    let other = add(&mut s, frame, NodeKind::Text(TextData::new("Other").into()), "Title");
     let rect = add(&mut s, page, NodeKind::Rectangle, "HÉLLO 世界");
     found(&mut s, json!({"name": "CAFÉ"}), &[frame, title]);
     found(&mut s, json!({"name": "[cArD]"}), &[frame]);
@@ -39,7 +39,7 @@ fn node_find_filters_are_literal_case_insensitive_and_anded() {
 fn node_find_matches_a_greek_final_sigma_both_ways() {
     let mut s = Session::new();
     let page = s.page().unwrap();
-    let os = add(&mut s, page, NodeKind::Text(TextData::new("ΛΟΓΟΣ")), "ΟΣ");
+    let os = add(&mut s, page, NodeKind::Text(TextData::new("ΛΟΓΟΣ").into()), "ΟΣ");
     found(&mut s, json!({"name": "Σ"}), &[os]);
     found(&mut s, json!({"name": "ς"}), &[os]);
     found(&mut s, json!({"text": "λογοσ"}), &[os]);
@@ -85,7 +85,7 @@ fn node_find_instances_match_main_name_and_visit_actual_children_only() {
     let page = s.page().unwrap();
     let main =
         add(&mut s, page, NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() }, "CAFÉ [Button]");
-    let original = add(&mut s, main, NodeKind::Text(TextData::new("Original")), "Original");
+    let original = add(&mut s, main, NodeKind::Text(TextData::new("Original").into()), "Original");
     let inst = idv(&ex(&mut s, "instance.create", json!({"component": main})));
     let child = s.doc().unwrap().get(inst).unwrap().children[0];
     ex(&mut s, "node.set", json!({"ids": [inst], "props": {"name": "Copy"}}));
@@ -142,7 +142,7 @@ fn node_find_accepts_every_canonical_type() {
         NodeKind::Star { count: 5, inner_ratio: 0.5 },
         NodeKind::Line,
         NodeKind::Vector { network: Default::default() },
-        NodeKind::Text(TextData::new("Text")),
+        NodeKind::Text(TextData::new("Text").into()),
         NodeKind::BooleanOp { op: BoolOp::Union },
         NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() },
         NodeKind::ComponentSet { description: String::new() },

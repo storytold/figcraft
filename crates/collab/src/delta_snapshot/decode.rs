@@ -26,6 +26,12 @@ use crate::replica::{Positions, Replica};
 const MAX_AMPLIFICATION_FACTOR: usize = 64;
 const MIN_MATERIALIZED_FLOOR: usize = 16 << 20;
 
+/// Effective materialized-byte ceiling shared by encoder and decoder.
+pub(super) fn materialized_budget(declared: usize, ceiling: usize) -> usize {
+    let cap = declared.saturating_mul(MAX_AMPLIFICATION_FACTOR).max(MIN_MATERIALIZED_FLOOR);
+    ceiling.min(cap)
+}
+
 /// Decode a compressed `CatchUp::DeltaSnapshot` payload into a validated [`Replica`].
 pub fn decode_delta_snapshot(bytes: &[u8], max_bytes: usize, max_nodes: usize) -> Result<Replica, Error> {
     decode_delta_snapshot_with_budget(bytes, max_bytes, max_nodes, DEFAULT_MAX_MATERIALIZED_BYTES)
@@ -51,15 +57,14 @@ pub fn decode_delta_snapshot_with_budget(bytes: &[u8], max_bytes: usize, max_nod
         return Err(Error::Decode(format!("delta snapshot truncated: header declared {declared} bytes, inflated {}", raw.len())));
     }
 
-    let cap = declared.saturating_mul(MAX_AMPLIFICATION_FACTOR).max(MIN_MATERIALIZED_FLOOR);
-    stream_decode_wire(&raw, max_nodes, max_materialized_bytes.min(cap))
+    stream_decode_wire(&raw, max_nodes, materialized_budget(declared, max_materialized_bytes))
 }
 
 fn est_str_map(m: &BTreeMap<String, String>) -> usize {
     m.iter().fold(0usize, |a, (k, v)| a.saturating_add(k.len()).saturating_add(v.len()).saturating_add(48))
 }
 
-fn est_vector_bytes(net: &VectorNetwork) -> usize {
+pub(super) fn est_vector_bytes(net: &VectorNetwork) -> usize {
     let regs = net.regions.iter().fold(0usize, |acc, r| {
         let loops = r.loops.iter().fold(0usize, |a, l| a.saturating_add(l.len().saturating_mul(size_of::<usize>())));
         let fills = r.fills.as_ref().map_or(0, |f| f.len().saturating_mul(size_of::<Paint>()));
@@ -83,7 +88,7 @@ fn est_kind_bytes(kind: &NodeKind) -> usize {
     }
 }
 
-fn est_node_bytes(n: &Node) -> usize {
+pub(super) fn est_node_bytes(n: &Node) -> usize {
     let ov: usize = n.overrides.iter().fold(0, |a, s| a.saturating_add(s.len()).saturating_add(24));
     size_of::<Node>()
         .saturating_add(n.name.len())
@@ -101,11 +106,13 @@ fn est_node_bytes(n: &Node) -> usize {
         .saturating_add(n.measurements.len().saturating_mul(size_of::<Measurement>()))
         .saturating_add(est_kind_bytes(&n.kind))
         .saturating_add(ov)
+        .saturating_add(est_str_map(&n.bound))
+        .saturating_add(est_str_map(&n.var_modes))
         .saturating_add(est_str_map(&n.plugin_data))
         .saturating_add(est_str_map(&n.prop_refs))
 }
 
-fn est_deltas_extra_bytes(deltas: &[FieldDelta], vector_sizes: &[usize]) -> usize {
+pub(super) fn est_deltas_extra_bytes(deltas: &[FieldDelta], vector_sizes: &[usize]) -> usize {
     deltas.iter().fold(0usize, |acc, d| {
         let extra = match d {
             FieldDelta::Name(s) | FieldDelta::DevNote(s) => s.len(),
@@ -113,19 +120,51 @@ fn est_deltas_extra_bytes(deltas: &[FieldDelta], vector_sizes: &[usize]) -> usiz
             FieldDelta::VectorRef(idx) => usize::try_from(*idx).ok().and_then(|i| vector_sizes.get(i).copied()).unwrap_or(0),
             FieldDelta::Fills(v) | FieldDelta::Strokes(v) => v.len().saturating_mul(size_of::<Paint>()),
             FieldDelta::Effects(v) => v.len().saturating_mul(size_of::<Effect>()),
-            FieldDelta::PluginData(m) | FieldDelta::PropRefs(m) => est_str_map(m),
+            FieldDelta::Bound(m) | FieldDelta::VarModes(m) | FieldDelta::PluginData(m) | FieldDelta::PropRefs(m) => est_str_map(m),
             FieldDelta::Annotations(v) => v.len().saturating_mul(size_of::<Annotation>()),
+            FieldDelta::CodeLinks(v) => v.len().saturating_mul(size_of::<CodeLink>()),
             _ => 0,
         };
         acc.saturating_add(extra)
     })
 }
 
+pub(super) fn est_meta_bytes(meta: &WireMeta) -> usize {
+    let images = meta.images.iter().fold(0usize, |a, i| a.saturating_add(i.key.len()).saturating_add(i.bytes.len()));
+    let comments = meta.comments.iter().fold(0usize, |a, c| {
+        let replies = c.replies.iter().fold(0usize, |r, m| r.saturating_add(m.author.len()).saturating_add(m.text.len()).saturating_add(64));
+        a.saturating_add(c.first.author.len()).saturating_add(c.first.text.len()).saturating_add(replies).saturating_add(128)
+    });
+    let styles = meta.styles.iter().fold(0usize, |a, s| a.saturating_add(s.id.len()).saturating_add(s.name.len()).saturating_add(128));
+    let dev_snaps = meta.dev_snapshots.values().fold(0usize, |a, s| s.nodes.iter().fold(a, |b, n| b.saturating_add(est_node_bytes(n))));
+    let vars = meta.variables.collections.len().saturating_mul(128).saturating_add(meta.variables.variables.len().saturating_mul(128));
+    let libs = meta.libraries.components.len().saturating_mul(128).saturating_add(meta.libraries.styles.len().saturating_mul(128));
+    let votes = meta.votes.iter().fold(0usize, |a, (k, v)| a.saturating_add(k.len()).saturating_add(v.len().saturating_mul(size_of::<NodeId>())));
+    let categories = meta
+        .annotation_categories
+        .iter()
+        .flatten()
+        .fold(0usize, |a, c| a.saturating_add(c.id.len()).saturating_add(c.name.len()).saturating_add(128));
+    meta.name
+        .len()
+        .saturating_add(images)
+        .saturating_add(comments)
+        .saturating_add(styles)
+        .saturating_add(dev_snaps)
+        .saturating_add(vars)
+        .saturating_add(libs)
+        .saturating_add(votes)
+        .saturating_add(categories)
+        .saturating_add(meta.vote_history.len().saturating_mul(128))
+        .saturating_add(meta.image_presets.len().saturating_mul(64))
+        .saturating_add(meta.document_colors.len().saturating_mul(32))
+}
+
 struct DecodeState {
     doc: Document,
     positions: Positions,
     touched: BTreeSet<NodeId>,
-    vectors: Vec<VectorNetwork>,
+    vectors: Vec<figcraft_doc::Shared<VectorNetwork>>,
     vector_sizes: Vec<usize>,
     node_sizes: HashMap<NodeId, usize>,
     meta: Option<WireMeta>,
@@ -240,7 +279,7 @@ impl<'de> Visitor<'de> for VectorsSeed<'_> {
                 return Err(self.0.fail(err));
             }
             self.0.vector_sizes.push(size);
-            self.0.vectors.push(net);
+            self.0.vectors.push(figcraft_doc::Shared::new(net));
         }
         Ok(())
     }
@@ -296,8 +335,7 @@ impl<'de> Visitor<'de> for DeltaWireSeed<'_> {
             match key.as_str() {
                 "meta" => {
                     let meta: WireMeta = map.next_value()?;
-                    let img_bytes = meta.images.iter().fold(0usize, |a, i| a.saturating_add(i.bytes.len()));
-                    if let Err(err) = self.0.charge(img_bytes) {
+                    if let Err(err) = self.0.charge(est_meta_bytes(&meta)) {
                         return Err(self.0.fail(err));
                     }
                     self.0.meta = Some(meta);

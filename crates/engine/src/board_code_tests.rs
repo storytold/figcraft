@@ -21,8 +21,8 @@ fn bx(s: &Session, id: NodeId) -> Rect {
 
 fn td(s: &Session, block: NodeId) -> TextData {
     let t = text_of(s.doc().unwrap(), block).unwrap();
-    match node(s, t).kind {
-        NodeKind::Text(td) => td,
+    match &node(s, t).kind {
+        NodeKind::Text(td) => (**td).clone(),
         other => panic!("not text: {other:?}"),
     }
 }
@@ -392,8 +392,8 @@ fn key(s: &mut Session, key: &str, shift: bool) {
 }
 
 fn characters(s: &Session, t: NodeId) -> String {
-    match node(s, t).kind {
-        NodeKind::Text(td) => td.characters,
+    match &node(s, t).kind {
+        NodeKind::Text(td) => td.characters.clone(),
         other => panic!("not text: {other:?}"),
     }
 }

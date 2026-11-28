@@ -77,9 +77,9 @@ pub(crate) fn design_system_doc(num_instances: usize) -> (Document, NodeId, Vec<
     let mut main_children = Vec::new();
     for i in 0..6 {
         let kind = match i {
-            0 | 1 => NodeKind::Text(TextData::new(format!("Title {i}"))),
-            2 => NodeKind::Vector { network: icon_a.clone() },
-            3 => NodeKind::Vector { network: icon_b.clone() },
+            0 | 1 => NodeKind::Text(TextData::new(format!("Title {i}")).into()),
+            2 => NodeKind::Vector { network: icon_a.clone().into() },
+            3 => NodeKind::Vector { network: icon_b.clone().into() },
             _ => NodeKind::Rectangle,
         };
         let cid = doc.create(comp, kind, &format!("Part {i}"), i as f64 * 24.0, 8.0, 32.0, 32.0).unwrap();
@@ -347,4 +347,62 @@ fn delta_snapshot_never_panics_when_truncated_or_bit_flipped() {
         mutated[idx] ^= 0x80;
         let _ = decode_delta_snapshot(&mutated, 16 << 20, 10_000);
     }
+}
+
+#[test]
+fn bound_map_amplification_and_oversized_metadata_are_rejected_by_budget() {
+    // Source node with a large `bound` map mirrored 1,000 times must trip the memory budget.
+    let mut bound_entries = Vec::with_capacity(200);
+    for i in 0..200 {
+        bound_entries.push(format!(r#""k{i:03}":"{}""#, "v".repeat(512)));
+    }
+    let bound_json = bound_entries.join(",");
+    let mut recs = format!(
+        r#"{{"meta":{{"name":"BoundBomb"}},"records":[{{"r":"full","pos":"a0","node":{{"id":1,"name":"P","type":"page","width":0,"height":0}}}},{{"r":"full","pos":"a0","node":{{"id":2,"name":"Src","parent":1,"type":"rectangle","width":10,"height":10,"bound":{{{bound_json}}}}}}}"#
+    );
+    for i in 3..1003u64 {
+        recs.push_str(&format!(r#",{{"r":"mirror","id":{i},"parent":1,"pos":"a{i:04}1","source":2}}"#));
+    }
+    recs.push_str("]}");
+    let err = decode_delta_snapshot(&make_raw_delta_payload(&recs, None), 16 << 20, Limits::default().max_nodes).unwrap_err();
+    assert!(matches!(err, Error::TooLarge(_)), "bound-map amplification must fail TooLarge, got {err:?}");
+
+    // Oversized metadata (`name` of 2 MiB) under a 1 MiB materialized budget must fail TooLarge.
+    let big_meta = format!(
+        r#"{{"meta":{{"name":"{}"}},"records":[{{"r":"full","pos":"a0","node":{{"id":1,"name":"P","type":"page","width":0,"height":0}}}}]}}"#,
+        "M".repeat(2 << 20)
+    );
+    let err2 = decode_delta_snapshot_with_budget(&make_raw_delta_payload(&big_meta, None), 16 << 20, 100, 1 << 20).unwrap_err();
+    assert!(matches!(err2, Error::TooLarge(_)), "oversized metadata must fail TooLarge, got {err2:?}");
+}
+
+#[test]
+fn server_falls_back_to_legacy_snapshot_when_delta_exceeds_decode_budget() {
+    // 2,000 mirrors of a 256 KiB text node exceed the client's 64x materialized ceiling:
+    // the server must fall back to `CatchUp::Snapshot` so capable clients still join cleanly.
+    let mut doc = Document::new("HighAmplificationHonest");
+    let page = doc.first_page().unwrap();
+    let src = doc.create(page, NodeKind::Text(TextData::new("T".repeat(256 * 1024)).into()), "Big", 0.0, 0.0, 100.0, 20.0).unwrap();
+    let src_snap = doc.node(src).unwrap().clone();
+    for _ in 0..2000 {
+        let mut m = src_snap.clone();
+        m.id = doc.alloc_id();
+        m.parent = None;
+        m.source = Some(src);
+        doc.insert(m, page, None).unwrap();
+    }
+    doc.take_dirty();
+
+    assert!(matches!(encode_delta_snapshot(&Replica::new(doc.clone())), Err(Error::TooLarge(_))));
+    let mut srv = Server::new(doc, "tok", Limits::default());
+    let ClientMsg::Hello(h) = Client::hello("f", "tok", "u", "#222") else { panic!() };
+    let (id, outs) = srv.join(h).unwrap();
+    let welcome = outs
+        .into_iter()
+        .find_map(|o| match o {
+            Outgoing::To(t, m @ ServerMsg::Welcome { .. }) if t == id => Some(m),
+            _ => None,
+        })
+        .unwrap();
+    assert!(matches!(welcome, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. }));
 }

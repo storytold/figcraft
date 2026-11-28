@@ -48,7 +48,7 @@ fn split_vector(s: &mut Session) -> NodeId {
     append(&mut network, box_path(50.0, 0.0, 100.0, 100.0));
     network.regions[0].fills = Some(vec![Paint::solid(Color::from_hex("#ff0000").unwrap())]);
     network.regions[1].fills = Some(vec![Paint::solid(Color::from_hex("#0000ff").unwrap())]);
-    s.doc_mut().unwrap().get_mut(id).unwrap().kind = NodeKind::Vector { network };
+    s.doc_mut().unwrap().get_mut(id).unwrap().kind = NodeKind::Vector { network: network.into() };
     id
 }
 
@@ -104,7 +104,7 @@ fn legacy_unstyled_nested_evenodd_regions_keep_the_hole_unpainted() {
         region.fills = None;
         region.paint_space = None;
     }
-    s.doc_mut().unwrap().get_mut(vector).unwrap().kind = NodeKind::Vector { network: net };
+    s.doc_mut().unwrap().get_mut(vector).unwrap().kind = NodeKind::Vector { network: net.into() };
     let crossing = rect(&mut s, -5.0, 45.0, 15.0, 10.0, "#ffffff");
     s.set_selection(vec![vector, crossing]);
     let a = arrangement(&mut s, &[vector, crossing]).unwrap();
@@ -168,7 +168,7 @@ fn exceeding_arrangement_capacity_never_drops_unprocessed_regions() {
         part.regions[0].fills = Some(vec![Paint::solid(Color::BLACK)]);
         append(&mut net, part);
     }
-    s.doc_mut().unwrap().get_mut(vector).unwrap().kind = NodeKind::Vector { network: net.clone() };
+    s.doc_mut().unwrap().get_mut(vector).unwrap().kind = NodeKind::Vector { network: net.clone().into() };
     s.set_selection(vec![vector]);
     let error = s.execute("shapeBuilder.remove", &json!({"points": [[5, 5]]})).unwrap_err();
     assert!(error.to_string().contains("too many fill regions"));
@@ -269,7 +269,7 @@ fn removal_preserves_holes_and_transformed_gradient_frames() {
     {
         let doc = s.doc_mut().unwrap();
         let node = doc.get_mut(vector).unwrap();
-        node.kind = NodeKind::Vector { network: outer };
+        node.kind = NodeKind::Vector { network: outer.into() };
         node.transform = transform;
     }
     let before = normalized_paint_world(&s, vector, 0);
