@@ -1,5 +1,10 @@
 //! Invite links and server addresses.
 //!
+//! An app hosting on its local network serves TLS with a certificate of its own (nobody vouches
+//! for it), so its links name it: `cert=<SHA-256, URL-safe base64>` beside a `wss://` server
+//! (`figcraft://join?server=wss://…&cert=…&file=…&token=…`, `wss://…/?cert=…&file=…&token=…`). A
+//! guest then connects only to a host presenting exactly that certificate.
+//!
 //! An invite (or share) link names a session's endpoint, its file and a token:
 //! `figcraft://join?host=<host:port>&file=<id>&token=<secret>` for a plain `ws://` endpoint at `/`
 //! (what the desktop app hosts), `figcraft://join?server=<ws(s)://host[:port][/path]>&file=…&token=…`
@@ -20,6 +25,8 @@
 //! out the file's team link to whoever asks, while the file is shared. Such a link carries no
 //! secret: whoever can reach the server may join with it.
 
+use base64::Engine as _;
+
 /// Where a session or a server listens: `ws://host:port/path` or `wss://…` (TLS).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Endpoint {
@@ -27,8 +34,11 @@ pub struct Endpoint {
     pub host: String,
     /// The path it answers on: `/`, or a reverse proxy's prefix (`/figcraft/`).
     pub path: String,
-    /// `wss://`: TLS (a reverse proxy in front of the server).
+    /// `wss://`: TLS (a reverse proxy in front of the server, or an app's own certificate).
     pub secure: bool,
+    /// The SHA-256 of the one certificate to accept (`cert=`; `wss://` only), in place of
+    /// checking it with the authorities this computer trusts.
+    pub cert: Option<[u8; 32]>,
 }
 
 /// What an invite link names.
@@ -53,12 +63,46 @@ pub enum Lookup {
 /// Longest link accepted (anything longer isn't one of ours).
 const MAX_LINK: usize = 2048;
 
+/// The query key of a certificate pin.
+const CERT: &str = "cert";
+
 const NOT: &str = "that's not a live session invite: expected figcraft://join?host=…&file=…&token=… or ws://host:port/?file=…&token=…";
 
 impl Endpoint {
     /// A plain `ws://host/` endpoint.
     pub fn plain(host: impl Into<String>) -> Self {
-        Self { host: host.into(), path: "/".into(), secure: false }
+        Self { host: host.into(), path: "/".into(), secure: false, cert: None }
+    }
+
+    /// A `wss://host/` endpoint presenting the certificate `cert` is the SHA-256 of.
+    pub fn pinned(host: impl Into<String>, cert: [u8; 32]) -> Self {
+        Self { host: host.into(), path: "/".into(), secure: true, cert: Some(cert) }
+    }
+
+    /// `cert=…&` for a pinned endpoint (empty otherwise): a link's query starts with it.
+    fn cert_pair(&self) -> String {
+        self.cert.map(|c| format!("{CERT}={}&", B64.encode(c))).unwrap_or_default()
+    }
+
+    /// Take a `cert=` pin out of `query` into this endpoint: a malformed one, one on a `ws://`
+    /// address, or one that contradicts a pin already there is an error (never ignored, which
+    /// would join without it).
+    fn take_cert(&mut self, query: &mut Vec<(String, String)>) -> Result<(), String> {
+        let mut found = None;
+        for (_, v) in query.extract_if(.., |(k, _)| k == CERT) {
+            let pin = read_cert(&v)?;
+            if found.is_some_and(|f| f != pin) || self.cert.is_some_and(|c| c != pin) {
+                return Err("the link names two different certificates".into());
+            }
+            found = Some(pin);
+        }
+        if let Some(pin) = found {
+            if !self.secure {
+                return Err("the link names a certificate for a ws:// address: a certificate needs wss://".into());
+            }
+            self.cert = Some(pin);
+        }
+        Ok(())
     }
 
     /// `ws://` at `/`: an invite can name it as `host=…`.
@@ -66,7 +110,7 @@ impl Endpoint {
         !self.secure && self.path == "/"
     }
 
-    /// The WebSocket URL to connect to (no secrets in it).
+    /// The WebSocket URL to connect to (no secrets in it, nor the pin).
     pub fn url(&self) -> String {
         format!("{}://{}{}", if self.secure { "wss" } else { "ws" }, self.host, self.path)
     }
@@ -87,6 +131,8 @@ impl Endpoint {
     /// Whether this endpoint is within an explicitly allowed server origin and path prefix.
     pub fn is_within(&self, allowed: &Endpoint) -> bool {
         self.secure == allowed.secure
+            // A pin trusts a certificate no authority checked: only the one allowed.
+            && self.cert == allowed.cert
             && self.host.eq_ignore_ascii_case(&allowed.host)
             && safe_path(&self.path)
             && safe_path(&allowed.path)
@@ -125,7 +171,10 @@ impl Endpoint {
         if !path.ends_with('/') {
             path.push('/');
         }
-        Ok((Endpoint { host, path, secure }, pairs(query)?))
+        let mut query = pairs(query)?;
+        let mut endpoint = Endpoint { host, path, secure, cert: None };
+        endpoint.take_cert(&mut query)?;
+        Ok((endpoint, query))
     }
 }
 
@@ -140,7 +189,7 @@ impl Invite {
         if self.server.is_plain() {
             format!("figcraft://join?host={}&file={}&token={}", self.server.host, self.file, self.token)
         } else {
-            format!("figcraft://join?server={}&file={}&token={}", self.server.url(), self.file, self.token)
+            format!("figcraft://join?server={}&{}file={}&token={}", self.server.url(), self.server.cert_pair(), self.file, self.token)
         }
     }
 
@@ -150,13 +199,13 @@ impl Invite {
         if self.server.is_plain() {
             format!("figcraft://join?host={}&file={}&team=1", self.server.host, self.file)
         } else {
-            format!("figcraft://join?server={}&file={}&team=1", self.server.url(), self.file)
+            format!("figcraft://join?server={}&{}file={}&team=1", self.server.url(), self.server.cert_pair(), self.file)
         }
     }
 
     /// The same session as a WebSocket URL.
     pub fn url(&self) -> String {
-        format!("{}?file={}&token={}", self.server.url(), self.file, self.token)
+        format!("{}?{}file={}&token={}", self.server.url(), self.server.cert_pair(), self.file, self.token)
     }
 
     /// What the client connects to (no secrets in it).
@@ -192,16 +241,19 @@ impl Invite {
             if !path.trim_end_matches('/').eq_ignore_ascii_case("join") {
                 return Err(NOT.into());
             }
-            let query = pairs(query).map_err(|_| NOT)?;
+            let mut query = pairs(query).map_err(|_| NOT)?;
             let get = |k: &str| query.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
-            let server = match (get("server"), get("host")) {
-                (Some(url), _) => Endpoint::parse(&url).map(|(e, _)| e).map_err(|_| "the invite link's server isn't a ws:// or wss:// address")?,
+            let mut server = match (get("server"), get("host")) {
+                (Some(url), _) => Endpoint::parse(&url)
+                    .map(|(e, _)| e)
+                    .map_err(|e| if e.contains("certificate") { e } else { "the invite link's server isn't a ws:// or wss:// address".into() })?,
                 (None, Some(host)) if valid_host(&host) => Endpoint::plain(host),
                 _ => return Err("the invite link's host isn't an address with a port (like 192.168.1.20:47900)".into()),
             };
+            server.take_cert(&mut query)?;
             (server, query)
         } else if scheme.eq_ignore_ascii_case("ws") || scheme.eq_ignore_ascii_case("wss") {
-            Endpoint::parse(link).map_err(|e| if e.contains("host") { e } else { NOT.into() })?
+            Endpoint::parse(link).map_err(|e| if e.contains("host") || e.contains("certificate") { e } else { NOT.into() })?
         } else {
             return Err(NOT.into());
         };
@@ -218,6 +270,19 @@ impl Invite {
         let token = get("token").filter(|t| valid_id(t, 16, 128)).ok_or("the invite link has no valid token")?;
         Ok((Invite { server, file, token }, None))
     }
+}
+
+/// URL-safe base64 without padding: how a link writes a certificate's SHA-256.
+const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+/// A `cert=` value: a SHA-256 in [`B64`] (43 characters). Errors don't echo it.
+fn read_cert(v: &str) -> Result<[u8; 32], String> {
+    const BAD: &str = "the link's certificate (cert=) isn't a SHA-256 in URL-safe base64";
+    if v.len() != 43 {
+        return Err(BAD.into());
+    }
+    let bytes = B64.decode(v).map_err(|_| BAD)?;
+    <[u8; 32]>::try_from(bytes).map_err(|_| BAD.into())
 }
 
 /// Without surrounding spaces, quotes or angle brackets.

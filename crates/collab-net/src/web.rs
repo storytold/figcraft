@@ -142,6 +142,11 @@ fn js_error(e: &wasm_bindgen::JsValue) -> String {
 /// Whether this page may reach `server`: an `https://` page can't open an unencrypted `ws://`
 /// connection, except to this machine.
 fn reachable(server: &Endpoint) -> Result<(), String> {
+    // A browser checks certificates against its authorities only: it can't hold a connection to
+    // the one certificate an app's invite pins.
+    if server.cert.is_some() {
+        return Err("that session is hosted by an app on its local network with its own certificate, which a browser can't check: join it from the desktop app".into());
+    }
     let secure_page = web_sys::window().and_then(|w| w.location().protocol().ok()).is_some_and(|p| p == "https:");
     if secure_page && !server.secure && !server.loopback() {
         return Err("this page was loaded over https, and browsers block unencrypted ws:// connections; use a wss:// address (a server behind TLS), open FigCraft from an http:// address (like http://localhost:8767), or use the desktop app".into());

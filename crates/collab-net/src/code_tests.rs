@@ -223,6 +223,32 @@ fn a_share_on_every_interface_names_an_address_others_reach() {
     assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
 }
 
+/// A session hosted for other machines (here on every interface, without a join code) serves TLS
+/// with a certificate of its own: its links are `wss://` and pin it, a guest joining with them
+/// edits along both ways, and the same session as a plain `ws://` link gets nowhere.
+#[test]
+fn a_network_host_serves_tls_its_links_pin_and_edits_sync() {
+    let (mut host, mut guest, mut plain) = (session("Hana"), session("Ada"), session("Bo"));
+    let hosted = host.execute("collab.host", &json!({"bind": "0.0.0.0"})).unwrap();
+    let (link, url) = (hosted["link"].as_str().unwrap().to_string(), hosted["url"].as_str().unwrap().to_string());
+    let invite = Invite::parse(&link).unwrap();
+    assert!(invite.server.secure && invite.server.cert.is_some(), "{link}");
+    assert_eq!(Invite::parse(&url).unwrap(), invite, "the link and the URL name the same pin");
+    guest.execute("collab.join", &json!({"link": link})).unwrap();
+    pump(&mut [&mut host, &mut guest], "the join", |s| live(s[1]) && s[0].live().peers.len() == 1);
+    let before = layers(&host);
+    host.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 40, "height": 30})).unwrap();
+    pump(&mut [&mut host, &mut guest], "the host's edit", |s| layers(s[1]) == before + 1);
+    guest.execute("shape.ellipse", &json!({"x": 80, "y": 10, "width": 40, "height": 30})).unwrap();
+    pump(&mut [&mut host, &mut guest], "the guest's edit", |s| layers(s[0]) == before + 2);
+    // Without TLS the host doesn't answer.
+    let unpinned = Invite::new(invite.server.host.clone(), invite.file.clone(), invite.token.clone());
+    plain.execute("collab.join", &json!({"link": unpinned.link()})).unwrap();
+    pump(&mut [&mut host, &mut guest, &mut plain], "the plain join's failure", |s| matches!(s[2].live().status, Status::Failed { .. }));
+    assert_eq!(host.live().peers.len(), 1);
+    assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
+}
+
 /// A listener on one address is reached at it; one on every interface at an address of its own
 /// family, on its port.
 #[test]

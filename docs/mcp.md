@@ -1715,7 +1715,9 @@ only: a host stops hosting it, a guest leaves it.
   or any free one when it's taken, as it is for a second hosted document (`port` picks one, 0
   any). Returns the session as
   `collab.peers` does, with `link` (`figcraft://join?host=…&file=…&token=…`) and `url`
-  (`ws://…/?file=…&token=…`): both carry the session's secret, so share them only with people you
+  (`ws://…/?file=…&token=…`); bound to any address but this machine's, the session serves TLS
+  with its own certificate and they pin it (`figcraft://join?server=wss://…&cert=…&file=…&token=…`,
+  `wss://…/?cert=…&file=…&token=…`; see `docs/collab-protocol.md`): both carry the session's secret, so share them only with people you
   invite. `collab.stop {}` ends the active document's session.
 - `collab.join {code}` or `collab.join {link}` (a join code of either kind: spaces, dashes and
   case don't matter, `O` reads as `0` and `I` or `L` as `1`; or a link in any form: an app's

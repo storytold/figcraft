@@ -250,7 +250,7 @@ mod tests {
             }
         });
         let limits = NetLimits { idle_timeout: idle, ..NetLimits::default() };
-        let server = Endpoint { host: addr.to_string(), path: "/".into(), secure: false };
+        let server = Endpoint { host: addr.to_string(), path: "/".into(), secure: false, cert: None };
         let ws = connect(&server, &limits, Duration::from_secs(2)).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -274,7 +274,7 @@ mod tests {
             }
         });
         let limits = NetLimits { request_reply_timeout: Duration::from_millis(400), ..NetLimits::default() };
-        let server = Endpoint { host: addr.to_string(), path: "/".into(), secure: false };
+        let server = Endpoint { host: addr.to_string(), path: "/".into(), secure: false, cert: None };
         let mut ws = connect(&server, &limits, Duration::from_secs(2)).unwrap();
         let started = std::time::Instant::now();
         assert!(reply::<()>(&mut ws, &limits, |_| None).is_err());

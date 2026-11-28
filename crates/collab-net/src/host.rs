@@ -15,6 +15,7 @@ use figcraft_engine::live::{Event, PEOPLE};
 pub use crate::hub::REMOVED;
 use crate::hub::{Admission, Backend, Closing, Hosting, Local, clean_name, to_local};
 use crate::inbox::Inbox;
+use crate::invite::Endpoint;
 pub use crate::join::ENDED;
 use crate::net::NetLimits;
 
@@ -36,12 +37,17 @@ pub struct HostConfig {
     pub name: String,
     pub limits: NetLimits,
     pub core: figcraft_collab::Limits,
+    /// Serve TLS with a certificate made for this session ([`crate::cert`]): every guest must
+    /// connect over it, to exactly that certificate ([`Host::cert_sha256`] for their links). For
+    /// a host others reach over a network, where the token would otherwise travel in the clear.
+    pub tls: bool,
 }
 
 /// A running session host. Dropping it stops it.
 pub struct Host {
     hosting: Hosting,
     me: Peer,
+    cert_sha256: Option<[u8; 32]>,
 }
 
 /// The app's one file and its tokens: whoever has the edit token edits, whoever has the view
@@ -94,6 +100,14 @@ impl Host {
                 "this file can't be shared: its design review settings hold {list}; trim them with design.configure (or reset the settings), then share again"
             )));
         }
+        // A new certificate each session: an old invite's pin never matches a later session.
+        let (tls, cert_sha256) = match cfg.tls {
+            true => {
+                let cert = crate::cert::generate().map_err(io::Error::other)?;
+                (Some(crate::cert::server_config(&cert).map_err(io::Error::other)?), Some(cert.sha256))
+            }
+            false => (None, None),
+        };
         let listener = match TcpListener::bind(cfg.addr) {
             Ok(l) => l,
             Err(e) if e.kind() == io::ErrorKind::AddrInUse && cfg.any_port_if_taken => TcpListener::bind(SocketAddr::new(cfg.addr.ip(), 0))?,
@@ -127,13 +141,27 @@ impl Host {
         let me = server.peers().find(|p| p.client_id == me).cloned().ok_or_else(|| io::Error::other("the host didn't join its own session"))?;
         let backend = OneFile { file: cfg.file.clone(), token: cfg.token, view: cfg.view_token };
         let local = Local { file: cfg.file, server, id: me.client_id, inbox };
-        let hosting = Hosting::start(listener, backend, cfg.limits, Some(local))?;
-        Ok(Host { hosting, me })
+        let hosting = Hosting::start(listener, backend, cfg.limits, Some(local), tls)?;
+        Ok(Host { hosting, me, cert_sha256 })
     }
 
     /// Where it listens.
     pub fn addr(&self) -> SocketAddr {
         self.hosting.addr()
+    }
+
+    /// The SHA-256 of the certificate it serves TLS with (`None`: plain `ws://`).
+    pub fn cert_sha256(&self) -> Option<[u8; 32]> {
+        self.cert_sha256
+    }
+
+    /// Where others connect to, at `host` (`host:port`): `wss://` to its certificate when it has
+    /// one, else plain `ws://`.
+    pub fn endpoint(&self, host: impl Into<String>) -> Endpoint {
+        match self.cert_sha256 {
+            Some(c) => Endpoint::pinned(host, c),
+            None => Endpoint::plain(host),
+        }
     }
 
     /// The host as the others see them.

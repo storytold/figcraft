@@ -15,6 +15,8 @@ figcraft-doc = { workspace = true }
 log = { workspace = true }
 # `std::time::Instant` natively, the browser's clock in the web build.
 web-time = "1"
+# Invite links write a session certificate's SHA-256 (`cert=`) in URL-safe base64.
+base64 = { workspace = true }
 
 # Native transport: blocking tungstenite with a reader and a writer thread per connection.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -27,7 +29,8 @@ rustls-pki-types = { version = "1", features = ["std"] }
 webpki-roots = "1"
 rustls-native-certs = "0.8"
 getrandom = "0.4"
-base64 = { workspace = true }
+# A hosting app's own Ed25519 certificate (`cert.rs`): the provider rustls already uses.
+ring = "0.17"
 
 # The browser client: the page's WebSocket API.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

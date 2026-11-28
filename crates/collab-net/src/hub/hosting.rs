@@ -1,3 +1,5 @@
+use rustls::ServerConfig;
+
 use super::backend::Backend;
 use super::conn::{Shared, accept};
 use super::limits::PerAddress;
@@ -43,10 +45,18 @@ pub struct Hosting {
 impl Hosting {
     /// Serve `backend`'s files on `listener`.
     pub fn serve<B: Backend>(listener: TcpListener, backend: B, limits: NetLimits) -> io::Result<Hosting> {
-        Self::start(listener, backend, limits, None)
+        Self::start(listener, backend, limits, None, None)
     }
 
-    pub(crate) fn start<B: Backend>(listener: TcpListener, backend: B, limits: NetLimits, local: Option<Local>) -> io::Result<Hosting> {
+    /// Serve on `listener`, with the hosting person in it (`local`), over TLS with `tls` when
+    /// given (every connection must speak it).
+    pub(crate) fn start<B: Backend>(
+        listener: TcpListener,
+        backend: B,
+        limits: NetLimits,
+        local: Option<Local>,
+        tls: Option<Arc<ServerConfig>>,
+    ) -> io::Result<Hosting> {
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let in_flight = InFlight(Arc::default());
@@ -76,7 +86,9 @@ impl Hosting {
             blocks: Blocks::default(),
             reading: Arc::default(),
             readers: Readers::default(),
+            tls,
         };
+        let shared_tls = shared.tls.is_some();
         let queued = shared.queued.clone();
         let blocks = shared.blocks.clone();
         let reading = shared.reading.clone();
@@ -92,7 +104,7 @@ impl Hosting {
                 return Err(e);
             }
         };
-        log::info!("live session: listening on {addr}");
+        log::info!("live session: listening on {addr}{}", if shared_tls { " (TLS)" } else { "" });
         Ok(Hosting {
             addr,
             hub: hub_tx,
