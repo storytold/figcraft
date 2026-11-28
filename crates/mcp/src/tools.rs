@@ -212,6 +212,7 @@ fn tools() -> Vec<Value> {
                     "closed": boolean("For type vector: close the path"),
                     "select": boolean("Select the new layer (default true)"),
                     "props": {"type": "object", "description": "Any set_properties keys applied at creation, e.g. {\"fill\":\"#3366FF\",\"cornerRadius\":12,\"fontSize\":24,\"layout\":\"vertical\",\"gap\":8,\"padding\":16}"},
+                    "children": {"type": "array", "items": {"type": "object"}, "description": "Layers to make inside this one in the same call and undo step: each takes these same keys except parent (and select), including its own children. The result's `children` mirrors the tree ([{id, children?}, ...]), so a batch step can name any of them with a field path such as children/1/id. A refused child is named by its place (children[1].children[0]: ...) and nothing is made"},
                 }),
                 &["type"],
             ),
@@ -640,6 +641,18 @@ fn bounds_of(b: &mut dyn Backend, ids: &[u64]) -> Option<(f64, f64, f64, f64)> {
 /// Make paint/effect JSON friendlier than the engine's strict serde (see
 /// [`figcraft_engine::params::normalize_paint`]). The engine reads paints this way itself; effects
 /// still need it here.
+/// [`normalize_props`] on a `node.create` params object's `props` and its children's, all the way down.
+fn normalize_tree(params: &mut Map<String, Value>) {
+    if let Some(Value::Object(p)) = params.get_mut("props") {
+        normalize_props(p);
+    }
+    if let Some(Value::Array(kids)) = params.get_mut("children") {
+        for kid in kids.iter_mut().filter_map(Value::as_object_mut) {
+            normalize_tree(kid);
+        }
+    }
+}
+
 pub fn normalize_props(props: &mut Map<String, Value>) {
     for k in ["fills", "strokes", "effects"] {
         if let Some(v) = props.get_mut(k) {
@@ -837,21 +850,20 @@ fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult
         return Err("`props` must be an object".into());
     }
     let mut params = Map::new();
-    for k in ["type", "x", "y", "width", "height", "parent", "index", "name", "text", "path", "points", "closed", "props", "select"] {
+    for k in ["type", "x", "y", "width", "height", "parent", "index", "name", "text", "path", "points", "closed", "props", "select", "children"] {
         if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
             params.insert(k.into(), v.clone());
         }
     }
-    if let Some(Value::Object(p)) = params.get_mut("props") {
-        normalize_props(p);
-    }
+    normalize_tree(&mut params);
     let r = exec(b, "node.create", Value::Object(params))?;
     let id = r.get("id").cloned().ok_or("node.create returned no id")?;
-    let warnings = r.get("warnings").cloned();
     let node = b.call("node.get", json!({"id": id, "depth": 0}))?;
     let mut out = json!({"id": id, "node": node});
-    if let Some(w) = warnings {
-        out["warnings"] = w;
+    for k in ["warnings", "children"] {
+        if let Some(v) = r.get(k) {
+            out[k] = v.clone();
+        }
     }
     Ok(ToolResult::json(&out))
 }

@@ -468,6 +468,8 @@ mod moved_by_tests;
 #[cfg(test)]
 mod nested_override_tests;
 #[cfg(test)]
+mod node_create_tree_tests;
+#[cfg(test)]
 mod node_find_tests;
 #[cfg(test)]
 mod node_set_refusals_tests;
