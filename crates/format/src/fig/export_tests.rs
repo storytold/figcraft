@@ -331,10 +331,10 @@ impl Gen {
                 id
             }
             8 => {
-                let id = self.node(parent, NodeKind::Vector { network: VectorNetwork::default() }, "Vector");
+                let id = self.node(parent, NodeKind::Vector { network: VectorNetwork::default().into() }, "Vector");
                 let n = self.doc.node_mut(id).unwrap();
                 let net = network(&mut self.r, n.width, n.height);
-                n.kind = NodeKind::Vector { network: net };
+                n.kind = NodeKind::Vector { network: net.into() };
                 if self.r.chance(40) {
                     (n.stroke.cap_start, n.stroke.cap_end) = (StrokeCap::None, StrokeCap::LineArrow);
                 }
@@ -342,7 +342,7 @@ impl Gen {
             }
             9 => {
                 let td = text_data(&mut self.r);
-                self.node(parent, NodeKind::Text(td), "Text")
+                self.node(parent, NodeKind::Text(td.into()), "Text")
             }
             10 if on_page => {
                 let id = self.doc.alloc_id();
@@ -412,7 +412,7 @@ impl Gen {
     fn components(&mut self, page: NodeId) {
         let comp = self.node(page, NodeKind::Component { description: "A button".into(), props: BTreeMap::new(), prop_order: Vec::new() }, "Button");
         let icon = self.node(comp, NodeKind::Rectangle, "Icon");
-        let label = self.node(comp, NodeKind::Text(TextData::new("Label")), "Label");
+        let label = self.node(comp, NodeKind::Text(TextData::new("Label").into()), "Label");
         {
             let n = self.doc.node_mut(comp).unwrap();
             if let NodeKind::Component { props, .. } = &mut n.kind {
@@ -855,10 +855,10 @@ fn vector_region_paints_round_trip() {
     let gradient = Paint::gradient(Gradient::default_for(GradientKind::Linear, Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }));
     two.regions[0].fills = Some(vec![half, gradient]);
     two.regions[1].fills = Some(Vec::new());
-    let id = doc.create(page, NodeKind::Vector { network: two }, "Painted", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let id = doc.create(page, NodeKind::Vector { network: two.into() }, "Painted", 0.0, 0.0, 100.0, 100.0).unwrap();
     doc.node_mut(id).unwrap().fills = vec![Paint::solid(Color::BLACK)];
     let inherit = VectorNetwork::from_points(&square, true);
-    let id2 = doc.create(page, NodeKind::Vector { network: inherit }, "Inherits", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let id2 = doc.create(page, NodeKind::Vector { network: inherit.into() }, "Inherits", 0.0, 0.0, 100.0, 100.0).unwrap();
     doc.node_mut(id2).unwrap().fills = vec![Paint::solid(Color::BLACK)];
 
     let (back, warnings) = round_trip(&doc, "region paints");
@@ -956,7 +956,7 @@ fn closed_vector_geometry_is_written_with_its_corner_smoothing() {
     for (v, r) in network.vertices.iter_mut().zip([20.0, 0.0, 10.0, 0.0]) {
         v.radius = r;
     }
-    let id = doc.create(page, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let id = doc.create(page, NodeKind::Vector { network: network.into() }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
     doc.node_mut(id).unwrap().strokes = vec![Paint::solid(Color::BLACK)];
     // The vector's written fill and stroke outlines.
     let outlines = |doc: &Document| -> Vec<Vec<u8>> {
@@ -999,7 +999,7 @@ fn sharp_points_on_a_rounded_vector_stay_sharp() {
     for (v, r) in network.vertices.iter_mut().zip([8.0, 0.0, 8.0, 0.0]) {
         v.radius = r;
     }
-    let id = doc.create(page, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let id = doc.create(page, NodeKind::Vector { network: network.into() }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
     doc.node_mut(id).unwrap().corners.radii = [8.0; 4];
     let (back, _) = round_trip(&doc, "sharp point");
     let v = back.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).unwrap();
@@ -1475,7 +1475,7 @@ fn set_with_properties() -> (Document, NodeId) {
         let v = doc
             .create(set, NodeKind::Component { description: String::new(), props, prop_order: Vec::new() }, name, 0.0, 60.0 * i as f64, 120.0, 40.0)
             .unwrap();
-        let label = doc.create(v, NodeKind::Text(TextData::new("Button")), "Label", 0.0, 0.0, 60.0, 20.0).unwrap();
+        let label = doc.create(v, NodeKind::Text(TextData::new("Button").into()), "Label", 0.0, 0.0, 60.0, 20.0).unwrap();
         doc.node_mut(label).unwrap().prop_refs.insert("characters".into(), "Label".into());
         // The icon is an instance placed in the variant: like the editor's, its `source` is its
         // main, which the binding doesn't belong to.
@@ -1737,7 +1737,7 @@ fn text_with_thousands_of_distinct_styles_exports_in_linear_time() {
     td.runs = (0..20_000)
         .map(|i| StyleRun { start: i, end: i + 1, style: TextStyle { font_size: 8.0 + i as f64 / 100.0, ..TextStyle::default() } })
         .collect();
-    doc.create(p, NodeKind::Text(td), "T", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.create(p, NodeKind::Text(td.into()), "T", 0.0, 0.0, 100.0, 100.0).unwrap();
     let start = std::time::Instant::now();
     let (bytes, _) = export(&doc, None).unwrap();
     assert!(!bytes.is_empty());

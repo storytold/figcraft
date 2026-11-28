@@ -16,7 +16,7 @@ fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
 
 fn net(s: &Session, id: NodeId) -> VectorNetwork {
     match &s.doc().unwrap().node(id).unwrap().kind {
-        NodeKind::Vector { network } => network.clone(),
+        NodeKind::Vector { network } => (**network).clone(),
         other => panic!("not a vector: {other:?}"),
     }
 }
@@ -46,7 +46,7 @@ fn vector_layer(s: &mut Session, network: VectorNetwork) -> NodeId {
     {
         let doc = s.doc_mut().unwrap();
         match &mut doc.get_mut(id).unwrap().kind {
-            NodeKind::Vector { network: net } => *net = network,
+            NodeKind::Vector { network: net } => *net = network.into(),
             other => panic!("not a vector: {other:?}"),
         }
     }
@@ -183,7 +183,7 @@ fn the_rule_switches_every_area_or_only_the_one_asked_for() {
     {
         let doc = s.doc_mut().unwrap();
         match &mut doc.get_mut(id).unwrap().kind {
-            NodeKind::Vector { network } => *network = two,
+            NodeKind::Vector { network } => *network = two.into(),
             other => panic!("not a vector: {other:?}"),
         }
     }

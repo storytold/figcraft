@@ -153,8 +153,12 @@ fn pixels_when_magnified(prep: Prepared, device_scale: f64) -> Prepared {
 
 fn fill_with(pix: &mut Pixmap, path: &tiny_skia::Path, paints: &[Paint], w: f64, h: f64, xf: Affine, rule: FillRule, ctx: &Ctx, mask: Option<&Mask>) {
     let scale = xf.determinant().abs().sqrt();
+    // An image picks its copy by the direction shown the most device pixels (a layer can be squeezed).
+    let [a, b, c, d, ..] = xf.as_coeffs();
+    let stretch = crate::paint::max_stretch(a, b, c, d);
     for p in paints {
-        let Some(prep) = prepare_at(p, w, h, scale, ctx.doc, ctx.time, ctx.preview) else { continue };
+        let k = if matches!(p.kind, PaintKind::Image(_)) { stretch } else { scale };
+        let Some(prep) = prepare_at(p, w, h, k, ctx.doc, ctx.time, ctx.preview) else { continue };
         let prep = if ctx.magnified_image_pixels && matches!(p.kind, PaintKind::Image(_)) { pixels_when_magnified(prep, scale) } else { prep };
         let paint = tiny_skia::Paint { shader: prep.shader(), anti_alias: true, blend_mode: ts_blend(p.blend), ..Default::default() };
         if p.blend == BlendMode::PlusDarker {

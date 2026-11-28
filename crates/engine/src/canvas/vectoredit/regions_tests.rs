@@ -51,7 +51,7 @@ fn editing_vector(s: &mut Session, n: VectorNetwork) -> NodeId {
     let id = crate::params::id_of(&r["id"]).unwrap();
     let doc = s.doc_mut().unwrap();
     let node = doc.get_mut(id).unwrap();
-    node.kind = figcraft_doc::NodeKind::Vector { network: n };
+    node.kind = figcraft_doc::NodeKind::Vector { network: n.into() };
     node.transform = Affine::IDENTITY;
     node.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE)];
     super::refit(doc, id).unwrap();

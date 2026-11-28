@@ -48,11 +48,11 @@ fn cards() -> (Document, NodeId) {
         }
         let mut title = TextData::new(format!("Card number {i}"));
         title.style.font_size = 16.0;
-        d.create(card, NodeKind::Text(title), "Title", 84.0, 36.0, 110.0, 20.0).unwrap();
+        d.create(card, NodeKind::Text(title.into()), "Title", 84.0, 36.0, 110.0, 20.0).unwrap();
         let mut body = TextData::new("Some body text that wraps onto a second line");
         body.auto_resize = figcraft_doc::TextAutoResize::Height;
         body.style.font_size = 11.0;
-        d.create(card, NodeKind::Text(body), "Body", 84.0, 60.0, 110.0, 30.0).unwrap();
+        d.create(card, NodeKind::Text(body.into()), "Body", 84.0, 60.0, 110.0, 30.0).unwrap();
     }
     (d, page)
 }
@@ -117,7 +117,7 @@ fn region_paints_disable_vector_and_ancestor_splatting() {
     let parent = d.create(page, NodeKind::Frame, "Parent", 0.0, 0.0, 4.0, 4.0).unwrap();
     let mut network = VectorNetwork::default();
     network.regions.push(Region { loops: Vec::new(), winding: Default::default(), fills: Some(Vec::new()), ..Default::default() });
-    let vector = d.create(parent, NodeKind::Vector { network }, "Styled", 0.0, 0.0, 2.0, 2.0).unwrap();
+    let vector = d.create(parent, NodeKind::Vector { network: network.into() }, "Styled", 0.0, 0.0, 2.0, 2.0).unwrap();
     let node = d.node(vector).unwrap();
     assert!(!lod::splattable(&d, node, 0));
     assert!(!lod::splattable(&d, d.node(parent).unwrap(), 0));
@@ -251,7 +251,7 @@ fn greeked_text_stays_inside_its_bounds() {
     let p = d.first_page().unwrap();
     let mut t = TextData::new("Greeked text on a line\nand a second line");
     t.style.font_size = 20.0;
-    let id = d.create(p, NodeKind::Text(t), "T", 100.0, 100.0, 300.0, 60.0).unwrap();
+    let id = d.create(p, NodeKind::Text(t.into()), "T", 100.0, 100.0, 300.0, 60.0).unwrap();
     let n = d.node(id).unwrap();
     assert!(lod::greeked(n, 0.1) && !lod::greeked(n, 0.5));
     let v = View { origin: (0.0, 0.0), scale: 0.1, width: 60, height: 30 };

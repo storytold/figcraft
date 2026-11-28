@@ -46,7 +46,7 @@ fn local_samples_wrap_at_their_saved_line_breaks() {
                 continue;
             }
             wrapped += usize::from(!saved.starts.is_empty());
-            let plain = figcraft_doc::TextData { saved_breaks: None, ..t.clone() };
+            let plain = figcraft_doc::TextData { saved_breaks: None, ..(**t).clone() };
             let (own, hinted) = (soft_starts(&plain, n.width), soft_starts(t, n.width));
             differed_before += usize::from(own != saved.starts);
             if t.saved_breaks_for(n.width).is_none() {

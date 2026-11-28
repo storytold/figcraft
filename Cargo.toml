@@ -76,6 +76,12 @@ craft-figcraft-format = { git = "https://github.com/storytold/craft-libs", rev =
 craft-figma-rest = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+# Camera raw files (craft-libs): the container decoders, and the shared develop stages that turn
+# sensor data into a picture (demosaic, white balance, colour matrices, tone).
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-develop = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-color-transform = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-geom = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
 craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", features = ["frames"] }
 
 # foundation

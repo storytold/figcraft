@@ -117,7 +117,7 @@ fn a_long_absence_catches_up_with_a_snapshot() {
     }
     let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!() };
     let (_, out) = s.join(h).unwrap();
-    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })));
+    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_) | CatchUp::DeltaSnapshot(_), .. })));
     deliver(&mut a, &out);
     assert_eq!(a.view(), s.replica());
     // A short absence gets the missed batches only.
@@ -154,7 +154,7 @@ fn the_default_log_is_bounded_in_bytes_and_a_client_behind_it_catches_up_with_a_
     assert!(s.log_bytes() > 0, "recent batches are still kept");
     let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!() };
     let (_, out) = s.join(h).unwrap();
-    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })));
+    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_) | CatchUp::DeltaSnapshot(_), .. })));
     deliver(&mut a, &out);
     assert_eq!(a.view(), s.replica());
     // Within the log, a short absence still gets the missed batch only.
@@ -195,7 +195,7 @@ fn after_a_snapshot_undo_leaves_what_others_changed_meanwhile() {
     }
     let ClientMsg::Hello(h) = a.reconnect(hello()) else { panic!() };
     let (_, out) = s.join(h).unwrap();
-    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })));
+    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_) | CatchUp::DeltaSnapshot(_), .. })));
     deliver(&mut a, &out);
     // Undo: the page name goes back, the frame keeps b's later name.
     let msgs = a.undo(&NoRecompute).unwrap();
@@ -326,7 +326,7 @@ fn a_restored_session_with_clamped_settings_catches_up_by_snapshot() {
     let (id, out) = restored.join(h).unwrap();
     assert_eq!(id, b.id(), "a reconnecting client keeps its id");
     assert!(
-        matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })),
+        matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_) | CatchUp::DeltaSnapshot(_), .. })),
         "a clamped session hands out the snapshot, not a batch past the limits: {out:?}"
     );
     deliver(&mut b, &out);
@@ -393,4 +393,34 @@ fn resume_needs_the_issued_secret() {
     // The real client still comes back as itself.
     let resend = come_back(&mut s, &mut host);
     assert!(resend.is_empty());
+}
+
+#[test]
+fn a_legacy_client_without_delta_snapshot_catches_up_with_a_legacy_snapshot() {
+    let mut s = Server::new(base(), "tok", Limits { max_log_batches: 2, ..Limits::default() });
+    let legacy_hello = || Hello { client_version: "0.18.1 signals hosting comments packed design-review branches".into(), ..hello() };
+    let (_, out) = s.join(legacy_hello()).unwrap();
+    assert!(matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })));
+    let Outgoing::To(_, w) = out.into_iter().next().unwrap() else { panic!() };
+    let mut a = Client::join(w).unwrap();
+    let mut b = join(&mut s);
+    let page = s.document().first_page().unwrap();
+
+    // Disconnect legacy client `a` and overflow the 2-batch server log so `a` must catch up via
+    // legacy `CatchUp::Snapshot` (never `DeltaSnapshot`).
+    a.disconnect();
+    s.leave(a.id());
+    for i in 0..4 {
+        let m = edit(&mut b, |d| d.node_mut(page).unwrap().name = format!("Legacy {i}")).unwrap();
+        let out = s.receive(b.id(), m);
+        deliver(&mut b, &out);
+    }
+    let ClientMsg::Hello(h) = a.reconnect(legacy_hello()) else { panic!() };
+    let (_, out) = s.join(h).unwrap();
+    assert!(
+        matches!(&out[0], Outgoing::To(_, ServerMsg::Welcome { catch_up: CatchUp::Snapshot(_), .. })),
+        "legacy client without delta-snapshot must receive CatchUp::Snapshot on rejoin"
+    );
+    deliver(&mut a, &out);
+    assert_eq!(a.view(), s.replica());
 }

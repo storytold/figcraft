@@ -23,7 +23,9 @@ fn welcome() -> ServerMsg {
     }
     doc.repair();
     let mut s = Server::new(doc, "tok", Limits::default());
-    let ClientMsg::Hello(h) = Client::hello("f", "tok", "Ada", "#FF8800") else { panic!("not a hello") };
+    let ClientMsg::Hello(mut h) = Client::hello("f", "tok", "Ada", "#FF8800") else { panic!("not a hello") };
+    // Test the legacy `packed` welcome path (a client from before `delta-snapshot`).
+    h.client_version = "0.18.1 signals hosting comments packed design-review branches".into();
     let (_, out) = s.join(h).unwrap();
     out.into_iter().find_map(|o| if let Outgoing::To(_, m @ ServerMsg::Welcome { .. }) = o { Some(m) } else { None }).unwrap()
 }

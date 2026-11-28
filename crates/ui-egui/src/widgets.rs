@@ -294,6 +294,123 @@ fn cancel_retargeted_field_save(ui: &mut Ui, id: Id) {
     ui.memory_mut(|m| m.surrender_focus(editor));
 }
 
+/// A snapshot of the active document and selection generation.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct SelectionSnapshot {
+    pub(crate) doc_uid: Option<u64>,
+    pub(crate) selection: Vec<figcraft_doc::NodeId>,
+    pub(crate) generation: u64,
+}
+
+pub(crate) fn update_selection_snapshot(ctx: &egui::Context, doc_uid: Option<u64>, selection: Vec<figcraft_doc::NodeId>) {
+    let sel_id = egui::Id::unique("app_current_selection");
+    let prev: Option<SelectionSnapshot> = ctx.data(|d| d.get_temp(sel_id));
+    let generation = match prev {
+        Some(ref p) if p.doc_uid == doc_uid && p.selection == selection => p.generation,
+        Some(ref p) => p.generation.wrapping_add(1),
+        None => 1,
+    };
+    ctx.data_mut(|d| {
+        d.insert_temp(sel_id, SelectionSnapshot { doc_uid, selection, generation });
+    });
+}
+
+/// Drop a field draft when the active selection, document, or layer value has changed since the edit began.
+fn sync_field_owner(ui: &mut Ui, id: Id, current_val: Option<f64>) -> (Option<String>, Option<SelectionSnapshot>) {
+    let editing_id = id.with("editing");
+    let owner_id = id.with("owner_sel");
+    let owner_val_id = id.with("owner_val");
+    let sel_id = egui::Id::unique("app_current_selection");
+    let cur_snap: Option<SelectionSnapshot> = ui.data(|d| d.get_temp(sel_id));
+    let owner_snap: Option<SelectionSnapshot> = ui.data(|d| d.get_temp(owner_id));
+    let owner_val: Option<Option<f64>> = ui.data(|d| d.get_temp(owner_val_id));
+    let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
+
+    let selection_changed = editing.is_some()
+        && match (&cur_snap, &owner_snap) {
+            (Some(cur), Some(owner)) => cur != owner,
+            _ => false,
+        };
+
+    let value_changed = editing.is_some() && owner_val.is_some() && owner_val != Some(current_val);
+
+    if selection_changed || value_changed {
+        ui.data_mut(|d| {
+            d.remove::<String>(editing_id);
+            d.remove::<String>(id.with("kept"));
+            d.remove::<SelectionSnapshot>(owner_id);
+            d.remove::<Option<f64>>(owner_val_id);
+            d.remove::<bool>(id.with("selectall"));
+            d.remove::<bool>(id.with("cmdstart"));
+            d.remove::<bool>(id.with("edited"));
+        });
+        ui.memory_mut(|m| m.surrender_focus(id.with("te")));
+        editing = None;
+    }
+    (editing, cur_snap)
+}
+
+/// Drop a text field draft when the active selection, document, or string value has changed since the edit began.
+fn sync_text_field_owner(ui: &mut Ui, id: Id, current_val: &str) -> (Option<String>, Option<SelectionSnapshot>) {
+    let editing_id = id.with("editing");
+    let owner_id = id.with("owner_sel");
+    let owner_text_id = id.with("owner_text");
+    let sel_id = egui::Id::unique("app_current_selection");
+    let cur_snap: Option<SelectionSnapshot> = ui.data(|d| d.get_temp(sel_id));
+    let owner_snap: Option<SelectionSnapshot> = ui.data(|d| d.get_temp(owner_id));
+    let owner_text: Option<String> = ui.data(|d| d.get_temp(owner_text_id));
+    let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
+
+    let selection_changed = editing.is_some()
+        && match (&cur_snap, &owner_snap) {
+            (Some(cur), Some(owner)) => cur != owner,
+            _ => false,
+        };
+
+    let value_changed = editing.is_some() && owner_text.as_deref().is_some_and(|t| t != current_val);
+
+    if selection_changed || value_changed {
+        ui.data_mut(|d| {
+            d.remove::<String>(editing_id);
+            d.remove::<SelectionSnapshot>(owner_id);
+            d.remove::<String>(owner_text_id);
+        });
+        ui.memory_mut(|m| m.surrender_focus(id.with("te")));
+        editing = None;
+    }
+    (editing, cur_snap)
+}
+
+/// Discard an editor's active draft and surrender focus.
+fn clear_field_editor(ui: &mut Ui, id: Id) {
+    ui.data_mut(|d| {
+        d.remove::<String>(id.with("editing"));
+        d.remove::<SelectionSnapshot>(id.with("owner_sel"));
+        d.remove::<Option<f64>>(id.with("owner_val"));
+        d.remove::<String>(id.with("owner_text"));
+    });
+    ui.memory_mut(|m| m.surrender_focus(id.with("te")));
+}
+
+/// Paint a lead label or icon for a number field.
+fn paint_number_field_lead(ui: &mut Ui, lead: &Lead, lead_rect: Rect, rect: Rect, lead_w: f32, lead_resp: &egui::Response, t: &Tokens) {
+    match lead {
+        Lead::Text(s) => {
+            // Whole points: egui rounds wrap width to GUI_ROUNDING, which wraps a fractional label column.
+            let galley = crate::bidi::name_galley(ui.painter(), s, regular(11.0), t.text_secondary, (lead_w - 12.0).ceil());
+            // A label cut short shows whole on hover.
+            if galley.elided {
+                lead_resp.clone().on_hover_text(*s);
+            }
+            ui.painter().galley(pos2(lead_rect.min.x + 8.0, rect.center().y - galley.size().y / 2.0), galley, t.text_secondary);
+        }
+        Lead::Icon(i, _) => {
+            icons::paint(ui.painter(), Rect::from_center_size(lead_rect.center() + vec2(1.0, 0.0), vec2(14.0, 14.0)), *i, t.icon_secondary);
+        }
+        Lead::None | Lead::Named(_) => {}
+    }
+}
+
 /// Implement the shared number field: label/icon lead, scrubbing, keyboard stepping and
 /// typing, select-all when a click starts editing, bindable values and deferred-save
 /// cancellation; returns an edit and/or bind event.
@@ -323,7 +440,8 @@ fn number_field_impl(
     let lead_rect = Rect::from_min_size(rect.min, vec2(lead_w, FIELD_H));
     let edit_rect = Rect::from_min_max(pos2(rect.min.x + lead_w, rect.min.y), rect.max);
     let editing_id = id.with("editing");
-    let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
+    let owner_id = id.with("owner_sel");
+    let (mut editing, cur_snap) = sync_field_owner(ui, id, value);
     // Alt held over the field scrubs it too, as the label always does: "hover the input field
     // itself and hold down the modifier key" (Adjust alignment, rotation, position, and
     // dimensions). The field senses drags only while Alt is held, or while a scrub begun that way
@@ -349,21 +467,7 @@ fn number_field_impl(
     } else if hovered {
         ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, t.field_hover_border), StrokeKind::Inside);
     }
-    match lead {
-        Lead::Text(s) => {
-            // Whole points: egui rounds wrap width to GUI_ROUNDING, which wraps a fractional label column.
-            let galley = crate::bidi::name_galley(ui.painter(), s, regular(11.0), t.text_secondary, (lead_w - 12.0).ceil());
-            // A label cut short shows whole on hover.
-            if galley.elided {
-                lead_resp.clone().on_hover_text(s);
-            }
-            ui.painter().galley(pos2(lead_rect.min.x + 8.0, rect.center().y - galley.size().y / 2.0), galley, t.text_secondary);
-        }
-        Lead::Icon(i, _) => {
-            icons::paint(ui.painter(), Rect::from_center_size(lead_rect.center() + vec2(1.0, 0.0), vec2(14.0, 14.0)), i, t.icon_secondary)
-        }
-        Lead::None | Lead::Named(_) => {}
-    }
+    paint_number_field_lead(ui, &lead, lead_rect, rect, lead_w, &lead_resp, &t);
     if lead_resp.hovered() || lead_resp.dragged() || (alt_now && editing.is_none() && field_resp.hovered()) || (alt_scrub && field_resp.dragged()) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
@@ -435,6 +539,10 @@ fn number_field_impl(
         ui.data_mut(|d| {
             d.insert_temp(editing_id, editing.clone().unwrap_or_default());
             d.insert_temp(kept_id, value.map(fmt_num).unwrap_or_default());
+            if let Some(ref s) = cur_snap {
+                d.insert_temp(owner_id, s.clone());
+            }
+            d.insert_temp(id.with("owner_val"), value);
             d.insert_temp(id.with("selectall"), !typed_now);
             d.insert_temp(id.with("cmdstart"), with_command);
             d.remove::<bool>(id.with("edited"));
@@ -486,6 +594,7 @@ fn number_field_impl(
                         // The stepped value stays selected: typing replaces it.
                         ui.data_mut(|d| {
                             d.insert_temp(kept_id, text.clone());
+                            d.insert_temp(id.with("owner_val"), Some(nv));
                             d.insert_temp(id.with("selectall"), true);
                             d.insert_temp(id.with("edited"), true);
                         });
@@ -497,8 +606,7 @@ fn number_field_impl(
             }
             if esc {
                 // Back to what it was: nothing is committed.
-                ui.data_mut(|d| d.remove::<String>(editing_id));
-                ui.memory_mut(|m| m.surrender_focus(id.with("te")));
+                clear_field_editor(ui, id);
             } else if r.lost_focus() || enter {
                 // Enter, Tab or a click elsewhere commits what was typed (a field left as it was
                 // commits nothing: no undo step, and a rounded display isn't written back).
@@ -512,7 +620,9 @@ fn number_field_impl(
                 {
                     out = Some(e);
                 }
-                ui.data_mut(|d| d.remove::<String>(editing_id));
+                clear_field_editor(ui, id);
+            } else if !r.ctx.memory(|m| m.has_focus(r.id)) && !started {
+                clear_field_editor(ui, id);
             } else {
                 ui.data_mut(|d| d.insert_temp(editing_id, text));
             }
@@ -683,7 +793,8 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
     cancel_retargeted_field_save(ui, id);
     let t = Tokens::get(ui.ctx());
     let editing_id = id.with("editing");
-    let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
+    let owner_id = id.with("owner_sel");
+    let (mut editing, cur_snap) = sync_text_field_owner(ui, id, value);
     let resp = ui.interact(rect, id.with("click"), field_sense(editing.is_some()));
     let shown = if secret { std::borrow::Cow::Owned("•".repeat(value.chars().count())) } else { std::borrow::Cow::Borrowed(value) };
     a11y::text(&resp, name, &shown);
@@ -696,6 +807,12 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
     let started = editing.is_none() && resp.clicked();
     if started {
         editing = Some(value.to_string());
+        if let Some(ref s) = cur_snap {
+            ui.data_mut(|d| {
+                d.insert_temp(owner_id, s.clone());
+                d.insert_temp(id.with("owner_text"), value.to_string());
+            });
+        }
         ui.memory_mut(|m| m.request_focus(id.with("te")));
         select_all_next(ui, id.with("te"), value);
     }
@@ -709,10 +826,12 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
             let enter = !started && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
             if esc {
-                ui.data_mut(|d| d.remove::<String>(editing_id));
+                clear_field_editor(ui, id);
             } else if r.lost_focus() || enter {
                 out = Some(text);
-                ui.data_mut(|d| d.remove::<String>(editing_id));
+                clear_field_editor(ui, id);
+            } else if !r.ctx.memory(|m| m.has_focus(r.id)) && !started {
+                clear_field_editor(ui, id);
             } else {
                 ui.data_mut(|d| d.insert_temp(editing_id, text));
             }
@@ -1457,6 +1576,10 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
                 ui.data_mut(|d| d.remove::<String>(buf_id));
                 ui.memory_mut(|m| m.surrender_focus(te_id));
                 (text != value && !text.trim().is_empty()).then_some(text)
+            } else if !r.ctx.memory(|m| m.has_focus(te_id)) && !started {
+                ui.data_mut(|d| d.remove::<String>(buf_id));
+                ui.memory_mut(|m| m.surrender_focus(te_id));
+                None
             } else {
                 ui.data_mut(|d| d.insert_temp(buf_id, text));
                 None

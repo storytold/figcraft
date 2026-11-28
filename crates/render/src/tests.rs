@@ -54,7 +54,7 @@ fn vector_regions_use_their_own_paints_and_empty_regions_do_not_erase() {
             Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(vec![]), ..Default::default() },
         ],
     };
-    let id = d.create(page, NodeKind::Vector { network }, "V", 10.0, 10.0, 20.0, 10.0).unwrap();
+    let id = d.create(page, NodeKind::Vector { network: network.into() }, "V", 10.0, 10.0, 20.0, 10.0).unwrap();
     d.get_mut(id).unwrap().fills.clear();
     let pix = render_view(&d, page, &view(40, 30), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
     assert_eq!(px(&pix, 15, 15), [255, 0, 0, 255]);
@@ -106,7 +106,7 @@ fn region_paint_space_preserves_gradient_image_and_pattern_placement() {
             region.paint_space = Some(RegionPaintSpace { width: 60.0, height: 30.0, transform: frame });
         }
         let n = d.get_mut(id).unwrap();
-        n.kind = NodeKind::Vector { network };
+        n.kind = NodeKind::Vector { network: network.into() };
         n.transform = Affine::IDENTITY;
         n.width = 120.0;
         n.height = 100.0;
@@ -145,7 +145,7 @@ fn styled_vector_mask_unions_region_windings_and_excludes_unpainted_regions() {
         });
     }
     network.regions = regions;
-    let mask = d.create(group, NodeKind::Vector { network }, "Mask", 0.0, 0.0, 60.0, 20.0).unwrap();
+    let mask = d.create(group, NodeKind::Vector { network: network.into() }, "Mask", 0.0, 0.0, 60.0, 20.0).unwrap();
     {
         let n = d.get_mut(mask).unwrap();
         n.fills.clear();
@@ -182,7 +182,7 @@ fn inherited_paint_frames_keep_overlapping_regions_in_vector_masks() {
             paint_space: Some(figcraft_doc::RegionPaintSpace { width: 20.0, height: 20.0, transform: Affine::translate((x, 0.0)) }),
         });
     }
-    let mask = d.create(group, NodeKind::Vector { network }, "Mask", 0.0, 0.0, 30.0, 20.0).unwrap();
+    let mask = d.create(group, NodeKind::Vector { network: network.into() }, "Mask", 0.0, 0.0, 30.0, 20.0).unwrap();
     let n = d.get_mut(mask).unwrap();
     n.fills = vec![Paint::solid(Color::BLACK)];
     n.is_mask = true;
@@ -432,7 +432,7 @@ fn text_renders_something() {
     let p = d.first_page().unwrap();
     let mut td = TextData::new("Hello");
     td.style.font_size = 32.0;
-    d.create(p, NodeKind::Text(td), "T", 0.0, 0.0, 200.0, 50.0).unwrap();
+    d.create(p, NodeKind::Text(td.into()), "T", 0.0, 0.0, 200.0, 50.0).unwrap();
     let pix = render_view(&d, p, &view(200, 60), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
     let dark = pix.data().as_chunks::<4>().0.iter().filter(|c| c[0] < 100).count();
     if figcraft_text::find_face("Inter", "Regular").is_some() {
@@ -455,7 +455,7 @@ fn colour_emoji_draw_their_pixels() {
     let mut td = TextData::new("\u{1F600}");
     (td.style.font_family, td.style.font_style) = (family.clone(), style.clone());
     td.style.font_size = 48.0;
-    d.create(p, NodeKind::Text(td), "T", 0.0, 0.0, 200.0, 64.0).unwrap();
+    d.create(p, NodeKind::Text(td.into()), "T", 0.0, 0.0, 200.0, 64.0).unwrap();
     let pix = render_view(&d, p, &view(100, 80), &Options { background: Some(Color::WHITE), ..Default::default() }).unwrap();
     // The emoji is the only thing in this document that paints saturated colour.
     let coloured = pix

@@ -340,7 +340,9 @@ controller button pressed in the prototype playing, the presenter's or else the 
 short name, a key/gamepad trigger's name or a standard layout index 0–16; an error when no prototype
 plays); positions are window points. Events of one call
 arrive in the same frame, so send a press and its release (or a double-click's two clicks) as
-separate calls. Returns `{queued}`.
+separate calls. Returns `{queued}`. Requests sent after a batch that a frame has already taken run
+in the frame after it, so a `doc.switch` (or any other request) never sends the batch into another
+file; a batch whose file changed before a frame took it is not applied, and its reply is an error.
 
 ```json
 {"id":6,"method":"ui.input","params":{"events":[{"move":[1000,315]}]}}

@@ -163,7 +163,7 @@ fn text_is_glyph_outlines_one_path_per_styled_run() {
     style.fills = Some(vec![Paint::solid(hex("00FF00"))]);
     text.runs.push(StyleRun { start: 1, end: 2, style });
     text.normalize();
-    let t = d.create(p, NodeKind::Text(text), "Text", 0.0, 0.0, 100.0, 40.0).unwrap();
+    let t = d.create(p, NodeKind::Text(text.into()), "Text", 0.0, 0.0, 100.0, 40.0).unwrap();
     d.get_mut(t).unwrap().fills = vec![Paint::solid(Color::BLACK)];
     let out = export(&d, &[t], Compat::BestEffort);
     let fills: Vec<_> = paths_of(&out.xml).iter().map(|e| e.get("fillColor").unwrap().to_string()).collect();
