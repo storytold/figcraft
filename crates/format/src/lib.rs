@@ -1078,6 +1078,23 @@ pub fn load_file_from(path: &std::path::Path, mut file: std::fs::File, archive_l
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn verify_zip_member_bounded(archive: &mut zip::ZipArchive<std::fs::File>, name: &str, max_bytes: u64, buf: &mut [u8]) -> Result<u64, FormatError> {
+    let mut entry = archive.by_name(name).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let mut total: u64 = 0;
+    loop {
+        let n = entry.read(buf).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        total = total.saturating_add(n as u64);
+        if total > max_bytes {
+            return Err(FormatError::Corrupt(format!("{name} is too large")));
+        }
+    }
+    Ok(total)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn load_archive_lazy(path: &std::path::Path, mut z: LocalZipArchive, total: u64, archive_len: u64, cache_bytes: u64) -> Result<Loaded, FormatError> {
     use craft_figcraft_format::NativeArchive as _;
 
@@ -1088,13 +1105,16 @@ fn load_archive_lazy(path: &std::path::Path, mut z: LocalZipArchive, total: u64,
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
     let index_dims = read_image_index_dims(&text);
 
-    // Collect image member metadata (names + declared sizes) before handing the archive to ZipImageStore.
+    // Stream-verify each image member's ZIP integrity and actual unpacked size using one reusable
+    // 64 KiB scratch buffer (zero image bytes retained in RAM), so damaged members are caught and
+    // reported on open just like the eager loader.
     let mut member_entries: Vec<(String, u64)> = Vec::new();
     let mut unread: Vec<(String, FormatError)> = Vec::new();
     let mut hashes: Vec<String> =
         z.names().into_iter().filter_map(|n| n.strip_prefix("images/").map(str::to_owned)).filter(|h| !h.is_empty()).collect();
     hashes.sort_by_key(|h| !own_images.as_ref().is_some_and(|o| o.contains(h)));
     let mut past_budget: BTreeSet<String> = BTreeSet::new();
+    let mut verify_buf = vec![0u8; 64 * 1024];
     for hash in hashes {
         if !ImageData::is_valid_key(&hash) {
             unread.push((hash, FormatError::Corrupt("its name isn't a valid image hash".to_string())));
@@ -1111,7 +1131,10 @@ fn load_archive_lazy(path: &std::path::Path, mut z: LocalZipArchive, total: u64,
             unread.push((hash, FormatError::Corrupt(format!("{name} is too large"))));
             continue;
         }
-        member_entries.push((hash, declared));
+        match verify_zip_member_bounded(&mut z.0, &name, MAX_MEMBER, &mut verify_buf) {
+            Ok(actual_len) => member_entries.push((hash, actual_len)),
+            Err(e) => unread.push((hash, e)),
+        }
     }
 
     // Read library, version history, and branches while the archive is still in `z`.
