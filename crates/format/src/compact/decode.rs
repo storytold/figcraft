@@ -14,7 +14,7 @@ use figcraft_doc::color::{BlendMode, Color, ColorProfile};
 use figcraft_doc::geom::Affine;
 use figcraft_doc::{
     AnnotationCategory, Ballots, BoardTimer, Comment, DesignReview, DevSnapshot, Document, FileKind, ImagePreset, Libraries, Node, NodeId, NodeKind,
-    Style, Variables, VectorNetwork, Vote, VoteRecord,
+    Shared, Style, Variables, VectorNetwork, Vote, VoteRecord,
 };
 use serde::de::{DeserializeSeed, Error as DeError, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -428,8 +428,8 @@ fn build_full_kind<E: DeError>(
         "slice" => Ok((NodeKind::Slice, None)),
         "vector" => match (kind_network, vector_ref) {
             (Some(_), Some(_)) => Err(E::custom("vector layer cannot set both `network` and `vectorRef`")),
-            (Some(network), None) => Ok((NodeKind::Vector { network }, None)),
-            (None, Some(idx)) => Ok((NodeKind::Vector { network: VectorNetwork::default() }, Some(idx))),
+            (Some(network), None) => Ok((NodeKind::Vector { network: Shared::new(network) }, None)),
+            (None, Some(idx)) => Ok((NodeKind::Vector { network: Shared::default() }, Some(idx))),
             (None, None) => Err(E::missing_field("network")),
         },
         _ => {
@@ -446,15 +446,19 @@ fn materialize(wire: CompactDocWire, budget: usize) -> Result<Document, FormatEr
         CompactNodeEntry::Full { vector_ref, .. } => vector_ref.is_some(),
         CompactNodeEntry::Mirror(m) => m.vector_ref.is_some(),
     });
-    let vectors: Vec<VectorNetwork> = if uses_vectors {
+    let vectors: Vec<Shared<VectorNetwork>> = if uses_vectors {
         match wire.vectors_raw {
-            Some(v) => serde_json::from_value(v).map_err(|e| FormatError::Corrupt(e.to_string()))?,
+            Some(v) => serde_json::from_value::<Vec<VectorNetwork>>(v)
+                .map_err(|e| FormatError::Corrupt(e.to_string()))?
+                .into_iter()
+                .map(Shared::new)
+                .collect(),
             None => Vec::new(),
         }
     } else {
         Vec::new()
     };
-    let mut charged: usize = vectors.iter().map(est_vector_bytes).fold(0usize, usize::saturating_add);
+    let mut charged: usize = vectors.iter().map(|v| est_vector_bytes(v)).fold(0usize, usize::saturating_add);
     if charged > budget {
         return Err(FormatError::Corrupt("document vectors exceed materialized memory budget".into()));
     }
@@ -498,7 +502,7 @@ fn materialize(wire: CompactDocWire, budget: usize) -> Result<Document, FormatEr
 fn resolve_chain(
     start: NodeId,
     raw: &mut BTreeMap<NodeId, CompactNodeEntry>,
-    vectors: &[VectorNetwork],
+    vectors: &[Shared<VectorNetwork>],
     resolved: &mut HashMap<NodeId, Arc<Node>>,
     stack: &mut Vec<NodeId>,
     in_stack: &mut HashMap<NodeId, bool>,
@@ -559,7 +563,7 @@ fn resolve_chain(
                     None => None,
                 };
                 // Charge before cloning the source node or vector network to prevent OOM spikes.
-                let pre_charge = est_node_bytes(src).saturating_add(vref_net.map_or(0, est_vector_bytes));
+                let pre_charge = est_node_bytes(src).saturating_add(vref_net.map_or(0, |v| est_vector_bytes(v)));
                 charge_budget(charged, pre_charge, budget)?;
                 let mut node = (**src).clone();
                 node.id = m.id;
@@ -582,7 +586,7 @@ fn resolve_chain(
     Ok(())
 }
 
-fn lookup_vector(vectors: &[VectorNetwork], idx: u32) -> Result<&VectorNetwork, FormatError> {
+fn lookup_vector(vectors: &[Shared<VectorNetwork>], idx: u32) -> Result<&Shared<VectorNetwork>, FormatError> {
     usize::try_from(idx).ok().and_then(|i| vectors.get(i)).ok_or_else(|| FormatError::Corrupt(format!("invalid vectorRef {idx}")))
 }
 

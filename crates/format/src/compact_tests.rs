@@ -51,8 +51,8 @@ fn build_component_instances_doc(instances: usize, layers_per_component: usize, 
     let mut src_children = Vec::with_capacity(layers_per_component);
     for i in 0..layers_per_component {
         let kind = match i % 4 {
-            0 => NodeKind::Text(TextData::new(format!("Label {i}"))),
-            1 => NodeKind::Vector { network: icon_net.clone() },
+            0 => NodeKind::Text(TextData::new(format!("Label {i}")).into()),
+            1 => NodeKind::Vector { network: icon_net.clone().into() },
             _ => NodeKind::Rectangle,
         };
         let cid = doc.create(comp, kind, &format!("L{i}"), (i % 8) as f64 * 48.0, (i / 8) as f64 * 56.0, 40.0, 40.0).unwrap();
@@ -193,7 +193,7 @@ fn repeated_non_mirror_vector_networks_are_deduplicated_in_vectors_table() {
     let page = doc.first_page().unwrap();
     let icon = star_vector(48, 24.0);
     for i in 0..8 {
-        doc.create(page, NodeKind::Vector { network: icon.clone() }, &format!("Icon {i}"), i as f64 * 30.0, 0.0, 24.0, 24.0).unwrap();
+        doc.create(page, NodeKind::Vector { network: icon.clone().into() }, &format!("Icon {i}"), i as f64 * 30.0, 0.0, 24.0, 24.0).unwrap();
     }
     let val = to_json(&doc).unwrap();
     assert_eq!(val["vectors"].as_array().map(Vec::len), Some(1));
@@ -326,7 +326,7 @@ fn bench_compact_format() {
                 .unwrap();
             let mut kids = Vec::new();
             for i in 0..40 {
-                let kind = if i % 4 == 0 { NodeKind::Text(TextData::new(format!("Label {i}"))) } else { NodeKind::Rectangle };
+                let kind = if i % 4 == 0 { NodeKind::Text(TextData::new(format!("Label {i}")).into()) } else { NodeKind::Rectangle };
                 kids.push(doc.create(comp, kind, &format!("L{i}"), (i % 8) as f64 * 48.0, (i / 8) as f64 * 56.0, 40.0, 40.0).unwrap());
             }
             for k in 0..1024 {
@@ -357,7 +357,7 @@ fn bench_compact_format() {
             let mut doc = Document::new("Flat");
             let page = doc.first_page().unwrap();
             for i in 0..42_000 {
-                let kind = if i % 4 == 0 { NodeKind::Text(TextData::new(format!("Label {i}"))) } else { NodeKind::Rectangle };
+                let kind = if i % 4 == 0 { NodeKind::Text(TextData::new(format!("Label {i}")).into()) } else { NodeKind::Rectangle };
                 doc.create(page, kind, &format!("L{i}"), (i % 100) as f64 * 50.0, (i / 100) as f64 * 50.0, 40.0, 40.0).unwrap();
             }
             doc
