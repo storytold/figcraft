@@ -294,8 +294,22 @@ fn paste_layers(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>, as_vari
     if let Some(src) = foreign {
         crate::library::adopt_pasted(doc, src, clip.source_path.as_deref(), &all)?;
     }
+    drop_dangling_bindings(doc, all.values().copied());
     crate::library::count_inserted(doc, &out);
     Ok(out)
+}
+
+/// Pasted layers bound to variables this file doesn't have (copied from another file or app that
+/// brought no variables along, or deleted since the copy) keep the values they showed, unbound: a
+/// binding that names no variable here would dangle (#2524).
+fn drop_dangling_bindings(doc: &mut Document, pasted: impl Iterator<Item = NodeId>) {
+    for id in pasted {
+        let Some(n) = doc.node(id).filter(|n| n.bound.values().any(|v| doc.variables.get_by_id(v).is_none())) else { continue };
+        let kept = n.bound.iter().filter(|(_, v)| doc.variables.get_by_id(v).is_some()).map(|(f, v)| (f.clone(), v.clone())).collect();
+        if let Ok(n) = doc.get_mut(id) {
+            n.bound = kept;
+        }
+    }
 }
 
 /// Lock the aspect ratio of a layer pasted into an auto layout frame when it shows an image cropped
