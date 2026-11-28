@@ -274,22 +274,38 @@ fn cmd_alt_arrows_rotate_a_degree_and_fifteen_with_shift() {
     assert_eq!(size(&u), (40.0, 40.0), "no resize");
     press(&mut u, Key::ArrowDown, cmd());
     assert_eq!(size(&u), (40.0, 41.0), "Cmd/Ctrl+arrows alone still resize");
-    // Two layers turned together: the turns go about the rotated selection box's centre, so a
-    // degree down and a degree up leave both where they were.
+    // Two layers turned together: the turns go about the page-aligned selection box's centre.
     let c = id(u.app.session.execute("shape.rectangle", &json!({"x": 200, "y": 0, "width": 40, "height": 40})).unwrap());
     let d = id(u.app.session.execute("shape.rectangle", &json!({"x": 300, "y": 60, "width": 30, "height": 20})).unwrap());
     u.app.run("select.set", json!({"ids": [c, d]}));
     u.app.run("transform.rotate", json!({"degrees": 30}));
-    let bounds = |u: &Ui| [c, d].map(|n| u.app.session.doc().unwrap().world_bounds(n).unwrap());
-    let before = bounds(&u);
+    let box_centre = |u: &Ui| {
+        let q = figcraft_engine::tools::selection_box(u.app.session.doc().unwrap(), &[c, d]).unwrap();
+        figcraft_geom::Point::new(q.iter().map(|p| p.x).sum::<f64>() / 4.0, q.iter().map(|p| p.y).sum::<f64>() / 4.0)
+    };
+    let layer_centre = |u: &Ui, n: figcraft_doc::NodeId| {
+        let doc = u.app.session.doc().unwrap();
+        let b = doc.world_bounds(n).unwrap();
+        figcraft_geom::Point::new((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5)
+    };
+    let pivot = box_centre(&u);
+    let before_centres = [layer_centre(&u, c), layer_centre(&u, d)];
     press(&mut u, Key::ArrowDown, cmd() | Modifiers::ALT);
+    for (i, n) in [c, d].into_iter().enumerate() {
+        let got_rot = figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(n).unwrap().transform);
+        assert!((got_rot - 31.0).abs() < 1e-6, "layer {i}: {got_rot}");
+        let want = figcraft_geom::translation(figcraft_geom::rotate_about(
+            figcraft_geom::Affine::translate((before_centres[i].x, before_centres[i].y)),
+            pivot,
+            1.0,
+        ));
+        let got = layer_centre(&u, n);
+        assert!((got.x - want.x).abs() < 1e-6 && (got.y - want.y).abs() < 1e-6, "layer {i}: {got:?} vs {want:?}");
+    }
     press(&mut u, Key::ArrowUp, cmd() | Modifiers::ALT);
-    let after = bounds(&u);
-    for (x, y) in before.iter().zip(&after) {
-        assert!(
-            (x.x0 - y.x0).abs() < 1e-6 && (x.y0 - y.y0).abs() < 1e-6 && (x.x1 - y.x1).abs() < 1e-6 && (x.y1 - y.y1).abs() < 1e-6,
-            "{x:?} then {y:?}"
-        );
+    for (i, n) in [c, d].into_iter().enumerate() {
+        let got_rot = figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(n).unwrap().transform);
+        assert!((got_rot - 30.0).abs() < 1e-6, "layer {i} back: {got_rot}");
     }
     // While points are being edited the chord does nothing to the layer.
     u.app.run("select.set", json!({"ids": [r]}));
