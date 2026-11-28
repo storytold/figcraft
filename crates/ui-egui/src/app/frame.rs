@@ -72,6 +72,14 @@ impl FigApp {
         }
     }
 
+    /// Whether the canvas hides the selection's frame and a text's coloured selection right now:
+    /// while a field is scrubbed ([`crate::widgets::scrubbing`]) or the colour picker is used on
+    /// the selection ([`Self::picker_hides_selection`]), so the value being changed shows on the
+    /// layer itself.
+    pub(crate) fn hides_selection(&self, ctx: &egui::Context) -> bool {
+        crate::widgets::scrubbing(ctx) || self.picker_hides_selection(ctx)
+    }
+
     /// Whether the colour picker is being used right now for the selected layers' own look (a
     /// paint, an effect, a text range or Selection colors): a drag on its value controls (the
     /// palette, the hue and alpha sliders, a number field, the gradient bar and its stops), the

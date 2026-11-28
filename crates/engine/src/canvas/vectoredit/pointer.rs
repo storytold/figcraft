@@ -56,14 +56,20 @@ pub(crate) enum VGesture {
         start_angle: f64,
         angle: f64,
     },
+    /// Bend tool on a segment: a drag past the click slop from `start` (the press, on the page)
+    /// bends it.
     BendSegment {
         seg: usize,
         t: f64,
+        start: Point,
+        moved: bool,
     },
-    /// Bend tool on a point: drag pulls out handles, a click on a smooth point sharpens it.
+    /// Bend tool on a point: a drag past the click slop from `start` (the press, on the page)
+    /// pulls out handles; a click (wobble included) on a smooth point sharpens it.
     BendVertex {
         v: usize,
         origin: Point,
+        start: Point,
         moved: bool,
         smooth: bool,
     },
@@ -748,11 +754,11 @@ impl Session {
                         e.vertices = vec![index];
                     })?;
                     self.begin_interaction("Bend")?;
-                    self.vgesture(VGesture::BendVertex { v: index, origin, moved: false, smooth });
+                    self.vgesture(VGesture::BendVertex { v: index, origin, start: ev.p(), moved: false, smooth });
                 }
                 Some(VHit::Segment { seg, t }) => {
                     self.begin_interaction("Bend")?;
-                    self.vgesture(VGesture::BendSegment { seg, t });
+                    self.vgesture(VGesture::BendSegment { seg, t, start: ev.p(), moved: false });
                 }
                 None => self.vgesture(VGesture::Marquee { start: ev.p(), base: Self::select_base(ve, ev.shift), leave: None }),
             },
@@ -956,17 +962,16 @@ impl Session {
                 self.tool.overlay.cursor = Cursor::Rotate((ev.p() - c).atan2().to_degrees());
                 self.vgesture(VGesture::BoxRotate { b, start_angle, angle });
             }
-            VGesture::BendSegment { seg, t } => {
+            // A hand's wobble during a click is not a drag (#2166): the same slop as other clicks.
+            VGesture::BendSegment { start, moved: false, .. } | VGesture::BendVertex { start, moved: false, .. } if within_slop(ev, start) => {}
+            VGesture::BendSegment { seg, t, start, .. } => {
                 self.preview(|doc, _| edit(doc, id, |net| ops::bend(net, seg, t, lp)))?;
+                self.vgesture(VGesture::BendSegment { seg, t, start, moved: true });
             }
-            VGesture::BendVertex { v, origin, moved, smooth } => {
+            VGesture::BendVertex { v, origin, start, smooth, .. } => {
                 let d = lp - origin;
-                let page_d = (w * lp - w * origin).hypot() * ev.zoom;
-                if !moved && page_d < 2.0 {
-                    return Ok(());
-                }
                 self.preview(|doc, _| edit(doc, id, |net| ops::make_smooth(net, v, d)))?;
-                self.vgesture(VGesture::BendVertex { v, origin, moved: true, smooth });
+                self.vgesture(VGesture::BendVertex { v, origin, start, moved: true, smooth });
             }
             VGesture::Marquee { start, base, .. } => {
                 let r = Rect::from_points(start, ev.p());

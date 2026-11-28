@@ -204,7 +204,7 @@ pub(crate) fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
 }
 
 /// The middle of field `name`'s label (what scrubs): just left of its value.
-fn label(u: &mut Ui, name: &str) -> Pos2 {
+pub(crate) fn label(u: &mut Ui, name: &str) -> Pos2 {
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;

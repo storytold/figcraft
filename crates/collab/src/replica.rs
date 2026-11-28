@@ -70,8 +70,10 @@ impl Replica {
         Replica { doc, positions }
     }
 
-    /// Rebuild a replica from a [`snapshot`](Self::snapshot).
-    pub fn from_snapshot(changes: &[Change]) -> Result<Replica, Error> {
+    /// Rebuild a replica from a [`snapshot`](Self::snapshot). It takes the changes, so a large
+    /// file's snapshot isn't copied on the way in (#2041): the few that need it (review settings
+    /// past the limits) are rewritten in place.
+    pub fn from_snapshot(changes: Vec<Change>) -> Result<Replica, Error> {
         Self::from_snapshot_leaving_out(changes).map(|(r, _, _)| r)
     }
 
@@ -81,9 +83,9 @@ impl Replica {
     /// [`docprops::clamp_snapshot_design_review`]); the last value says whether that happened,
     /// because a session whose settings had to be clamped can no longer replay its saved batches
     /// for clients that resume (they hold the value past the limits).
-    pub(crate) fn from_snapshot_leaving_out(changes: &[Change]) -> Result<(Replica, usize, bool), Error> {
+    pub(crate) fn from_snapshot_leaving_out(mut changes: Vec<Change>) -> Result<(Replica, usize, bool), Error> {
+        let _reading = crate::heap::reading();
         let mut r = Replica { doc: Document::without_pages(""), positions: Positions::new() };
-        let mut changes = changes.to_vec();
         let clamped = docprops::clamp_snapshot_design_review(&mut changes);
         let left_out = r.apply_kept(&mut changes, Change::is_image)?;
         if r.doc.pages.is_empty() {
@@ -199,6 +201,9 @@ impl Replica {
         let (mut relist, mut relist_all) = (BTreeSet::new(), false);
         let mut index = docprops::Index::default();
         for c in changes {
+            // While a snapshot is applied, on the web the heap grows in large steps instead of
+            // page by page ([`crate::heap`]); a live batch doesn't reserve anything.
+            crate::heap::keep_ahead();
             match self.apply_one(c, &mut out, &mut index) {
                 Ok(Relist::No) => {}
                 Ok(Relist::Page(p)) => {

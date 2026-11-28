@@ -214,7 +214,7 @@ impl Server {
     /// reconnect with their ids). A log that doesn't lead up to the sequence number is dropped
     /// (clients then catch up with a snapshot).
     pub fn restore(state: SessionState, token: impl Into<String>, limits: Limits) -> Result<Server, Error> {
-        let (replica, left_out, review_clamped) = Replica::from_snapshot_leaving_out(&state.snapshot)?;
+        let (replica, left_out, review_clamped) = Replica::from_snapshot_leaving_out(state.snapshot)?;
         let mut server = Server::new(replica.document().clone(), token, limits);
         server.state = replica;
         server.session = state.session;

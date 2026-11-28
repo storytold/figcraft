@@ -40,6 +40,7 @@ pub fn decode_delta_snapshot(bytes: &[u8], max_bytes: usize, max_nodes: usize) -
 /// Decode a compressed `CatchUp::DeltaSnapshot` with an explicit ceiling on estimated
 /// materialized memory, also capped at `max(16 MiB, 64 * declared_bytes)`.
 pub fn decode_delta_snapshot_with_budget(bytes: &[u8], max_bytes: usize, max_nodes: usize, max_materialized_bytes: usize) -> Result<Replica, Error> {
+    let _reading = crate::heap::reading();
     let declared = parse_header(bytes)?;
     if declared > max_bytes {
         return Err(Error::TooLarge(max_bytes));
@@ -280,6 +281,7 @@ impl<'de> Visitor<'de> for VectorsSeed<'_> {
             }
             self.0.vector_sizes.push(size);
             self.0.vectors.push(figcraft_doc::Shared::new(net));
+            crate::heap::keep_ahead();
         }
         Ok(())
     }
@@ -313,6 +315,7 @@ impl<'de> Visitor<'de> for RecordsSeed<'_> {
             if let Err(err) = self.0.ingest_record(rec) {
                 return Err(self.0.fail(err));
             }
+            crate::heap::keep_ahead();
         }
         Ok(())
     }
