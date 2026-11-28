@@ -38,3 +38,11 @@ pub fn page_server(content: &str) -> Option<String> {
 pub fn control(search: &str) -> bool {
     search.strip_prefix('?').unwrap_or(search).split('&').any(|entry| entry.split('=').next() == Some("control"))
 }
+
+/// Whether the host confirms saves ([`crate::host_saves`]): `search` (`location.search`, with or
+/// without its `?`) has exactly `save=managed`, or the canvas has `data-save="managed"` (a page
+/// running FigCraft in its own document). Without either, a file counts as saved once it is
+/// handed to the host, as before.
+pub fn confirms_saves(search: &str, data_save: Option<&str>) -> bool {
+    search.strip_prefix('?').unwrap_or(search).split('&').any(|entry| entry == "save=managed") || data_save == Some("managed")
+}

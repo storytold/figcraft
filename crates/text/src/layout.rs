@@ -510,7 +510,7 @@ fn shape_text(text: &TextData) -> ShapedText {
     let mut faces: Vec<Option<Arc<Face>>> = Vec::with_capacity(styles.len());
     let mut style_fallbacks: Vec<Vec<Arc<Face>>> = Vec::with_capacity(styles.len());
     for s in &styles {
-        faces.push(dbw.find(&s.font_family, &s.font_style).or_else(|| dbw.default_face()));
+        faces.push(dbw.find_or_stand_in(&s.font_family, &s.font_style));
         style_fallbacks.push(dbw.fallbacks_for(&s.font_style));
     }
     // Colour emoji are their own, large faces (Apple Color Emoji is ~180 MB): they are read only

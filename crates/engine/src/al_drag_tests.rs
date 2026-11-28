@@ -76,7 +76,7 @@ fn three(s: &mut Session, mode: &str) -> (NodeId, [NodeId; 3]) {
     let kids: Vec<NodeId> =
         (0..3).map(|_| id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 60, "height": 60, "parent": f})).unwrap())).collect();
     s.execute("layout.add", &json!({"ids": [f]})).unwrap();
-    s.execute("node.set", &json!({"id": f, "props": {"layoutMode": mode, "gap": 20, "padding": 0, "sizingH": "fixed", "sizingV": "fixed"}})).unwrap();
+    s.execute("node.set", &json!({"id": f, "props": {"layoutMode": mode, "gap": 20, "padding": 0, "sizingH": "fixed", "sizingV": "fixed", "width": 300, "height": 300}})).unwrap();
     s.execute("select.none", &json!({})).unwrap();
     (f, [kids[0], kids[1], kids[2]])
 }

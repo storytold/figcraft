@@ -57,7 +57,7 @@ fn ordinary_hit_uses_region_paints_without_layer_fill() {
             Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(Vec::new()), ..Default::default() },
         ],
     };
-    let id = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let id = d.create(p, NodeKind::Vector { network: network.into() }, "V", 0.0, 0.0, 10.0, 10.0).unwrap();
     d.get_mut(id).unwrap().fills.clear();
     assert!(d.node(id).unwrap().fills.is_empty());
     assert_eq!(d.hit_test(p, Point::new(5.0, 5.0), 0.0, None), Some(id));
@@ -71,7 +71,7 @@ fn inherited_paint_frames_use_per_region_hit_testing() {
     let mut network = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0), Point::new(0.0, 10.0)], true);
     network.regions[0].winding = WindingRule::EvenOdd;
     network.regions.push(network.regions[0].clone());
-    let id = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let id = d.create(p, NodeKind::Vector { network: network.into() }, "V", 0.0, 0.0, 10.0, 10.0).unwrap();
     assert_eq!(d.hit_test(p, Point::new(5.0, 5.0), 0.0, None), None, "legacy even-odd loops cancel");
     let NodeKind::Vector { network } = &mut d.get_mut(id).unwrap().kind else { panic!("expected vector") };
     network.regions[0].paint_space = Some(crate::RegionPaintSpace { width: 10.0, height: 10.0, transform: figcraft_geom::Affine::IDENTITY });
@@ -87,7 +87,7 @@ fn explicitly_unfilled_regions_keep_the_stroke_only_selection_band() {
     let mut network =
         VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 100.0), Point::new(0.0, 100.0)], true);
     network.regions[0].fills = Some(Vec::new());
-    let id = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let id = d.create(p, NodeKind::Vector { network: network.into() }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
     let n = d.get_mut(id).unwrap();
     n.fills.clear();
     n.strokes = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];

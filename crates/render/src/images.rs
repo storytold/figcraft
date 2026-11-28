@@ -4,7 +4,9 @@
 //!
 //! The canvas draws a large image shown smaller than its pixels from a copy scaled down to one of
 //! [`DISPLAY_SIDES`] (see [`shown`]), so several of them stay decoded within the cache's budget
-//! (#1483); exports and every other render draw from the image itself ([`get`]).
+//! (#1483); exports draw from the image itself ([`get`]). Wherever an image shows at half its
+//! pixels or fewer, it is drawn from a copy averaged down to under twice that size ([`filtered`]),
+//! so fine detail blends instead of aliasing into moiré (#2664).
 //!
 //! Animated GIFs keep their original bytes like any image; their first frame is the image
 //! everywhere (canvas, exports). The presenter plays them: [`frame_at`] decodes every frame on
@@ -345,8 +347,29 @@ pub fn get(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile
 /// [`get`] for the canvas, where the image shows `side` device pixels on its longer side: an image
 /// larger than one of [`DISPLAY_SIDES`] that holds `side` comes scaled down to that side (cached
 /// apart), else as [`get`] gives it. The image's size is the one `data` records (none: the image).
+/// Either is halved further while at least twice `side` ([`filtered_side`]).
 pub fn shown(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile, side: f64) -> Option<Arc<Pixmap>> {
-    get_within(hash, data, filters, profile, display_side(data.map_or(0, |d| d.width.max(d.height)), side))
+    let long = data.map_or(0, |d| d.width.max(d.height));
+    get_within(hash, data, filters, profile, filtered_side(long, display_side(long, side), side))
+}
+
+/// [`get`] for an image showing `side` device pixels on its longer side: scaled down (cached apart)
+/// while it is at least twice that long ([`filtered_side`]), else the image itself.
+pub fn filtered(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, profile: ColorProfile, side: f64) -> Option<Arc<Pixmap>> {
+    get_within(hash, data, filters, profile, filtered_side(data.map_or(0, |d| d.width.max(d.height)), MAX_SIDE, side))
+}
+
+/// The largest side to decode an image `long` pixels on its longer side at, decoded at most
+/// `max_side` long, to show `side` device pixels long: halved while at least twice `side`, so it is
+/// never sampled at half its size or less (each pixel an average of the pixels it covers, not a few
+/// samples of them, which turns fine detail into moiré); else `max_side`.
+pub(crate) fn filtered_side(long: u32, max_side: u32, side: f64) -> u32 {
+    let start = long.min(max_side);
+    let mut s = start;
+    while s > 1 && f64::from(s) >= 2.0 * side {
+        s = s.div_ceil(2);
+    }
+    if s < start { s } else { max_side }
 }
 
 /// The largest side to decode an image `long` pixels on its longer side at, to show `side` device
@@ -362,12 +385,31 @@ fn get_within(hash: &str, data: Option<&ImageData>, filters: &ImageFilters, prof
     if let Some(p) = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
         return Some(p);
     }
-    let (mut p, srgb) = decode_within(&data?.bytes, profile, max_side, MAX_DECODED_BYTES)?;
+    let (mut p, srgb) = decode_within(&data?.bytes, profile, MAX_SIDE, MAX_DECODED_BYTES)?;
     // Images with their own profile are in `profile` already (sRGB → sRGB is the identity).
     finish(&mut p, filters, if srgb { profile } else { ColorProfile::Srgb });
-    let p = Arc::new(p);
+    // A copy averages the finished pixels, as drawing the image smaller does: adjustments clamp,
+    // and premultiplied colour keeps transparent pixels from darkening their neighbours.
+    let p = Arc::new(shrink(p, max_side)?);
     cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, p.clone(), MAX_CACHED_BYTES);
     Some(p)
+}
+
+/// The size to place `pm`, image `data` or a copy of it, as: the size `data` records when `pm` is
+/// that size decoded and scaled to `pm`'s longer side as [`get_within`] does (each side of a copy
+/// rounds apart, so its own proportions are off by up to a pixel), else `pm`'s own.
+pub(crate) fn source_size(data: Option<&ImageData>, pm: &Pixmap) -> (f64, f64) {
+    let own = (pm.width(), pm.height());
+    let made = |(w, h)| thumbnail_size(w, h, MAX_SIDE).and_then(|(w, h)| thumbnail_size(w, h, own.0.max(own.1)));
+    let (w, h) = data.map(|d| (d.width, d.height)).filter(|&size| made(size) == Some(own)).unwrap_or(own);
+    (f64::from(w), f64::from(h))
+}
+
+/// `p` averaged down to at most `max_side` wide and tall.
+fn shrink(p: Pixmap, max_side: u32) -> Option<Pixmap> {
+    let (w, h) = (p.width(), p.height());
+    let (nw, nh) = thumbnail_size(w, h, max_side)?;
+    Pixmap::from_vec(thumbnail_u8((w, h), (nw, nh), false, p.take())?, tiny_skia::IntSize::from_wh(nw, nh)?)
 }
 
 /// The filters, then the conversion into the document's colour space.

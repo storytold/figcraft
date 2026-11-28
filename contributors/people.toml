@@ -141,3 +141,14 @@ real_name = "Ibuchukwu Umeano"
 
 [people.Terra854]
 display_name = "Terra854"
+
+[people.andrejskvorc]
+real_name = "Andrej Skvorc"
+
+[people.victorazesc]
+sync_github_name = true
+
+[people.brytoncooper]
+real_name = "Bryton Cooper"
+display_name = "Bryton Cooper"
+sync_github_name = true

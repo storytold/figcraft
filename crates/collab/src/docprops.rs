@@ -290,27 +290,61 @@ fn image_of(key: &str, value: &Json) -> Result<ImageData, Error> {
     image_within(key, value, ImageData::MAX_BYTES)
 }
 
-/// [`image_of`] with `max_bytes` for the decoded size.
-pub(crate) fn image_within(key: &str, value: &Json, max_bytes: u64) -> Result<ImageData, Error> {
+/// Validate raw image bytes and dimensions under the same security rules as [`image_of`] (#1086).
+pub(crate) fn validate_image_raw_within(key: &str, width: u32, height: u32, bytes: Vec<u8>, max_bytes: u64) -> Result<ImageData, Error> {
     if !ImageData::is_valid_key(key) {
         return Err(Error::Invalid(format!("image: {key:?} can't name an image (1–128 letters, digits, - or _)")));
     }
-    let v: ImageValue = value.read("image")?;
-    if v.width > MAX_IMAGE_SIDE || v.height > MAX_IMAGE_SIDE {
-        return Err(Error::Invalid(format!("image: {}×{} passes the {} a side may be", v.width, v.height, MAX_IMAGE_SIDE)));
+    if width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE {
+        return Err(Error::Invalid(format!("image: {width}×{height} passes the {MAX_IMAGE_SIDE} a side may be")));
     }
-    let max_encoded = (max_bytes / 3).saturating_mul(4).saturating_add(4);
-    if u64::try_from(v.bytes.len()).unwrap_or(u64::MAX) > max_encoded {
-        return Err(Error::Invalid(format!("image: base64 text longer than {max_encoded} bytes for {max_bytes} of bytes")));
-    }
-    let bytes = base64::engine::general_purpose::STANDARD.decode(v.bytes.as_bytes()).map_err(|e| Error::Invalid(format!("image: {e}")))?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
         return Err(Error::Invalid(format!("image: {} bytes pass the {max_bytes} an image may be", bytes.len())));
     }
     if ImageData::claims_content_hash(key) && key != sha256_hex(&bytes) {
         return Err(Error::Invalid(format!("image: the bytes aren't what their key {key} hashes to")));
     }
-    Ok(ImageData { bytes: Arc::new(bytes), width: v.width, height: v.height })
+    Ok(ImageData { bytes: Arc::new(bytes), width, height })
+}
+
+/// Validate base64-encoded image bytes and dimensions under [`ImageData::MAX_BYTES`].
+pub(crate) fn validate_image_base64(key: &str, width: u32, height: u32, encoded: &str) -> Result<ImageData, Error> {
+    validate_image_base64_within(key, width, height, encoded, ImageData::MAX_BYTES)
+}
+
+fn validate_image_base64_within(key: &str, width: u32, height: u32, encoded: &str, max_bytes: u64) -> Result<ImageData, Error> {
+    if !ImageData::is_valid_key(key) {
+        return Err(Error::Invalid(format!("image: {key:?} can't name an image (1–128 letters, digits, - or _)")));
+    }
+    if width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE {
+        return Err(Error::Invalid(format!("image: {width}×{height} passes the {MAX_IMAGE_SIDE} a side may be")));
+    }
+    let max_encoded = (max_bytes / 3).saturating_mul(4).saturating_add(4);
+    if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > max_encoded {
+        return Err(Error::Invalid(format!("image: base64 text longer than {max_encoded} bytes for {max_bytes} of bytes")));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()).map_err(|e| Error::Invalid(format!("image: {e}")))?;
+    validate_image_raw_within(key, width, height, bytes, max_bytes)
+}
+
+/// Clamp oversized review settings in place (matches [`clamp_snapshot_design_review`]).
+pub(crate) fn clamp_design_review_config(config: &mut figcraft_doc::DesignReview) -> bool {
+    if config.over_limits().is_empty() {
+        return false;
+    }
+    config.radii.truncate(figcraft_doc::MAX_RADII);
+    config.brand.truncate(figcraft_doc::MAX_BRAND_COLORS);
+    config.disabled.truncate(figcraft_doc::MAX_DISABLED);
+    true
+}
+
+/// [`image_of`] with `max_bytes` for the decoded size.
+pub(crate) fn image_within(key: &str, value: &Json, max_bytes: u64) -> Result<ImageData, Error> {
+    if !ImageData::is_valid_key(key) {
+        return Err(Error::Invalid(format!("image: {key:?} can't name an image (1–128 letters, digits, - or _)")));
+    }
+    let v: ImageValue = value.read("image")?;
+    validate_image_base64_within(key, v.width, v.height, &v.bytes, max_bytes)
 }
 
 macro_rules! doc_scalars {
@@ -413,17 +447,12 @@ pub(crate) fn clamp_snapshot_design_review(changes: &mut Vec<Change>) -> bool {
     let mut clamped_any = false;
     for c in changes {
         if let Change::SetDoc { prop: DocProp::DesignReview, value } = c
-            && let Ok(config) = value.read::<figcraft_doc::DesignReview>("design review")
-            && !config.over_limits().is_empty()
+            && let Ok(mut clamped) = value.read::<figcraft_doc::DesignReview>("design review")
+            && clamp_design_review_config(&mut clamped)
+            && let Ok(v) = Json::of(&clamped)
         {
-            let mut clamped = config;
-            clamped.radii.truncate(figcraft_doc::MAX_RADII);
-            clamped.brand.truncate(figcraft_doc::MAX_BRAND_COLORS);
-            clamped.disabled.truncate(figcraft_doc::MAX_DISABLED);
-            if let Ok(v) = Json::of(&clamped) {
-                *value = v;
-                clamped_any = true;
-            }
+            *value = v;
+            clamped_any = true;
         }
     }
     clamped_any

@@ -628,13 +628,13 @@ impl<'a> Ctx<'a> {
                 }
             }
             // Point counts aren't part of the documented JSON: the outline is exact when present.
-            "REGULAR_POLYGON" | "STAR" if point_count().is_none() && has_geometry => NodeKind::Vector { network: VectorNetwork::default() },
+            "REGULAR_POLYGON" | "STAR" if point_count().is_none() && has_geometry => NodeKind::Vector { network: VectorNetwork::default().into() },
             "REGULAR_POLYGON" => NodeKind::Polygon { count: point_count().unwrap_or_else(|| self.default_count(3)) },
             "STAR" => NodeKind::Star {
                 count: point_count().unwrap_or_else(|| self.default_count(5)),
                 inner_ratio: num(j, "innerRadius").map_or(0.382, |r| r.clamp(0.01, 1.0)),
             },
-            "VECTOR" => NodeKind::Vector { network: VectorNetwork::default() },
+            "VECTOR" => NodeKind::Vector { network: VectorNetwork::default().into() },
             "BOOLEAN_OPERATION" => NodeKind::BooleanOp {
                 op: match text(j, "booleanOperation") {
                     Some("SUBTRACT") => BoolOp::Subtract,
@@ -643,7 +643,7 @@ impl<'a> Ctx<'a> {
                     _ => BoolOp::Union,
                 },
             },
-            "TEXT" => NodeKind::Text(text::text_data(self, j)),
+            "TEXT" => NodeKind::Text(text::text_data(self, j).into()),
             "COMPONENT" => NodeKind::Component { description: description(&self.component_meta, j), props: BTreeMap::new(), prop_order: Vec::new() },
             "COMPONENT_SET" => NodeKind::ComponentSet { description: description(&self.set_meta, j) },
             "SLICE" => NodeKind::Slice,
@@ -767,10 +767,15 @@ impl<'a> Ctx<'a> {
     }
 
     /// The `board` field (a FigCraft extension): what the object is on a board. A sticky or shape
-    /// is set at once; anything else, or junk, is ignored with a warning.
+    /// is set at once, a connector (a vector) once every layer is in and its ends can be found;
+    /// anything else, or junk, is ignored with a warning.
     fn board_item(&mut self, n: &mut Node, b: &'a Value) {
         // A sticky or shape is a frame holding its layers: on anything else it is ignored.
         let frame = n.kind.is_frame_like();
+        if text(b, "type") == Some("connector") && matches!(n.kind, NodeKind::Vector { .. }) {
+            self.pending_boards.push((n.id, b));
+            return;
+        }
         let item = match text(b, "type") {
             Some("sticky") if frame => {
                 let author = text(b, "author").unwrap_or("").trim();
@@ -789,10 +794,36 @@ impl<'a> Ctx<'a> {
 
     /// Board items that name other layers (connector ends, a label's connector), once every
     /// layer is imported and `ids` can resolve them.
+    /// A connector's `from` and `to` are each `{node: <REST id>, side?, at?: [x, y]}` (`at`: where
+    /// on the layer, as fractions of its box) or a page point `{x, y}`; `routing` is straight,
+    /// elbow or curved. One whose ends don't resolve is ignored with a warning (it stays a vector).
     fn resolve_boards(&mut self) {
-        for (id, _) in std::mem::take(&mut self.pending_boards) {
-            let name = self.doc.node(id).map(|n| n.name.clone()).unwrap_or_default();
-            self.warn(format!("unknown board item on {name} was ignored"));
+        for (id, b) in std::mem::take(&mut self.pending_boards) {
+            let end = |e: &Value| -> Option<figcraft_doc::End> {
+                let Some(rest_id) = text(e, "node") else {
+                    let (x, y) = (num(e, "x")?, num(e, "y")?);
+                    let c = |v: f64| v.clamp(-MAX_COORD, MAX_COORD);
+                    return (x.is_finite() && y.is_finite()).then(|| figcraft_doc::End::Point { x: c(x), y: c(y) });
+                };
+                let node = *self.ids.get(rest_id).filter(|node| **node != id)?;
+                let side = text(e, "side").and_then(figcraft_doc::Side::from_id).unwrap_or_default();
+                let at = list(e, "at").iter().map(Value::as_f64).collect::<Option<Vec<f64>>>().and_then(|v| match v.as_slice() {
+                    [x, y] if x.is_finite() && y.is_finite() => Some([x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)]),
+                    _ => None,
+                });
+                Some(figcraft_doc::End::Node { node, side, at })
+            };
+            let ends = b.get("from").and_then(end).zip(b.get("to").and_then(end));
+            let routing = text(b, "routing").and_then(figcraft_doc::Routing::from_id).unwrap_or_default();
+            match (ends, self.doc.node_mut(id)) {
+                (Some((from, to)), Some(n)) => {
+                    n.board = Some(figcraft_doc::BoardItem::Connector(figcraft_doc::Connector { from, to, routing, path: None, branch: false }));
+                }
+                (_, n) => {
+                    let name = n.map(|n| n.name.clone()).unwrap_or_default();
+                    self.warn(format!("unknown board item on {name} was ignored"));
+                }
+            }
         }
     }
 
@@ -830,7 +861,7 @@ impl<'a> Ctx<'a> {
         if let Some(net) = net {
             match net {
                 Some(network) => {
-                    n.kind = NodeKind::Vector { network };
+                    n.kind = NodeKind::Vector { network: network.into() };
                     return false;
                 }
                 None => self.warn("invalid or oversized vector networks import as outlines"),
@@ -853,7 +884,7 @@ impl<'a> Ctx<'a> {
         for r in &mut network.regions {
             r.winding = winding;
         }
-        n.kind = NodeKind::Vector { network };
+        n.kind = NodeKind::Vector { network: network.into() };
         outline
     }
 
@@ -963,7 +994,7 @@ impl<'a> Ctx<'a> {
                     "grid"
                 }
                 StyleKind::Text { .. } => {
-                    sample.kind = NodeKind::Text(text::text_data(self, node));
+                    sample.kind = NodeKind::Text(text::text_data(self, node).into());
                     "text"
                 }
             };

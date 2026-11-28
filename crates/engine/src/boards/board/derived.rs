@@ -263,13 +263,15 @@ pub(super) fn place_route(doc: &mut Document, id: NodeId, pts: &[Point], routing
         _ => VectorNetwork::from_points(&rel.elements().iter().filter_map(PathEl::end_point).collect::<Vec<_>>(), false),
     };
     let t = Affine::translate((b.x0, b.y0));
-    let same =
-        n.transform == t && n.width == b.width() && n.height == b.height() && matches!(&n.kind, NodeKind::Vector { network: old } if *old == network);
+    let same = n.transform == t
+        && n.width == b.width()
+        && n.height == b.height()
+        && matches!(&n.kind, NodeKind::Vector { network: old } if **old == network);
     if same {
         return;
     }
     if let Some(n) = doc.node_mut(id) {
-        n.kind = NodeKind::Vector { network };
+        n.kind = NodeKind::Vector { network: network.into() };
         n.transform = t;
         (n.width, n.height) = (b.width(), b.height());
     }

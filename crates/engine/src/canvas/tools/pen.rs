@@ -218,7 +218,7 @@ impl Session {
             Some(id) if doc.contains(id) => id,
             _ => {
                 let id = doc.alloc_id();
-                let mut n = Node::new(id, NodeKind::Vector { network: VectorNetwork::default() }, "Vector", 0.0, 0.0);
+                let mut n = Node::new(id, NodeKind::Vector { network: VectorNetwork::default().into() }, "Vector", 0.0, 0.0);
                 n.fills.clear();
                 n.strokes = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];
                 n.stroke.align = StrokeAlign::Center;
@@ -227,7 +227,7 @@ impl Session {
             }
         };
         let n = doc.get_mut(id)?;
-        n.kind = NodeKind::Vector { network: net };
+        n.kind = NodeKind::Vector { network: net.into() };
         n.width = bb.width();
         n.height = bb.height();
         n.transform = Affine::translate((bb.x0, bb.y0));

@@ -303,7 +303,7 @@ fn a_resume_after_history_was_left_out_catches_up_with_the_snapshot() {
     let (key, bytes) = crate::image_tests::forged();
     state.snapshot.push(crate::image_tests::put(&key, 2, 1, bytes));
     let mut r = Server::restore(state, "", Limits::default()).unwrap();
-    assert!(matches!(catch_up_of(&mut r, &mut a), message::CatchUp::Snapshot(_)), "left out on restore");
+    assert!(matches!(catch_up_of(&mut r, &mut a), message::CatchUp::Snapshot(_) | message::CatchUp::DeltaSnapshot(_)), "left out on restore");
 
     // Left out on replay.
     let mut s = Server::new(base(), "", Limits::default());
@@ -312,7 +312,7 @@ fn a_resume_after_history_was_left_out_catches_up_with_the_snapshot() {
     let mut r = Server::restore(state.clone(), "", Limits::default()).unwrap();
     let batch = vec![crate::image_tests::put(&key, 2, 1, bytes)];
     r.replay(Journal::Accepted(message::Accepted { seq: state.seq + 1, author: a.id(), batch_id: 90, changes: batch })).unwrap();
-    assert!(matches!(catch_up_of(&mut r, &mut a), message::CatchUp::Snapshot(_)), "left out on replay");
+    assert!(matches!(catch_up_of(&mut r, &mut a), message::CatchUp::Snapshot(_) | message::CatchUp::DeltaSnapshot(_)), "left out on replay");
 }
 
 /// A restart that left nothing out keeps resuming clients on the cheaper delta.

@@ -1,20 +1,19 @@
 //! Embedded font detection without decoding or retaining unsupported binaries.
 
-use super::{BudgetReader, InflateBudget, MAX_ENTRIES, warn};
-use std::io::{Cursor, Read};
-use zip::ZipArchive;
+use super::{BudgetReader, InflateBudget, MAX_ENTRIES, PenpotArchive, warn};
+use std::io::Read;
 
 /// Identify unsupported fonts from signatures without decoding their payloads.
-pub(super) fn report(z: &mut ZipArchive<Cursor<&[u8]>>, warnings: &mut Vec<String>, budget: &mut InflateBudget) {
+pub(super) fn report(z: &mut PenpotArchive<'_>, warnings: &mut Vec<String>, budget: &mut InflateBudget) {
     let names: Vec<String> = z
-        .file_names()
+        .names()
         .filter(|n| n.starts_with("objects/") || n.starts_with("fonts/") || n.starts_with("assets/fonts/"))
         .take(MAX_ENTRIES)
-        .map(str::to_owned)
+        .map(std::borrow::Cow::into_owned)
         .collect();
     let mut count = 0;
     for name in names {
-        let Ok(member) = z.by_name(&name) else { continue };
+        let Ok(Some(member)) = z.open_entry(&name, u64::MAX) else { continue };
         let mut header = [0; 4];
         if (BudgetReader { inner: member, budget }).read_exact(&mut header).is_ok()
             && (matches!(&header, b"OTTO" | b"true" | b"ttcf" | b"wOFF" | b"wOF2") || header == [0, 1, 0, 0])
@@ -35,7 +34,7 @@ pub(super) fn report(z: &mut ZipArchive<Cursor<&[u8]>>, warnings: &mut Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{Cursor, Write};
     use zip::{ZipWriter, write::SimpleFileOptions};
 
     #[test]
@@ -45,7 +44,7 @@ mod tests {
         z.write_all(b"wOF2").unwrap();
         z.write_all(&vec![0; 100_000]).unwrap();
         let bytes = z.finish().unwrap().into_inner();
-        let mut z = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut z = super::super::open_archive(&bytes).unwrap();
         let mut budget = InflateBudget::new();
         let before = budget.remaining;
         let mut warnings = Vec::new();

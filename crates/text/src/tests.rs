@@ -315,16 +315,16 @@ fn vertical_alignment_in_fixed_box() {
     let mut t = TextData::new("Hi");
     t.auto_resize = figcraft_doc::TextAutoResize::None;
     t.align_v = figcraft_doc::TextAlignV::Bottom;
-    let mut n = figcraft_doc::Node::new(figcraft_doc::NodeId(1), figcraft_doc::NodeKind::Text(t.clone()), "t", 100.0, 100.0);
+    let mut n = figcraft_doc::Node::new(figcraft_doc::NodeId(1), figcraft_doc::NodeKind::Text(t.clone().into()), "t", 100.0, 100.0);
     let (l, dy) = layout_node(&n).unwrap();
     assert!((dy + l.height - 100.0).abs() < 1e-6);
     t.align_v = figcraft_doc::TextAlignV::Middle;
-    n.kind = figcraft_doc::NodeKind::Text(t.clone());
+    n.kind = figcraft_doc::NodeKind::Text(t.clone().into());
     let (l, dy) = layout_node(&n).unwrap();
     assert!((dy - (100.0 - l.height) / 2.0).abs() < 1e-6);
     // Auto height ignores vertical alignment.
     t.auto_resize = figcraft_doc::TextAutoResize::Height;
-    n.kind = figcraft_doc::NodeKind::Text(t);
+    n.kind = figcraft_doc::NodeKind::Text(t.into());
     assert_eq!(layout_node(&n).unwrap().1, 0.0);
 }
 

@@ -19,12 +19,13 @@ web-time = "1"
 # Native transport: blocking tungstenite with a reader and a writer thread per connection.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
-# `wss://`: TLS with ring as the crypto provider and Mozilla's root certificates compiled in (no
-# OS certificate store, no OpenSSL). Over our own split reader/writer stream (`tls.rs`), so not
-# tungstenite's single-owner TLS stream.
+# `wss://`: TLS with ring as the crypto provider, the public root certificates of webpki-roots
+# compiled in and the operating system's certificate store read (no OpenSSL). Over our own split
+# reader/writer stream (`tls.rs`), so not tungstenite's single-owner TLS stream.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12", "logging"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 webpki-roots = "1"
+rustls-native-certs = "0.8"
 getrandom = "0.4"
 base64 = { workspace = true }
 

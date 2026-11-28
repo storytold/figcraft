@@ -420,7 +420,7 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
                 if !filled {
                     network.regions.clear();
                 }
-                NodeKind::Vector { network }
+                NodeKind::Vector { network: network.into() }
             };
             let at = Affine::translate((bb.x0, bb.y0));
             // Fill closes every subpath; a stroke only those that close themselves. A filled

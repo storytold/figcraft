@@ -106,7 +106,7 @@ fn clip_node(doc: &Document, id: NodeId, mut sub: VectorNetwork) -> Option<Node>
     n.transform = doc.world_transform(id) * Affine::translate((b.x0, b.y0));
     n.width = b.width();
     n.height = b.height();
-    n.kind = NodeKind::Vector { network: sub };
+    n.kind = NodeKind::Vector { network: sub.into() };
     n.parent = None;
     n.children.clear();
     n.name = "Vector".into();
@@ -181,7 +181,7 @@ pub fn clipboard_svg(s: &Session) -> Option<String> {
 /// frames, groups, instances, …). `doc` is the file the layer was copied from.
 fn outline_network(doc: &Document, n: &Node) -> Option<VectorNetwork> {
     let net = match &n.kind {
-        NodeKind::Vector { network } => network.clone(),
+        NodeKind::Vector { network } => (**network).clone(),
         k if k.is_shape() || matches!(k, NodeKind::BooleanOp { .. }) => {
             let (path, rule) = figcraft_render::node_outline(doc, n)?;
             let mut net = VectorNetwork::from_path(&path);

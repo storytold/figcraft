@@ -34,7 +34,7 @@ fn sample() -> Document {
         n.stroke.weight = 2.0;
         n.stroke.align = StrokeAlign::Center;
     });
-    add(&mut doc, frame, NodeKind::Text(TextData::new("One\nTwo")), "Text", 60.0, 40.0, &|_| {});
+    add(&mut doc, frame, NodeKind::Text(TextData::new("One\nTwo").into()), "Text", 60.0, 40.0, &|_| {});
     doc
 }
 
@@ -364,7 +364,7 @@ fn mask_types_round_trip() {
 fn the_archive_lists_its_members_and_describes_the_file() {
     let (bytes, _) = export(&sample(), Some(&super::tests::png())).unwrap();
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
-    let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).collect();
+    let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().expect("ZIP member name").into_owned()).collect();
     assert_eq!(names, ["canvas.fig", "thumbnail.png", "meta.json"]);
     let meta: serde_json::Value = serde_json::from_slice(&crate::read_member(&mut z, "meta.json", 1 << 20).unwrap()).unwrap();
     assert_eq!(meta["file_name"], "Interop");

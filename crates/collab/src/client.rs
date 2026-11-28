@@ -86,10 +86,19 @@ impl Client {
 
     /// Start from the server's `Welcome` (which must carry a snapshot).
     pub fn join(welcome: ServerMsg) -> Result<Client, Error> {
-        let ServerMsg::Welcome { session, client_id, seq, catch_up: CatchUp::Snapshot(snapshot), processed, peers, access, secret } = welcome else {
+        let ServerMsg::Welcome { session, client_id, seq, catch_up, processed, peers, access, secret } = welcome else {
             return Err(Error::Protocol("expected a welcome with the document".into()));
         };
-        let mut confirmed = Replica::from_snapshot(&snapshot)?;
+        let mut confirmed = match catch_up {
+            CatchUp::Snapshot(snapshot) => Replica::from_snapshot(snapshot)?,
+            CatchUp::DeltaSnapshot(bytes) => {
+                let limits = crate::Limits::default();
+                crate::delta_snapshot::decode_delta_snapshot(&bytes, 1 << 30, limits.max_nodes)?
+            }
+            CatchUp::Delta(_) | CatchUp::Packed(_) => {
+                return Err(Error::Protocol("expected a welcome with the document".into()));
+            }
+        };
         confirmed.document_mut().set_client_id(client_id);
         let next_id = confirmed.document().next_id();
         Ok(Client {
@@ -595,28 +604,15 @@ impl Client {
                 }
             }
             CatchUp::Snapshot(snapshot) => {
-                let mut confirmed = Replica::from_snapshot(&snapshot)?;
+                let mut confirmed = Replica::from_snapshot(snapshot)?;
                 confirmed.document_mut().set_client_id(self.id);
-                self.confirmed = confirmed;
-                self.seq = seq;
-                // What the server accepted meanwhile is in the snapshot. Which of the batches since
-                // were others' isn't known, so the steps check every value they wrote below.
-                while let Some(p) = self.pending.front().filter(|p| p.batch_id <= last_batch).cloned() {
-                    self.pending.pop_front();
-                    if processed.refused.contains(&p.batch_id) {
-                        self.refused(&p, offline());
-                    } else if p.kind != BatchKind::FollowUp
-                        && let Some(s) = p.step.and_then(|id| find_step(&mut self.undo, &mut self.redo, id))
-                    {
-                        s.settle(p.kind);
-                    }
-                }
-                for s in self.undo.iter_mut().chain(self.redo.iter_mut()).filter(|s| s.confirmed) {
-                    s.verify(&self.confirmed)?;
-                }
-                for p in &mut self.pending {
-                    p.rebased = true;
-                }
+                self.rejoin_with_confirmed(confirmed, seq, last_batch, processed)?;
+            }
+            CatchUp::DeltaSnapshot(bytes) => {
+                let limits = crate::Limits::default();
+                let mut confirmed = crate::delta_snapshot::decode_delta_snapshot(&bytes, 1 << 30, limits.max_nodes)?;
+                confirmed.document_mut().set_client_id(self.id);
+                self.rejoin_with_confirmed(confirmed, seq, last_batch, processed)?;
             }
         }
         if self.seq != seq {
@@ -634,6 +630,31 @@ impl Client {
         self.online = true;
         self.rebuild();
         Ok(self.flush(recompute))
+    }
+
+    fn rejoin_with_confirmed(&mut self, confirmed: Replica, seq: u64, last_batch: u64, processed: &Processed) -> Result<(), Error> {
+        let offline = || "it no longer applied when the connection came back".to_string();
+        self.confirmed = confirmed;
+        self.seq = seq;
+        // What the server accepted meanwhile is in the snapshot. Which of the batches since
+        // were others' isn't known, so the steps check every value they wrote below.
+        while let Some(p) = self.pending.front().filter(|p| p.batch_id <= last_batch).cloned() {
+            self.pending.pop_front();
+            if processed.refused.contains(&p.batch_id) {
+                self.refused(&p, offline());
+            } else if p.kind != BatchKind::FollowUp
+                && let Some(s) = p.step.and_then(|id| find_step(&mut self.undo, &mut self.redo, id))
+            {
+                s.settle(p.kind);
+            }
+        }
+        for s in self.undo.iter_mut().chain(self.redo.iter_mut()).filter(|s| s.confirmed) {
+            s.verify(&self.confirmed)?;
+        }
+        for p in &mut self.pending {
+            p.rebased = true;
+        }
+        Ok(())
     }
 
     /// A session that doesn't know this client (it restarted without its saved state) welcomed

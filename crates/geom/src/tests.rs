@@ -19,6 +19,24 @@ fn rounded_rect_area_matches_circle_corners() {
 }
 
 #[test]
+fn corner_styles_cut_each_corner_at_its_own_radius() {
+    let radii = [20.0, 8.0, 0.0, 4.0];
+    let cut = radii.iter().map(|r| r * r).sum::<f64>();
+    let rect = |style| styled_rect(100.0, 50.0, radii, 0.6, style);
+    let chamfer = rect(CornerStyle::Chamfer);
+    let concave = rect(CornerStyle::Concave);
+    assert!((area(&chamfer) - (5000.0 - cut / 2.0)).abs() < 1e-6);
+    assert!((area(&concave) - (5000.0 - PI * cut / 4.0)).abs() < 0.2);
+    assert!(chamfer.contains(Point::new(11.0, 11.0)));
+    assert!(!concave.contains(Point::new(11.0, 11.0)));
+    assert!(concave.contains(Point::new(99.0, 49.0)));
+    for style in [CornerStyle::Round, CornerStyle::Chamfer, CornerStyle::Concave] {
+        assert_eq!(styled_rect(100.0, 50.0, [0.0; 4], 0.6, style), rounded_rect(100.0, 50.0, [0.0; 4], 0.0));
+        assert_eq!(styled_rect(100.0, 50.0, [900.0; 4], 0.0, style), styled_rect(100.0, 50.0, [25.0; 4], 0.0, style));
+    }
+}
+
+#[test]
 fn full_radius_is_capsule_and_bounds_hold() {
     let p = rounded_rect(100.0, 40.0, [1000.0; 4], 0.0);
     let b = p.bounding_box();
