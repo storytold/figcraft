@@ -352,6 +352,14 @@ impl Document {
         NodeId(self.next_id.next)
     }
 
+    /// Replace the document's raw node map and `next_id` counter (used by compact format loaders
+    /// before [`Self::validate`] / [`Self::repair`]).
+    pub fn set_raw_nodes(&mut self, nodes: impl IntoIterator<Item = (NodeId, Arc<Node>)>, next_id: NodeId) {
+        self.nodes = nodes.into_iter().collect();
+        self.next_id.next = next_id.0;
+        self.dirty = Dirty::default();
+    }
+
     /// The collaboration client ids are allocated for (0: none, a single-user document).
     pub fn client_id(&self) -> u32 {
         self.next_id.client

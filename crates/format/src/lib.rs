@@ -1,7 +1,9 @@
 //! The native `.figcraft` format.
 //!
 //! A zip archive holding `document.json` (the [`Document`] as JSON, with a `format`/`version`
-//! header; layer fields at their default values are left out and read back as those defaults),
+//! header; layer fields at their default values are left out and read back as those defaults,
+//! mirrored instance layers are written as deltas against their `source`, and repeated vector
+//! networks are hoisted into a top-level `vectors` table),
 //! `images/<sha256>` for every image the document (or a saved version) uses, an optional
 //! `thumbnail.png` and an optional version history: `versions/index.json` (`{"versions": [{id,
 //! name, description, time, images}]}`, oldest first) plus one `versions/<id>.json` snapshot per
@@ -30,6 +32,7 @@ pub mod thumbnail;
 pub use density::{pixel_density, placed_size};
 pub use library::{is_valid_library_id, read_library, read_library_within};
 
+mod compact;
 mod density;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -397,8 +400,9 @@ impl<S: serde::ser::SerializeStructVariant> serde::ser::SerializeStructVariant f
 /// NaN and infinite numbers are written as `0`.
 pub fn to_json(doc: &Document) -> Result<Value, FormatError> {
     {
+        let compact = compact::CompactDocument::new(doc);
         let mut bytes = Vec::new();
-        craft_figcraft_format::write_document_json(&FiniteValue(doc), &native_image_index(doc), &mut bytes).map_err(io_err)?;
+        craft_figcraft_format::write_document_json(&FiniteValue(&compact), &native_image_index(doc), &mut bytes).map_err(io_err)?;
         serde_json::from_slice(&bytes).map_err(io_err)
     }
 }
@@ -406,7 +410,8 @@ pub fn to_json(doc: &Document) -> Result<Value, FormatError> {
 /// Write the document (without images) as `document.json` content to `w`.
 /// NaN and infinite numbers are written as `0`.
 pub fn write_json(doc: &Document, w: impl Write) -> Result<(), FormatError> {
-    craft_figcraft_format::write_document_json(&FiniteValue(doc), &native_image_index(doc), w).map_err(io_err)
+    let compact = compact::CompactDocument::new(doc);
+    craft_figcraft_format::write_document_json(&FiniteValue(&compact), &native_image_index(doc), w).map_err(io_err)
 }
 
 /// Parse `document.json` content.
@@ -418,10 +423,7 @@ pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
 /// (a newer file is refused before its document is read), then the document is deserialized
 /// straight from the text.
 fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatError> {
-    let (mut doc, header) = craft_figcraft_format::read_document_json::<Document>(text).map_err(|e| match e {
-        craft_figcraft_format::ReadDocumentError::Json(error) => FormatError::Corrupt(error.to_string()),
-        craft_figcraft_format::ReadDocumentError::NewerVersion(error) => FormatError::Newer(error.0),
-    })?;
+    let (mut doc, header) = compact::parse_compact_document(text)?;
     let images = header.images.map(|hashes| hashes.into_iter().collect());
     let issues = doc.validate();
     if !issues.is_empty() {
@@ -463,7 +465,8 @@ pub fn zip_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Re
 
 /// Add `doc` as a `document.json`-style member, serialized straight into the compressor.
 fn put_json(z: &mut craft_figcraft_format::ArchiveWriter, name: &str, doc: &Document) -> Result<(), FormatError> {
-    z.add_document_json(name, &FiniteValue(doc), &native_image_index(doc)).map_err(io_err)
+    let compact = compact::CompactDocument::new(doc);
+    z.add_document_json(name, &FiniteValue(&compact), &native_image_index(doc)).map_err(io_err)
 }
 
 /// Write a `.figcraft` archive to bytes.
@@ -951,6 +954,8 @@ pub fn load_file(path: &std::path::Path) -> Result<(Document, Vec<String>), Form
 
 #[cfg(test)]
 mod branch_tests;
+#[cfg(test)]
+mod compact_tests;
 #[cfg(test)]
 mod dtcg_tests;
 #[cfg(test)]
