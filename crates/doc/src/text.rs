@@ -114,6 +114,17 @@ pub enum TextCase {
     SmallCaps,
 }
 
+/// Where characters sit on the line: superscript (smaller and raised) or subscript (smaller and
+/// lowered), drawn with the font's `sups` / `subs` glyphs or synthesised without them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextPosition {
+    #[default]
+    None,
+    Superscript,
+    Subscript,
+}
+
 impl TextCase {
     pub fn apply(self, s: &str) -> String {
         self.apply_after(s, None)
@@ -339,6 +350,9 @@ pub struct TextStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decoration_look: Option<Box<DecorationLook>>,
     pub case: TextCase,
+    /// Superscript or subscript for these chars; `None` leaves the layer's `sups` / `subs`.
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub position: TextPosition,
     /// Run fills (None = node fills).
     pub fills: Option<Vec<Paint>>,
     /// Hyperlink.
@@ -391,6 +405,7 @@ impl Default for TextStyle {
             decoration: TextDecoration::None,
             decoration_look: None,
             case: TextCase::Original,
+            position: TextPosition::None,
             fills: None,
             link: None,
             variations: std::collections::BTreeMap::new(),
@@ -416,10 +431,12 @@ impl TextStyle {
             || self.variations.get("slnt").is_some_and(|v| *v != 0.0)
     }
 
-    /// Take what text style `def` sets (font, size, line height, letter spacing, decoration, case
-    /// and axis values) and link to it as `id`; fills and hyperlinks stay.
+    /// Take what text style `def` sets (font, size, line height, letter spacing, decoration, case,
+    /// a position when it has one, and axis values) and link to it as `id`; fills, hyperlinks and
+    /// a position the style doesn't set stay.
     pub fn take_text_style(&mut self, def: &TextStyle, id: &str) {
-        *self = TextStyle { fills: self.fills.take(), link: self.link.take(), style_id: Some(id.to_string()), ..def.clone() };
+        let position = if def.position == TextPosition::None { self.position } else { def.position };
+        *self = TextStyle { fills: self.fills.take(), link: self.link.take(), style_id: Some(id.to_string()), position, ..def.clone() };
     }
 
     /// Whether these chars show what text style `def` sets.
@@ -432,6 +449,7 @@ impl TextStyle {
             && self.decoration == def.decoration
             && self.decoration_look == def.decoration_look
             && self.case == def.case
+            && (def.position == TextPosition::None || self.position == def.position)
             && self.variations == def.variations
     }
 
@@ -717,6 +735,33 @@ impl TextData {
             TextAutoResize::WidthAndHeight if width => TextAutoResize::Height,
             mode => mode,
         };
+    }
+
+    /// Where chars styled `s` sit: their own position, else the layer's `sups` / `subs` (`sups`
+    /// first, as drawn).
+    pub fn position_of(&self, s: &TextStyle) -> TextPosition {
+        let on = |tag: &str| self.features.get(tag).copied().unwrap_or(false);
+        match s.position {
+            TextPosition::None if on("sups") => TextPosition::Superscript,
+            TextPosition::None if on("subs") => TextPosition::Subscript,
+            p => p,
+        }
+    }
+
+    /// Set chars `start..end` to `position`. The layer's `sups` / `subs` move onto its chars
+    /// first, so a range set to none is drawn on the line.
+    pub fn set_position(&mut self, start: usize, end: usize, position: TextPosition) {
+        let layer = self.position_of(&TextStyle::default());
+        self.features.remove("sups");
+        self.features.remove("subs");
+        if layer != TextPosition::None {
+            self.restyle(0, self.char_count(), |s| {
+                if s.position == TextPosition::None {
+                    s.position = layer;
+                }
+            });
+        }
+        self.restyle(start, end, |s| s.position = position);
     }
 
     /// The style at char index `i`.
