@@ -151,6 +151,8 @@ mod delta_snapshot_tests;
 #[cfg(test)]
 mod diff_tests;
 #[cfg(test)]
+mod dst_fault_tests;
+#[cfg(test)]
 mod entry_ids_tests;
 #[cfg(test)]
 mod frac_tests;

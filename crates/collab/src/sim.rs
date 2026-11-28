@@ -96,6 +96,11 @@ pub struct Sim {
     pub undos: usize,
     /// Reconnects that caught up with a snapshot (the missed batches were no longer logged).
     pub snapshots: usize,
+    /// Reconnects by kind of catch-up: the missed batches from the log (at least one), a compressed
+    /// snapshot, a plain snapshot (clients that don't read the compressed one).
+    pub log_catch_ups: usize,
+    pub delta_snapshots: usize,
+    pub plain_snapshots: usize,
     /// Undo or redo batches that reverted a write by someone else the client had already seen.
     pub violations: Vec<String>,
 }
@@ -129,6 +134,9 @@ impl Sim {
             repairs: 0,
             undos: 0,
             snapshots: 0,
+            log_catch_ups: 0,
+            delta_snapshots: 0,
+            plain_snapshots: 0,
             violations: Vec::new(),
         };
         for i in 0..n {
@@ -182,6 +190,26 @@ impl Sim {
     /// Whether client `i` is connected.
     pub fn is_online(&self, i: usize) -> bool {
         self.online.get(i).copied().unwrap_or(false)
+    }
+
+    /// Client `i` says it runs `version` from its next reconnect on (e.g. an older app that
+    /// doesn't read compressed snapshots).
+    pub fn set_version(&mut self, i: usize, version: &str) {
+        if let Some(h) = self.hellos.get_mut(i) {
+            h.client_version = version.to_string();
+        }
+    }
+
+    /// Hold back what is in flight on client `i`'s link to the server (`up`) or from it by
+    /// `ticks` more, and what is sent on it next too: a one-way stall that keeps the order.
+    pub fn stall(&mut self, i: usize, up: bool, ticks: u64) {
+        let link = if up { self.up.get_mut(i) } else { self.down.get_mut(i) };
+        if let Some(link) = link {
+            for (due, _) in &mut link.queue {
+                *due += ticks;
+            }
+            link.last_due = link.last_due.max(self.now) + ticks;
+        }
     }
 
     fn client(&mut self, i: usize) -> Result<&mut Client, Error> {
@@ -291,6 +319,16 @@ impl Sim {
         let ClientMsg::Hello(hello) = hello else { return Err(Error::Protocol("hello".into())) };
         let seen = self.clients.get(i).map_or(0, Client::seq);
         let (id, out) = self.server.join(hello).map_err(|m| Error::Protocol(format!("{m:?}")))?;
+        let catch_up = out.iter().find_map(|o| match o {
+            Outgoing::To(to, ServerMsg::Welcome { catch_up, .. }) if *to == id => Some(catch_up),
+            _ => None,
+        });
+        match catch_up {
+            Some(crate::CatchUp::Delta(d)) if !d.is_empty() => self.log_catch_ups += 1,
+            Some(crate::CatchUp::DeltaSnapshot(_)) => self.delta_snapshots += 1,
+            Some(crate::CatchUp::Snapshot(_) | crate::CatchUp::Packed(_)) => self.plain_snapshots += 1,
+            _ => {}
+        }
         if out.iter().any(|o| {
             matches!(o, Outgoing::To(to, ServerMsg::Welcome { catch_up: crate::CatchUp::Snapshot(_) | crate::CatchUp::DeltaSnapshot(_), .. }) if *to == id)
         }) {
