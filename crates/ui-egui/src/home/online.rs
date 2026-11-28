@@ -68,6 +68,33 @@ fn refresh(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
+/// Shown again after something else was: ask the servers.
+fn refresh_when_shown(app: &mut FigApp, ctx: &egui::Context) {
+    let frame = ctx.cumulative_frame_nr();
+    if app.ui.online.drawn.replace(frame).is_none_or(|d| d.saturating_add(1) < frame) {
+        refresh(app, ctx);
+    }
+}
+
+/// The files of the server's team list that match the home search `query` (lower case), as rows;
+/// how many. The query stays on this computer: the list is the one the server gave, filtered here.
+pub fn search_team(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize {
+    let ctx = ui.ctx().clone();
+    refresh_when_shown(app, &ctx);
+    let Some(team) = app.session.team().cloned() else { return 0 };
+    let TeamList::Files { web, files } = &team.list else { return 0 };
+    let found: Vec<&TeamFile> = files.iter().filter(|f| f.name.to_lowercase().contains(query)).collect();
+    if found.is_empty() {
+        return 0;
+    }
+    let host = server_host(&team.server).to_string();
+    ui.label(egui::RichText::new(trf("Shared by your team on {server}", &[("server", &host)])).font(semibold(14.0)).color(t.text));
+    for f in &found {
+        team_row(app, ui, t, &team.server, web, f);
+    }
+    found.len()
+}
+
 /// Run `action` of `collab.manageFile` on recorded file `f` without the window waiting for the
 /// server; `done` gets the result.
 fn manage(app: &mut FigApp, ctx: &egui::Context, f: (&str, &str), action: &str, extra: Value, done: crate::Done) {
@@ -91,11 +118,7 @@ pub(crate) fn open(app: &mut FigApp, f: &OnlineFile) {
 /// The Online section of the home screen, in `main`.
 pub fn section(app: &mut FigApp, ui: &mut Ui, main: Rect, t: &Tokens) {
     let ctx = ui.ctx().clone();
-    // Shown again after something else was: ask the servers.
-    let frame = ctx.cumulative_frame_nr();
-    if app.ui.online.drawn.replace(frame).is_none_or(|d| d.saturating_add(1) < frame) {
-        refresh(app, &ctx);
-    }
+    refresh_when_shown(app, &ctx);
     ui.painter().text(main.min, Align2::LEFT_TOP, tr("Online files"), semibold(18.0), t.text);
     let body = Rect::from_min_max(pos2(main.min.x, main.min.y + 40.0), pos2(main.min.x + main.width().min(720.0), main.max.y));
     ui.scope_builder(egui::UiBuilder::new().max_rect(body).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
