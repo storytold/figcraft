@@ -445,7 +445,7 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
     net.translate(-bb.x0, -bb.y0);
     let vid = doc.alloc_id();
     let name = first.as_ref().map(|f| f.name.clone()).unwrap_or_else(|| "Vector".into());
-    let mut v = Node::new(vid, NodeKind::Vector { network: net }, name, bb.width(), bb.height());
+    let mut v = Node::new(vid, NodeKind::Vector { network: net.into() }, name, bb.width(), bb.height());
     v.transform = Affine::translate((bb.x0, bb.y0));
     if let Some(f) = first {
         v.fills = output_fills;
@@ -620,7 +620,7 @@ fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let parent = n.parent.ok_or_else(|| bad("vector.outlineStroke", "page"))?;
         let idx = doc.index_in_parent(i);
         let vid = doc.alloc_id();
-        let mut v = Node::new(vid, NodeKind::Vector { network: net }, n.name.clone(), bb.width(), bb.height());
+        let mut v = Node::new(vid, NodeKind::Vector { network: net.into() }, n.name.clone(), bb.width(), bb.height());
         v.transform = n.transform * Affine::translate((bb.x0, bb.y0));
         // The stroke's paints (and its colour style) fill the outline.
         v.fills = n.strokes.clone();
@@ -932,7 +932,7 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
                 net = VectorNetwork::from_path(&simplified);
                 net.regions.clear();
             }
-            *network = net;
+            *network = net.into();
         }
     }
     ok()
@@ -964,7 +964,7 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
             let bounds = result.bounding_box();
             result.apply_affine(Affine::translate((-bounds.x0, -bounds.y0)));
             let node = doc.get_mut(i)?;
-            node.kind = NodeKind::Vector { network: VectorNetwork::from_path(&result) };
+            node.kind = NodeKind::Vector { network: VectorNetwork::from_path(&result).into() };
             node.transform *= Affine::translate((bounds.x0, bounds.y0));
             node.width = bounds.width();
             node.height = bounds.height();
@@ -984,7 +984,7 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
             let bb = res.bounding_box();
             res.apply_affine(Affine::translate((-bb.x0, -bb.y0)));
             let nm = doc.get_mut(i)?;
-            nm.kind = NodeKind::Vector { network: VectorNetwork::from_path(&res) };
+            nm.kind = NodeKind::Vector { network: VectorNetwork::from_path(&res).into() };
             nm.transform *= Affine::translate((bb.x0, bb.y0));
             nm.width = bb.width();
             nm.height = bb.height();
@@ -1035,14 +1035,14 @@ fn offset_path(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let Some(bb) = net.bounds() else {
             let nm = doc.get_mut(i)?;
-            nm.kind = NodeKind::Vector { network: net };
+            nm.kind = NodeKind::Vector { network: net.into() };
             nm.width = 0.0;
             nm.height = 0.0;
             continue;
         };
         net.translate(-bb.x0, -bb.y0);
         let nm = doc.get_mut(i)?;
-        nm.kind = NodeKind::Vector { network: net };
+        nm.kind = NodeKind::Vector { network: net.into() };
         nm.transform *= Affine::translate((bb.x0, bb.y0));
         nm.width = bb.width();
         nm.height = bb.height();

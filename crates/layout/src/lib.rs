@@ -134,7 +134,11 @@ pub fn set_size(doc: &mut Document, id: NodeId, w: f64, h: f64) {
     let sy = if oh > 1e-9 { h / oh } else { 1.0 };
     match &mut n.kind {
         NodeKind::Vector { network } => network.scale(sx, sy),
-        NodeKind::Text(figcraft_doc::TextData { path: Some(tp), .. }) => tp.scale(sx, sy),
+        NodeKind::Text(t) if t.path.is_some() => {
+            if let Some(tp) = &mut t.path {
+                tp.scale(sx, sy);
+            }
+        }
         _ => {}
     }
     n.width = w;

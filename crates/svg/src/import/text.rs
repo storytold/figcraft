@@ -360,7 +360,7 @@ fn add_layer(cx: &mut Ctx, layer: TextLayer<'_, '_, '_>) {
     }
     td.normalize();
     let name = if t.id().is_empty() { first.text.chars().take(64).collect() } else { layer_name(t.id(), "Text") };
-    let mut n = Node::new(cx.doc.alloc_id(), NodeKind::Text(td), name, w, h);
+    let mut n = Node::new(cx.doc.alloc_id(), NodeKind::Text(td.into()), name, w, h);
     n.transform = transform;
     n.fills = base_fill;
     if let Some(st) = spans.first().and_then(|sp| sp.stroke()) {

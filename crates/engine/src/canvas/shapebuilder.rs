@@ -323,12 +323,12 @@ fn reshape_vector_regions(doc: &mut Document, id: NodeId, areas: &[(usize, BezPa
     }
     let Some(bounds) = rebuilt.bounds() else {
         let n = doc.get_mut(id)?;
-        n.kind = NodeKind::Vector { network: rebuilt };
+        n.kind = NodeKind::Vector { network: rebuilt.into() };
         return Ok(());
     };
     rebuilt.translate(-bounds.x0, -bounds.y0);
     let n = doc.get_mut(id)?;
-    n.kind = NodeKind::Vector { network: rebuilt };
+    n.kind = NodeKind::Vector { network: rebuilt.into() };
     n.children.clear();
     n.corners = Corners::default();
     n.transform *= Affine::translate((bounds.x0, bounds.y0));
@@ -351,7 +351,7 @@ fn reshape(doc: &mut Document, id: NodeId, area: &BezPath) -> Result<()> {
         }
     }
     let n = doc.get_mut(id)?;
-    n.kind = NodeKind::Vector { network: net };
+    n.kind = NodeKind::Vector { network: net.into() };
     n.children.clear();
     n.corners = Corners::default();
     crate::vectoredit::refit(doc, id)
@@ -388,7 +388,7 @@ fn create_merged(doc: &mut Document, style: Part, area: &BezPath) -> Result<Node
         region.paint_space = Some(figcraft_doc::RegionPaintSpace { width: paint_width, height: paint_height, transform: paint_transform });
     }
     let id = doc.alloc_id();
-    let mut v = Node::new(id, NodeKind::Vector { network: net }, src.name.clone(), bb.width(), bb.height());
+    let mut v = Node::new(id, NodeKind::Vector { network: net.into() }, src.name.clone(), bb.width(), bb.height());
     v.transform = Affine::translate((bb.x0, bb.y0));
     v.fills = src.fills;
     v.strokes = src.strokes;

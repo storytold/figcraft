@@ -26,7 +26,7 @@ fn large(screens: usize) -> Document {
             32.0,
         )
         .unwrap();
-    let label = d.create(button, NodeKind::Text(TextData::new("OK")), "Label", 8.0, 8.0, 40.0, 16.0).unwrap();
+    let label = d.create(button, NodeKind::Text(TextData::new("OK").into()), "Label", 8.0, 8.0, 40.0, 16.0).unwrap();
     d.get_mut(label).unwrap().plugin_data.insert("agent".into(), "note".into());
     for s in 0..screens {
         let screen = d.create(page, NodeKind::Frame, &format!("Screen {s}"), (s % 20) as f64 * 400.0, (s / 20) as f64 * 300.0, 360.0, 240.0).unwrap();
@@ -44,7 +44,7 @@ fn large(screens: usize) -> Document {
                     t.align_h = TextAlignH::Center;
                     t.paragraph_spacing = 4.0;
                     t.features.insert("liga".into(), false);
-                    NodeKind::Text(t)
+                    NodeKind::Text(t.into())
                 }
                 _ => NodeKind::Line,
             };
@@ -86,7 +86,7 @@ fn large(screens: usize) -> Document {
         n.source = Some(button);
         n.overrides.insert("fills".into());
         n.prop_refs.insert("visible".into(), "Show".into());
-        let l = d.create(inst, NodeKind::Text(TextData::new("Go")), "Label", 8.0, 8.0, 40.0, 16.0).unwrap();
+        let l = d.create(inst, NodeKind::Text(TextData::new("Go").into()), "Label", 8.0, 8.0, 40.0, 16.0).unwrap();
         d.get_mut(l).unwrap().source = Some(label);
     }
     d
@@ -131,7 +131,7 @@ fn defaults_are_left_out_and_come_back() {
     let mut d = Document::new("Defaults");
     let p = d.first_page().unwrap();
     let r = d.create(p, NodeKind::Rectangle, "Plain", 5.0, 0.0, 10.0, 10.0).unwrap();
-    let t = d.create(p, NodeKind::Text(TextData::new("Hi")), "Text", 0.0, 20.0, 10.0, 10.0).unwrap();
+    let t = d.create(p, NodeKind::Text(TextData::new("Hi").into()), "Text", 0.0, 20.0, 10.0, 10.0).unwrap();
     let v = to_json(&d).unwrap();
     let node = |id: figcraft_doc::NodeId| v["nodes"][id.0.to_string()].as_object().unwrap().clone();
     let plain = node(r);

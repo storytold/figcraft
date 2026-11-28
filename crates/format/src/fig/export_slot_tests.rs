@@ -35,7 +35,7 @@ fn slots_document_with(own_slot: bool) -> Document {
     ]);
     let main =
         doc.create(page, NodeKind::Component { description: String::new(), props, prop_order: Vec::new() }, "Card", 0.0, 0.0, 300.0, 160.0).unwrap();
-    let label = doc.create(main, NodeKind::Text(TextData::new("Title")), "Label", 0.0, 0.0, 200.0, 20.0).unwrap();
+    let label = doc.create(main, NodeKind::Text(TextData::new("Title").into()), "Label", 0.0, 0.0, 200.0, 20.0).unwrap();
     doc.node_mut(label).unwrap().prop_refs.insert("characters".into(), "Label".into());
     let slot = doc.create(main, NodeKind::Frame, "Content", 0.0, 30.0, 280.0, 100.0).unwrap();
     doc.node_mut(slot).unwrap().prop_refs.insert("slot".into(), "Content".into());
@@ -65,7 +65,7 @@ fn slots_document_with(own_slot: bool) -> Document {
             n.prop_refs.clear();
             n.overrides.insert("slot".into());
             n.children.clear();
-            doc.create(m, NodeKind::Text(TextData::new("Own")), "Own", 0.0, 0.0, 100.0, 20.0).unwrap();
+            doc.create(m, NodeKind::Text(TextData::new("Own").into()), "Own", 0.0, 0.0, 100.0, 20.0).unwrap();
         }
     }
     doc
@@ -115,7 +115,7 @@ fn set_slots_document() -> Document {
     n.prop_refs.clear();
     n.overrides.insert("slot".into());
     n.children.clear();
-    doc.create(slot, NodeKind::Text(TextData::new("Mine")), "Mine", 0.0, 0.0, 80.0, 20.0).unwrap();
+    doc.create(slot, NodeKind::Text(TextData::new("Mine").into()), "Mine", 0.0, 0.0, 80.0, 20.0).unwrap();
     doc
 }
 

@@ -200,7 +200,7 @@ impl<'d> Exporter<'d> {
             } else {
                 let mut sample = Node::new(NodeId(0), NodeKind::Rectangle, "", 0.0, 0.0);
                 if let StyleKind::Text { style, .. } = &st.kind {
-                    sample.kind = NodeKind::Text(TextData { style: style.as_text_style(), ..TextData::new("Ag") });
+                    sample.kind = NodeKind::Text((TextData { style: style.as_text_style(), ..TextData::new("Ag") }).into());
                 }
                 sample.bound.clone_from(&st.bound);
                 self.bound(&sample)

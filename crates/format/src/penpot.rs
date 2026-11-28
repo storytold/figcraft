@@ -3015,7 +3015,9 @@ fn layer_kind(
         // This parsing crate must not depend on the higher-level SVG/render crates.
         "svg-raw" => NodeKind::Frame,
         "circle" | "ellipse" => NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 },
-        "path" if v.get("content").and_then(Value::as_array).is_some_and(Vec::is_empty) => NodeKind::Vector { network: VectorNetwork::default() },
+        "path" if v.get("content").and_then(Value::as_array).is_some_and(Vec::is_empty) => {
+            NodeKind::Vector { network: VectorNetwork::default().into() }
+        }
         "path" => match vector_bezpath(v, warnings) {
             Some(path) => {
                 let local = shape_matrix(v, x, y, w, h).inverse() * Affine::translate((x, y)) * path;
@@ -3029,14 +3031,14 @@ fn layer_kind(
                 let local = Affine::translate(-origin.to_vec2()) * local;
                 let network = VectorNetwork::from_path(&local);
                 vector_source = Some(local);
-                NodeKind::Vector { network }
+                NodeKind::Vector { network: network.into() }
             }
             None => {
                 warn(warnings, "A Penpot path could not be decoded; kept as a frame".into());
                 NodeKind::Frame
             }
         },
-        "text" => NodeKind::Text(text_node(v)),
+        "text" => NodeKind::Text(text_node(v).into()),
         other => {
             warn(warnings, format!("Unsupported Penpot layer type '{other}': imported as frame"));
             NodeKind::Frame
@@ -3363,7 +3365,7 @@ impl LayerImport<'_, '_> {
             && let Some(path) = vector_source
             && let Some(node) = self.doc.node_mut(created)
         {
-            node.kind = NodeKind::Vector { network: filled_network(&path) };
+            node.kind = NodeKind::Vector { network: filled_network(&path).into() };
         }
         let svg = v.get("svgAttrs");
         let fill_rule = svg.and_then(|a| a.get("style")).and_then(|s| string(s, "fillRule")).or_else(|| svg.and_then(|a| string(a, "fillRule")));

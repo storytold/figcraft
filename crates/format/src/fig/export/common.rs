@@ -50,7 +50,7 @@ pub(super) fn outlined(n: &Node) -> Option<(Node, String)> {
         r.winding = WindingRule::NonZero;
     }
     let mut v = n.clone();
-    v.kind = NodeKind::Vector { network };
+    v.kind = NodeKind::Vector { network: network.into() };
     v.fills = std::mem::take(&mut v.strokes);
     v.stroke = Default::default();
     v.styles.fill = v.styles.stroke.take();

@@ -1171,7 +1171,7 @@ impl Session {
         // The preview starts again from the document before the drag: bring the moved layer.
         self.preview(|doc, _| {
             *doc.get_mut(id)? = moved;
-            edit(doc, id, |net| *net = merged)
+            edit(doc, id, |net| *net = (*merged).clone())
         })?;
         set_state(self, |e| {
             e.vertices = vec![if keep > v { keep - 1 } else { keep }];

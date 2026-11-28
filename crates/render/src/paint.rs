@@ -145,13 +145,17 @@ pub fn prepare_at(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document, tim
                 Some(f) => f.clone(),
                 None => still(img, data, w, h, scale, doc, preview)?,
             };
-            let transform = image_transform(img, f64::from(pm.width()), f64::from(pm.height()), w, h);
+            let (pw, ph) = (f64::from(pm.width()), f64::from(pm.height()));
             if img.scale_mode == ImageScaleMode::Tile {
+                let transform = image_transform(img, pw, ph, w, h);
                 return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Repeat, quality: FilterQuality::Bicubic, opacity: op, transform });
             }
+            // A smaller copy goes where the image itself would.
+            let (iw, ih) = crate::images::source_size(data, &pm);
+            let transform = Transform::from_scale((iw / pw) as f32, (ih / ph) as f32).post_concat(image_transform(img, iw, ih, w, h));
             // An image covering the whole box fills it to its edges (a transparent border would
             // fade them where the image is scaled up).
-            if covers_box(img, f64::from(pm.width()), f64::from(pm.height()), w, h) {
+            if covers_box(img, iw, ih, w, h) {
                 return Some(Prepared::Pattern { pixmap: pm, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform });
             }
             // Fit/Crop: a transparent 1-px border so Pad spreads transparency, not edge pixels.
@@ -169,15 +173,28 @@ pub fn prepare_at(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document, tim
 
 /// The pixmap image paint `img` draws in a `w` × `h` box at `scale` device pixels per unit: on the
 /// canvas (`preview`) a copy no larger than the image shows ([`crate::images::shown`]), else the
-/// image itself. Tiles keep the image: their size is in its pixels.
+/// image itself, scaled down where it shows at half its size or less ([`crate::images::filtered`]).
+/// Tiles keep the image: their size is in its pixels.
+/// shortcut: tiles shown much smaller can still alias; scale their transform with the copy if that turns up.
 fn still(img: &ImagePaint, data: Option<&ImageData>, w: f64, h: f64, scale: f64, doc: &Document, preview: bool) -> Option<Arc<Pixmap>> {
     let (iw, ih) = data.map_or((0, 0), |d| (d.width, d.height));
-    if preview && img.scale_mode != ImageScaleMode::Tile && iw > 0 && ih > 0 {
+    if img.scale_mode != ImageScaleMode::Tile && iw > 0 && ih > 0 {
         let t = image_transform(img, f64::from(iw), f64::from(ih), w, h);
-        let side = scale * f64::from(t.sx * t.sy - t.kx * t.ky).abs().sqrt() * f64::from(iw.max(ih));
-        return crate::images::shown(&img.image, data, &img.filters, doc.color_profile, side);
+        // `scale` is the layer's largest stretch, so the product bounds what any direction shows.
+        let stretch = max_stretch(t.sx.into(), t.ky.into(), t.kx.into(), t.sy.into());
+        let side = scale * stretch * f64::from(iw.max(ih));
+        let pick = if preview { crate::images::shown } else { crate::images::filtered };
+        return pick(&img.image, data, &img.filters, doc.color_profile, side);
     }
     crate::images::get(&img.image, data, &img.filters, doc.color_profile)
+}
+
+/// The most the linear map `[a c; b d]` stretches any direction (its largest singular value): the
+/// scale for uniform scaling and rotation, the longer axis for a squeeze.
+pub(crate) fn max_stretch(a: f64, b: f64, c: f64, d: f64) -> f64 {
+    let sum = a * a + b * b + c * c + d * d;
+    let det = a * d - b * c;
+    ((sum + (sum * sum - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt()
 }
 
 /// Whether image paint `img` paints its whole `w` × `h` box opaque: an image without transparent

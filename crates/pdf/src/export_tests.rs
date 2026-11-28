@@ -147,7 +147,7 @@ fn text_hyperlinks_become_link_annotations() {
     linked.link = Some(URL.into());
     // "docs" (chars 9..13) links.
     td.runs = vec![StyleRun { start: 9, end: 13, style: linked }];
-    let t = d.create(f, NodeKind::Text(td), "T", 10.0, 10.0, 280.0, 40.0).unwrap();
+    let t = d.create(f, NodeKind::Text(td.into()), "T", 10.0, 10.0, 280.0, 40.0).unwrap();
     d.get_mut(t).unwrap().fills = vec![Paint::solid(Color::BLACK)];
     let Some((layout, _)) = figcraft_text::layout_node(d.node(t).unwrap()) else { return };
     if layout.glyphs.is_empty() {
@@ -183,7 +183,7 @@ fn hostile_links_are_skipped() {
         td.style.link = Some(url.to_string());
         // One off the page entirely.
         let x = if i == 2 { 500.0 } else { 0.0 };
-        d.create(f, NodeKind::Text(td), "T", x, 0.0, 80.0, 20.0).unwrap();
+        d.create(f, NodeKind::Text(td.into()), "T", x, 0.0, 80.0, 20.0).unwrap();
     }
     let pdf = export_pdf(&d, &[f], &PdfOptions::default()).unwrap();
     assert_eq!(text(&pdf).matches("/Subtype/Link").count(), 0);
@@ -296,7 +296,7 @@ fn an_oversized_link_is_dropped_before_it_is_copied_per_line() {
     let mut td = TextData::new(words.trim_end());
     td.style.font_size = 20.0;
     td.style.link = Some("https://example.com/".to_string() + &"a".repeat(1 << 20));
-    let t = d.create(f, NodeKind::Text(td), "T", 10.0, 10.0, 280.0, 3980.0).unwrap();
+    let t = d.create(f, NodeKind::Text(td.into()), "T", 10.0, 10.0, 280.0, 3980.0).unwrap();
     d.get_mut(t).unwrap().fills = vec![Paint::solid(Color::BLACK)];
     let pdf = export_pdf(&d, &[f], &PdfOptions::default()).unwrap();
     assert_eq!(text(&pdf).matches("/Subtype/Link").count(), 0);

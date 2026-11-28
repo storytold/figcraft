@@ -173,8 +173,8 @@ pub fn kind_for(t: &str) -> Option<(NodeKind, &'static str)> {
         "star" => (NodeKind::Star { count: 5, inner_ratio: 0.38 }, "Star"),
         "line" => (NodeKind::Line, "Line"),
         "arrow" => (NodeKind::Line, "Arrow"),
-        "vector" | "path" => (NodeKind::Vector { network: VectorNetwork::default() }, "Vector"),
-        "text" => (NodeKind::Text(TextData::default()), "Text"),
+        "vector" | "path" => (NodeKind::Vector { network: VectorNetwork::default().into() }, "Vector"),
+        "text" => (NodeKind::Text(TextData::default().into()), "Text"),
         "frame" => (NodeKind::Frame, "Frame"),
         "section" => (NodeKind::Section { contents_hidden: false }, "Section"),
         "component" => (NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() }, "Component"),
@@ -332,7 +332,7 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if let NodeKind::Vector { network } = &mut kind {
         if let Some(d) = string(p, "path") {
             let shape = path_network(cmd, &d, asked.0, asked.1)?;
-            *network = shape.network;
+            *network = (shape.network).into();
             if boolean(p, "closed") == Some(false) {
                 network.regions.clear();
             }
@@ -355,7 +355,7 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let (sx, sy) = vector_scale(asked.0, asked.1, bb.width(), bb.height(), "a point set").map_err(|e| bad(cmd, e))?;
             let local: Vec<Point> = pts.iter().map(|q| Point::new((q.x - bb.x0) * sx, (q.y - bb.y0) * sy)).collect();
-            *network = VectorNetwork::from_points(&local, boolean(p, "closed").unwrap_or(false));
+            *network = VectorNetwork::from_points(&local, boolean(p, "closed").unwrap_or(false)).into();
             w = bb.width() * sx;
             h = bb.height() * sy;
             offset = (bb.x0, bb.y0);

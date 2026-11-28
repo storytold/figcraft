@@ -136,7 +136,7 @@ fn themed() -> Document {
             ],
         );
     });
-    add(&mut doc, frame, NodeKind::Text(TextData::new("Hello")), "Title", (10.0, 80.0), (60.0, 20.0), &|n| {
+    add(&mut doc, frame, NodeKind::Text(TextData::new("Hello").into()), "Title", (10.0, 80.0), (60.0, 20.0), &|n| {
         n.fills = vec![solid(0.0, 0.0, 0.0)];
         bind(
             n,
@@ -218,7 +218,7 @@ fn same_after_round_trip(doc: &Document, what: &str) -> Vec<String> {
         let mut styles = d.styles.clone();
         for s in &mut styles {
             // Held the way a layer's paints and text are.
-            let mut n = Node::new(NodeId(0), NodeKind::Text(TextData::new("")), "", 0.0, 0.0);
+            let mut n = Node::new(NodeId(0), NodeKind::Text(TextData::new("").into()), "", 0.0, 0.0);
             match &mut s.kind {
                 StyleKind::Paint { paints } => {
                     n.fills = std::mem::take(paints);
@@ -231,8 +231,8 @@ fn same_after_round_trip(doc: &Document, what: &str) -> Vec<String> {
                     }
                     n.fills.clear();
                     normalize(&mut n, &|i| i);
-                    if let NodeKind::Text(td) = n.kind {
-                        *style = td.style;
+                    if let NodeKind::Text(td) = &n.kind {
+                        *style = td.style.clone();
                     }
                 }
                 _ => {}
@@ -466,7 +466,7 @@ fn styled() -> Document {
     });
     let mut td = TextData::new("Title");
     td.style = heading;
-    add(&mut doc, frame, NodeKind::Text(td), "Title", (10.0, 80.0), (100.0, 32.0), &|n| {
+    add(&mut doc, frame, NodeKind::Text(td.into()), "Title", (10.0, 80.0), (100.0, 32.0), &|n| {
         n.fills = vec![solid(0.0, 0.0, 0.0)];
         n.styles.text = Some("s-text".into());
     });
@@ -568,7 +568,7 @@ fn sized() -> (Document, [NodeId; 3]) {
     add(&mut doc, main, NodeKind::Rectangle, "Box", (10.0, 10.0), (40.0, 40.0), &|n| {
         n.constraints = Constraints { horizontal: HConstraint::Scale, vertical: VConstraint::Scale };
     });
-    add(&mut doc, main, NodeKind::Text(TextData::new("Card")), "Label", (56.0, 20.0), (32.0, 16.0), &|_| {});
+    add(&mut doc, main, NodeKind::Text(TextData::new("Card").into()), "Label", (56.0, 20.0), (32.0, 16.0), &|_| {});
     let mut g = Gen { r: Lcg(1), doc, image: String::new(), frames: Vec::new(), layers: Vec::new() };
     let insts = [(); 3].map(|_| g.instance(main, page, BTreeMap::new()));
     let mut doc = g.doc;
@@ -671,7 +671,7 @@ fn layers_bound_like_their_mains_are_no_overrides_in_another_mode() {
             n.bound.insert("fill".into(), "v-bg".into());
         },
     );
-    add(&mut doc, main, NodeKind::Text(TextData::new("Chip")), "Chip label", (8.0, 6.0), (40.0, 16.0), &|n| {
+    add(&mut doc, main, NodeKind::Text(TextData::new("Chip").into()), "Chip label", (8.0, 6.0), (40.0, 16.0), &|n| {
         n.fills = vec![solid(0.0, 0.0, 0.0)];
         n.bound.insert("fill".into(), "v-fg".into());
     });
@@ -1266,7 +1266,7 @@ fn checkbox_variable_and_conditional_actions_round_trip() {
     let frame = doc.create(page, NodeKind::Frame, "Checkbox demo", 0.0, 0.0, 320.0, 180.0).unwrap();
     let toggle = doc.create(frame, NodeKind::Frame, "Toggle checkbox", 24.0, 24.0, 44.0, 44.0).unwrap();
     let mark = doc.create(toggle, NodeKind::Rectangle, "Checked indicator", 12.0, 12.0, 20.0, 20.0).unwrap();
-    let label = doc.create(frame, NodeKind::Text(TextData::new("Unchecked")), "Status", 84.0, 36.0, 120.0, 20.0).unwrap();
+    let label = doc.create(frame, NodeKind::Text(TextData::new("Unchecked").into()), "Status", 84.0, 36.0, 120.0, 20.0).unwrap();
     doc.node_mut(mark).unwrap().bound.insert("visible".into(), "checked".into());
     doc.node_mut(label).unwrap().bound.insert("characters".into(), "status".into());
     let set_status = |value| Action::SetVariable { variable: "status".into(), value: json!(value), expr: None };

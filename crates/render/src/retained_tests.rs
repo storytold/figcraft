@@ -53,7 +53,7 @@ fn scene(cut_sensitive: bool) -> Scene {
     let mut td = TextData::new("A line of text that overflows its box");
     td.auto_resize = TextAutoResize::None;
     td.style.font_size = 14.0;
-    let text = d.create(page, NodeKind::Text(td), "T", 20.0, 270.0, 60.0, 20.0).unwrap();
+    let text = d.create(page, NodeKind::Text(td.into()), "T", 20.0, 270.0, 60.0, 20.0).unwrap();
     if cut_sensitive {
         let inner = d.create(page, NodeKind::Rectangle, "Inner", 180.0, 150.0, 70.0, 50.0).unwrap();
         solid(d.get_mut(inner).unwrap(), "FFFFFF");
@@ -277,7 +277,7 @@ fn overflowing_text_is_drawn_while_its_box_is_out_of_view() {
     let mut td = TextData::new("Overflowing far to the right of a one pixel box");
     td.auto_resize = TextAutoResize::WidthAndHeight;
     td.style.font_size = 16.0;
-    let t = d.create(page, NodeKind::Text(td), "T", 100.0, 10.0, 1.0, 20.0).unwrap();
+    let t = d.create(page, NodeKind::Text(td.into()), "T", 100.0, 10.0, 1.0, 20.0).unwrap();
     let Some((layout, _)) = figcraft_text::layout_node(d.node(t).unwrap()) else { return };
     if layout.glyphs.is_empty() || layout.width < 120.0 {
         return; // no fonts on this machine

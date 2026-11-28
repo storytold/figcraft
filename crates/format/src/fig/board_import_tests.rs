@@ -574,7 +574,7 @@ fn a_jam_diamond_is_a_native_shape_drawn_by_figcraft() {
     assert_eq!(frame.children.len(), 2, "the outline and the text: {warnings:?}");
     let outline = doc.node(frame.children[0]).unwrap();
     let NodeKind::Vector { network } = &outline.kind else { panic!("{:?}", outline.kind) };
-    assert_eq!(*network, figcraft_doc::VectorNetwork::from_path(&figcraft_doc::BoardShape::Diamond.path(240.0, 240.0)));
+    assert_eq!(*network, figcraft_doc::VectorNetwork::from_path(&figcraft_doc::BoardShape::Diamond.path(240.0, 240.0)).into());
     assert_eq!(outline.fills[0].solid_color().unwrap().to_rgba8(), [255, 191, 64, 255]);
     assert!(outline.child_layout.absolute);
     assert_eq!(outline.constraints.horizontal, figcraft_doc::HConstraint::Scale);
@@ -596,7 +596,7 @@ fn a_jam_shape_past_the_size_cap_draws_its_outline_at_the_cap() {
     assert_eq!((frame.width, frame.height), (1e6, 1e6));
     let outline = doc.node(frame.children[0]).unwrap();
     let NodeKind::Vector { network } = &outline.kind else { panic!("{:?}", outline.kind) };
-    assert_eq!(*network, figcraft_doc::VectorNetwork::from_path(&figcraft_doc::BoardShape::Diamond.path(1e6, 1e6)));
+    assert_eq!(*network, figcraft_doc::VectorNetwork::from_path(&figcraft_doc::BoardShape::Diamond.path(1e6, 1e6)).into());
 }
 
 /// 23 of FigJam's 30 shape kinds have a FigCraft outline; the other 7 stay frames and say which.
