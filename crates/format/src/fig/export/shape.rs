@@ -289,23 +289,44 @@ impl<'d> Exporter<'d> {
                 ));
             }
         }
-        if !net.regions.is_empty() {
-            let winding = net.regions.first().map(|r| r.winding).unwrap_or_default();
-            if net.regions.iter().any(|r| r.winding != winding) {
-                self.warn("vectors whose filled areas use different winding rules use the first one's in their outline");
+        if let Some(first) = net.regions.first().map(|r| r.winding) {
+            let drawn = figcraft_doc::geometry::drawn_network(net, n.corners.smoothing);
+            if net.regions.iter().all(|r| r.winding == first) {
+                self.geometry("fillGeometry", &drawn.fill_path(), first, f);
+            } else {
+                // One outline per winding rule, the first area's rule first: each is filled with its own rule.
+                let second = if first == WindingRule::NonZero { WindingRule::EvenOdd } else { WindingRule::NonZero };
+                let parts: Vec<(BezPath, WindingRule)> = [first, second]
+                    .into_iter()
+                    .map(|rule| {
+                        let mut part = drawn.clone().into_owned();
+                        part.regions.retain(|r| r.winding == rule);
+                        (part.fill_path(), rule)
+                    })
+                    .collect();
+                let parts: Vec<(&BezPath, WindingRule)> = parts.iter().map(|(p, rule)| (p, *rule)).collect();
+                self.geometries("fillGeometry", &parts, f);
             }
-            self.geometry("fillGeometry", &figcraft_doc::geometry::drawn_network(net, n.corners.smoothing).fill_path(), winding, f);
         }
     }
 
     /// `fillGeometry` or `strokeGeometry` (`key`) from a local path.
     pub(super) fn geometry(&mut self, key: &'static str, p: &BezPath, winding: WindingRule, f: &mut Fields) {
-        if p.elements().is_empty() {
-            return;
+        self.geometries(key, &[(p, winding)], f);
+    }
+
+    /// `fillGeometry` or `strokeGeometry` (`key`) from local paths, each filled with its own winding rule (empty paths
+    /// are left out, and the field with them).
+    fn geometries(&mut self, key: &'static str, parts: &[(&BezPath, WindingRule)], f: &mut Fields) {
+        let mut list = Vec::new();
+        for (p, winding) in parts.iter().filter(|(p, _)| !p.elements().is_empty()) {
+            if let Some(i) = self.blob(path_blob(p)) {
+                let rule = if *winding == WindingRule::EvenOdd { "ODD" } else { "NONZERO" };
+                list.push(o(vec![("windingRule", e(rule)), ("commandsBlob", u(i)), ("styleID", u(0))]));
+            }
         }
-        if let Some(i) = self.blob(path_blob(p)) {
-            let rule = if winding == WindingRule::EvenOdd { "ODD" } else { "NONZERO" };
-            f.push((key, arr(vec![o(vec![("windingRule", e(rule)), ("commandsBlob", u(i)), ("styleID", u(0))])])));
+        if !list.is_empty() {
+            f.push((key, arr(list)));
         }
     }
 

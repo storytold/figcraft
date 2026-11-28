@@ -220,3 +220,82 @@ fn a_server_key_flag_and_an_unreachable_app_fail_with_exit_1_and_a_message() {
     assert!(got.err.contains("can't reach the FigCraft app at 127.0.0.1:1"), "{}", got.err);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// `--strict` writes what leaves nothing out as without it, and refuses (exit 1, the reasons listed,
+/// no file written or replaced) what would leave something out.
+#[test]
+fn strict_refuses_to_write_what_would_leave_content_out() {
+    let dir = workdir("strict");
+    let path = |name: &str| dir.join(name).to_str().unwrap().to_string();
+    let frame = r#"{"command": "frame.create", "params": {"x": 0, "y": 0, "width": 10, "height": 10, "name": "F"}}"#;
+    // The .fig format has no place for comments, so the writer reports one as left out.
+    let comment = r#"{"command": "comment.add", "params": {"x": 5, "y": 5, "text": "Check"}}"#;
+    let (clean, noted, script) = (path("clean.figcraft"), path("noted.figcraft"), path("s.json"));
+    for (doc, steps) in [(&clean, format!("[{frame}]")), (&noted, format!("[{frame}, {comment}]"))] {
+        std::fs::write(&script, steps).unwrap();
+        let made = invoke(["run", script.as_str(), "--out", doc.as_str()]);
+        assert_eq!(made.code, 0, "{}", made.err);
+    }
+
+    let fig = path("clean.fig");
+    let got = invoke(["export", clean.as_str(), "-o", fig.as_str(), "--strict"]);
+    assert_eq!((got.code, got.err.contains("note:")), (0, false), "{}", got.err);
+    assert_eq!(invoke(["info", fig.as_str()]).code, 0, "the strict export reads back");
+    let got = invoke(["convert", clean.as_str(), path("clean.penpot").as_str(), "--strict"]);
+    assert_eq!(got.code, 0, "{}", got.err);
+
+    let (absent, previous) = (path("absent.fig"), path("previous.fig"));
+    std::fs::write(&previous, b"previous export").unwrap();
+    for args in [
+        vec!["export", noted.as_str(), "-o", absent.as_str(), "--strict"],
+        vec!["export", noted.as_str(), "-o", previous.as_str(), "--strict"],
+        vec!["convert", noted.as_str(), absent.as_str(), "--strict"],
+        vec!["run", script.as_str(), "--in", clean.as_str(), "--out", previous.as_str(), "--strict"],
+    ] {
+        let got = invoke(args.iter().copied());
+        assert_eq!(got.code, 1, "{args:?}: {}", got.err);
+        assert!(
+            got.err.starts_with("error: ") && got.err.contains("--strict") && got.err.contains("comments were left out"),
+            "{args:?}: {}",
+            got.err
+        );
+        assert!(!std::path::Path::new(&absent).exists(), "{args:?} wrote {absent}");
+        assert_eq!(std::fs::read(&previous).unwrap(), b"previous export", "{args:?} replaced {previous}");
+    }
+    // Without --strict the same export writes the file and notes what it left out.
+    let got = invoke(["export", noted.as_str(), "-o", absent.as_str()]);
+    assert_eq!(got.code, 0, "{}", got.err);
+    assert!(got.err.contains("note: comments were left out") && std::path::Path::new(&absent).exists(), "{}", got.err);
+
+    // A folder of drawables is written only when no file in it leaves anything out.
+    let drawables = path("clean-drawables");
+    let got = invoke(["export", clean.as_str(), "-o", drawables.as_str(), "--format", "xml", "--strict"]);
+    assert_eq!(got.code, 0, "{}", got.err);
+    assert!(std::path::Path::new(&drawables).join("F.xml").exists(), "{}", got.out);
+    std::fs::write(
+        &script,
+        r##"[{"command": "shape.rectangle", "params": {"x": 0, "y": 0, "width": 24, "height": 24, "name": "Dot", "props": {"fill": "#ff0000", "effects": [{"type": "dropShadow"}]}}}]"##,
+    )
+    .unwrap();
+    let shadowed = path("shadowed.figcraft");
+    assert_eq!(invoke(["run", script.as_str(), "--out", shadowed.as_str()]).code, 0);
+    let folder = path("drawables");
+    let got = invoke(["export", shadowed.as_str(), "-o", folder.as_str(), "--format", "xml", "--strict"]);
+    assert_eq!(got.code, 1, "{}", got.err);
+    assert!(got.err.contains("drop shadows were left out") && !std::path::Path::new(&folder).exists(), "{}", got.err);
+
+    // --vd-compat only matters for drawables.
+    let got = invoke(["export", clean.as_str(), "-o", path("ignored.fig").as_str(), "--vd-compat", "ignore", "--strict"]);
+    assert_eq!(got.code, 0, "{}", got.err);
+    // Where nothing would be checked, --strict is a usage error.
+    for args in [
+        vec!["export", clean.as_str(), "-o", "x.png", "--strict"],
+        vec!["export", clean.as_str(), "-o", "frames", "--strict"],
+        vec!["export", shadowed.as_str(), "-o", "x.xml", "--vd-compat", "ignore", "--strict"],
+        vec!["convert", clean.as_str(), "x.svg", "--strict"],
+        vec!["run", script.as_str(), "--strict"],
+    ] {
+        assert!(usage_error(&args).contains("--strict"), "{args:?}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

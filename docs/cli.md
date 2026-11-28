@@ -124,7 +124,7 @@ page 1 "Screens": 380 nodes, 4 top-level
   …
 ```
 
-### `export <file> -o <out> [--format png|jpg|svg|webp|pdf|xml|fig|penpot] [--scale N] [--page NAME] [--node ID|NAME] [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk] [--vd-compat bestEffort|exact|ignore]`
+### `export <file> -o <out> [--format png|jpg|svg|webp|pdf|xml|fig|penpot] [--scale N] [--page NAME] [--node ID|NAME] [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk] [--vd-compat bestEffort|exact|ignore] [--strict]`
 
 - `<out>` is a directory: one file per top-level frame of the selected page, named
   after the frame (`Home.png`, `Settings.png`…); with no frames, one file per top-level layer.
@@ -158,6 +158,12 @@ page 1 "Screens": 380 nodes, 4 top-level
   Layers opened from a `.penpot` keep their Penpot ids, and unchanged text, layouts, interactions
   and tokens are written back from the original. What Penpot cannot represent is printed as
   `note:` lines.
+- `--strict` (with `fig`, `penpot` or `xml`, the formats that report what they can't hold) turns
+  those notes into a failure: when the export would leave out or change anything, nothing is
+  written or replaced, and the command exits 1 with the reasons on one `error:` line. A folder of
+  drawables is written only when none of its files leaves anything out. With another format, or
+  for xml with `--vd-compat ignore` (which drops content without notes), `--strict` is a usage error.
+  Only what the writer reports counts: what an import of the input left out is not checked.
 - The format comes from `--format`, else `<out>`'s extension, else png. `--scale` (default 1, max 64)
   applies to raster formats.
 - SVG/PDF/XML exports with visible descendants more than 256 levels below an exported root fail with
@@ -187,7 +193,7 @@ figcraft-cli export app.figcraft -o poster.pdf --node "Poster" --bleed 3mm --cro
 figcraft-cli export app.figcraft -o handoff.fig
 ```
 
-### `convert <in> <out>`
+### `convert <in> <out> [--in-place] [--strict]`
 
 By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.sketch` (Sketch 48 or newer, best effort),
 `.penpot` (Penpot 2.x archive, best effort), `.svg` (an editable frame: groups,
@@ -200,13 +206,15 @@ frames, one page each), `.fig` (the whole file, experimental, as `export --forma
 (the whole file as a Penpot 2.x archive, as `export --format penpot`).
 
 When converting from a `.penpot` file, import warnings are printed to stderr as `note:` lines.
+`--strict` refuses to write a `.fig` or `.penpot` `<out>` that would leave out or change content,
+as for `export` (a `.figcraft` `<out>` keeps everything); with other outputs it is a usage error.
 
 ### `render <file> -o <out.png> [--scale N] [--page NAME]`
 
 The whole page with its background, as png, jpg or webp. `--page` defaults to the first non-divider
 page, as for `export`. Large pages are scaled down to fit 16384 px.
 
-### `run <script.json|script.jsonl> [--in <file>] [--out <file>]`
+### `run <script.json|script.jsonl> [--in <file>] [--out <file>] [--in-place] [--strict]`
 
 Runs commands in a headless session (a new document, or `--in`), printing one JSON line per step:
 
@@ -233,7 +241,9 @@ created ([Step references](mcp.md#step-references) has the rules):
 ```
 
 The result lines are printed once the script is through, so none of them reports work a later step
-took back.
+took back. `--strict` (with `--out` ending in `.fig`, `.penpot` or `.figcraft`) refuses to save a
+result that would leave out or change content, as for `export`: the result lines are printed, the
+file is not written, and the command exits 1.
 
 To keep going past a failed command, make a step a `command.batch` with `"onError": "continue"`
 ([MCP server](mcp.md) has the rules). If a later top-level step fails, FigCraft rolls back that
