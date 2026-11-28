@@ -3,6 +3,8 @@
 
 use proptest::prelude::*;
 
+use figcraft_engine::live::LiveLink;
+
 use crate::invite::{Endpoint, Invite};
 
 const TOKEN: &str = "AbCdEfGhIjKlMnOpQrStUv";
@@ -56,6 +58,28 @@ fn server_links_carry_tls_and_a_path() {
     let plain = Invite::parse(&format!("figcraft://join?server=ws://10.0.0.5:47900&file=0123456789abcdef&token={TOKEN}")).unwrap();
     assert_eq!(plain, Invite::new("10.0.0.5:47900", "0123456789abcdef", TOKEN));
     assert!(plain.link().starts_with("figcraft://join?host=10.0.0.5:47900&"));
+}
+
+#[test]
+fn an_automation_server_allowlist_matches_the_parsed_origin_and_path_prefix() {
+    let net = crate::NetLink::new(std::sync::Arc::new(|| {}));
+    let allowed = vec!["wss://figcraft.example.com/team/".to_string()];
+    let invite = |server: &str| Invite { server: Endpoint::parse(server).unwrap().0, ..invite() }.link();
+
+    assert!(net.automation_join_allowed(&invite("wss://FIGCRAFT.example.com/team/live/"), &allowed));
+    assert!(net.automation_join_allowed(&invite("wss://figcraft.example.com/team/"), &allowed));
+    assert!(!net.automation_join_allowed(&invite("wss://figcraft.example.com/teams/"), &allowed));
+    assert!(!net.automation_join_allowed(&invite("wss://figcraft.example.com/team/../outside/"), &allowed));
+    assert!(!net.automation_join_allowed(&invite("wss://figcraft.example.com/team/live/"), &["wss://figcraft.example.com/team/../".to_string()]));
+    assert!(!net.automation_join_allowed(&invite("ws://figcraft.example.com/team/"), &allowed));
+    assert!(!net.automation_join_allowed(&invite("wss://figcraft.example.com:444/team/"), &allowed));
+    assert!(!net.automation_join_allowed(&invite("wss://other.example.com/team/"), &allowed));
+    assert!(!net.automation_join_allowed(
+        "figcraft://join?server=wss://other.example.com/team/&file=0123456789abcdef&token=AbCdEfGhIjKlMnOpQrStUv",
+        &allowed
+    ));
+    assert!(!net.automation_join_allowed("figcraft://join?host=192.168.1.20:47900&file=0123456789abcdef&token=AbCdEfGhIjKlMnOpQrStUv", &allowed));
+    assert!(!net.automation_join_allowed(&invite("wss://figcraft.example.com/team/"), &["wss://figcraft.example.com/team/?key=secret".to_string()]));
 }
 
 #[test]

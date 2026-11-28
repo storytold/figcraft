@@ -446,6 +446,13 @@ pub trait LiveLink: Send {
     fn can_host(&self) -> bool {
         true
     }
+    /// Whether `link` names a collaboration server in the automation allowlist.
+    ///
+    /// Implementations must parse the invite and compare its endpoint; a string-prefix check
+    /// would let a crafted invite bypass the file/network boundary.
+    fn automation_join_allowed(&self, _link: &str, _allowed_servers: &[String]) -> bool {
+        false
+    }
     /// Start hosting session `session` for `opts.doc`.
     fn host(&mut self, session: SessionId, opts: HostOptions) -> std::result::Result<SessionInfo, String>;
     /// Start joining the session behind an invite link, as session `session`. Errors are for

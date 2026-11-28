@@ -85,6 +85,28 @@ fn the_connector_bar_sets_its_ends_dashes_and_weight() {
     assert_eq!(stroke(&u).weight, 4.0, "the weight is its own step");
 }
 
+/// A connector drawn from right to left (#1744): its end point's menu comes first, so the menu on
+/// the left sets the end on the left.
+#[test]
+fn the_left_menu_sets_the_left_end_of_a_connector_drawn_right_to_left() {
+    let mut s = Session::new();
+    s.execute("file.newBoard", &json!({})).unwrap();
+    let a = s.execute("board.sticky", &json!({"x": 400, "y": 300})).unwrap()["id"].clone();
+    let b = s.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap()["id"].clone();
+    let c = id(&s.execute("board.connector", &json!({"from": a, "to": b, "style": "elbow"})).unwrap());
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let stroke = |u: &Ui| u.app.session.doc().unwrap().node(c).unwrap().stroke.clone();
+    // The two menus' places on the bar, named for a connector drawn left to right.
+    let (left, right) = (START, END);
+    pick(&mut u, left, "Circle");
+    assert_eq!(stroke(&u).cap_end, StrokeCap::CircleFilled, "the left menu is the end's");
+    assert_ne!(stroke(&u).cap_start, StrokeCap::CircleFilled);
+    pick(&mut u, right, "Diamond");
+    assert_eq!(stroke(&u).cap_start, StrokeCap::DiamondFilled, "the right menu is the start's");
+}
+
 #[test]
 fn the_colour_wheel_opens_the_picker_for_connectors_only() {
     let (mut u, c, b) = connector();

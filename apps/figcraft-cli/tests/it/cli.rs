@@ -244,7 +244,18 @@ fn run_takes_the_documented_gradient_shorthand() {
 
 #[test]
 fn mcp_over_stdio() {
-    let mut child = bin().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let d = tmp("mcp-over-stdio");
+    let mut child = bin()
+        .arg("mcp")
+        .arg("--automation-read-root")
+        .arg(&d)
+        .arg("--automation-write-root")
+        .arg(&d)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
     {
         let stdin = child.stdin.as_mut().unwrap();
         writeln!(stdin, r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18"}}}}"#).unwrap();
@@ -261,6 +272,7 @@ fn mcp_over_stdio() {
     assert_eq!(lines[0]["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(lines[1]["error"]["code"], -32700);
     assert_eq!(lines[2]["result"]["isError"], false);
+    let _ = std::fs::remove_dir_all(d);
 }
 
 #[test]
@@ -270,8 +282,18 @@ fn mcp_over_stdio_confined_to_automation_roots() {
         std::fs::create_dir_all(d.join(sub)).unwrap();
     }
     let p = |rel: &str| d.join(rel).to_string_lossy().into_owned();
-    // A root that isn't a folder stops the server before it serves.
-    let out = bin().args(["mcp", "--automation-read-root", &p("missing")]).output().unwrap();
+    for args in [
+        vec!["mcp".to_owned()],
+        vec!["mcp".to_owned(), "--automation-read-root".to_owned(), p("in")],
+        vec!["mcp".to_owned(), "--automation-write-root".to_owned(), p("out")],
+    ] {
+        let out = bin().args(args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("requires both --automation-read-root and --automation-write-root"));
+    }
+
+    // Both roots are required; a root that isn't a folder stops the server before it serves.
+    let out = bin().args(["mcp", "--automation-read-root", &p("missing"), "--automation-write-root", &p("out")]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("--automation-read-root"));
     let mut child = bin()

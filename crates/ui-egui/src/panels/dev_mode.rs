@@ -572,25 +572,48 @@ pub fn responsive_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: Nod
         let group = responsive::group_of(n);
         row(ui, 32.0, |ui| {
             let width = ui.available_width() - 2.0 * PAD;
-            if let Some(v) = widgets::text_field(ui, Id::unique(("responsive_group", id)), group, width, tr("Design it's a version of")) {
+            if let Some(v) = widgets::text_field(ui, group_field(app, id), group, width, tr("Design it's a version of")) {
                 // Emptied: back to the frame's name.
                 let group = if v.trim().is_empty() { json!(null) } else { json!(v) };
                 app.run("responsive.set", json!({"id": id, "viewport": current, "group": group}));
             }
         });
     }
-    let field = rule_draft(app, id);
-    let draft = ui.data(|d| d.get_temp::<String>(field)).unwrap_or_default();
+    let (field, editor) = (rule_draft(app, id), rule_editor(app, id));
+    let mut draft = ui.data(|d| d.get_temp::<String>(field)).unwrap_or_default();
     widgets::sublabels(ui, tr("Add a rule"), None);
-    if let Some(v) = widgets::multiline_field(ui, field, &draft, tr("Sidebar becomes a drawer below 768 px"), 3) {
-        ui.data_mut(|d| d.insert_temp(field, v));
+    if let Some(v) = widgets::multiline_field(ui, editor, &draft, tr("Sidebar becomes a drawer below 768 px"), 3) {
+        ui.data_mut(|d| d.insert_temp(field, v.clone()));
+        draft = v;
     }
+    // While the field has focus, what it holds is the rule. Without focus, text it kept when the
+    // section went away mid-edit was never shown: it isn't sent, and it's dropped so the next
+    // edit starts from the draft the field shows.
+    let focused = ui.memory(|m| m.has_focus(editor.with("te")));
+    let draft = if focused {
+        ui.data(|d| d.get_temp::<String>(editor)).unwrap_or(draft)
+    } else {
+        ui.data_mut(|d| d.remove_temp::<String>(editor));
+        draft
+    };
     row(ui, 32.0, |ui| {
         if widgets::button(ui, tr("Add rule"), false, !draft.trim().is_empty()).clicked() {
             add_rule(app, ui.ctx(), id, &draft);
         }
     });
     widgets::note(ui, tr("Rules appear under Annotations, in the Responsive category."), t.text_secondary);
+}
+
+/// The Screen sizes section's field for the design layer `id` is a version of.
+pub(crate) fn group_field(app: &FigApp, id: NodeId) -> Id {
+    // Layer ids repeat across open documents.
+    Id::unique(("responsive_group", app.session.ds().ok().map(|d| d.uid), id))
+}
+
+/// The rule field's own editing state for layer `id`.
+pub(crate) fn rule_editor(app: &FigApp, id: NodeId) -> Id {
+    // Apart from the draft: the field drops its editing state when it loses focus.
+    rule_draft(app, id).with("editor")
 }
 
 /// Where the Screen sizes section keeps the rule being typed for layer `id`.
@@ -601,9 +624,13 @@ pub(crate) fn rule_draft(app: &FigApp, id: NodeId) -> Id {
 
 /// Add `text` as a rule on `id`. The draft stays when the rule is refused, so nothing typed is lost.
 pub(crate) fn add_rule(app: &mut FigApp, ctx: &egui::Context, id: NodeId, text: &str) {
-    let field = rule_draft(app, id);
+    let (field, editor) = (rule_draft(app, id), rule_editor(app, id));
     if app.run("responsive.rule", json!({"id": id, "text": text})).is_some() {
-        ctx.data_mut(|d| d.remove_temp::<String>(field));
+        // Both: a field that kept focus (an assistive Click doesn't move it) would bring the rule back.
+        ctx.data_mut(|d| {
+            d.remove_temp::<String>(field);
+            d.remove_temp::<String>(editor);
+        });
     }
 }
 
