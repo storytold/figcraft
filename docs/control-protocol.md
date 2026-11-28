@@ -32,8 +32,15 @@ HTTP request a web page makes the browser send here never runs). The implementat
 
 A request line is limited to **32 MiB before the newline**, including whitespace. The reader stops
 at the first excess byte, replies `{"id": null, "ok": false, "error": "message too large"}`, then
-closes the connection without consuming the rest of the frame. The server accepts at most **8
-active connections**; additional connections are closed immediately. Socket reads and writes each
+closes the connection without consuming the rest of the frame. All connections together hold at
+most **64 MiB of request lines** (counted as they arrive, until each is answered): a line past
+that gets `{"id": null, "ok": false, "error": "the control server holds too many large requests:
+retry when they are answered"}` and its connection is closed. The server keeps at most **8
+connections**. With all 8 open, a new client takes the slot of the connection that has waited
+longest for its client (between requests, or in `events.poll`), which is closed; a connection
+whose request the app is running keeps its slot, and with all 8 running one the new client is
+closed at once. Clients that keep a connection reconnect when it closes (the attached MCP
+backend does). Socket reads and writes each
 have a **60 s inactivity timeout**, so idle clients and clients that stop reading release their
 worker. This bounds blocked socket operations, not the total duration of a frame arriving slowly.
 Clients can reconnect after an idle timeout (the attached MCP backend already does).

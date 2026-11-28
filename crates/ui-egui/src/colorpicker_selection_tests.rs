@@ -541,3 +541,27 @@ fn a_focused_palette_square_does_not_hide_the_selection() {
     }
     assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "focus on a palette square leaves the frame in view");
 }
+
+// Scrubbing a field changes the layer live (#1319): its frame and handles step aside meanwhile, as
+// they do for the colour picker, so the new value shows on the layer itself.
+#[test]
+fn scrubbing_a_field_hides_the_selections_frame_until_let_go() {
+    let mut s = Session::new();
+    let text = selected_text(&mut s);
+    let mut u = Ui::new(s);
+    let area = text_area(&u, text);
+    let accent = crate::theme::canvas_accent(&u.ctx);
+    u.ctx.enable_accesskit();
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "the selected text's frame shows");
+    let from = crate::field_tests::label(&mut u, "Rotation");
+    u.button(from, true);
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "a press on the label alone leaves the frame");
+    let mut to = from;
+    for _ in 0..4 {
+        to += egui::vec2(6.0, 0.0);
+        u.frame(vec![egui::Event::PointerMoved(to)]);
+    }
+    assert_eq!(painted_around(&u.frame_output(vec![]), area, accent), 0, "scrubbing hides the frame");
+    u.button(to, false);
+    assert!(painted_around(&u.frame_output(vec![]), area, accent) > 0, "letting go brings the frame back");
+}

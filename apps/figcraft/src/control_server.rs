@@ -1,10 +1,11 @@
 //! Localhost JSON-lines control server: each line `{"id", "method", "params"}` is queued for the UI
 //! thread; the reply line `{"id", "ok", "result" | "error"}` is written when the frame handled it.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use figcraft_engine::events::{self, EventLog};
 use figcraft_ui_egui::{ControlReply, ControlRequest, RequestGate, RequestState};
@@ -14,6 +15,9 @@ type Queue = Arc<Mutex<Vec<ControlRequest>>>;
 type CtxSlot = Arc<Mutex<Option<egui::Context>>>;
 
 const MAX_LINE: usize = 32 * 1024 * 1024;
+/// Bytes of request lines all connections hold at once (#1111): a line is counted as it is read
+/// and until its reply is written, so eight clients can't make the app hold eight full lines.
+const MAX_IN_FLIGHT: usize = 64 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 8;
 const MAX_QUEUED_REQUESTS: usize = 8;
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -115,8 +119,9 @@ pub fn start(port: u16, busy: Duration, queue: Queue, ctx: CtxSlot, events: Arc<
     eprintln!("FigCraft control server listening on 127.0.0.1:{port}");
     let spawned = std::thread::Builder::new().name("figcraft-control".into()).spawn(move || {
         let mut workers = Vec::new();
+        let budget = Arc::new(AtomicUsize::new(0));
         for stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
-            spawn_connection(stream, queue.clone(), ctx.clone(), events.clone(), &mut workers, TIMEOUT);
+            spawn_connection(stream, queue.clone(), ctx.clone(), events.clone(), &budget, &mut workers, TIMEOUT);
         }
     });
     if let Err(e) = spawned {
@@ -129,23 +134,91 @@ fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: imp
     incoming.filter_map(move |stream| stream.map_err(|_| wait()).ok())
 }
 
+/// Since when a connection has been waiting for its client (`None` while the UI runs one of its
+/// requests).
+type Idle = Arc<Mutex<Option<Instant>>>;
+
+/// One connection's thread, a handle on its socket and since when it has been idle.
+struct Worker {
+    thread: std::thread::JoinHandle<()>,
+    stream: TcpStream,
+    idle: Idle,
+}
+
 fn spawn_connection(
     stream: TcpStream,
     queue: Queue,
     ctx: CtxSlot,
     events: Arc<EventLog>,
-    workers: &mut Vec<std::thread::JoinHandle<()>>,
+    budget: &Arc<AtomicUsize>,
+    workers: &mut Vec<Worker>,
     timeout: Duration,
 ) {
-    workers.retain(|worker| !worker.is_finished());
+    workers.retain(|worker| !worker.thread.is_finished());
     if workers.len() >= MAX_CONNECTIONS {
-        return;
+        // A client keeping slots it doesn't use can't lock others out (#1110): the connection idle
+        // longest (between requests or in `events.poll`; clients reconnect) gives its slot up. One
+        // whose request the UI is running keeps it.
+        let idle = |w: &Worker| *w.idle.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let longest = workers.iter().enumerate().filter_map(|(i, w)| Some((i, idle(w)?))).min_by_key(|(_, since)| *since);
+        let Some((i, _)) = longest else { return };
+        let _ = workers.swap_remove(i).stream.shutdown(Shutdown::Both);
     }
+    let Ok(handle) = stream.try_clone() else { return };
+    let idle: Idle = Arc::new(Mutex::new(Some(Instant::now())));
+    let (budget, mine) = (budget.clone(), idle.clone());
     match std::thread::Builder::new().name("figcraft-control-conn".into()).spawn(move || {
-        let _ = serve_with_events(stream, queue, ctx, events, timeout);
+        let _ = serve_with_events(stream, queue, ctx, events, &budget, &mine, timeout);
     }) {
-        Ok(worker) => workers.push(worker),
+        Ok(thread) => workers.push(Worker { thread, stream: handle, idle }),
         Err(e) => log::error!("control connection thread: {e}"),
+    }
+}
+
+/// Bytes of a line reserved from the shared budget, given back when dropped.
+struct Held<'a> {
+    budget: &'a AtomicUsize,
+    bytes: usize,
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.budget.fetch_sub(self.bytes, Ordering::SeqCst);
+    }
+}
+
+/// What [`read_line`] read.
+enum Line<'a> {
+    End,
+    /// A line, its newline included if it had one; longer than [`MAX_LINE`] when it was too long.
+    Read(Held<'a>),
+    /// The connections hold [`MAX_IN_FLIGHT`] bytes already.
+    Busy,
+}
+
+/// Read a line of at most [`MAX_LINE`] bytes plus its newline into `line`, taking its bytes from
+/// `budget` as they arrive.
+fn read_line<'a>(reader: &mut impl BufRead, line: &mut Vec<u8>, budget: &'a AtomicUsize) -> std::io::Result<Line<'a>> {
+    let mut held = Held { budget, bytes: 0 };
+    loop {
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
+            return Ok(if line.is_empty() { Line::End } else { Line::Read(held) });
+        }
+        let room = MAX_LINE + 1 - line.len();
+        let (take, done) = match buf.iter().position(|b| *b == b'\n') {
+            Some(i) if i < room => (i + 1, true),
+            _ => (buf.len().min(room), false),
+        };
+        if budget.try_update(Ordering::SeqCst, Ordering::SeqCst, |used| used.checked_add(take).filter(|t| *t <= MAX_IN_FLIGHT)).is_err() {
+            return Ok(Line::Busy);
+        }
+        held.bytes += take;
+        line.extend_from_slice(&buf[..take]);
+        reader.consume(take);
+        if done || line.len() > MAX_LINE {
+            return Ok(Line::Read(held));
+        }
     }
 }
 
@@ -155,19 +228,35 @@ fn spawn_connection(
 /// Serve a connection with a private event log (the tests; the app shares its session's log).
 #[cfg(test)]
 fn serve(out: TcpStream, queue: Queue, ctx: CtxSlot, timeout: Duration) -> std::io::Result<()> {
-    serve_with_events(out, queue, ctx, Arc::new(EventLog::default()), timeout)
+    serve_with_events(out, queue, ctx, Arc::new(EventLog::default()), &AtomicUsize::new(0), &Mutex::new(None), timeout)
 }
 
-fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc<EventLog>, timeout: Duration) -> std::io::Result<()> {
+fn serve_with_events(
+    mut out: TcpStream,
+    queue: Queue,
+    ctx: CtxSlot,
+    events: Arc<EventLog>,
+    budget: &AtomicUsize,
+    idle: &Mutex<Option<Instant>>,
+    timeout: Duration,
+) -> std::io::Result<()> {
     out.set_read_timeout(Some(timeout))?;
     out.set_write_timeout(Some(timeout))?;
     let mut reader = BufReader::new(out.try_clone()?);
-    let mut line = Vec::new();
+    let set_idle = |since: Option<Instant>| *idle.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = since;
     loop {
-        line.clear();
-        if (&mut reader).take((MAX_LINE + 1) as u64).read_until(b'\n', &mut line)? == 0 {
-            break;
-        }
+        set_idle(Some(Instant::now()));
+        // A new buffer each time: an idle connection keeps no large line's capacity.
+        let mut line = Vec::new();
+        let _held = match read_line(&mut reader, &mut line, budget)? {
+            Line::End => break,
+            Line::Read(held) => held,
+            Line::Busy => {
+                let error = "the control server holds too many large requests: retry when they are answered";
+                writeln!(out, "{}", json!({"id": null, "ok": false, "error": error}))?;
+                break;
+            }
+        };
         if line.last() == Some(&b'\n') {
             line.pop();
         }
@@ -205,6 +294,7 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                     continue;
                 }
                 let needs_frame = matches!(method.as_str(), "ui.screenshot" | "ui.input");
+                set_idle(None);
                 pending.push(ControlRequest { id: id.clone(), method, params, reply: tx, state: gate.clone() });
                 drop(pending);
                 if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {

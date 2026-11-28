@@ -123,6 +123,13 @@ pub(crate) fn render_number() -> u64 {
 
 /// Render a page region, splitting it into horizontal bands rendered in parallel (desktop).
 pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+    render_view_with(doc, page, view, opts, max_backdrop_blur(doc))
+}
+
+/// [`render_view`], where `backdrop` is at least the largest backdrop radius of what it draws (a
+/// retained render works it out for the page: a blur on another page then widens no band's
+/// overlap).
+pub(crate) fn render_view_with(doc: &Document, page: NodeId, view: &View, opts: &Options, backdrop: f64) -> Option<Pixmap> {
     start_render();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(pool) = band_pool() {
@@ -130,43 +137,60 @@ pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) ->
         let bands = threads.min(view.height / 96).max(1);
         if bands > 1
             && view.width.saturating_mul(view.height) > 300_000
-            && let Some(p) = pool.install(|| render_bands(doc, page, view, opts, bands))
+            && let Some(p) = pool.install(|| render_bands_with(doc, page, view, opts, bands, backdrop))
         {
             return Some(p);
         }
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = backdrop;
     render_one(doc, page, view, opts)
+}
+
+/// [`render_part_with`] for backdrop radii up to the file's largest.
+#[cfg(test)]
+pub(crate) fn render_part(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+    render_part_with(doc, page, view, opts, max_backdrop_blur(doc))
 }
 
 /// [`render_view`] for a part of a view a retained render redraws (the strips a pan uncovers, the
 /// area of an edit): in parallel bands however few pixels it has, along its longer side (rows of a
 /// tall strip, columns of a wide one), since what it costs is the layers it crosses (a shadow is
-/// drawn whole for a sliver of it), not its pixels.
-pub(crate) fn render_part(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+/// drawn whole for a sliver of it), not its pixels. `backdrop` is at least the largest backdrop
+/// radius of what it draws.
+pub(crate) fn render_part_with(doc: &Document, page: NodeId, view: &View, opts: &Options, backdrop: f64) -> Option<Pixmap> {
     start_render();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(pool) = band_pool() {
         let threads = pool.current_num_threads().clamp(1, 16) as u32;
         let rendered = if view.height >= view.width {
             let bands = threads.min(view.height / 96);
-            (bands > 1).then(|| pool.install(|| render_bands(doc, page, view, opts, bands))).flatten()
+            (bands > 1).then(|| pool.install(|| render_bands_with(doc, page, view, opts, bands, backdrop))).flatten()
         } else {
             let bands = threads.min(view.width / 96);
-            (bands > 1).then(|| pool.install(|| render_columns(doc, page, view, opts, bands))).flatten()
+            (bands > 1).then(|| pool.install(|| render_columns_with(doc, page, view, opts, bands, backdrop))).flatten()
         };
         if rendered.is_some() {
             return rendered;
         }
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = backdrop;
     render_one(doc, page, view, opts)
 }
 
-/// [`render_bands`] across: `bands` columns, overlapping by what background blurs read.
-#[cfg(not(target_arch = "wasm32"))]
+/// [`render_columns_with`] for backdrop radii up to the file's largest.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 fn render_columns(doc: &Document, page: NodeId, view: &View, opts: &Options, bands: u32) -> Option<Pixmap> {
+    render_columns_with(doc, page, view, opts, bands, max_backdrop_blur(doc))
+}
+
+/// [`render_bands_with`] across: `bands` columns, overlapping by what background blurs read.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_columns_with(doc: &Document, page: NodeId, view: &View, opts: &Options, bands: u32, backdrop: f64) -> Option<Pixmap> {
     use rayon::prelude::*;
     let band_w = view.width.div_ceil(bands.max(1));
-    let overlap = band_overlap(doc, view, band_w)?;
+    let overlap = overlap_for(backdrop, view, band_w)?;
     let s = view.scale.max(1e-9);
     let parts: Vec<(u32, Option<Pixmap>)> = (0..bands)
         .into_par_iter()
@@ -205,15 +229,21 @@ fn band_pool() -> Option<&'static rayon::ThreadPool> {
     POOL.get_or_init(|| rayon::ThreadPoolBuilder::new().thread_name(|i| format!("figcraft-band-{i}")).stack_size(RENDER_STACK).build().ok()).as_ref()
 }
 
-/// Render `view` as `bands` horizontal bands in parallel. Bands overlap by what background blurs
-/// read and each keeps only its own rows, so a backdrop never ends at a band's edge. `None` when a
-/// blur reaches past a whole band (every band would render most of the view: render it in one
-/// piece instead).
-#[cfg(not(target_arch = "wasm32"))]
+/// [`render_bands_with`] for backdrop radii up to the file's largest.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 fn render_bands(doc: &Document, page: NodeId, view: &View, opts: &Options, bands: u32) -> Option<Pixmap> {
+    render_bands_with(doc, page, view, opts, bands, max_backdrop_blur(doc))
+}
+
+/// Render `view` as `bands` horizontal bands in parallel. Bands overlap by what background blurs
+/// read (`backdrop` is at least the largest backdrop radius of what they draw) and each keeps only
+/// its own rows, so a backdrop never ends at a band's edge. `None` when a blur reaches past a whole
+/// band (every band would render most of the view: render it in one piece instead).
+#[cfg(not(target_arch = "wasm32"))]
+fn render_bands_with(doc: &Document, page: NodeId, view: &View, opts: &Options, bands: u32, backdrop: f64) -> Option<Pixmap> {
     use rayon::prelude::*;
     let band_h = view.height.div_ceil(bands.max(1));
-    let overlap = band_overlap(doc, view, band_h)?;
+    let overlap = overlap_for(backdrop, view, band_h)?;
     let parts: Vec<(u32, Option<Pixmap>)> = (0..bands)
         .into_par_iter()
         .map(|i| {
@@ -230,10 +260,16 @@ fn render_bands(doc: &Document, page: NodeId, view: &View, opts: &Options, bands
     Some(out)
 }
 
-/// How many rows bands of `band_h` rows of `view` overlap (what background blurs read); `None`
-/// when that is more than a band.
+/// [`overlap_for`] for backdrop radii up to the file's largest.
+#[cfg(test)]
 pub(crate) fn band_overlap(doc: &Document, view: &View, band_h: u32) -> Option<u32> {
-    let overlap = backdrop_reach(max_backdrop_blur(doc), view.scale).ceil();
+    overlap_for(max_backdrop_blur(doc), view, band_h)
+}
+
+/// How many rows bands of `band_h` rows of `view` overlap (what background blurs of radii up to
+/// `backdrop` read); `None` when that is more than a band.
+pub(crate) fn overlap_for(backdrop: f64, view: &View, band_h: u32) -> Option<u32> {
+    let overlap = backdrop_reach(backdrop, view.scale).ceil();
     (overlap.is_finite() && overlap <= f64::from(band_h)).then_some(overlap as u32)
 }
 
@@ -705,6 +741,8 @@ mod join_tests;
 #[cfg(test)]
 mod jpeg_sampling_tests;
 #[cfg(test)]
+mod large_doc_bench_tests;
+#[cfg(test)]
 mod large_image_tests;
 #[cfg(test)]
 mod lod_tests;
@@ -724,6 +762,8 @@ mod progressive_tests;
 mod render_depth_tests;
 #[cfg(test)]
 mod retained_edit_tests;
+#[cfg(test)]
+mod retained_page_tests;
 #[cfg(test)]
 mod retained_tests;
 #[cfg(test)]

@@ -48,6 +48,32 @@ fn row_jobs(src: &[[u8; 4]], dst: &mut [[u8; 4]], w: usize, job: impl Fn(&[[u8; 
     src.chunks(n).zip(dst.chunks_mut(n)).for_each(|(s, d)| job(s, d));
 }
 
+/// Division by a box's width `d` as a multiply and a shift, exact for every sum of `d` bytes (at
+/// most 255 × `d`, under `2^n` for `n` = 8 + ⌈log₂ d⌉): with `m` = ⌈2^(n + ⌈log₂ d⌉) / d⌉, the
+/// product overshoots the quotient by less than 1/d, which never reaches the next whole number.
+/// A divide per channel per pixel took about a third of a blur's time on one thread.
+#[derive(Clone, Copy)]
+struct ByWidth {
+    m: u64,
+    shift: u32,
+}
+
+impl ByWidth {
+    /// `None` for widths whose products could pass 64 bits (over 2^23 pixels: no box is that wide).
+    fn new(d: u32) -> Option<ByWidth> {
+        let log = u32::BITS - d.checked_sub(1)?.leading_zeros();
+        if log > 23 {
+            return None;
+        }
+        let shift = 8 + 2 * log;
+        Some(ByWidth { m: (1u64 << shift).div_ceil(u64::from(d)), shift })
+    }
+
+    fn of(self, sum: u32) -> u8 {
+        ((u64::from(sum) * self.m) >> self.shift) as u8
+    }
+}
+
 /// One row box-blurred by radius `r` (transparent past its ends) into `dst`, the same length.
 fn box_blur_row(src: &[[u8; 4]], dst: &mut [[u8; 4]], r: usize) {
     if r == 0 {
@@ -55,6 +81,14 @@ fn box_blur_row(src: &[[u8; 4]], dst: &mut [[u8; 4]], r: usize) {
         return;
     }
     let div = (2 * r + 1) as u32;
+    match ByWidth::new(div) {
+        Some(by) => box_sums(src, dst, r, |a| by.of(a)),
+        None => box_sums(src, dst, r, |a| (a / div) as u8),
+    }
+}
+
+/// [`box_blur_row`] with each window's sum divided by its width by `quotient`.
+fn box_sums(src: &[[u8; 4]], dst: &mut [[u8; 4]], r: usize, quotient: impl Fn(u32) -> u8) {
     let mut acc = [0u32; 4];
     for p in src.iter().take(r + 1) {
         for (a, c) in acc.iter_mut().zip(p) {
@@ -62,7 +96,7 @@ fn box_blur_row(src: &[[u8; 4]], dst: &mut [[u8; 4]], r: usize) {
         }
     }
     for (x, d) in dst.iter_mut().enumerate() {
-        *d = acc.map(|a| (a / div) as u8);
+        *d = acc.map(&quotient);
         if let Some(p) = src.get(x + r + 1) {
             for (a, c) in acc.iter_mut().zip(p) {
                 *a += u32::from(*c);
@@ -584,6 +618,55 @@ mod tests {
                 assert!(fast.data() == slow.data(), "{w}×{h} r {r}");
             }
         }
+    }
+
+    /// Blur timings, the best of several runs: in parallel (a full render's blur) and on one
+    /// thread (a band of a parallel render, the browser). Run in release:
+    /// `cargo test --release -p figcraft-render --lib blur_timings -- --ignored --nocapture`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "timing: run in release with --ignored --nocapture"]
+    fn blur_timings() {
+        let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let best = |src: &Pixmap, sigma: f64, runs: u32, on_one: bool| {
+            (0..runs)
+                .map(|_| {
+                    let mut p = src.clone();
+                    let t = std::time::Instant::now();
+                    if on_one {
+                        one.install(|| blur(&mut p, sigma));
+                    } else {
+                        blur(&mut p, sigma);
+                    }
+                    t.elapsed().as_secs_f64() * 1000.0
+                })
+                .fold(f64::MAX, f64::min)
+        };
+        println!("| pixmap | sigma | parallel ms | one thread ms |\n|---|---:|---:|---:|");
+        for (w, h, sigma) in [(1700u32, 1200u32, 48.0), (1700, 1200, 12.0), (600, 400, 6.0)] {
+            let src = noise(w, h, 5);
+            println!("| {w} × {h} | {sigma} | {:.2} | {:.2} |", best(&src, sigma, 15, false), best(&src, sigma, 5, true));
+        }
+    }
+
+    /// The multiply and shift give every quotient a box's sums can have, for every box width up
+    /// to 4,001 pixels (radius 2,000) and for the widest ones.
+    #[test]
+    fn division_by_a_box_width_is_exact() {
+        let widths = (1..=4001u32).step_by(2).chain([65_535, 1_000_001, 2_000_001, (1 << 23) - 1, 1 << 23]);
+        for d in widths {
+            let by = ByWidth::new(d).unwrap();
+            let sums: Box<dyn Iterator<Item = u32>> = if d <= 4001 {
+                Box::new(0..=255 * d)
+            } else {
+                Box::new((0..=255u32).flat_map(move |q| [q * d, (q * d).saturating_sub(1), q * d + d - 1]).filter(move |s| *s <= 255 * d))
+            };
+            for s in sums {
+                assert_eq!(u32::from(by.of(s)), s / d, "{s} / {d}");
+            }
+        }
+        assert!(ByWidth::new((1 << 23) + 1).is_none());
+        assert!(ByWidth::new(0).is_none());
     }
 
     #[test]
