@@ -14,7 +14,7 @@
 //! it does nothing. Between the steps of a read it only reads the memory size unless the memory
 //! grew.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// A WebAssembly memory page.
 const PAGE: usize = 64 * 1024;
@@ -35,6 +35,10 @@ static READING: AtomicUsize = AtomicUsize::new(0);
 /// The memory size at the last look, in pages.
 static SEEN: AtomicUsize = AtomicUsize::new(0);
 
+/// Set when a reservation fails near the browser's memory limit so the rest of this read does not
+/// retry failing large reservations on every subsequent growth.
+static EXHAUSTED: AtomicBool = AtomicBool::new(false);
+
 /// A snapshot read under way: [`keep_ahead`] acts until it is dropped, on error paths too.
 pub(crate) struct Reading(());
 
@@ -47,6 +51,7 @@ impl Drop for Reading {
 /// Start a snapshot read: growth from here on gets room kept ahead.
 pub(crate) fn reading() -> Reading {
     if READING.fetch_add(1, Ordering::Relaxed) == 0 {
+        EXHAUSTED.store(false, Ordering::Relaxed);
         SEEN.store(memory_pages().unwrap_or(0), Ordering::Relaxed);
     }
     Reading(())
@@ -55,17 +60,19 @@ pub(crate) fn reading() -> Reading {
 /// Reserve room ahead in the heap if a snapshot is being read and the memory grew since the last
 /// call (see the module docs).
 pub(crate) fn keep_ahead() {
-    if READING.load(Ordering::Relaxed) == 0 {
+    if READING.load(Ordering::Relaxed) == 0 || EXHAUSTED.load(Ordering::Relaxed) {
         return;
     }
     let Some(now) = memory_pages() else { return };
     if let Some(bytes) = room(SEEN.load(Ordering::Relaxed), now) {
         let mut block: Vec<u8> = Vec::new();
-        // Near the browser's memory limit this fails and nothing changes: the heap then grows as
-        // it needs, as before.
+        // Near the browser's memory limit this fails and nothing changes: stop trying large
+        // reservations for the rest of this read and let the heap grow as needed.
         if block.try_reserve_exact(bytes).is_ok() {
             // Opaque to the optimizer, which could otherwise drop an allocation nothing reads.
             drop(std::hint::black_box(block));
+        } else {
+            EXHAUSTED.store(true, Ordering::Relaxed);
         }
     }
     SEEN.store(memory_pages().unwrap_or(now), Ordering::Relaxed);
